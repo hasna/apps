@@ -92,6 +92,8 @@ projects list --query app --tags web,ts
 projects list --label org:hasnaxyz --json
 projects list --limit 50 --verbose
 projects list --query app --tags web,ts --json
+projects list --query app --json --detail compact
+projects list --query app --json --detail compact --fields slug,status,path
 projects show my-app --json
 projects show my-app --verbose
 projects events list my-app --limit 10 --verbose
@@ -540,7 +542,8 @@ Endpoints: `GET /health` → `{"status":"ok","name":"projects"}`, MCP at `POST/G
 | `projects_recipes_list` / `projects_recipes_add` | Manage recipe defaults for project creation |
 | `projects_agents_list` / `projects_agents_add` | Register human, CLI, service, and AI agents |
 | `projects_tmux_profiles_list` / `projects_tmux_profiles_add` / `projects_tmux_profiles_apply` | Manage reusable tmux sessions/windows |
-| `projects_list` / `projects_show` | Search and inspect projects |
+| `projects_list` / `projects_show` | Legacy-compatible full project listing and project detail |
+| `projects_search` | Compact bounded project discovery with fields, query scopes, and continuation metadata |
 | `projects_render_list` / `projects_render_show` / `projects_render_start` / `projects_render_status` / `projects_render_sessions` / `projects_render_roots` / `projects_render_recipes` | Emit validated JSON Render specs for project surfaces |
 | `projects_store_inspect` | Inspect canonical project storage and the per-project app store under `$HASNA_PROJECTS_HOME/data/<workspace_id>/project.db` |
 | `projects_canvases_list` / `projects_canvases_create` / `projects_canvases_upsert` / `projects_canvases_compose` / `projects_render_canvas` | Manage, compose, update, and render per-project React Flow canvas records |
@@ -589,6 +592,33 @@ print a hint for the next detail command. Use `--limit <n>` to raise the row cap
 `show`/`events list` for detail workflows, and `--json` for stable
 machine-readable records.
 
+Legacy `projects list --json` remains a complete, full-record array for script
+compatibility. New agent and machine callers should opt into the bounded
+envelope with `--detail compact`; it defaults to 25 rows, minified JSON, and
+the fields `id,slug,name,status,kind,path`. `path` is the public compact name
+for the stored `primary_path`. Use `--fields`, `--limit`/`--offset`, and the
+returned `next_offset`/`next_arguments` to page; use `--all` explicitly for a
+complete compact population, `--detail full` for a bounded full-record page,
+`--max-bytes` to lower or raise the 32 KiB page ceiling, and `--pretty` only
+for interactive formatting. Explicit `--all` uses a 256 KiB ceiling when none
+is supplied and refuses rather than claiming completeness if the population
+still cannot fit. Byte-clipped pages report `truncated`,
+`omitted_from_page`, and a continuation that resumes at the first omitted row.
+Hosted compact reads require the server's `projects.list.v2` filter attestation;
+an older deployment that could ignore query/tag/eval filters is refused rather
+than returning a mislabeled page. Deploy the matching `projects-serve` before
+rolling out a client that uses these additive compact surfaces.
+The same fail-closed attestation applies whenever `--query-scope` is explicit,
+including human, JSON-array, and render-spec list output; no CLI path may send
+the new scope and silently accept a legacy producer's unscoped answer.
+
+Searches made through the compact contract default to `--query-scope
+discovery` (name, slug, description, and tags), so a common parent folder
+does not make nearly every project match. Select `identity`, `structured`, or
+the path-inclusive `all` scope explicitly when needed. Omitting
+`--query-scope` outside the additive compact contract preserves legacy search
+membership.
+
 Compact terminal defaults cover the noisy project registry commands plus smaller
 registry lists such as `projects roots list`, `projects recipes list`,
 `projects agents list`, `projects tmux-profiles list`, `projects locks`,
@@ -597,6 +627,9 @@ Examples:
 
 ```bash
 projects list --limit 25
+projects list --query projects --json --detail compact
+projects list --query projects --query-scope all --json --detail compact --limit 25
+projects list --json --detail compact --fields slug,status,path --all
 projects roots list --limit 10 --verbose
 projects doctor --limit 20 --verbose
 projects events list my-app --limit 10 --verbose
@@ -607,6 +640,12 @@ Where supported, pass `compact: true` to receive compact summaries; compact MCP
 calls accept `limit`, and `verbose: true` returns full records. Prompt-agent
 tools use compact project/event summaries by default; agent tools expose
 `verbose: true` for explicit detail retrieval.
+
+For non-empty MCP discovery queries, prefer `projects_search`. It is compact
+and bounded by default, uses discovery-scoped matching, returns truthful total
+and continuation fields, accepts a small field projection, and emits minified
+JSON. Keep `projects_list` for legacy or unfiltered enumeration; its existing
+contract is intentionally unchanged.
 
 ## Data Model
 
@@ -703,6 +742,7 @@ import { ProjectsClient, createProjectsClientFromEnv } from "@hasna/projects/sdk
 const projects = createProjectsClientFromEnv();
 const created = await projects.createProject({ name: "My Project", tags: ["demo"] });
 const list = await projects.listProjects({ tag: "demo" });
+const discovery = await projects.listProjects({ query: "billing", query_scope: "discovery", tags: ["web", "ts"], exclude_evals: true, limit: 25 });
 ```
 
 ## Architecture

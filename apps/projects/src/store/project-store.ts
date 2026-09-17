@@ -136,7 +136,7 @@ import {
   isProjectWorkspaceStorePath,
   PROJECT_WORKSPACE_ID_PATTERN,
 } from "../lib/project-store-paths.js";
-import { collectCompletePages, collectPages, type CompletePage } from "./paginate.js";
+import { collectCompletePages, collectPages, PaginationError, type CompletePage } from "./paginate.js";
 import {
   createProjectDataModel as dbCreateProjectDataModel,
   createProjectDataRecord as dbCreateProjectDataRecord,
@@ -205,6 +205,7 @@ import {
   type ProductionProjectRegistrationAuthorityOptions,
 } from "../lib/production-project-registration-authorities.js";
 import { normalizeProjectMetadata } from "../lib/project-management.js";
+import { PROJECT_LIST_V2_CONTRACT } from "../lib/project-list-output.js";
 import type {
   Agent,
   AgentRun,
@@ -1084,11 +1085,19 @@ function listQuery(filter?: WorkspaceFilter): QueryParams {
     kind: filter.kind,
     status: filter.status,
     query: filter.query,
+    query_scope: filter.query_scope,
     root_id: filter.root_id,
+    // Keep legacy callers on the historical single-tag request. The additive
+    // compact contract opts into repeated conjunctive tags and requires a
+    // producer attestation before trusting the result.
     tag: filter.tags && filter.tags.length > 0 ? filter.tags[0] : undefined,
+    tags: filter.require_list_v2_contract && filter.tags && filter.tags.length > 1
+      ? filter.tags.slice(1)
+      : undefined,
     // The hosted API excludes registry-fixture rows by default; only send the
     // opt-in when the caller explicitly asked for them.
     ...(filter.exclude_registry_fixtures === false ? { include_fixtures: "true" } : {}),
+    ...(filter.exclude_eval_artifacts === true ? { exclude_evals: "true" } : {}),
     limit: filter.limit,
     offset: filter.offset,
   };
@@ -1177,6 +1186,13 @@ class ApiProjectStore implements ProjectStore {
     has_more: boolean | null;
   }> {
     const raw = await this.client.transport.get<{
+      filter_contract?: string;
+      applied_filters?: {
+        query_scope?: string;
+        tags?: string[];
+        exclude_evals?: boolean;
+        exclude_registry_fixtures?: boolean;
+      };
       workspaces?: Workspace[];
       projects?: Workspace[];
       total?: number;
@@ -1187,6 +1203,36 @@ class ApiProjectStore implements ProjectStore {
       query: { ...listQuery(filter), limit: params.limit, offset: params.offset },
     });
     const rows = (raw.workspaces ?? raw.projects ?? []).map((row) => normalizeApiWorkspace(row) ?? (row as Workspace));
+    if (typeof raw.offset === "number" && raw.offset !== params.offset) {
+      throw new PaginationError(
+        `Projects list producer returned offset ${raw.offset} for requested offset ${params.offset}; refusing a mislabeled page.`,
+      );
+    }
+    if (filter?.require_list_v2_contract) {
+      const expectedFilters = {
+        query_scope: filter.query_scope ?? "legacy",
+        tags: [...new Set(filter.tags ?? [])],
+        exclude_evals: filter.exclude_eval_artifacts === true,
+        exclude_registry_fixtures: filter.exclude_registry_fixtures === true,
+      };
+      if (raw.filter_contract !== PROJECT_LIST_V2_CONTRACT) {
+        throw new PaginationError(
+          `Projects list requires the ${PROJECT_LIST_V2_CONTRACT} filter contract; update projects-serve before using compact search.`,
+        );
+      }
+      const applied = raw.applied_filters;
+      if (
+        !applied
+        || applied.query_scope !== expectedFilters.query_scope
+        || JSON.stringify(applied.tags ?? []) !== JSON.stringify(expectedFilters.tags)
+        || applied.exclude_evals !== expectedFilters.exclude_evals
+        || applied.exclude_registry_fixtures !== expectedFilters.exclude_registry_fixtures
+      ) {
+        throw new PaginationError(
+          "Projects list producer did not attest the exact query/tag/eval/fixture filters; refusing a mislabeled compact page.",
+        );
+      }
+    }
     return {
       rows,
       total: typeof raw.total === "number" ? raw.total : null,
@@ -1251,7 +1297,14 @@ class ApiProjectStore implements ProjectStore {
     const projects = await collectPages<Workspace>(
       async (params) => {
         const page = await this.fetchProjectPage(f, params);
-        if (page.total !== null) serverTotal = page.total;
+        if (page.total !== null) {
+          if (serverTotal !== null && page.total !== serverTotal) {
+            throw new PaginationError(
+              `Projects list producer total changed during bounded traversal (${serverTotal} -> ${page.total}); refusing a moving population.`,
+            );
+          }
+          serverTotal = page.total;
+        }
         return page.rows;
       },
       (row) => row?.id,

@@ -130,6 +130,112 @@ describe("projects MCP HTTP transport", () => {
     await client.close();
   });
 
+  test("projects_search is compact, bounded, paginated, and leaves projects_list legacy output intact", async () => {
+    const client = new Client({ name: "projects-http-search-test", version: "0.0.0" });
+    const transport = new StreamableHTTPClientTransport(
+      new URL(`http://127.0.0.1:${port}/mcp`),
+    );
+    await client.connect(transport);
+
+    for (let index = 0; index < 3; index += 1) {
+      const created = await client.callTool({
+        name: "projects_create",
+        arguments: {
+          name: `MCP Search ${index}`,
+          path: join(root, "projects-parent", `mcp-search-${index}`),
+          metadata: {
+            notes: "x".repeat(2_000),
+            ...(index === 0 ? { api_key: "must-not-appear-in-mcp-output" } : {}),
+          },
+        },
+      });
+      expect(created.isError).not.toBe(true);
+    }
+
+    const legacy = await client.callTool({ name: "projects_list", arguments: { query: "mcp-search-0", limit: 1 } });
+    const legacyText = (legacy.content as Array<{ type: string; text?: string }>)[0]?.text ?? "[]";
+    expect((JSON.parse(legacyText) as Array<{ metadata?: { notes?: string } }>)[0]?.metadata?.notes).toHaveLength(2_000);
+
+    const first = await client.callTool({
+      name: "projects_search",
+      arguments: { query: "MCP Search", limit: 2, fields: ["slug", "path"] },
+    });
+    expect(first.isError).not.toBe(true);
+    const firstText = (first.content as Array<{ type: string; text?: string }>)[0]?.text ?? "{}";
+    const firstPayload = JSON.parse(firstText) as {
+      projects: Array<Record<string, unknown>>;
+      count: number;
+      total: number;
+      offset: number;
+      limit: number;
+      next_offset: number;
+      has_more: boolean;
+      complete: boolean;
+      detail: string;
+      fields: string[];
+      query_scope: string;
+      next_arguments: Record<string, unknown>;
+      max_bytes: number;
+      response_bytes: number;
+    };
+    expect(firstPayload).toMatchObject({
+      count: 2,
+      total: 3,
+      offset: 0,
+      limit: 2,
+      next_offset: 2,
+      has_more: true,
+      complete: false,
+      detail: "compact",
+      fields: ["id", "slug", "path"],
+      query_scope: "discovery",
+      next_arguments: { query: "MCP Search", query_scope: "discovery", offset: 2, limit: 2 },
+      max_bytes: 32768,
+    });
+    expect(Object.keys(firstPayload.projects[0] ?? {})).toEqual(["id", "slug", "path"]);
+    expect(firstPayload.projects[0]?.path).toContain("projects-parent");
+    expect(Buffer.byteLength(firstText)).toBeLessThan(1_500);
+    expect(firstPayload.response_bytes).toBe(Buffer.byteLength(firstText));
+    expect(firstPayload.next_arguments.max_bytes).toBe(32768);
+    expect(firstText).not.toContain("\n  ");
+
+    const second = await client.callTool({
+      name: "projects_search",
+      arguments: { query: "MCP Search", limit: 2, offset: 2 },
+    });
+    expect(JSON.parse((second.content as Array<{ text?: string }>)[0]?.text ?? "{}")).toMatchObject({
+      count: 1,
+      total: 3,
+      offset: 2,
+      next_offset: null,
+      has_more: false,
+      complete: false,
+    });
+
+    const pathOnly = await client.callTool({
+      name: "projects_search",
+      arguments: { query: "projects-parent", limit: 10 },
+    });
+    expect(JSON.parse((pathOnly.content as Array<{ text?: string }>)[0]?.text ?? "{}")).toMatchObject({ count: 0, total: 0 });
+
+    const allScope = await client.callTool({
+      name: "projects_search",
+      arguments: { query: "projects-parent", query_scope: "all", limit: 10 },
+    });
+    expect(JSON.parse((allScope.content as Array<{ text?: string }>)[0]?.text ?? "{}")).toMatchObject({ count: 3, total: 3 });
+
+    const full = await client.callTool({
+      name: "projects_search",
+      arguments: { query: "MCP Search 0", detail: "full", limit: 1 },
+    });
+    const fullText = (full.content as Array<{ text?: string }>)[0]?.text ?? "{}";
+    expect((JSON.parse(fullText) as { projects: Array<{ metadata: { api_key: string } }> }).projects[0]?.metadata.api_key)
+      .toBe("[REDACTED]");
+    expect(fullText).not.toContain("must-not-appear-in-mcp-output");
+
+    await client.close();
+  });
+
   test("projects_list excludes registry-fixture rows by default; include_fixtures=true includes them", async () => {
     createWorkspace({
       name: "Fixture Smoke",

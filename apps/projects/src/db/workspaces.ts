@@ -130,6 +130,7 @@ import type {
   WorkspaceRow,
   WorkspaceStatus,
 } from "../types/workspace.js";
+import type { ProjectQueryScope } from "../lib/project-list-output.js";
 
 const nanoid = customAlphabet(`0123456789${"abcdefghijklmnopqrstuvwxyz"}`, 12);
 
@@ -918,6 +919,9 @@ export interface WorkspaceFilter {
   kind?: WorkspaceKind;
   root_id?: string;
   query?: string;
+  query_scope?: ProjectQueryScope;
+  /** Internal client requirement: hosted pages must attest the v2 filter contract. */
+  require_list_v2_contract?: boolean;
   tags?: string[];
   exclude_eval_artifacts?: boolean;
   exclude_registry_fixtures?: boolean;
@@ -938,9 +942,21 @@ function workspaceFilterSql(filter: WorkspaceFilter): { where: string; params: S
   if (filter.kind) { conditions.push("kind = ?"); params.push(filter.kind); }
   if (filter.root_id) { conditions.push("root_id = ?"); params.push(filter.root_id); }
   if (filter.query) {
-    const q = `%${filter.query.toLowerCase()}%`;
-    conditions.push("(lower(name) LIKE ? OR lower(slug) LIKE ? OR lower(COALESCE(description, '')) LIKE ? OR lower(COALESCE(primary_path, '')) LIKE ? OR lower(COALESCE(tags, '')) LIKE ? OR lower(COALESCE(integrations, '')) LIKE ? OR lower(COALESCE(metadata, '')) LIKE ?)");
-    params.push(q, q, q, q, q, q, q);
+    const scope = filter.query_scope;
+    const normalizedQuery = filter.query.toLowerCase();
+    const q = `%${scope === undefined ? normalizedQuery : normalizedQuery.replace(/[\\%_]/g, "\\$&")}%`;
+    const columns = scope === undefined
+      ? ["name", "slug", "COALESCE(description, '')", "COALESCE(primary_path, '')", "COALESCE(tags, '')", "COALESCE(integrations, '')", "COALESCE(metadata, '')"]
+      : scope === "identity"
+        ? ["name", "slug"]
+        : scope === "discovery"
+          ? ["name", "slug", "COALESCE(description, '')", "COALESCE(tags, '')"]
+          : scope === "structured"
+            ? ["name", "slug", "COALESCE(description, '')", "COALESCE(tags, '')", "COALESCE(integrations, '')", "COALESCE(metadata, '')"]
+            : ["name", "slug", "COALESCE(description, '')", "COALESCE(primary_path, '')", "COALESCE(tags, '')", "COALESCE(integrations, '')", "COALESCE(metadata, '')"];
+    const escape = scope === undefined ? "" : " ESCAPE '\\'";
+    conditions.push(`(${columns.map((column) => `lower(${column}) LIKE ?${escape}`).join(" OR ")})`);
+    params.push(...columns.map(() => q));
   }
   if (filter.tags && filter.tags.length > 0) {
     for (const tag of filter.tags) {
@@ -950,14 +966,14 @@ function workspaceFilterSql(filter: WorkspaceFilter): { where: string; params: S
   }
   if (filter.exclude_eval_artifacts) {
     conditions.push(`NOT (
-      slug LIKE 'eval-%'
-      OR name LIKE 'Eval %'
+      substr(slug, 1, 5) = 'eval-'
+      OR substr(name, 1, 5) = 'Eval '
       OR EXISTS (
         SELECT 1 FROM json_each(workspaces.tags)
-        WHERE json_each.value = 'eval' OR json_each.value LIKE 'eval-%'
+        WHERE json_each.value = 'eval' OR substr(json_each.value, 1, 5) = 'eval-'
       )
-      OR COALESCE(json_extract(metadata, '$.eval_fixture'), 0) = 1
-      OR COALESCE(json_extract(metadata, '$.agent_eval_fixture'), 0) = 1
+      OR COALESCE(json_type(metadata, '$.eval_fixture') = 'true', 0)
+      OR COALESCE(json_type(metadata, '$.agent_eval_fixture') = 'true', 0)
     )`);
   }
   if (filter.exclude_registry_fixtures) {

@@ -285,6 +285,18 @@ export function buildOpenApiSpec(version: string): Record<string, unknown> {
           description:
             "A single page of projects. `count` is the page length; `total` is how many rows match the filter. When `has_more` is true the caller must request the next page with `offset` — a full page is otherwise indistinguishable from the last one.",
           properties: {
+            filter_contract: { type: "string", enum: ["projects.list.v2"], description: "Present on current producers so compact clients can fail closed against servers that ignore additive filters." },
+            applied_filters: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                query_scope: { type: "string", enum: ["legacy", "identity", "discovery", "structured", "all"] },
+                tags: { type: "array", items: { type: "string" } },
+                exclude_evals: { type: "boolean" },
+                exclude_registry_fixtures: { type: "boolean" },
+              },
+              required: ["query_scope", "tags", "exclude_evals", "exclude_registry_fixtures"],
+            },
             workspaces: { type: "array", items: ref("Workspace") },
             count: { type: "integer", description: "Rows in this page." },
             total: { type: "integer", description: "Rows matching the filter, ignoring limit/offset." },
@@ -1316,8 +1328,12 @@ export function buildOpenApiSpec(version: string): Record<string, unknown> {
             { name: "status", in: "query", required: false, schema: { type: "string" } },
             { name: "kind", in: "query", required: false, schema: { type: "string" } },
             { name: "root_id", in: "query", required: false, schema: { type: "string" } },
-            { name: "query", in: "query", required: false, schema: { type: "string" } },
-            { name: "tag", in: "query", required: false, schema: { type: "string" } },
+            { name: "query", in: "query", required: false, schema: { type: "string", maxLength: 512 } },
+            { name: "query_scope", in: "query", required: false, schema: { type: "string", enum: ["identity", "discovery", "structured", "all"] } },
+            { name: "tag", in: "query", required: false, schema: { type: "string", maxLength: 128 } },
+            { name: "tags", in: "query", required: false, style: "form", explode: true, schema: { type: "array", maxItems: 50, items: { type: "string", maxLength: 128 } } },
+            { name: "exclude_evals", in: "query", required: false, schema: { type: "boolean", default: false } },
+            { name: "include_fixtures", in: "query", required: false, schema: { type: "boolean", default: false } },
             {
               name: "limit",
               in: "query",

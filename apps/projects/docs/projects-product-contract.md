@@ -280,6 +280,7 @@ For create-like prompts, the agent must check existing projects first. For start
 MCP tools should be project-first:
 
 - `projects_list`
+- `projects_search` (bounded compact discovery with query scopes, fields, byte limits, and continuation metadata)
 - `projects_show`
 - `projects_locations_list`
 - `projects_locations_add`

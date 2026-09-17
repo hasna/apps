@@ -1,7 +1,7 @@
 // @generated from the projects-serve OpenAPI document by scripts/generate-sdk.ts.
 // DO NOT EDIT BY HAND. Regenerate: bun run sdk:generate
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
-// Source: Projects API 1.0.0
+// Source: Projects API 1.2.1
 
 export interface Root { "id": string; "slug": string; "name": string; "base_path": string; "tags"?: Array<string>; "default_kind"?: string | null; "repo_visibility"?: string | null; "allowed_recipes"?: Array<string>; "allowed_agents"?: Array<string>; "metadata"?: Record<string, unknown>; "created_at"?: string; "updated_at"?: string }
 
@@ -25,7 +25,7 @@ export interface UpdateWorkspace { "name"?: string; "slug"?: string; "descriptio
 
 export interface WorkspaceEvent { "id": string; "workspace_id"?: string | null; "agent_id"?: string | null; "event_type": string; "source": string; "metadata"?: Record<string, unknown>; "created_at"?: string }
 
-export interface WorkspaceList { "workspaces": Array<Workspace>; "count": number; "total": number; "offset": number; "limit": number; "has_more": boolean; "complete": boolean }
+export interface WorkspaceList { "filter_contract"?: "projects.list.v2"; "applied_filters"?: { "query_scope": "legacy" | "identity" | "discovery" | "structured" | "all"; "tags": Array<string>; "exclude_evals": boolean; "exclude_registry_fixtures": boolean }; "workspaces": Array<Workspace>; "count": number; "total": number; "offset": number; "limit": number; "has_more": boolean; "complete": boolean }
 
 export interface GuardedResponseControl { "response_byte_limit": number; "time_budget_ms": number; "response_bytes": number; "elapsed_ms": number; "complete": boolean; "truncated": boolean }
 
@@ -294,12 +294,31 @@ export class ProjectsClient {
     }
 
     /** List projects (workspaces) */
-    async listProjects(query?: { "status"?: string; "kind"?: string; "root_id"?: string; "query"?: string; "tag"?: string; "limit"?: number; "offset"?: number }, init?: RequestInit): Promise<WorkspaceList> {
-      return this.request("GET", `/v1/projects`, {
+    async listProjects(query?: { "status"?: string; "kind"?: string; "root_id"?: string; "query"?: string; "query_scope"?: "identity" | "discovery" | "structured" | "all"; "tag"?: string; "tags"?: Array<string>; "exclude_evals"?: boolean; "include_fixtures"?: boolean; "limit"?: number; "offset"?: number }, init?: RequestInit): Promise<WorkspaceList> {
+      const response = await this.request<WorkspaceList>("GET", `/v1/projects`, {
         body: undefined,
         query,
         init,
       });
+      const usesV2Filters = query?.query_scope !== undefined
+        || query?.tags !== undefined
+        || query?.exclude_evals !== undefined
+        || query?.include_fixtures !== undefined;
+      if (usesV2Filters) {
+        const expectedTags = [...new Set([...(query?.tag ? [query.tag] : []), ...(query?.tags ?? [])])];
+        const applied = response.applied_filters;
+        if (
+          response.filter_contract !== "projects.list.v2"
+          || !applied
+          || applied.query_scope !== (query?.query_scope ?? "legacy")
+          || JSON.stringify(applied.tags) !== JSON.stringify(expectedTags)
+          || applied.exclude_evals !== (query?.exclude_evals === true)
+          || applied.exclude_registry_fixtures !== (query?.include_fixtures !== true)
+        ) {
+          throw new Error("Projects list requires the projects.list.v2 filter contract; deploy the matching projects-serve before using additive filters.");
+        }
+      }
+      return response;
     }
 
     /** Create a project (workspace) */

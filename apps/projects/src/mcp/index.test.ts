@@ -426,6 +426,7 @@ describe("projects-mcp project-first surface", () => {
 
     expect(source).toContain("\"projects_create\"");
     expect(source).toContain("\"projects_list\"");
+    expect(source).toContain("\"projects_search\"");
     expect(source).toContain("\"projects_update\"");
     expect(source).toContain("\"projects_tag\"");
     expect(source).toContain("\"projects_untag\"");
@@ -502,6 +503,7 @@ describe("projects-mcp project-first surface", () => {
     const legacyCreateTool = ["projects", "workspaces_create"].join("_");
     expect(tools).toContain("projects_create");
     expect(tools).toContain("projects_list");
+    expect(tools).toContain("projects_search");
     expect(tools).toContain("projects_tag");
     expect(tools).toContain("projects_untag");
     expect(tools).toContain("projects_unlink");

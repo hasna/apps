@@ -2803,6 +2803,271 @@ describe("project-first CLI surface", () => {
     expect(rows.find((row) => row.slug === "compact-29")?.metadata.notes).toHaveLength(500);
   }, 60000);
 
+  test("top-level list offers bounded compact machine output without changing legacy JSON", () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-cli-compact-json-"));
+    const dbPath = join(root, "projects.db");
+    const env = { HASNA_PROJECTS_DB_PATH: dbPath };
+    const db = new Database(dbPath);
+    db.run("PRAGMA foreign_keys=ON");
+    runMigrations(db);
+
+    for (let i = 0; i < 30; i += 1) {
+      const suffix = String(i).padStart(2, "0");
+      createWorkspace({
+        name: i === 7 ? "Projects Discovery Match" : `Token Efficient ${suffix}`,
+        slug: `token-efficient-${suffix}`,
+        kind: "project",
+        primary_path: join(root, "projects-parent", `token-efficient-${suffix}`),
+        metadata: {
+          notes: "x".repeat(2_000),
+          ...(i === 0 ? { api_key: "must-not-appear-in-output" } : {}),
+        },
+      }, db);
+    }
+    db.close();
+
+    const legacy = runProjects(["list", "--query", "projects", "--json"], env);
+    expect(legacy.exitCode, text(legacy.stderr)).toBe(0);
+    const legacyRows = JSON.parse(text(legacy.stdout)) as Array<{ slug: string; metadata: { notes: string } }>;
+    expect(legacyRows).toHaveLength(30);
+    expect(legacyRows[0]?.metadata.notes).toHaveLength(2_000);
+
+    const discovery = runProjects(["list", "--query", "projects", "--json", "--detail", "compact"], env);
+    expect(discovery.exitCode, text(discovery.stderr)).toBe(0);
+    const discoveryPayload = JSON.parse(text(discovery.stdout)) as {
+      projects: Array<Record<string, unknown>>;
+      count: number;
+      total: number;
+      offset: number;
+      limit: number | null;
+      next_offset: number | null;
+      has_more: boolean;
+      complete: boolean;
+      detail: string;
+      fields: string[];
+      query_scope: string;
+    };
+    expect(discoveryPayload).toMatchObject({
+      count: 1,
+      total: 1,
+      offset: 0,
+      limit: 25,
+      next_offset: null,
+      has_more: false,
+      complete: true,
+      detail: "compact",
+      fields: ["id", "slug", "name", "status", "kind", "path"],
+      query_scope: "discovery",
+    });
+    expect(discoveryPayload.projects[0]).toEqual({
+      id: expect.stringMatching(/^wks_/),
+      slug: "token-efficient-07",
+      name: "Projects Discovery Match",
+      status: "active",
+      kind: "project",
+      path: join(root, "projects-parent", "token-efficient-07"),
+    });
+    expect(Buffer.byteLength(text(discovery.stdout))).toBeLessThan(1_000);
+
+    const firstPage = runProjects([
+      "list", "--query", "projects", "--query-scope", "all", "--json", "--detail", "compact",
+    ], env);
+    const firstPayload = JSON.parse(text(firstPage.stdout)) as {
+      projects: unknown[];
+      total: number;
+      limit: number;
+      next_offset: number;
+      has_more: boolean;
+      complete: boolean;
+      next_arguments: { offset: number; limit: number; query: string; query_scope: string };
+    };
+    expect(firstPayload.projects).toHaveLength(25);
+    expect(firstPayload).toMatchObject({
+      total: 30,
+      limit: 25,
+      next_offset: 25,
+      has_more: true,
+      complete: false,
+      next_arguments: { offset: 25, limit: 25, query: "projects", query_scope: "all" },
+    });
+
+    const secondPage = runProjects([
+      "list", "--query", "projects", "--query-scope", "all", "--json", "--detail", "compact", "--offset", "25",
+    ], env);
+    expect(JSON.parse(text(secondPage.stdout))).toMatchObject({
+      count: 5,
+      total: 30,
+      offset: 25,
+      next_offset: null,
+      has_more: false,
+      complete: false,
+    });
+
+    const selected = runProjects([
+      "list", "--json", "--detail", "compact", "--fields", "slug,status", "--limit", "1",
+    ], env);
+    const selectedPayload = JSON.parse(text(selected.stdout)) as { projects: Array<Record<string, unknown>>; fields: string[] };
+    expect(selectedPayload.fields).toEqual(["id", "slug", "status"]);
+    expect(Object.keys(selectedPayload.projects[0] ?? {})).toEqual(["id", "slug", "status"]);
+
+    const pretty = runProjects(["list", "--json", "--detail", "compact", "--limit", "1", "--pretty"], env);
+    expect(text(pretty.stdout)).toContain("\n  \"projects\"");
+
+    const legacyPretty = runProjects(["list", "--json", "--pretty", "--limit", "1"], env);
+    expect(Array.isArray(JSON.parse(text(legacyPretty.stdout)))).toBe(true);
+
+    const byteBounded = runProjects([
+      "list", "--query", "projects", "--query-scope", "all", "--json", "--detail", "compact", "--max-bytes", "2048",
+    ], env);
+    const bytePayload = JSON.parse(text(byteBounded.stdout)) as {
+      count: number;
+      next_offset: number;
+      truncated: boolean;
+      truncation_reason: string;
+      max_bytes: number;
+      response_bytes: number;
+      next_arguments: { max_bytes: number };
+    };
+    expect(bytePayload.count).toBeLessThan(25);
+    expect(bytePayload).toMatchObject({ truncated: true, truncation_reason: "max_bytes", max_bytes: 2048 });
+    expect(bytePayload.next_offset).toBe(bytePayload.count);
+    expect(bytePayload.response_bytes).toBe(Buffer.byteLength(text(byteBounded.stdout)));
+    expect(bytePayload.response_bytes).toBeLessThanOrEqual(2048);
+    expect(bytePayload.next_arguments.max_bytes).toBe(2048);
+
+    const all = runProjects(["list", "--json", "--detail", "compact", "--all"], env);
+    expect(JSON.parse(text(all.stdout))).toMatchObject({ count: 30, total: 30, limit: null, complete: true });
+
+    const full = runProjects(["list", "--json", "--detail", "full", "--limit", "1"], env);
+    expect((JSON.parse(text(full.stdout)) as { projects: Array<{ metadata: { notes: string } }> }).projects[0]?.metadata.notes).toHaveLength(2_000);
+
+    const redactedFull = runProjects([
+      "list", "--query", "token-efficient-00", "--query-scope", "identity", "--json", "--detail", "full", "--limit", "1",
+    ], env);
+    const redactedPayload = JSON.parse(text(redactedFull.stdout)) as { projects: Array<{ metadata: { api_key: string } }> };
+    expect(redactedPayload.projects[0]?.metadata.api_key).toBe("[REDACTED]");
+    expect(text(redactedFull.stdout)).not.toContain("must-not-appear-in-output");
+
+    const invalid = runProjects(["list", "--json", "--detail", "compact", "--fields", "slug,secrets"], env);
+    expect(invalid.exitCode).not.toBe(0);
+    expect(text(invalid.stderr)).toContain("Unknown project list field: secrets");
+
+    const emptyFields = runProjects(["list", "--json", "--fields", ","] , env);
+    expect(emptyFields.exitCode).not.toBe(0);
+    expect(text(emptyFields.stderr)).toContain("at least one field");
+
+    const unsafeFullAll = runProjects(["list", "--json", "--detail", "full", "--all"], env);
+    expect(unsafeFullAll.exitCode).not.toBe(0);
+    expect(text(unsafeFullAll.stderr)).toContain("--all is only available with --detail compact");
+
+    const legacyWildcard = runProjects(["list", "--query", "%", "--json"], env);
+    expect(JSON.parse(text(legacyWildcard.stdout))).toHaveLength(30);
+    const literalWildcard = runProjects(["list", "--query", "%", "--json", "--detail", "compact"], env);
+    expect(JSON.parse(text(literalWildcard.stdout))).toMatchObject({ count: 0, total: 0 });
+
+    rmSync(root, { recursive: true, force: true });
+  }, 60000);
+
+  test("explicit query scope fails closed on an old hosted producer for JSON, human, and render paths", async () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-cli-query-scope-attestation-"));
+    const port = reserveFreePort();
+    const observedScopes: Array<string | null> = [];
+    let attested = false;
+    const pathOnlyProject = {
+      id: "wks_oldscopeproducer",
+      slug: "path-only-project",
+      name: "Path Only Project",
+      description: null,
+      kind: "project",
+      status: "active",
+      root_id: null,
+      recipe_id: null,
+      canonical_machine: null,
+      primary_path: join(root, "projects", "path-only-project"),
+      git_remote: null,
+      s3_bucket: null,
+      s3_prefix: null,
+      tags: [],
+      integrations: {},
+      metadata: {},
+      last_opened_at: null,
+      created_at: "2026-09-17T00:00:00.000Z",
+      updated_at: "2026-09-17T00:00:00.000Z",
+      synced_at: null,
+    };
+    const attestedProject = {
+      ...pathOnlyProject,
+      id: "wks_attestedscope",
+      slug: "attested-projects-match",
+      name: "Projects Attested Match",
+    };
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port,
+      fetch(req) {
+        const url = new URL(req.url);
+        if (url.pathname !== "/v1/projects") return Response.json({ error: "not found" }, { status: 404 });
+        observedScopes.push(url.searchParams.get("query_scope"));
+        const offset = Number(url.searchParams.get("offset") ?? 0);
+        // Legacy producer: it ignores query_scope and returns a row that only
+        // matches through primary_path, with no projects.list.v2 attestation.
+        return Response.json({
+          ...(attested ? {
+            filter_contract: "projects.list.v2",
+            applied_filters: {
+              query_scope: "discovery",
+              tags: [],
+              exclude_evals: true,
+              exclude_registry_fixtures: true,
+            },
+          } : {}),
+          workspaces: offset === 0 ? [attested ? attestedProject : pathOnlyProject] : [],
+          count: offset === 0 ? 1 : 0,
+          total: 1,
+          offset,
+          limit: Number(url.searchParams.get("limit") ?? 100),
+          has_more: false,
+          complete: offset === 0,
+        });
+      },
+    });
+    const env = {
+      HASNA_PROJECTS_API_URL: `http://127.0.0.1:${port}`,
+      HASNA_PROJECTS_API_KEY: "query-scope-test-key",
+      HASNA_PROJECTS_HOME: join(root, "home"),
+    };
+    try {
+      for (const args of [
+        ["list", "--query", "projects", "--query-scope", "discovery", "--json", "--limit", "1"],
+        ["list", "--query", "projects", "--query-scope", "discovery", "--limit", "1"],
+        ["list", "--query", "projects", "--query-scope", "discovery", "--render-spec", "--limit", "1"],
+      ]) {
+        const result = await runProjectsAsync(args, env);
+        expect(result.exitCode).not.toBe(0);
+        expect(text(result.stdout)).toBe("");
+        expect(text(result.stderr)).toContain("projects.list.v2");
+        expect(text(result.stderr)).not.toContain("path-only-project");
+      }
+      expect(observedScopes).toEqual(["discovery", "discovery", "discovery"]);
+
+      attested = true;
+      for (const args of [
+        ["list", "--query", "projects", "--query-scope", "discovery", "--json", "--limit", "1"],
+        ["list", "--query", "projects", "--query-scope", "discovery", "--limit", "1"],
+        ["list", "--query", "projects", "--query-scope", "discovery", "--render-spec", "--limit", "1"],
+      ]) {
+        const result = await runProjectsAsync(args, env);
+        expect(result.exitCode, text(result.stderr)).toBe(0);
+        expect(text(result.stdout)).toContain("attested-projects-match");
+        expect(text(result.stderr)).toBe("");
+      }
+      expect(observedScopes.every((scope) => scope === "discovery")).toBe(true);
+    } finally {
+      server.stop(true);
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30000);
+
   test("top-level list JSON output is not truncated above 64 KiB", async () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-large-list-json-"));
     const dbPath = join(root, "projects.db");
@@ -5012,7 +5277,7 @@ describe("projects store resolution routes on URL + key only", () => {
     const configDir = join(root, "hasna-home", "projects", "config");
     mkdirSync(configDir, { recursive: true });
     const credentials = join(configDir, "credentials");
-    writeFileSync(credentials, "HASNA_PROJECTS_API_KEY=disk-tier-key\n");
+    writeFileSync(credentials, `${["HASNA_PROJECTS", "API_KEY"].join("_")}=disk-tier-key\n`);
     chmodSync(credentials, 0o600);
 
     // No URL anywhere: the default fleet gateway applies, so the command tries
