@@ -32,6 +32,19 @@ afterAll(() => rmSyncTop(FIXTURE_HOME, { recursive: true, force: true }));
 
 describe("CLI run core", () => {
   describe("run", () => {
+    test("legacy local execution removes one wrapper separator and preserves child flags", async () => {
+      const tmpDir = mkdtempSyncTop(joinTop(tmpdirTop(), "cli-run-args-"));
+      try {
+        const args = ["--target", "child-only", "--input", "child data", "--json", "--no-color", "", "--", "--remote"];
+        const result = await runCliInCwd(["run", "--json", "lorem-generator", "--", ...args], tmpDir, FIXTURE_ENV);
+        expect(result.exitCode, result.stdout + result.stderr).toBe(0);
+        const data = JSON.parse(result.stdout);
+        expect(data.args).toEqual(args);
+        expect(data.stdout.trim()).toBe("lorem-generator " + args.join(" "));
+        expect(data.remote).not.toBe(true);
+      } finally { rmSyncTop(tmpDir, { recursive: true, force: true }); }
+    });
+
     test("fails for nonexistent skill", async () => {
       const { stderr, exitCode } = await runCli(["run", "nonexistent-xyz"]);
       expect(stderr).toContain("not found");

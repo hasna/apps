@@ -47,13 +47,14 @@ import { resolveConfiguredRunRouting } from "../../lib/run-routing.js";
 import { RemoteSkillsClient } from "../../lib/remote-client.js";
 import { execute as executeRemote } from "./remote-account.js";
 import { describeRemoteFiles, type RemoteInputFile } from "../../lib/remote-files.js";
+import { optionPrefix } from "../option-boundary.js";
 
 export function registerRuntime(parent: Command) {
   // Run
   parent
     .command("run")
     .argument("<skill>", "Skill name")
-    .argument("[args...]", "Arguments to pass to the skill")
+    .argument("[args...]", "Arguments to pass to the skill; use -- to end Skills options")
     .allowUnknownOption(true)
     .passThroughOptions(true)
     .option("--json", "Output result as JSON", false)
@@ -73,7 +74,14 @@ export function registerRuntime(parent: Command) {
     .option("--poll-interval-ms <ms>", "Remote polling interval in milliseconds", "1000")
     .option("--poll-timeout-ms <ms>", "Maximum time to wait for a remote run", "300000")
     .description("Run a skill directly")
-    .action(async (name: string, args: string[], options: RunCommandOptions) => handleRun(name, args, options));
+    .action(async (name: string, args: string[], options: RunCommandOptions, command: Command) => {
+      // A -- before <skill> is already consumed by Commander. Its parent still
+      // records that prefix; everything in this command's args is then literal.
+      const parentArgs = command.parent!.args;
+      const prefix = parentArgs.slice(0, parentArgs.length - command.args.length);
+      const separatorBeforeSkill = optionPrefix(command.parent!, prefix).separator >= 0;
+      await handleRun(name, args, options, separatorBeforeSkill);
+    });
 
   const executions = parent.command("executions").description("Inspect isolated cloud executions");
   for (const operation of ["show", "logs", "artifacts", "cancel"] as const) {
@@ -456,12 +464,18 @@ interface RunCommandOptions {
   pollTimeoutMs?: string;
 }
 
-async function handleRun(name: string, args: string[], options: RunCommandOptions) {
+async function handleRun(name: string, args: string[], options: RunCommandOptions, separatorBeforeSkill: boolean) {
   let managed: boolean;
   try { managed = requiresCliSkillLoading(); }
   catch (error) { console.log(JSON.stringify({ error: (error as Error).message, exitCode: 1 })); process.exitCode = 1; return; }
-  // Commander preserves arguments after <skill>. Reserve run-control options
-  // for selected executions, and keep legacy skill arguments unchanged.
+  // Commander preserves arguments after <skill>, including its -- separator.
+  // Only the prefix belongs to Skills: child flags and any later literal --
+  // must survive unchanged, for selected, remote and legacy local runs alike.
+  const separator = args.indexOf("--");
+  const childArgs = separatorBeforeSkill ? args : separator < 0 ? [] : args.slice(separator + 1);
+  if (separatorBeforeSkill) args = [];
+  else if (separator >= 0) args = args.slice(0, separator);
+  // Without a separator, retain the existing selected-control/legacy behavior.
   const targetIndex = args.indexOf("--target");
   if ((managed && !options.remote) || options.target || targetIndex >= 0 || options.secretBindings || options.secretBindingsTemplate || args.includes("--secret-bindings") || args.includes("--secret-bindings-template")) {
     options = { ...options }; args = [...args];
@@ -479,6 +493,7 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
       const at = args.indexOf(flag); if (at >= 0) { options[key] = true; args.splice(at, 1); }
     }
   }
+  args = [...args, ...childArgs];
   // Explicit hosted execution uses the configured server catalog and quote,
   // independently of the station's selected-bundle loading policy.
   if (options.remote && options.target) {

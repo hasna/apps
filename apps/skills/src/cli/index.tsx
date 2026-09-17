@@ -11,15 +11,9 @@ import { loadBasicRegistry } from "../lib/registry.js";
 import { getCompactSkillDiscovery } from "../lib/discovery.js";
 import { isSkillsFleetCredentialError } from "../lib/fleet-credentials.js";
 import { requireSkillsReadAccess } from "../lib/read-access.js";
+import { optionPrefix } from "./option-boundary.js";
 
 const isTTY = (process.stdout.isTTY ?? false) && (process.stdin.isTTY ?? false);
-
-// Respect --no-color flag
-if (process.argv.includes("--no-color")) {
-  chalk.level = 0;
-  const idx = process.argv.indexOf("--no-color");
-  process.argv.splice(idx, 1);
-}
 
 const program = new Command();
 
@@ -152,6 +146,15 @@ const { registerRegistryReconcile } = await import("./commands/registry-reconcil
 registerRegistryReconcile(program);
 
 registerEventsCommands(program as any, { source: "skills" });
+
+// Registration supplies option arity: a required value may itself be -- or
+// --no-color. Preserve those values and all executable arguments after --.
+const cliArgs = process.argv.slice(2);
+const colorFlag = optionPrefix(program, cliArgs).indices.find(index => cliArgs[index] === "--no-color");
+if (colorFlag !== undefined) {
+  chalk.level = 0;
+  process.argv.splice(colorFlag + 2, 1);
+}
 
 // A retired deployment-mode setting is an operator error with a one-line fix, and
 // the fix is in the message. Printed bare rather than thrown, because a stack trace
