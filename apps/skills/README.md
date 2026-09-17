@@ -246,8 +246,11 @@ select complete skill instructions from that verified cache using explicit
 A session retains its selected versions; compaction restores loaded instructions,
 and subagents inherit the parent's selection. Instructions that exceed the
 context budget produce an explicit `skills load` command. A hook never executes
-a skill. Cached use is explicit and expires after 24 hours; authentication
-failures do not silently switch to a local catalog.
+a skill. Cached use is explicit and expires after 24 hours. When cached context
+expires or is missing, the hook makes one authenticated API attempt for the same
+pinned session. It preserves exact versions and does not extend an expired
+receipt's lifetime. Authentication, integrity and native discovery failures still
+block; they do not silently switch to a local catalog.
 
 ## Profiles, station sync and rollback
 

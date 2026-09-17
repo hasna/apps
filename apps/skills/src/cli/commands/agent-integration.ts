@@ -8,6 +8,35 @@ import { selectedProfileId } from "./context.js";
 import { AGENT_ADAPTERS, INTEGRATION_AGENTS, normalizeAgentHookEvent } from "../../lib/agent-adapters.js";
 import { planAgentIntegration, applyAgentIntegration, inventoryNativeSkills, archiveNativeSkills, assertManagedAgentBridge, hookContextOutput, normalizeAgentHookPrompt, type IntegrationAgent } from "../../lib/agent-integration.js";
 
+const RECOVERABLE_CONTEXT_CACHE_ERRORS = new Set(["CACHED_PROFILE_EXPIRED", "CACHED_PROFILE_MISSING", "CACHED_BUNDLE_MISSING"]);
+
+async function contextForHook(input: unknown, profileId: string, cached: boolean, deadline: number): Promise<any> {
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) throw new Error("Skills hook deadline exceeded");
+  const args = [process.execPath, process.argv[1]!, "context", "--stdin", "--json", "--selection-profile", profileId];
+  if (cached) args.push("--cached");
+  const child = Bun.spawn(args, { stdin: new Blob([JSON.stringify(input)]), stdout: "pipe", stderr: "pipe", env: { ...process.env, NO_COLOR: "1" } });
+  const timer = setTimeout(() => child.kill("SIGKILL"), Math.min(6500, remaining));
+  let result: any;
+  let status: number;
+  try {
+    const [stdout, , exitCode] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    status = exitCode;
+    result = JSON.parse(stdout);
+  } finally { clearTimeout(timer); }
+  if (status !== 0) {
+    // An expired pin overrides a newly synced profile. Reauthorize this exact
+    // session through the API; do not reset its versions or forge a fresh cache
+    // timestamp. Authentication/integrity failures never fall back to a cache.
+    if (cached && RECOVERABLE_CONTEXT_CACHE_ERRORS.has(result?.error?.code)) {
+      return contextForHook(input, profileId, false, deadline);
+    }
+    throw new Error("Skills context could not be resolved");
+  }
+  if (typeof result?.context !== "string") throw new Error("Invalid Skills context response");
+  return result;
+}
+
 function agents(value: string): IntegrationAgent[] {
   if (value === "all") return [...INTEGRATION_AGENTS];
   if (INTEGRATION_AGENTS.includes(value as IntegrationAgent)) return [value as IntegrationAgent];
@@ -47,6 +76,7 @@ export function registerAgentIntegration(parent: Command): void {
     .option("--selection-profile <id>", "Selection profile to load")
     .description("Read native lifecycle JSON on stdin and return selected context")
     .action(async (options) => {
+      const deadline = Date.now() + 12_000;
       // The installed blocking event must survive malformed JSON/input too.
       let event = options.agent === "hermes" && options.event === "pre_tool_call" ? "pre_tool_call" : "UserPromptSubmit";
       try {
@@ -89,32 +119,27 @@ export function registerAgentIntegration(parent: Command): void {
         assertManagedAgentBridge(options.agent, { projectDirs: projects, profileId: selectionProfile });
         if (typeof input.prompt === "string") input.prompt = normalizeAgentHookPrompt(options.agent, nativeEvent, input.prompt);
         if (event === "SessionStart") {
+          const remaining = deadline - Date.now();
+          if (remaining <= 0) throw new Error("Skills hook deadline exceeded");
           const refresh = Bun.spawn([process.execPath, process.argv[1]!, "sync", "--selection-profile", selectionProfile, "--json"], { stdin: "ignore", stdout: "pipe", stderr: "pipe", env: { ...process.env, NO_COLOR: "1" } });
-          const timer = setTimeout(() => refresh.kill("SIGKILL"), 6500);
+          const timer = setTimeout(() => refresh.kill("SIGKILL"), Math.min(6500, remaining));
           try {
             const [, , status] = await Promise.all([new Response(refresh.stdout).text(), new Response(refresh.stderr).text(), refresh.exited]);
             if (status !== 0) throw new Error("Session profile refresh failed");
           } finally { clearTimeout(timer); }
         }
-        // Prompt selection uses the explicitly verified cache; only session start refreshes remotely.
-        const args = [process.execPath, process.argv[1]!, "context", "--stdin", "--json", "--cached", "--selection-profile", selectionProfile];
-        const child = Bun.spawn(args, { stdin: new Blob([JSON.stringify(input)]), stdout: "pipe", stderr: "pipe", env: { ...process.env, NO_COLOR: "1" } });
-        const timer = setTimeout(() => child.kill("SIGKILL"), 6500);
-        try {
-          const [stdout, , status] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-          if (status !== 0) throw new Error("Skills context could not be resolved");
-          const result = JSON.parse(stdout);
-          if (typeof result.context !== "string") throw new Error("Invalid Skills context response");
-          const output = hookContextOutput(event, result) as { hookSpecificOutput?: { hookEventName: string; additionalContext: string } };
-          if (options.agent === "hermes") {
-            await writeCliOutput(JSON.stringify({ context: output.hookSpecificOutput?.additionalContext ?? "" }));
-          } else if (options.agent === "cursor") {
-            await writeCliOutput(JSON.stringify(event === "SessionStart" ? { additional_context: output.hookSpecificOutput?.additionalContext ?? "" } : { continue: true }));
-          } else {
-            if (options.agent === "gemini" && output.hookSpecificOutput) output.hookSpecificOutput.hookEventName = nativeEvent;
-            await writeCliOutput(JSON.stringify(output));
-          }
-        } finally { clearTimeout(timer); }
+        // Fresh cached context stays local. An expired session can override the
+        // profile refreshed above, so resolve it once through the API if needed.
+        const result = await contextForHook(input, selectionProfile, true, deadline);
+        const output = hookContextOutput(event, result) as { hookSpecificOutput?: { hookEventName: string; additionalContext: string } };
+        if (options.agent === "hermes") {
+          await writeCliOutput(JSON.stringify({ context: output.hookSpecificOutput?.additionalContext ?? "" }));
+        } else if (options.agent === "cursor") {
+          await writeCliOutput(JSON.stringify(event === "SessionStart" ? { additional_context: output.hookSpecificOutput?.additionalContext ?? "" } : { continue: true }));
+        } else {
+          if (options.agent === "gemini" && output.hookSpecificOutput) output.hookSpecificOutput.hookEventName = nativeEvent;
+          await writeCliOutput(JSON.stringify(output));
+        }
       } catch (error) {
         const reason = error instanceof Error && error.message.startsWith("NATIVE_SKILL_DRIFT:")
           ? error.message
