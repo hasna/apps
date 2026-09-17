@@ -225,6 +225,36 @@ describe("standard-adherence: protected Instructions deployment lane", () => {
     expect(backup).toContain('--manifest-version-id "${MANIFEST_VERSION_ID}"');
   });
 
+  test("rejects moving version-pinned verification outside the second container shell", () => {
+    const movedVerification = workflow
+      .replace(
+        "-c 'set -eu\n              bun dist/cli/index.js storage backup verify",
+        "-c 'true'\n          bun dist/cli/index.js storage backup verify",
+      )
+      .replace(
+        "                --json > /backup/s3-verify.json'\n          archive_sha256=",
+        "            --json > /backup/s3-verify.json\n          archive_sha256=",
+      );
+
+    expect(movedVerification).not.toBe(workflow);
+    expect(validateInstructionsDeploy(movedVerification, "ci", "1.3.14")).toContain(
+      'S3 backup verification container shell missing: bun dist/cli/index.js storage backup verify "${BACKUP_ID}"',
+    );
+  });
+
+  test("rejects an unrelated image for the version-pinned verification container", () => {
+    const runnerParse = workflow.indexOf('payload_version_id="$(jq -er');
+    const image = workflow.indexOf('"${LOCAL_IMAGE}:${SOURCE_SHA}"', runnerParse);
+    const unrelatedImage = image < 0
+      ? workflow
+      : `${workflow.slice(0, image)}"unrelated-image:fixed"${workflow.slice(image + '"${LOCAL_IMAGE}:${SOURCE_SHA}"'.length)}`;
+
+    expect(unrelatedImage).not.toBe(workflow);
+    expect(validateInstructionsDeploy(unrelatedImage, "ci", "1.3.14")).toContain(
+      "S3 backup verification container must run the exact source image",
+    );
+  });
+
   test("uses only the redacted receipt for WORM object keys without logging content", () => {
     expect(workflow).toContain("hasna.instructions.redacted-backup-receipt.v2");
     expect(workflow).toContain("payload_key=\"$(jq -er '.payloadKey' \"${backup_receipt}\")\"");

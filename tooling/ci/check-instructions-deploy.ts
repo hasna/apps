@@ -723,8 +723,38 @@ export function validateInstructionsDeploy(
   const pushContainer = backup.slice(backup.lastIndexOf("docker run --rm", pushCommand), runnerVersionParse);
   if (pushContainer.includes("jq"))
     fail("S3 backup push container must not depend on jq");
-  if ((backup.match(/docker run --rm/g) ?? []).length !== 2)
+  const backupContainers = [...backup.matchAll(/docker run --rm/g)].map((match) => match.index);
+  if (backupContainers.length !== 2) {
     fail("S3 backup must use separate push and version-pinned verification containers");
+  } else if (runnerVersionParse >= 0) {
+    const verificationContainerStart = backupContainers.find((index) => index > runnerVersionParse);
+    const verificationContainerEnd = verificationContainerStart === undefined
+      ? -1
+      : backup.indexOf("\narchive_sha256=", verificationContainerStart);
+    if (verificationContainerStart === undefined || verificationContainerEnd < 0) {
+      fail("S3 backup verification container is missing or unterminated");
+    } else {
+      const verificationContainer = backup.slice(verificationContainerStart, verificationContainerEnd);
+      if (!/"\$\{LOCAL_IMAGE\}:\$\{SOURCE_SHA\}" \\\n\s+-c '/.test(verificationContainer))
+        fail("S3 backup verification container must run the exact source image");
+      const shellMarker = "-c '";
+      const shellStart = verificationContainer.indexOf(shellMarker);
+      const shellEnd = shellStart < 0
+        ? -1
+        : verificationContainer.indexOf("'", shellStart + shellMarker.length);
+      const shell = shellStart < 0 || shellEnd < 0
+        ? ""
+        : verificationContainer.slice(shellStart + shellMarker.length, shellEnd);
+      for (const command of [
+        'bun dist/cli/index.js storage backup verify "${BACKUP_ID}"',
+        '--payload-version-id "${PAYLOAD_VERSION_ID}"',
+        '--manifest-version-id "${MANIFEST_VERSION_ID}"',
+        '--json > /backup/s3-verify.json',
+      ])
+        if (!shell.includes(command))
+          fail(`S3 backup verification container shell missing: ${command}`);
+    }
+  }
   if (backup.includes("dist/cli/index.js export"))
     fail("S3 backup step must push the previously validated archive without re-exporting");
   const ecr = runOf(steps, NAMES.ecr);
@@ -1102,6 +1132,29 @@ export function selfTestInstructionsDeploy(root = process.cwd()): string[] {
       "S3 backup must use separate push and version-pinned verification containers",
     ],
     [
+      "version-pinned verification moved outside its container shell",
+      (s) =>
+        s.replace(
+          "-c 'set -eu\n              bun dist/cli/index.js storage backup verify",
+          "-c 'true'\n          bun dist/cli/index.js storage backup verify",
+        ).replace(
+          "                --json > /backup/s3-verify.json'\n          archive_sha256=",
+          "            --json > /backup/s3-verify.json\n          archive_sha256=",
+        ),
+      "S3 backup verification container shell missing: bun dist/cli/index.js storage backup verify",
+    ],
+    [
+      "verification container source image replaced",
+      (s) => {
+        const runnerParse = s.indexOf('payload_version_id="$(jq -er');
+        const image = s.indexOf('"${LOCAL_IMAGE}:${SOURCE_SHA}"', runnerParse);
+        return image < 0
+          ? s
+          : `${s.slice(0, image)}"unrelated-image:fixed"${s.slice(image + '"${LOCAL_IMAGE}:${SOURCE_SHA}"'.length)}`;
+      },
+      "S3 backup verification container must run the exact source image",
+    ],
+    [
       "exact archive digest binding removed",
       (s) =>
         s.replaceAll(
@@ -1236,7 +1289,7 @@ if (import.meta.main) {
       process.exit(1);
     }
     console.log(
-      "instructions-deploy self-test: PASS — positive control accepted and 30 negative controls rejected",
+      "instructions-deploy self-test: PASS — positive control accepted and 32 negative controls rejected",
     );
   }
   const errors = validateInstructionsDeploy(
