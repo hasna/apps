@@ -87,8 +87,21 @@ function logicalCollections(
   options: { includeOperationalTimestamps: boolean },
 ): Record<keyof InstructionsDomainArchiveCounts, unknown[]> {
   const configs = [...domain.configs].sort((left, right) => compareText(left.slug, right.slug));
-  const snapshots = [...domain.config_snapshots].sort((left, right) =>
-    compareText(left.config_slug, right.config_slug) || left.version - right.version || compareText(left.id, right.id));
+  // Snapshot IDs are physical row identities. A restore intentionally assigns
+  // fresh IDs, so the logical hash must order duplicate-version rows by the
+  // fields that survive a restore. This keeps multiplicity and every divergent
+  // content value in the integrity calculation without making the result
+  // depend on newly generated IDs.
+  const snapshots = domain.config_snapshots.map((snapshot) => ({
+    config_slug: snapshot.config_slug,
+    version: snapshot.version,
+    content: snapshot.content,
+    ...(options.includeOperationalTimestamps ? { created_at: snapshot.created_at } : {}),
+  })).sort((left, right) =>
+    compareText(left.config_slug, right.config_slug) ||
+    left.version - right.version ||
+    compareText(left.content, right.content) ||
+    compareText("created_at" in left ? left.created_at ?? "" : "", "created_at" in right ? right.created_at ?? "" : ""));
   const profiles = [...domain.profiles].sort((left, right) => compareText(left.slug, right.slug));
   const configBindings = [...domain.profile_config_bindings].sort((left, right) =>
     compareText(left.profile_slug, right.profile_slug) || left.sort_order - right.sort_order || compareText(left.config_slug, right.config_slug));
@@ -119,12 +132,7 @@ function logicalCollections(
         synced_at: config.synced_at,
       } : {}),
     })),
-    config_snapshots: snapshots.map((snapshot) => ({
-      config_slug: snapshot.config_slug,
-      version: snapshot.version,
-      content: snapshot.content,
-      ...(options.includeOperationalTimestamps ? { created_at: snapshot.created_at } : {}),
-    })),
+    config_snapshots: snapshots,
     profiles: profiles.map((profile) => ({
       slug: profile.slug,
       name: profile.name,
@@ -265,34 +273,30 @@ export function validateInstructionsDomainArchive(value: unknown): InstructionsD
   assertUnique(typed.configs.map((row) => row.slug), "config slug");
   assertUnique(typed.profiles.map((row) => row.slug), "profile slug");
   assertUnique(typed.machines.map((row) => row.hostname), "machine hostname");
-  assertUnique(typed.config_snapshots.map((row) => `${row.config_slug}@${row.version}`), "config snapshot");
+  // Legacy hosted data can contain more than one physical row for a logical
+  // (config, version) pair, including rows with different content. Preserve
+  // those rows as evidence. Only the physical snapshot ID must be unique.
+  assertUnique(typed.config_snapshots.map((row) => row.id), "config snapshot id");
   assertUnique(typed.profile_config_bindings.map((row) => `${row.profile_slug}:${row.config_slug}`), "profile config binding");
   assertUnique(typed.profile_asset_bindings.map((row) => `${row.profile_slug}:${row.binding.assetKey}`), "profile asset binding");
 
-  const configSlugs = new Set(typed.configs.map((row) => row.slug));
+  const configsBySlug = new Map(typed.configs.map((row) => [row.slug, row]));
+  const configSlugs = new Set(configsBySlug.keys());
   const profileSlugs = new Set(typed.profiles.map((row) => row.slug));
   for (const config of typed.configs) {
     assertTimestamp(config.created_at, `config ${config.slug} created_at`);
     assertTimestamp(config.updated_at, `config ${config.slug} updated_at`);
     assertTimestamp(config.synced_at, `config ${config.slug} synced_at`, true);
     if (!Number.isSafeInteger(config.version) || config.version < 1) throw new Error(`Invalid v2 archive: config ${config.slug} has invalid version`);
-    const snapshots = typed.config_snapshots.filter((row) => row.config_slug === config.slug).sort((a, b) => a.version - b.version);
-    if (snapshots.some((row) => !Number.isSafeInteger(row.version) || row.version < 1 || row.version > config.version)) {
-      throw new Error(`Invalid v2 archive: config ${config.slug} has an invalid snapshot version`);
-    }
-    if (snapshots.length) {
-      const first = snapshots[0]!.version;
-      const expected = Array.from({ length: config.version - first + 1 }, (_, index) => first + index);
-      if (canonicalDomainJson(snapshots.map((row) => row.version)) !== canonicalDomainJson(expected) || snapshots.at(-1)!.version !== config.version) {
-        throw new Error(`Invalid v2 archive: snapshots for ${config.slug} must be a contiguous suffix ending at version ${config.version}`);
-      }
-      if (snapshots.at(-1)!.content !== config.content) {
-        throw new Error(`Invalid v2 archive: latest snapshot content differs from config ${config.slug}`);
-      }
-    }
   }
   for (const row of typed.config_snapshots) {
-    if (!configSlugs.has(row.config_slug)) throw new Error(`Invalid v2 archive: snapshot references missing config ${row.config_slug}`);
+    const config = configsBySlug.get(row.config_slug);
+    if (!config) {
+      throw new Error(`Invalid v2 archive: snapshot references missing config ${row.config_slug}`);
+    }
+    if (!Number.isSafeInteger(row.version) || row.version < 1 || row.version > config.version) {
+      throw new Error(`Invalid v2 archive: config ${row.config_slug} has an invalid snapshot version`);
+    }
     assertTimestamp(row.created_at, `snapshot ${row.config_slug}@${row.version} created_at`);
   }
   for (const profile of typed.profiles) {
