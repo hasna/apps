@@ -42,6 +42,8 @@ import { ConfigNotFoundError, ProfileNotFoundError } from "../types/index.js";
 import type {
   Config,
   ConfigFilter,
+  ConfigSummary,
+  ConfigIdentity,
   ConfigSnapshot,
   CreateConfigInput,
   CreateProfileInput,
@@ -129,6 +131,20 @@ function parseBoundedOrLegacyPage<T>(
   return { ...page, source_bounded: false };
 }
 
+
+function projectBoundedPage<T, U>(page: BoundedReadPage<T>, project: (item: T) => U): BoundedReadPage<U> {
+  return {
+    items: page.items.map(project),
+    total: page.total,
+    limit: page.limit,
+    cursor: page.cursor,
+    next_cursor: page.next_cursor,
+    has_more: page.has_more,
+    complete: page.complete,
+    truncated: page.truncated,
+    source_bounded: page.source_bounded,
+  };
+}
 
 class CollectionChangedWhilePagingError extends Error {
   constructor(label: string, detail: string) {
@@ -282,6 +298,9 @@ export interface ConfigStore {
   readonly v1BaseUrl: string | null;
   // Configs
   listConfigs(filter?: ConfigFilter): Promise<Config[]>;
+  listConfigsPage(filter?: ConfigFilter, options?: BoundedReadOptions): Promise<BoundedReadPage<Config>>;
+  listConfigIdentitiesPage(filter?: ConfigFilter, options?: BoundedReadOptions): Promise<BoundedReadPage<ConfigIdentity>>;
+  listConfigSummariesPage(filter?: ConfigFilter, options?: BoundedReadOptions): Promise<BoundedReadPage<ConfigSummary>>;
   getConfig(idOrSlug: string): Promise<Config>;
   getConfigById(id: string): Promise<Config>;
   createConfig(input: CreateConfigInput): Promise<Config>;
@@ -361,6 +380,15 @@ export class LocalConfigStore implements ConfigStore {
   // Configs
   async listConfigs(filter?: ConfigFilter): Promise<Config[]> {
     return (await localStoreModule()).listConfigs(filter, this.db);
+  }
+  async listConfigsPage(filter: ConfigFilter = {}, options: BoundedReadOptions = {}): Promise<BoundedReadPage<Config>> {
+    return (await localStoreModule()).listConfigsPage(filter, options, this.db);
+  }
+  async listConfigIdentitiesPage(filter: ConfigFilter = {}, options: BoundedReadOptions = {}): Promise<BoundedReadPage<ConfigIdentity>> {
+    return (await localStoreModule()).listConfigIdentitiesPage(filter, options, this.db);
+  }
+  async listConfigSummariesPage(filter: ConfigFilter = {}, options: BoundedReadOptions = {}): Promise<BoundedReadPage<ConfigSummary>> {
+    return (await localStoreModule()).listConfigSummariesPage(filter, options, this.db);
   }
   async getConfig(idOrSlug: string): Promise<Config> {
     return (await localStoreModule()).getConfig(idOrSlug, this.db);
@@ -482,6 +510,45 @@ export class LocalConfigStore implements ConfigStore {
   }
 }
 
+function toConfigIdentity(value: unknown): ConfigIdentity {
+  const record = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  return {
+    id: String(record.id ?? ""),
+    name: String(record.name ?? ""),
+    slug: String(record.slug ?? ""),
+    kind: String(record.kind ?? "") as ConfigIdentity["kind"],
+    category: String(record.category ?? "") as ConfigIdentity["category"],
+    agent: String(record.agent ?? "") as ConfigIdentity["agent"],
+    format: String(record.format ?? "") as ConfigIdentity["format"],
+    is_template: Boolean(record.is_template),
+    version: Number(record.version ?? 0),
+    created_at: String(record.created_at ?? ""),
+    updated_at: String(record.updated_at ?? ""),
+    synced_at: record.synced_at == null ? null : String(record.synced_at),
+  };
+}
+
+function toConfigSummary(value: unknown): ConfigSummary {
+  const record = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  const outputs = Array.isArray(record.outputs) ? record.outputs : [];
+  return {
+    id: String(record.id ?? ""),
+    slug: String(record.slug ?? ""),
+    name: String(record.name ?? ""),
+    category: String(record.category ?? "") as ConfigSummary["category"],
+    agent: String(record.agent ?? "") as ConfigSummary["agent"],
+    kind: String(record.kind ?? "") as ConfigSummary["kind"],
+    format: String(record.format ?? "") as ConfigSummary["format"],
+    target_path: record.target_path == null ? null : String(record.target_path),
+    output_count: Number(record.output_count ?? outputs.length),
+    version: Number(record.version ?? 0),
+    is_template: Boolean(record.is_template),
+    ...(record.updated_at !== undefined ? { updated_at: String(record.updated_at) } : {}),
+    ...(record.description !== undefined ? { description: record.description == null ? null : String(record.description) } : {}),
+    ...(Array.isArray(record.tags) ? { tags: record.tags.map(String) } : {}),
+  };
+}
+
 /** Cloud store: routes every operation to the `/v1` HTTP API through the contracts transport. */
 export class CloudConfigStore implements ConfigStore {
   readonly mode = "api" as const;
@@ -512,9 +579,9 @@ export class CloudConfigStore implements ConfigStore {
   }
 
   // Configs
-  private async listConfigsPageRemote(
-    filter: ConfigFilter,
-    options: BoundedReadOptions,
+  async listConfigsPage(
+    filter: ConfigFilter = {},
+    options: BoundedReadOptions = {},
   ): Promise<BoundedReadPage<Config>> {
     const normalized = normalizeBoundedReadOptions(options);
     const params = new URLSearchParams();
@@ -522,6 +589,7 @@ export class CloudConfigStore implements ConfigStore {
     if (filter.agent) params.set("agent", filter.agent);
     if (filter.kind) params.set("kind", filter.kind);
     if (filter.search) params.set("search", filter.search);
+    for (const tag of filter.tags ?? []) params.append("tag", tag);
     params.set("limit", String(normalized.limit));
     params.set("cursor", String(normalized.cursor));
     const { data } = await this.request<BoundedReadPage<Config> & { configs?: Config[] }>(
@@ -531,10 +599,67 @@ export class CloudConfigStore implements ConfigStore {
     return parseBoundedOrLegacyPage<Config>(data, data?.configs, normalized, "config list");
   }
 
+  async listConfigIdentitiesPage(
+    filter: ConfigFilter = {},
+    options: BoundedReadOptions = {},
+  ): Promise<BoundedReadPage<ConfigIdentity>> {
+    const normalized = normalizeBoundedReadOptions(options);
+    const params = new URLSearchParams();
+    if (filter.category) params.set("category", filter.category);
+    if (filter.agent) params.set("agent", filter.agent);
+    if (filter.kind) params.set("kind", filter.kind);
+    if (filter.search) params.set("search", filter.search);
+    for (const tag of filter.tags ?? []) params.append("tag", tag);
+    params.set("view", "identity");
+    params.set("limit", String(normalized.limit));
+    params.set("cursor", String(normalized.cursor));
+    const { data } = await this.request<BoundedReadPage<ConfigIdentity> & { configs?: unknown[] }>(
+      "GET",
+      `/configs?${params.toString()}`,
+    );
+    const page = parseBoundedOrLegacyPage<unknown>(data, data?.configs, normalized, "config identity list");
+    if (page.items.some((item) => {
+      const record = item && typeof item === "object" ? item as Record<string, unknown> : {};
+      return ["content", "target_path", "outputs", "description", "tags"].some((field) =>
+        Object.prototype.hasOwnProperty.call(record, field));
+    })) {
+      throw new Error("Instructions /v1 config identity projection is unavailable; deploy the identity endpoint before using compact lists");
+    }
+    return projectBoundedPage(page, toConfigIdentity);
+  }
+
+  async listConfigSummariesPage(
+    filter: ConfigFilter = {},
+    options: BoundedReadOptions = {},
+  ): Promise<BoundedReadPage<ConfigSummary>> {
+    const normalized = normalizeBoundedReadOptions(options);
+    const params = new URLSearchParams();
+    if (filter.category) params.set("category", filter.category);
+    if (filter.agent) params.set("agent", filter.agent);
+    if (filter.kind) params.set("kind", filter.kind);
+    if (filter.search) params.set("search", filter.search);
+    for (const tag of filter.tags ?? []) params.append("tag", tag);
+    params.set("view", "summary");
+    params.set("limit", String(normalized.limit));
+    params.set("cursor", String(normalized.cursor));
+    const { data } = await this.request<BoundedReadPage<ConfigSummary> & { configs?: unknown[] }>(
+      "GET",
+      `/configs?${params.toString()}`,
+    );
+    const page = parseBoundedOrLegacyPage<unknown>(data, data?.configs, normalized, "config summary list");
+    if (page.items.some((item) => {
+      const record = item && typeof item === "object" ? item as Record<string, unknown> : {};
+      return Object.prototype.hasOwnProperty.call(record, "content") || Object.prototype.hasOwnProperty.call(record, "outputs");
+    })) {
+      throw new Error("Instructions /v1 config summary projection is unavailable; deploy the summary endpoint before using summary lists");
+    }
+    return projectBoundedPage(page, toConfigSummary);
+  }
+
   async listConfigs(filter: ConfigFilter = {}): Promise<Config[]> {
     const configs = await aggregateBoundedCollection(
       "config list",
-      (cursor) => this.listConfigsPageRemote(filter, { limit: 100, cursor }),
+      (cursor) => this.listConfigsPage(filter, { limit: 100, cursor }),
       (config) => config.id,
       { requireAscendingIdentity: true },
     );

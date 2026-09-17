@@ -74,9 +74,10 @@ MCP responses contain one text item whose text is JSON. Tool failures set
 | `delete_config` | `id_or_slug` (required) |
 | `apply_config` | `id_or_slug` (required), `dry_run?`, `verbose?` |
 
-`list_configs` returns a paged compact envelope and omits content. Set
-`verbose: true` for tags/output targets or call `get_config` for the complete
-record. `apply_config` uses the same session-renderer ownership gate as the CLI
+`list_configs` returns a bounded identity envelope and omits content, paths,
+descriptions, tags, and output topology by default. Set `verbose: true` for the
+content-free summary projection (paths, descriptions, tags, and output counts),
+or call `get_config` for the complete record. `apply_config` uses the same session-renderer ownership gate as the CLI
 and reports owned targets in `skipped`. `verbose` controls whether apply
 results include previous/new content.
 

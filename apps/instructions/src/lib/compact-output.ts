@@ -1,4 +1,5 @@
-import type { ApplyResult, Config, Profile } from "../types/index.js";
+import type { ApplyResult, Config, ConfigSummary, Profile } from "../types/index.js";
+export type { ConfigSummary } from "../types/index.js";
 
 export const DEFAULT_LIST_LIMIT = 20;
 export const MAX_LIST_LIMIT = 100;
@@ -71,24 +72,6 @@ export function truncateMiddle(value: string | null | undefined, max = 80): stri
   const head = Math.ceil((max - 3) * 0.55);
   const tail = Math.floor((max - 3) * 0.45);
   return `${text.slice(0, head)}...${text.slice(text.length - tail)}`;
-}
-
-export interface ConfigSummary {
-  id: string;
-  slug: string;
-  name: string;
-  category: Config["category"];
-  agent: Config["agent"];
-  kind: Config["kind"];
-  format: Config["format"];
-  target_path: string | null;
-  output_count: number;
-  version: number;
-  is_template: boolean;
-  updated_at?: string;
-  description?: string | null;
-  tags?: string[];
-  outputs?: Config["outputs"];
 }
 
 export function summarizeConfig(config: Config, opts: { verbose?: boolean } = {}): ConfigSummary {

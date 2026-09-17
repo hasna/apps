@@ -126,6 +126,40 @@ describe("Instructions metadata-only identity pages", () => {
     );
   });
 
+  test("config summary view is content-free and preserves bounded metadata", async () => {
+    mockCloudBoundary();
+    const summary: import("../types/index.js").ConfigSummary = {
+      id: "config-1", slug: "demo", name: "Demo", category: "rules", agent: "global", kind: "file",
+      format: "markdown", target_path: "~/.config/demo.md", output_count: 0, version: 1, is_template: false,
+      updated_at: "2026-09-17T00:00:00.000Z", description: null, tags: [],
+    };
+    const read = track(spyOn(store, "listConfigSummariesPage").mockResolvedValue({
+      items: [summary], total: 3, limit: 1, cursor: 1, next_cursor: 2,
+      has_more: true, complete: false, truncated: false, source_bounded: true,
+    }));
+
+    const response = await request("/v1/configs?view=summary&tag=safe&limit=1&cursor=1");
+    const payload = await response?.json() as Record<string, unknown>;
+
+    expect(response?.status).toBe(200);
+    expect(read).toHaveBeenCalledWith(expect.anything(), { tags: ["safe"] }, { limit: "1", cursor: "1" });
+    expect(payload.items).toEqual([summary]);
+    expect(payload.configs).toBeUndefined();
+    expect(payload).toMatchObject({ count: 1, total: 3, next_cursor: 2, has_more: true, complete: false });
+    expect(JSON.stringify(payload)).not.toContain('"content"');
+  });
+
+  test("invalid config views fail closed instead of returning full content", async () => {
+    mockCloudBoundary();
+    const full = track(spyOn(store, "listConfigsPage").mockResolvedValue({} as never));
+
+    const response = await request("/v1/configs?view=summray");
+
+    expect(response?.status).toBe(400);
+    expect(await response?.json()).toMatchObject({ code: "INVALID_CONFIG_VIEW" });
+    expect(full).not.toHaveBeenCalled();
+  });
+
   test.each([
     ["configs", "/v1/configs?view=identity&limit=2&cursor=0", "listConfigIdentitiesPage"],
     ["profiles", "/v1/profiles?view=identity&limit=2&cursor=0", "listProfileIdentitiesPage"],
@@ -239,7 +273,7 @@ describe("Instructions OpenAPI security and bounded-read contract", () => {
       );
       expect(operation.responses["200"].content["application/json"].schema.$ref).toContain("BoundedProfile");
     }
-    expect(configsGet.responses["200"].content["application/json"].schema.oneOf).toHaveLength(2);
+    expect(configsGet.responses["200"].content["application/json"].schema.anyOf).toHaveLength(3);
 
     for (const operation of [
       document.paths["/v1/configs"].post,

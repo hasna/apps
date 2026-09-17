@@ -17,9 +17,15 @@ otherwise. Destructive commands do not prompt.
 ## Output and pagination
 
 Collection commands use compact human output and cap it at 20 rows by default.
-Use `--limit <n>` and the reported zero-based `--cursor <n>` to page. `--json`
-returns full records where offered. `list --verbose` and `profile list
---verbose` expand metadata but remain paged.
+Use `--limit <n>` and the reported zero-based `--cursor <n>` to page. Config
+listing reads the content-free `/v1/configs?view=summary` projection unless full
+records are explicitly requested. Legacy `list --json` with no detail flags
+retains the complete full-record array; adding `--limit` or `--cursor` now bounds
+that array. `list --json --detail compact` returns a bounded identity `{ configs, _meta }`
+envelope, while `--detail full` explicitly includes content. `--all` is the
+explicit complete-read switch for the modern envelope and `--pretty` opts into
+indented JSON. `list --verbose` and `profile list --verbose` expand metadata but
+remain paged.
 
 Large JSON and content output is written synchronously so piping it to tools
 such as `jq` does not truncate it.
@@ -59,7 +65,18 @@ instructions list [options]
 - `-s, --search <query>` (name, description, and content)
 - `-f, --format <fmt>` (`compact`, `table`, or `json`; default `compact`)
 - `--brief`, `--verbose`, `--json`
+- `--detail <compact|full>` (enables the modern JSON envelope)
+- `--fields <comma-separated-fields>` (implies compact detail; must include immutable `id`; content requires full detail)
+- `--all` (explicit complete modern read), `--pretty`
 - `--limit <n>`, `--cursor <n>`
+
+Modern envelopes identify `_meta.schema_version: 1` and include truthful `count`, `total`, `limit`, `cursor`,
+`next_cursor`, `has_more`, `complete`, `truncated`, `truncation_reason`,
+`detail`, `fields`, and `source_bounded` metadata. Here `complete` means the
+output contains the entire filtered collection; a terminal page with a nonzero
+cursor is therefore still truncated. The underlying `/v1` producer page keeps
+its established meaning, where `complete` means no later page exists. Compact
+output never includes config content.
 
 ### `show` (`inspect`)
 
