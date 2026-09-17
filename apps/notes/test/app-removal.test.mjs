@@ -79,6 +79,11 @@ async function scan(files, needles) {
         // exact packaged file is not the removed desktop app's root manifest.
         if (needle === 'Package.swift' && relative(repoRoot, file) === 'package.json'
           && line.trim().replace(/,$/, '') === '"swift/Package.swift"') return;
+        // A native SDK receipt (scripts/native-sdk-receipt.py) inventories that
+        // same packaged manifest by its path inside swift/. Only this exact
+        // inventory line in a receipt file is exempt.
+        if (needle === 'Package.swift' && /^receipts\/notes-[0-9]+\.[0-9]+\.[0-9]+\.published\.json$/.test(relative(repoRoot, file))
+          && line.trim() === '"path": "Package.swift",') return;
         if (line.includes(needle)) hits.push(`${relative(repoRoot, file)}:${i + 1} [${needle}]`);
       });
     }
