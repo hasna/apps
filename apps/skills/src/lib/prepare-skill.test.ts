@@ -31,6 +31,69 @@ function editManifest(path: string, edit: (manifest: Record<string, any>) => voi
 }
 
 describe("prepare local skill drafts", () => {
+  test("instruction manifests may retain helper runtime metadata without becoming executable", () => fixture((root, path) => {
+    const document = join(path, "SKILL.md");
+    writeFileSync(document, readFileSync(document, "utf8").replace(/^kind: instruction\r?\n/m, ""));
+    editManifest(path, manifest => {
+      manifest.runtime = { runtime: "python3", entrypoint: "scripts/not-runnable.py" };
+    });
+    const result = prepareSkill("prepare-example", { rootDir: root, version: "0.2.0" });
+    expect(result.kind).toBe("instruction");
+    expect(validatePortableSkillDirectory("prepare-example", path).valid).toBe(true);
+    expect(existsSync(join(path, "scripts/not-runnable.py"))).toBe(false);
+  }, "instruction"));
+
+  test.each([
+    ["python3", "src/main.py"],
+    ["python3", "main.py"],
+    ["node", "lib/main.mjs"],
+    ["bun", "scripts/main.ts"],
+  ])("prepares and packs the declared %s entrypoint %s without a JavaScript scaffold", async (runtime, entrypoint) => asyncFixture(async (root, path) => {
+    rmSync(join(path, "src"), { recursive: true });
+    mkdirSync(join(path, entrypoint, ".."), { recursive: true });
+    const source = "Synthetic source bytes; preparing a skill must never execute these.\n";
+    writeFileSync(join(path, entrypoint), source);
+    const pkg = JSON.parse(readFileSync(join(path, "package.json"), "utf8"));
+    pkg.bin = { "prepare-example": entrypoint };
+    writeFileSync(join(path, "package.json"), JSON.stringify(pkg));
+    editManifest(path, manifest => {
+      manifest.runtime.runtime = runtime;
+      manifest.runtime.entrypoint = entrypoint;
+      manifest.commands[0].entry = entrypoint;
+    });
+    const prepared = prepareSkill("prepare-example", { rootDir: root, version: "0.2.0" });
+    expect(prepared.written).toBe(true);
+    expect(validatePortableSkillDirectory("prepare-example", path).valid).toBe(true);
+    const entries = unpackSkillBundle(packSkillBundle(path).bytes);
+    expect(new TextDecoder().decode(entries.find(entry => entry.path === entrypoint)?.bytes)).toBe(source);
+    expect(entries.some(entry => entry.path === "src/index.ts" || entry.path === "src/index.js")).toBe(false);
+  }));
+
+  test.each(["missing", "directory", "symlink", "parent-symlink", "escape", "absolute"])("refuses a declared runtime entrypoint that is %s even when the scaffold exists", variant => fixture((root, path) => {
+    let entrypoint = "scripts/main.py";
+    const outside = join(root, "outside.py");
+    writeFileSync(outside, "Outside source must not become a runtime entry.\n");
+    if (variant === "directory") mkdirSync(join(path, entrypoint), { recursive: true });
+    if (variant === "symlink") {
+      mkdirSync(join(path, "scripts"));symlinkSync(outside, join(path, entrypoint));
+    }
+    if (variant === "parent-symlink") {
+      const outsideDir = join(root, "outside-directory");mkdirSync(outsideDir);
+      writeFileSync(join(outsideDir, "main.py"), "Outside directory source.\n");
+      symlinkSync(outsideDir, join(path, "scripts"));
+    }
+    if (variant === "escape") entrypoint = "../outside.py";
+    if (variant === "absolute") entrypoint = outside;
+    editManifest(path, manifest => { manifest.runtime.runtime = "python3";manifest.runtime.entrypoint = entrypoint; });
+    const direct = validatePortableSkillDirectory("prepare-example", path);
+    expect(direct.valid).toBe(false);
+    expect(direct.issues.some(issue => issue.code.startsWith("skill.runtime_entrypoint_"))).toBe(true);
+    const before = readFileSync(join(path, "skill.json"), "utf8");
+    expect(() => prepareSkill("prepare-example", { rootDir: root, version: "0.2.0" })).toThrow();
+    expect(readFileSync(join(path, "skill.json"), "utf8")).toBe(before);
+    expect(readFileSync(outside, "utf8")).toBe("Outside source must not become a runtime entry.\n");
+  }));
+
   test.each([
     ["mixed-case-directory", "src/Node_Modules/fixture.txt"],
     ["dependency-named-file", "scripts/node_modules"],

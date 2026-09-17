@@ -569,6 +569,10 @@ export function validatePortableSkillDirectory(name: string, skillPath: string):
           "package.bin_missing",
           "skill.src_missing",
           "skill.src_index_missing",
+          "skill.runtime_entrypoint_unsafe",
+          "skill.runtime_entrypoint_missing",
+          "skill.runtime_entrypoint_symlink",
+          "skill.runtime_entrypoint_not_file",
         ]);
         for (let i = issues.length - 1; i >= 0; i--) {
           if (executableOnlyCodes.has(issues[i]!.code)) issues.splice(i, 1);
