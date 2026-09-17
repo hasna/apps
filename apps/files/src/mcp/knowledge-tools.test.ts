@@ -6,7 +6,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { buildServer } from "./index.js";
 
-const ENV_KEYS = ["HASNA_FILES_DATA_DIR", "HASNA_FILES_DB_PATH"] as const;
+const ENV_KEYS = ["HASNA_FILES_DATA_DIR", "HASNA_FILES_DB_PATH", "HASNA_FILES_MCP_PROFILE"] as const;
 const savedEnv = new Map<string, string | undefined>();
 let testDir: string | undefined;
 
@@ -16,6 +16,7 @@ beforeEach(() => {
   testDir = mkdtempSync(join(tmpdir(), "files-mcp-knowledge-"));
   process.env.HASNA_FILES_DATA_DIR = testDir;
   process.env.HASNA_FILES_DB_PATH = join(testDir, "files.db");
+  process.env.HASNA_FILES_MCP_PROFILE = "full";
 });
 
 afterEach(async () => {

@@ -29,6 +29,42 @@ The HTTP server binds to `127.0.0.1` by default. Its endpoints are:
 
 The default port is `8863`. `--port` takes precedence over `MCP_HTTP_PORT`.
 
+## Token-bounded profiles
+
+`files-mcp` defaults to `HASNA_FILES_MCP_PROFILE=standard`. The legacy alias
+`OPEN_FILES_MCP_PROFILE` is also accepted. `--profile <name>` has highest
+precedence and is validated before stdio connects or an HTTP listener binds.
+
+- `minimal`: file/source/tag/collection/project discovery and metadata reads.
+- `standard`: minimal plus bounded content, extraction, evidence audit, agent
+  and activity reads; context-pack tools are included only in explicit local
+  mode.
+- `full`: the complete historical tool inventory.
+
+Reduced profiles omit tools outside the selected profile and omit
+capability-gated tools until every required `OPEN_FILES_MCP_ALLOW_*` flag is
+enabled. The `full` profile preserves historical discovery and call-time
+capability refusals.
+
+`list_files` and `search_files` preserve the historical full bare-array
+response by default (`format: "legacy"`). Set `format: "page"` for the
+agent-oriented contract. Page mode defaults to 20 compact rows and minified
+JSON and returns `items` plus `_meta.count`, `limit`, `offset`, `next_offset`,
+`has_more`, `end_reached`, whole-query `complete`, `all`, and `detail`.
+Compact pages also include the actual projected `fields` plus
+`byte_length`/`max_bytes`/`byte_limited` and default to a 32-KiB ceiling;
+callers may request 1 KiB through 1 MiB. Normal pages are capped at 500 rows.
+Set `detail: "full"` for full page records or pass `fields` for a compact
+projection; the two options are mutually exclusive and full IDs are always
+retained. `get_file` remains the exact full-detail path.
+
+`all: true` requires `format: "page"`, compact detail, and offset zero. It
+walks bounded 500-row service pages and succeeds only if the whole query fits
+within the hard 5,000-row and 1-MiB boundaries. It refuses on either bound;
+it never returns a partial result with `complete: true`. `end_reached` means
+there is no page after the current offset. `complete` means the response covers
+the whole query from offset zero.
+
 ## Capability Gates
 
 Tools named in the capability map are denied by default unless every required
@@ -56,11 +92,10 @@ and `downloads`. A hard `delete_file` additionally checks `destructive`.
 Writing a context pack or knowledge manifest artifact additionally checks
 `mutations`.
 
-Tools with no capability-map entry are not denied by this guard. Consequently,
-the default server is not strictly read-only: `register_agent`, `heartbeat`,
-`set_focus`, `send_feedback`, `files_organization_bootstrap_google_drive`, and
-`files_organization_update_review` can write state without a capability flag.
-Read-oriented tools that accept an agent ID may also record activity telemetry.
+Tools with no capability-map entry are not denied by this guard. The reduced
+profiles omit state-writing agent, feedback, and organization operations; the
+`full` legacy profile still exposes them. Read-oriented tools that accept an
+agent ID may record activity telemetry.
 
 ## Local and API Modes
 
@@ -73,6 +108,12 @@ watchers, and all organization-review tools.
 Two process-local exceptions do not route through the API store:
 `resolve_id` consults the local SQLite ID resolver even in API mode, and
 `unwatch_source` only updates the current process's watcher registry.
+
+`build_context_pack` and `search_context_pack` also remain explicitly on-box.
+The hosted transport has no owned bounded-pack `/v1` route yet, so both tools
+have regression-tested refusals in API mode. They never substitute a local
+store or assemble an unbounded pack client-side; a hosted implementation is a
+follow-up service contract, not part of this output-only change.
 
 Evidence tools work through both stores. In API mode the service owns evidence
 storage configuration; client bucket and local-root overrides are ignored.

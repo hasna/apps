@@ -108,6 +108,20 @@ describe("ApiStore listFiles logical limits", () => {
     expect(queries).toEqual([{ source_id: "src_1", limit: 125, offset: 75 }]);
   });
 
+  test("search walks bounded hosted pages instead of asking /v1 for more than 500 rows", async () => {
+    const { transport, queries } = cappedFilesTransport(1_200);
+    const store = new ApiStore(createHasnaStorageClient("files", transport));
+
+    const files = await store.searchFiles("symbol", { limit: 1_000, offset: 0 });
+
+    expect(files).toHaveLength(1_000);
+    expect(queries.map((query) => [query.limit, query.offset])).toEqual([
+      [500, 0],
+      [500, 500],
+    ]);
+    expect(queries.every((query) => Number(query.limit) <= SERVER_PAGE_CAP)).toBe(true);
+  });
+
   test("leaves invalid limits for the server to reject instead of returning an empty success", async () => {
     const transport = {
       baseUrl: "https://files.example.invalid/v1",

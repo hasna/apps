@@ -28,6 +28,21 @@ import { createRequire } from "module";
 import { buildOpenFilesFileRef } from "../lib/source-ref.js";
 import type { FilesContextPack, GoogleDriveConfig, KnowledgeSourceManifestFormat, KnowledgeSourceResolveMode, S3Config } from "../types/index.js";
 import { DEFAULT_MCP_HTTP_PORT } from "./options.js";
+import { resolveFilesMcpProfile, shouldRegisterFilesMcpTool } from "./profiles.js";
+import {
+  DEFAULT_ALL_FILE_MAX_BYTES,
+  DEFAULT_COMPACT_FILE_MAX_BYTES,
+  FILE_LIST_FIELDS,
+  FILE_SEARCH_FIELDS,
+  MAX_ALL_FILE_ROWS,
+  buildFilePage,
+  fetchAllFileRows,
+  fetchFilePageRows,
+  filePageJson,
+  normalizeFileOutputMaxBytes,
+  validateFileProjection,
+} from "../lib/compact-output.js";
+import { FILES_API_MAX_PAGE_SIZE } from "../lib/api-pagination.js";
 
 const require = createRequire(import.meta.url);
 const pkg = require("../../package.json") as { version: string };
@@ -213,6 +228,15 @@ function requireLocalTransport(tool: string) {
   return null;
 }
 
+function requireHostedContextPackContract(tool: "build_context_pack" | "search_context_pack") {
+  if (store().transport !== "local") {
+    return mcpError(
+      `REMOTE_COMMAND_UNSUPPORTED: ${tool} requires a tenant-scoped, revision-aware bounded-pack /v1 contract; no local SQLite fallback was attempted.`,
+    );
+  }
+  return null;
+}
+
 /**
  * The active store when the client is on the hosted (api) transport, or null
  * on the local transport. Read-side tools route through the {@link ApiStore}'s
@@ -263,11 +287,16 @@ function mcpContextPackResult(
   };
 }
 
-export function buildServer(): McpServer {
+export function buildServer(options: {
+  profile?: ReturnType<typeof resolveFilesMcpProfile>;
+  transport?: "api" | "local";
+} = {}): McpServer {
   const server = new McpServer({
     name: "files",
     version: pkg.version,
   });
+  const profile = options.profile ?? resolveFilesMcpProfile();
+  const transport = options.transport ?? store().transport;
 
 type ToolHandler = (params: any) => unknown | Promise<unknown>;
 
@@ -277,6 +306,8 @@ function registerTool(
   inputSchema: Record<string, z.ZodTypeAny>,
   handler: ToolHandler,
 ): void {
+  const capabilityAvailable = requireMcpToolCapabilities(name) === null;
+  if (!shouldRegisterFilesMcpTool({ name, profile, capabilityAvailable, transport })) return;
   (server.tool as any)(name, description, inputSchema, async (params: any) => {
     const denied = requireMcpToolCapabilities(name);
     if (denied) return denied;
@@ -454,7 +485,7 @@ registerTool("index_source", "Re-index a source (or all sources on this machine)
 
 // ─── Files ────────────────────────────────────────────────────────────────────
 
-registerTool("list_files", "List indexed files with optional filters. If agent_id is set and agent has a focused project, auto-applies project filter.", {
+registerTool("list_files", "List files. Legacy full array by default; set format=page for bounded receipts.", {
   source_id: z.string().optional(),
   machine_id: z.string().optional(),
   tag: z.string().optional(),
@@ -467,11 +498,19 @@ registerTool("list_files", "List indexed files with optional filters. If agent_i
   max_size: z.number().optional().describe("Maximum file size in bytes"),
   sort: z.enum(["name", "size", "date"]).optional().default("date"),
   sort_dir: z.enum(["asc", "desc"]).optional().default("desc"),
-  limit: z.number().optional().default(50),
-  offset: z.number().optional().default(0),
+  limit: z.number().int().positive().optional().describe("Rows to return; legacy default 50, page default 20"),
+  offset: z.number().int().nonnegative().optional().default(0),
+  format: z.enum(["legacy", "page"]).optional().default("legacy").describe("legacy array or receipt-bearing page"),
+  all: z.boolean().optional().default(false).describe("Exhaust safely; requires format=page"),
+  detail: z.enum(["compact", "full"]).optional().describe("With format=page; default compact"),
+  fields: z.array(z.enum(FILE_LIST_FIELDS)).nonempty().optional().describe("Fields to return; id is always included"),
+  max_bytes: z.number().int().min(1024).max(1024 * 1024).optional().describe("Compact response byte ceiling (default 32768)"),
   sync_status: z.enum(["local_only", "synced", "conflict"]).optional().describe("Filter by sync status"),
   agent_id: z.string().optional().describe("Agent ID — auto-applies focused project filter if set"),
 }, async (opts) => {
+  if (opts.sync_status && transport === "api") {
+    throw new Error("sync_status is unavailable on the hosted /v1 files list; refusing to ignore the filter");
+  }
   // Workspace scoping: auto-apply agent's focused project (a local-store
   // concern; the ApiStore honors only the source_id/machine_id/ext/limit/offset
   // subset the cloud /v1/files endpoint supports).
@@ -479,25 +518,106 @@ registerTool("list_files", "List indexed files with optional filters. If agent_i
     const agent = await store().getAgent(opts.agent_id);
     if (agent?.project_id) opts.project_id = agent.project_id;
   }
-  const files = await store().listFiles(opts);
-  return { content: [{ type: "text", text: JSON.stringify(files, null, 2) }] };
+  const format = opts.format ?? "legacy";
+  const limit = opts.limit ?? (format === "page" ? 20 : 50);
+  const offset = opts.offset ?? 0;
+  if (format === "legacy") {
+    if (opts.all || opts.detail !== undefined || opts.fields !== undefined || opts.max_bytes !== undefined) {
+      throw new Error("all, detail, fields, and max_bytes require format=page");
+    }
+    const files = await store().listFiles({ ...opts, limit, offset });
+    return { content: [{ type: "text", text: JSON.stringify(files, null, 2) }] };
+  }
+  const detail = opts.detail ?? "compact";
+  const fields = validateFileProjection(detail, opts.fields, "list");
+  if (!opts.all && limit > FILES_API_MAX_PAGE_SIZE) {
+    throw new Error(`Page limit must be <= ${FILES_API_MAX_PAGE_SIZE}; paginate with offset`);
+  }
+  if (opts.all && offset !== 0) throw new Error("all=true requires offset=0 so completeness covers the whole query");
+  if (opts.all && detail !== "compact") throw new Error("all=true requires compact detail for bounded exhaustive output");
+  if (detail === "full" && opts.max_bytes !== undefined) {
+    throw new Error("max_bytes cannot be combined with detail=full");
+  }
+  const maxBytes = opts.max_bytes !== undefined
+    ? normalizeFileOutputMaxBytes(opts.max_bytes)
+    : opts.all ? DEFAULT_ALL_FILE_MAX_BYTES
+      : detail === "compact" ? DEFAULT_COMPACT_FILE_MAX_BYTES : undefined;
+  const readPage = (pageLimit: number, pageOffset: number) => store().listFiles({ ...opts, limit: pageLimit, offset: pageOffset });
+  const files = opts.all
+    ? await fetchAllFileRows(readPage)
+    : await fetchFilePageRows(readPage, limit, offset);
+  const page = buildFilePage(files, {
+    limit: opts.all ? MAX_ALL_FILE_ROWS : limit,
+    offset,
+    detail,
+    fields,
+    maxBytes,
+    all: opts.all,
+  });
+  if (opts.all && page._meta.byte_limited) {
+    throw new Error(`Exhaustive list output exceeds max_bytes=${maxBytes}; use paginated format=page output`);
+  }
+  return { content: [{ type: "text", text: filePageJson(page) }] };
 });
 
-registerTool("search_files", "Full-text search across file names, paths, and tags", {
+registerTool("search_files", "Search files. Legacy full array by default; set format=page for bounded receipts.", {
   query: z.string().describe("Search query"),
   source_id: z.string().optional(),
   machine_id: z.string().optional(),
   tag: z.string().optional(),
   ext: z.string().optional(),
-  limit: z.number().optional().default(20),
-  offset: z.number().optional().default(0),
+  limit: z.number().int().positive().optional().default(20),
+  offset: z.number().int().nonnegative().optional().default(0),
+  format: z.enum(["legacy", "page"]).optional().default("legacy").describe("legacy array or receipt-bearing page"),
+  all: z.boolean().optional().default(false).describe("Exhaust safely; requires format=page"),
+  detail: z.enum(["compact", "full"]).optional().describe("With format=page; default compact"),
+  fields: z.array(z.enum(FILE_SEARCH_FIELDS)).nonempty().optional().describe("Fields to return; id is always included"),
+  max_bytes: z.number().int().min(1024).max(1024 * 1024).optional().describe("Compact response byte ceiling (default 32768)"),
   agent_id: z.string().optional().describe("Agent ID for activity tracking"),
-}, async ({ query, source_id, machine_id, tag, ext, limit, offset, agent_id }) => {
-  const results = await store().searchFiles(query, { source_id, machine_id, tag, ext, limit, offset });
-  if (agent_id) {
-    logActivity({ agent_id, action: "search", metadata: { query, results_count: results.length } });
+}, async ({ query, source_id, machine_id, tag, ext, limit = 20, offset = 0, format = "legacy", all = false, detail: requestedDetail, fields: requestedFields, max_bytes, agent_id }) => {
+  const readPage = (pageLimit: number, pageOffset: number) => store().searchFiles(query, {
+    source_id, machine_id, tag, ext, limit: pageLimit, offset: pageOffset,
+  });
+  if (format === "legacy") {
+    if (all || requestedDetail !== undefined || requestedFields !== undefined || max_bytes !== undefined) {
+      throw new Error("all, detail, fields, and max_bytes require format=page");
+    }
+    const results = await readPage(limit, offset);
+    if (agent_id) logActivity({ agent_id, action: "search", metadata: { query, results_count: results.length } });
+    return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
   }
-  return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
+  const detail = requestedDetail ?? "compact";
+  const fields = validateFileProjection(detail, requestedFields, "search");
+  if (!all && limit > FILES_API_MAX_PAGE_SIZE) {
+    throw new Error(`Page limit must be <= ${FILES_API_MAX_PAGE_SIZE}; paginate with offset`);
+  }
+  if (all && offset !== 0) throw new Error("all=true requires offset=0 so completeness covers the whole query");
+  if (all && detail !== "compact") throw new Error("all=true requires compact detail for bounded exhaustive output");
+  if (detail === "full" && max_bytes !== undefined) {
+    throw new Error("max_bytes cannot be combined with detail=full");
+  }
+  const maxBytes = max_bytes !== undefined
+    ? normalizeFileOutputMaxBytes(max_bytes)
+    : all ? DEFAULT_ALL_FILE_MAX_BYTES
+      : detail === "compact" ? DEFAULT_COMPACT_FILE_MAX_BYTES : undefined;
+  const results = all
+    ? await fetchAllFileRows(readPage)
+    : await fetchFilePageRows(readPage, limit, offset);
+  const page = buildFilePage(results, {
+    limit: all ? MAX_ALL_FILE_ROWS : limit,
+    offset,
+    detail,
+    fields,
+    maxBytes,
+    all,
+  });
+  if (all && page._meta.byte_limited) {
+    throw new Error(`Exhaustive search output exceeds max_bytes=${maxBytes}; use paginated format=page output`);
+  }
+  if (agent_id) {
+    logActivity({ agent_id, action: "search", metadata: { query, results_count: page._meta.count } });
+  }
+  return { content: [{ type: "text", text: filePageJson(page) }] };
 });
 
 registerTool("build_context_pack", "Build a bounded, cited context pack for explicit file IDs or open-files refs", {
@@ -512,7 +632,7 @@ registerTool("build_context_pack", "Build a bounded, cited context pack for expl
   output_local_path: z.string().optional().describe("Write full bounded pack JSON to this local path and return a compact pointer"),
   dry_run: z.boolean().optional().default(false).describe("With output_local_path, preview the pointer without writing"),
 }, async (params) => {
-  const denied = requireLocalTransport("build_context_pack");
+  const denied = requireHostedContextPackContract("build_context_pack");
   if (denied) return denied;
   try {
     const pack = await buildFilesContextPack({
@@ -548,7 +668,7 @@ registerTool("search_context_pack", "Search files and return a bounded, cited co
   output_local_path: z.string().optional().describe("Write full bounded pack JSON to this local path and return a compact pointer"),
   dry_run: z.boolean().optional().default(false).describe("With output_local_path, preview the pointer without writing"),
 }, async (params) => {
-  const denied = requireLocalTransport("search_context_pack");
+  const denied = requireHostedContextPackContract("search_context_pack");
   if (denied) return denied;
   try {
     const pack = await buildFilesSearchPack({
@@ -577,7 +697,7 @@ registerTool("get_file", "Get full details for a file by ID", {
 }, async ({ id }) => {
   const file = await store().getFile(id);
   if (!file) return { content: [{ type: "text", text: `File not found: ${id}` }], isError: true };
-  return { content: [{ type: "text", text: JSON.stringify(file, null, 2) }] };
+  return { content: [{ type: "text", text: JSON.stringify(file) }] };
 });
 
 registerTool("download_file", "Download a file from S3 to a local path", {
@@ -1886,6 +2006,8 @@ Options:
   --stdio           Serve MCP over stdio (the default; env: MCP_STDIO=1)
   --http            Serve MCP over Streamable HTTP on 127.0.0.1 (env: MCP_HTTP=1)
   --port <number>   HTTP port (default: ${DEFAULT_MCP_HTTP_PORT}, env: MCP_HTTP_PORT)
+  --profile <name>  Tool profile: minimal, standard (default), or full
+                    (env: HASNA_FILES_MCP_PROFILE)
   -V, --version     Print the package version
   -h, --help        Show this help text`);
 }
@@ -1910,6 +2032,14 @@ function answerInformationalFlags(argv: readonly string[] = process.argv.slice(2
 async function main(): Promise<void> {
   if (answerInformationalFlags()) return;
 
+  let profile: ReturnType<typeof resolveFilesMcpProfile>;
+  try {
+    profile = resolveFilesMcpProfile(process.env, process.argv.slice(2));
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
+
   // Transport gate (fail closed): refuse to serve without a credential the
   // @hasna/contracts chain can resolve (the Keychain item
   // hasna.credentials.files.api-key, ~/.hasna/files/config/credentials, or
@@ -1917,8 +2047,10 @@ async function main(): Promise<void> {
   // explicit local opt-in (HASNA_FILES_LOCAL=1 / FILES_LOCAL=1). The MCP
   // server never silently serves the on-box SQLite store as a default, and a
   // local run announces itself on stderr.
+  let transport: "api" | "local";
   try {
     const storage = resolveFilesCloudStorage();
+    transport = storage.active ? "api" : "local";
     if (!storage.active) announceFilesLocalMode();
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
@@ -1930,7 +2062,7 @@ async function main(): Promise<void> {
   if (selectsMcpHttpTransport()) {
     // Opt-in (`--http` / MCP_HTTP=1): shared Streamable HTTP server (one
     // process per MCP, many agents).
-    const handle = await startMcpHttpServer(buildServer, {
+    const handle = await startMcpHttpServer(() => buildServer({ profile, transport }), {
       port: resolveMcpHttpPort(),
     });
     process.on("SIGINT", () => void handle.close().finally(() => process.exit(0)));
@@ -1939,9 +2071,9 @@ async function main(): Promise<void> {
   }
 
   // Default: stdio — the fleet convention, and what --help documents.
-  const server = buildServer();
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
+  const server = buildServer({ profile, transport });
+  const stdioTransport = new StdioServerTransport();
+  await server.connect(stdioTransport);
 }
 
 if (import.meta.main) {

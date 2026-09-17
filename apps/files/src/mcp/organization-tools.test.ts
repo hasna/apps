@@ -23,6 +23,7 @@ const ENV_KEYS = [
   "HASNA_FILES_DB_PATH",
   "HASNA_FILES_API_URL",
   "HASNA_FILES_API_KEY",
+  "HASNA_FILES_MCP_PROFILE",
   // Ambient credential roots: the api-mode describe below pins a FAKE
   // authority while driving the resolver through the live `process.env`, and
   // the resolver's disk tier outranks the env tier — a real station file at
@@ -55,6 +56,7 @@ beforeEach(() => {
   process.env.HASNA_STATION = "files-hermetic-no-such-station";
   delete process.env.HASNA_FILES_API_URL;
   delete process.env.HASNA_FILES_API_KEY;
+  process.env.HASNA_FILES_MCP_PROFILE = "full";
 });
 
 afterEach(async () => {

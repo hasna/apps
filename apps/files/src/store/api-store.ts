@@ -213,18 +213,48 @@ export class ApiStore implements FilesStore {
     // server-side derived-content index (file_search_documents tsvector). The
     // `search_scope` and every search filter reach the server; the server's
     // per-row rank and match sources pass through unchanged.
-    const files = (await this.client.list<RankedFilePayload>("files", {
-      query: {
-        q: query,
-        search_scope: opts.search_scope ?? "all",
-        source_id: opts.source_id,
-        machine_id: opts.machine_id,
-        ext: opts.ext,
-        tag: opts.tag,
-        limit: opts.limit,
-        offset: opts.offset,
-      },
-    })).items;
+    const listPage = async (limit: number | undefined, offset: number | undefined) => (
+      await this.client.list<RankedFilePayload>("files", {
+        query: {
+          q: query,
+          search_scope: opts.search_scope ?? "all",
+          source_id: opts.source_id,
+          machine_id: opts.machine_id,
+          project_id: opts.project_id,
+          collection_id: opts.collection_id,
+          ext: opts.ext,
+          tag: opts.tag,
+          status: opts.status,
+          after: opts.after,
+          before: opts.before,
+          min_size: opts.min_size,
+          max_size: opts.max_size,
+          sort: opts.sort,
+          sort_dir: opts.sort_dir,
+          limit,
+          offset,
+        },
+      })
+    ).items;
+    const requestedLimit = opts.limit;
+    let files: RankedFilePayload[];
+    if (
+      requestedLimit === undefined
+      || !Number.isInteger(requestedLimit)
+      || requestedLimit <= FILES_API_MAX_PAGE_SIZE
+    ) {
+      files = await listPage(requestedLimit, opts.offset);
+    } else {
+      files = [];
+      let offset = opts.offset ?? 0;
+      while (files.length < requestedLimit) {
+        const pageLimit = Math.min(FILES_API_MAX_PAGE_SIZE, requestedLimit - files.length);
+        const page = await listPage(pageLimit, offset);
+        files.push(...page.slice(0, requestedLimit - files.length));
+        if (page.length < pageLimit) break;
+        offset += page.length;
+      }
+    }
     return files.map((f) => ({
       ...f,
       // The server stamps rank + match sources per row. A row without them is

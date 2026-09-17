@@ -12,6 +12,7 @@ const ENV_KEYS = [
   "OPEN_FILES_MCP_ALLOW_MUTATIONS",
   "OPEN_FILES_MCP_ALLOW_ALL",
   "OPEN_FILES_ALLOW_ALL",
+  "HASNA_FILES_MCP_PROFILE",
 ] as const;
 
 const savedEnv = new Map<string, string | undefined>();
@@ -26,6 +27,7 @@ beforeEach(() => {
   delete process.env.OPEN_FILES_MCP_ALLOW_MUTATIONS;
   delete process.env.OPEN_FILES_MCP_ALLOW_ALL;
   delete process.env.OPEN_FILES_ALLOW_ALL;
+  process.env.HASNA_FILES_MCP_PROFILE = "full";
 });
 
 afterEach(async () => {

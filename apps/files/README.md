@@ -149,10 +149,16 @@ final retirement audit.
 files-mcp
 ```
 
-Includes file, source, Google Drive, project, collection, agent activity, and
-evidence-vault tools. Tools in the MCP capability map fail closed unless their
-required mutation, destructive, import, signed URL, download, or indexing
-capabilities are explicitly enabled:
+`files-mcp` defaults to the token-bounded `standard` profile. Select
+`HASNA_FILES_MCP_PROFILE=minimal|standard|full` before startup (legacy alias:
+`OPEN_FILES_MCP_PROFILE`). `minimal` exposes discovery and metadata reads,
+`standard` adds bounded content and audit reads (plus local context-pack tools
+when the server is in explicit local mode), and `full` preserves the complete
+legacy inventory.
+
+Reduced profiles register capability-gated tools only when their required
+mutation, destructive, import, signed URL, download, or indexing capabilities
+are enabled:
 
 ```bash
 OPEN_FILES_MCP_ALLOW_MUTATIONS=1 files-mcp
@@ -163,18 +169,23 @@ OPEN_FILES_MCP_ALLOW_INDEXING=1 files-mcp
 OPEN_FILES_MCP_ALLOW_DESTRUCTIVE=1 files-mcp
 ```
 
-`OPEN_FILES_ALLOW_<CAPABILITY>=1` or `OPEN_FILES_MCP_ALLOW_ALL=1` may be used
-for controlled local operator sessions.
+`list_files` and `search_files` preserve their historical full bare-array
+response by default. Set `format: "page"` for minified agent output with
+`count`, `limit`, `offset`, `next_offset`, `has_more`, `end_reached`, and
+whole-query `complete`; compact pages additionally report the enforced byte
+budget. Pages are capped at 500 rows; use `detail: "full"` for full page
+records or `fields` for an exact compact projection (`id` is always retained).
+`all: true` exhausts from offset zero within a 5,000-row/1-MiB hard safety
+boundary and refuses rather than claiming partial success. `get_file` remains
+the exact full-detail path.
 
-The current default server is not strictly read-only: agent registration and
-focus, feedback, and organization bootstrap/review updates are not in the
-capability map. See [docs/mcp.md](docs/mcp.md) for the exact behavior.
+The standard profile exposes read-only `build_context_pack` and
+`search_context_pack` for bounded excerpts, citations, attachment refs, and
+omitted counts in local mode. Hosted calls keep a tested refusal: there is no
+owned bounded-pack `/v1` route yet, so the client never downloads an unbounded
+corpus or falls back to local SQLite.
 
-The MCP server also exposes read-only `build_context_pack` and
-`search_context_pack` tools for bounded excerpts, citations, attachment refs,
-and omitted counts in agent loops.
-
-See [docs/mcp.md](docs/mcp.md) for the complete tool catalog, local/API-mode
+See [docs/mcp.md](docs/mcp.md) for the complete profile catalog, local/API-mode
 availability, and capability mapping.
 
 ## HTTP mode

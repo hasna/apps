@@ -90,6 +90,49 @@ server-side. Remote `search` is a ranked full-text search over metadata
 (`search-index` documents) with `--scope all|metadata|content`; the server
 returns a per-row `rank` and the `search_match_sources` that actually matched.
 
+For machine output, the historical contract stays available unchanged:
+
+```bash
+files list --json                    # full bare array, pretty-printed
+files search contract --json         # full bare array, pretty-printed
+```
+
+The agent-oriented page contract is explicit:
+
+```bash
+files list --agent-json
+files list --agent-json --fields id,name,path,size
+files list --agent-json --detail full --pretty
+files search contract --agent-json --fields id,name,rank,search_match_sources
+files list --agent-json --all --max-bytes 1048576
+```
+
+`--agent-json` is minified and compact by default. `_meta` reports the emitted
+`count`, requested `limit`, `offset`, `next_offset`, `has_more`, `end_reached`,
+whole-query `complete`, `all`, `detail`, actual fields, and the compact response
+byte receipt. Compact output has a 32-KiB default ceiling; `--max-bytes` accepts
+1 KiB through 1 MiB. Normal agent pages are capped at 500 rows. The client asks
+the existing `/v1/files` route for one continuation row to prove `has_more`;
+it does not change authority or use local fallback. `--detail full` expands
+only the requested page. `--fields` accepts a comma-separated allowlisted
+compact projection, always retains the immutable `id`, and cannot be combined
+with `--detail full`. Use `--pretty` only when human-readable JSON whitespace
+is wanted.
+
+`--all` requires `--agent-json`, compact detail, and offset zero. It walks
+bounded 500-row service pages and succeeds only if the whole query fits within
+the hard 5,000-row and 1-MiB boundaries. If either bound is exceeded, the
+command refuses instead of returning a success-shaped partial result.
+`end_reached` means no page follows the current offset; `complete` is true only
+when the response covers the whole query from offset zero.
+
+Legacy scripts using `files list --json | jq '.[]'` or
+`files search ... --json | jq '.[]'` continue unchanged. New agent callers use
+`.items[]` and follow `._meta.next_offset` while `._meta.has_more` is true. `--detail`,
+`--fields`, `--pretty`, `--max-bytes`, and `--all` are agent-page controls and
+are rejected with a stable usage error unless `--agent-json` is selected;
+compact detail is defaulted only after that selection.
+
 ## Source Commands
 
 ```txt
@@ -139,8 +182,11 @@ with nothing to rebuild).
 
 Context packs default to 5 files, 12 excerpts, 900 characters per excerpt,
 6,000 excerpt characters total, and 262,144 bytes read per file. Secret-like
-text is redacted by default. `--out` writes formatted JSON; `--dry-run` previews
-the output pointer without writing.
+text is redacted by default. `--out` writes formatted JSON; `--dry-run`
+previews the output pointer without writing. They remain on-box only. Hosted
+calls fail closed with a tested refusal until the files service owns an
+additive bounded context-pack `/v1` contract; the CLI does not download a
+corpus or fall back to SQLite.
 
 ## Collections, Projects, and Peers
 

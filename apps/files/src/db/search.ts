@@ -23,37 +23,60 @@ interface SearchCandidate {
  * at the file level so raw extracted text does not have to be printed by search.
  */
 export function searchFiles(query: string, opts: SearchOptions = {}): SearchResult[] {
-  const db = getDb();
   const limit = opts.limit ?? 50;
   const offset = opts.offset ?? 0;
   const scope = opts.search_scope ?? "all";
-  const candidateLimit = Math.max((limit + offset) * 4, 100);
+  const targetCount = limit + offset;
+  let candidateLimit = Math.max(targetCount * 4, 100);
   const ftsQuery = sanitizeFtsQuery(query);
 
-  let candidates: Map<string, SearchCandidate>;
-  try {
-    candidates = new Map();
-    if (scope !== "content") {
-      for (const row of searchMetadataFts(ftsQuery, candidateLimit)) {
-        mergeCandidate(candidates, row.id, row.rank, "metadata");
-      }
+  while (true) {
+    let loaded: { candidates: Map<string, SearchCandidate>; exhausted: boolean };
+    try {
+      loaded = loadFtsCandidates(ftsQuery, scope, candidateLimit);
+    } catch {
+      loaded = fallbackLikeCandidates(query, scope, candidateLimit);
     }
-    if (scope !== "metadata") {
-      for (const row of searchContentFts(ftsQuery, candidateLimit)) {
-        mergeCandidate(candidates, row.file_id, row.rank, "content", parseKinds(row.kinds), row.document_count);
-      }
-    }
-  } catch {
-    candidates = fallbackLikeCandidates(query, scope, candidateLimit);
-  }
 
+    const results = materializeCandidates(loaded.candidates, opts, targetCount);
+    if (results.length >= targetCount || loaded.exhausted) {
+      return results.slice(offset, offset + limit);
+    }
+    candidateLimit *= 2;
+  }
+}
+
+function loadFtsCandidates(
+  query: string,
+  scope: SearchOptions["search_scope"],
+  limit: number,
+): { candidates: Map<string, SearchCandidate>; exhausted: boolean } {
+  const candidates = new Map<string, SearchCandidate>();
+  const metadataRows = scope === "content" ? [] : searchMetadataFts(query, limit);
+  const contentRows = scope === "metadata" ? [] : searchContentFts(query, limit);
+  for (const row of metadataRows) mergeCandidate(candidates, row.id, row.rank, "metadata");
+  for (const row of contentRows) {
+    mergeCandidate(candidates, row.file_id, row.rank, "content", parseKinds(row.kinds), row.document_count);
+  }
+  return {
+    candidates,
+    exhausted: (scope === "content" || metadataRows.length < limit)
+      && (scope === "metadata" || contentRows.length < limit),
+  };
+}
+
+function materializeCandidates(
+  candidates: Map<string, SearchCandidate>,
+  opts: SearchOptions,
+  targetCount: number,
+): SearchResult[] {
+  const db = getDb();
   const results: SearchResult[] = [];
-  const ordered = [...candidates.values()].sort((a, b) => a.rank - b.rank);
+  const ordered = [...candidates.values()].sort((a, b) => a.rank - b.rank || a.id.localeCompare(b.id));
   for (const candidate of ordered) {
-    if (results.length >= limit + offset) break;
+    if (results.length >= targetCount) break;
     const file = getFile(candidate.id);
-    if (!file || file.status !== "active") continue;
-    if (!passesPostFilters(file, opts)) continue;
+    if (!file || file.status !== "active" || !passesPostFilters(file, opts)) continue;
 
     const source = db.query<{ name: string }, [string]>("SELECT name FROM sources WHERE id=?").get(file.source_id);
     const machine = db.query<{ name: string }, [string]>("SELECT name FROM machines WHERE id=?").get(file.machine_id);
@@ -78,8 +101,7 @@ export function searchFiles(query: string, opts: SearchOptions = {}): SearchResu
       search_document_count: candidate.document_count || undefined,
     });
   }
-
-  return results.slice(offset, offset + limit);
+  return results;
 }
 
 function sanitizeFtsQuery(q: string): string {
@@ -94,7 +116,7 @@ function sanitizeFtsQuery(q: string): string {
 
 function searchMetadataFts(query: string, limit: number): Array<{ id: string; rank: number }> {
   return getDb().query<{ id: string; rank: number }, [string, number]>(
-    "SELECT id, rank FROM files_fts WHERE files_fts MATCH ? ORDER BY rank LIMIT ?",
+    "SELECT id, rank FROM files_fts WHERE files_fts MATCH ? ORDER BY rank, id LIMIT ?",
   ).all(query, limit);
 }
 
@@ -114,15 +136,21 @@ function searchContentFts(query: string, limit: number): Array<{
      FROM file_search_documents_fts
      WHERE file_search_documents_fts MATCH ?
      GROUP BY file_id
-     ORDER BY rank
+     ORDER BY rank, file_id
      LIMIT ?`,
   ).all(query, limit);
 }
 
-function fallbackLikeCandidates(query: string, scope: SearchOptions["search_scope"], limit: number): Map<string, SearchCandidate> {
+function fallbackLikeCandidates(
+  query: string,
+  scope: SearchOptions["search_scope"],
+  limit: number,
+): { candidates: Map<string, SearchCandidate>; exhausted: boolean } {
   const db = getDb();
   const candidates = new Map<string, SearchCandidate>();
   const like = `%${query}%`;
+  let metadataCount = 0;
+  let contentCount = 0;
 
   if (scope !== "content") {
     const rows = db.query<{ id: string; rank: number }, [string, string, string, string, string, string, string, string, number]>(
@@ -140,9 +168,10 @@ function fallbackLikeCandidates(query: string, scope: SearchOptions["search_scop
            OR COALESCE(r.owner, '') LIKE ?
            OR COALESCE(r.review_status, '') LIKE ?
          )
-       ORDER BY f.indexed_at DESC
+       ORDER BY f.indexed_at DESC, f.id DESC
        LIMIT ?`,
     ).all(like, like, like, like, like, like, like, like, limit);
+    metadataCount = rows.length;
     for (const row of rows) mergeCandidate(candidates, row.id, row.rank, "metadata");
   }
 
@@ -153,7 +182,8 @@ function fallbackLikeCandidates(query: string, scope: SearchOptions["search_scop
       kinds: string | null;
       document_count: number;
     }, [string, string, string, string, number]>(
-      `SELECT file_id, 0 AS rank, group_concat(DISTINCT kind) AS kinds, COUNT(DISTINCT id) AS document_count
+      `SELECT file_id, 0 AS rank, group_concat(DISTINCT kind) AS kinds, COUNT(DISTINCT id) AS document_count,
+              MAX(updated_at) AS newest
        FROM file_search_documents
        WHERE status IN ('ready', 'partial')
          AND (
@@ -163,15 +193,20 @@ function fallbackLikeCandidates(query: string, scope: SearchOptions["search_scop
            OR extractor LIKE ?
          )
        GROUP BY file_id
-       ORDER BY updated_at DESC
+       ORDER BY newest DESC, file_id DESC
        LIMIT ?`,
     ).all(like, like, like, like, limit);
+    contentCount = rows.length;
     for (const row of rows) {
       mergeCandidate(candidates, row.file_id, row.rank, "content", parseKinds(row.kinds), row.document_count);
     }
   }
 
-  return candidates;
+  return {
+    candidates,
+    exhausted: (scope === "content" || metadataCount < limit)
+      && (scope === "metadata" || contentCount < limit),
+  };
 }
 
 function mergeCandidate(
