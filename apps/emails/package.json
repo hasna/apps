@@ -19,7 +19,7 @@
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/hasna/apps.git",
+    "url": "https://github.com/hasna/apps.git",
     "directory": "apps/emails"
   },
   "bin": {
@@ -126,5 +126,9 @@
     "htmlparser2": "10.1.0",
     "solid-js": "1.9.13",
     "typescript": "^6.0.3"
+  },
+  "homepage": "https://github.com/hasna/apps/tree/main/apps/emails#readme",
+  "bugs": {
+    "url": "https://github.com/hasna/apps/issues"
   }
 }

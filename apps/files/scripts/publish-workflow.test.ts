@@ -12,7 +12,7 @@ const packageJson = await Bun.file(
   new URL("../package.json", import.meta.url),
 ).json() as {
   name: string;
-  repository: { url: string };
+  repository: { type: string; url: string; directory: string };
   publishConfig: { registry: string; access: string };
 };
 
@@ -63,7 +63,9 @@ describe("npm trusted publishing workflow", () => {
     expect(packageJson).toMatchObject({
       name: "@hasna/files",
       repository: {
-        url: "git+https://github.com/hasna/files.git",
+        type: "git",
+        url: "https://github.com/hasna/apps.git",
+        directory: "apps/files",
       },
       publishConfig: {
         registry: "https://registry.npmjs.org",

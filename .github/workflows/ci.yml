@@ -144,6 +144,12 @@ jobs:
       - name: Name-conformance gate (@hasna/* only, name == directory)
         run: bun tooling/ci/check-names.ts
 
+      - name: Public package repository-identity gate self-test
+        run: bun tooling/ci/check-package-identities.ts --self-test
+
+      - name: Public package repository identities (live top-level census)
+        run: bun tooling/ci/check-package-identities.ts
+
       - name: Private skill content gate self-test
         run: bun tooling/ci/check-skill-content.ts --self-test
 

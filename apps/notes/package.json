@@ -90,7 +90,7 @@
   "bugs": {
     "url": "https://github.com/hasna/apps/issues"
   },
-  "homepage": "https://github.com/hasna/apps#readme",
+  "homepage": "https://github.com/hasna/apps/tree/main/apps/notes#readme",
   "license": "MIT",
   "engines": {
     "bun": ">=1.0"

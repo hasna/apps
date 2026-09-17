@@ -60,9 +60,9 @@
     "url": "https://github.com/hasna/apps.git",
     "directory": "apps/repos"
   },
-  "homepage": "https://github.com/hasna/repos",
+  "homepage": "https://github.com/hasna/apps/tree/main/apps/repos#readme",
   "bugs": {
-    "url": "https://github.com/hasna/repos/issues"
+    "url": "https://github.com/hasna/apps/issues"
   },
   "engines": {
     "bun": ">=1.0.0"

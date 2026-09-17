@@ -133,5 +133,9 @@
     "access": "public"
   },
   "license": "Apache-2.0",
-  "author": "Hasna <andrei@hasna.com>"
+  "author": "Hasna <andrei@hasna.com>",
+  "homepage": "https://github.com/hasna/apps/tree/main/apps/recordings#readme",
+  "bugs": {
+    "url": "https://github.com/hasna/apps/issues"
+  }
 }

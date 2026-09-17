@@ -61,9 +61,9 @@
     "url": "https://github.com/hasna/apps.git",
     "directory": "apps/orgs"
   },
-  "homepage": "https://github.com/hasna/orgs",
+  "homepage": "https://github.com/hasna/apps/tree/main/apps/orgs#readme",
   "bugs": {
-    "url": "https://github.com/hasna/orgs/issues"
+    "url": "https://github.com/hasna/apps/issues"
   },
   "engines": {
     "bun": ">=1.0.0"
