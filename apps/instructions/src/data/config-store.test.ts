@@ -858,6 +858,38 @@ describe("CloudConfigStore stable bounded aggregation", () => {
     expect(m.calls).toHaveLength(4);
   });
 
+  test("accepts the deployed name-ordered profile pages without assuming UUID order", async () => {
+    const profiles = [
+      { ...SAMPLE_PROFILE, id: "b1e73a0a-957d-4668-be18-17a9501557b2", name: "agent-pa-station03", slug: "agent-pa-station03" },
+      { ...SAMPLE_PROFILE, id: "7696e380-7a29-4e1d-8cbf-076be4e7187d", name: "linux-arm64", slug: "linux-arm64" },
+      { ...SAMPLE_PROFILE, id: "6053c052-6eea-409f-ac6e-c14c5e14ee04", name: "macos-arm64", slug: "macos-arm64" },
+    ];
+    const m = fakeStorageClient((call) => {
+      const cursor = Number(new URL(`https://example.test${call.path}`).searchParams.get("cursor"));
+      const items = cursor === 0 ? profiles.slice(0, 2) : profiles.slice(2);
+      return { json: page(items, profiles.length, 100, cursor) };
+    });
+
+    const result = await new CloudConfigStore(m.client).listProfiles();
+
+    expect(result.map((profile) => profile.id)).toEqual(profiles.map((profile) => profile.id));
+    expect(m.calls.map((call) => call.path)).toEqual([
+      "/profiles?limit=100&cursor=0",
+      "/profiles?limit=100&cursor=2",
+    ]);
+  });
+
+  test("still rejects duplicate profile ids across name-ordered pages", async () => {
+    const duplicate = { ...SAMPLE_PROFILE, id: "profile-duplicate" };
+    const m = fakeStorageClient((call) => {
+      const cursor = Number(new URL(`https://example.test${call.path}`).searchParams.get("cursor"));
+      return { json: page([{ ...duplicate, name: cursor === 0 ? "Alpha" : "Beta" }], 2, 100, cursor) };
+    });
+
+    await expect(new CloudConfigStore(m.client).listProfiles()).rejects.toThrow(/duplicate identity profile-duplicate/);
+    expect(m.calls).toHaveLength(4);
+  });
+
   test("rejects a persistently corrupt machine scan after one bounded retry", async () => {
     const m = fakeStorageClient((call) => {
       const url = new URL(`https://example.test${call.path}`);

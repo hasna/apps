@@ -653,11 +653,15 @@ export class CloudConfigStore implements ConfigStore {
 
   // Profiles
   async listProfiles(): Promise<Profile[]> {
+    // The deployed v0.5.x service pages profiles by name, while the current
+    // producer pages them by id. The bounded-read envelope does not promise an
+    // ordering key, so the client must not infer one from the row identity.
+    // aggregateBoundedCollection still requires unique ids, a stable total,
+    // and exact cursor advancement across every page.
     return aggregateBoundedCollection(
       "profile list",
       (cursor) => this.listProfilesPage({ limit: 100, cursor }),
       (profile) => profile.id,
-      { requireAscendingIdentity: true },
     );
   }
 
