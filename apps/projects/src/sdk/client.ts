@@ -133,6 +133,10 @@ export interface AgentList { "agents": Array<Agent>; "count": number }
 
 export interface RecipeList { "recipes": Array<Recipe>; "count": number }
 
+export interface Machine { "slug": string; "status": string; "role": "mirror-hub" | "assignable" | "avoid" }
+
+export interface MachineList { "machines": Array<Machine>; "count": number }
+
 export interface EventList { "events": Array<WorkspaceEvent>; "count": number }
 
 export interface LocationList { "locations": Array<WorkspaceLocation>; "count": number }
@@ -289,6 +293,15 @@ export class ProjectsClient {
       return this.request("DELETE", `/v1/locks/${encodeURIComponent(String(key))}`, {
         body: undefined,
         query,
+        init,
+      });
+    }
+
+    /** List canonical machines in the registry */
+    async listMachines(init?: RequestInit): Promise<MachineList> {
+      return this.request("GET", `/v1/machines`, {
+        body: undefined,
+        query: undefined,
         init,
       });
     }

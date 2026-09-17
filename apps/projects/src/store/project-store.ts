@@ -206,6 +206,7 @@ import {
 } from "../lib/production-project-registration-authorities.js";
 import { normalizeProjectMetadata } from "../lib/project-management.js";
 import { PROJECT_LIST_V2_CONTRACT } from "../lib/project-list-output.js";
+import { AGENT_KINDS } from "../types/workspace.js";
 import type {
   Agent,
   AgentRun,
@@ -1161,6 +1162,51 @@ function normalizeApiWorkspace(raw: unknown): Workspace | null {
   };
 }
 
+/**
+ * Validate an authoritative single-agent response before it can be used for
+ * mutation attribution. In particular, a proxy or incompatible producer may
+ * not answer a lookup for one id/slug with a different agent and still cause
+ * that unrelated immutable id to be written into an event.
+ */
+function normalizeApiAgent(raw: unknown, requestedIdOrSlug: string): Agent {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error(`Projects agent lookup returned a malformed response for ${requestedIdOrSlug}.`);
+  }
+  const value = raw as Record<string, unknown>;
+  const validOptionalNullableString = (candidate: unknown): candidate is string | null | undefined =>
+    candidate === undefined || candidate === null || typeof candidate === "string";
+  const metadata = value.metadata;
+  const permissions = value.permissions;
+  if (
+    typeof value.id !== "string" || value.id.trim().length === 0
+    || typeof value.slug !== "string" || value.slug.trim().length === 0
+    || typeof value.name !== "string" || value.name.trim().length === 0
+    || typeof value.kind !== "string" || !AGENT_KINDS.includes(value.kind as (typeof AGENT_KINDS)[number])
+    || !validOptionalNullableString(value.provider)
+    || !validOptionalNullableString(value.model)
+    || !validOptionalNullableString(value.role)
+    || (permissions !== undefined && (!Array.isArray(permissions) || permissions.some((permission) => typeof permission !== "string")))
+    || (metadata !== undefined && (!metadata || typeof metadata !== "object" || Array.isArray(metadata)))
+    || (value.created_at !== undefined && typeof value.created_at !== "string")
+    || (value.updated_at !== undefined && typeof value.updated_at !== "string")
+  ) {
+    throw new Error(`Projects agent lookup returned a malformed response for ${requestedIdOrSlug}.`);
+  }
+  if (value.id !== requestedIdOrSlug && value.slug !== requestedIdOrSlug) {
+    throw new Error(`Projects agent lookup response did not match ${requestedIdOrSlug}.`);
+  }
+  return {
+    ...(value as unknown as Agent),
+    provider: (value.provider as string | null | undefined) ?? null,
+    model: (value.model as string | null | undefined) ?? null,
+    role: (value.role as string | null | undefined) ?? null,
+    permissions: (permissions as string[] | undefined) ?? [],
+    metadata: (metadata as JsonObject | undefined) ?? {},
+    created_at: typeof value.created_at === "string" ? value.created_at : "",
+    updated_at: typeof value.updated_at === "string" ? value.updated_at : "",
+  };
+}
+
 class ApiProjectStore implements ProjectStore {
   readonly transport = "http" as const;
   readonly baseUrl: string;
@@ -1734,7 +1780,8 @@ class ApiProjectStore implements ProjectStore {
   }
 
   async getAgent(idOrSlug: string): Promise<Agent | null> {
-    return this.client.get<Agent>("agents", idOrSlug);
+    const raw = await this.client.get<unknown>("agents", idOrSlug);
+    return raw === null ? null : normalizeApiAgent(raw, idOrSlug);
   }
 
   async createAgent(input: CreateAgentInput): Promise<Agent> {
