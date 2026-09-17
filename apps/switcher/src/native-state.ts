@@ -160,6 +160,31 @@ export function nativeStateEnvironment(state: NativeState): Record<string, strin
   return { [state.marker]: state.home, ...(state.sqliteHome ? { CODEX_SQLITE_HOME: state.sqliteHome } : {}) };
 }
 
+/** A transcript projection cannot reconcile SQLite-only history or metadata. */
+async function assertCodexDatabaseRedirectSafe(state: NativeState, overlayHome: string): Promise<void> {
+  if (state.tool !== "codex") return;
+  const config = await readCodexStateConfig(overlayHome);
+  const previous = config.sqlite_home;
+  if (previous !== undefined && typeof previous !== "string")
+    throw new Fault(422, "native_state_config", "The previous Codex sqlite_home must be an absolute directory.");
+  const roots = new Set([overlayHome, ...(typeof previous === "string" ? [absolute(previous)] : [])]);
+  for (const root of roots) {
+    if (root === (state.sqliteHome ?? state.home) || !await info(root)) continue;
+    await assertNativeStateDirectory(root);
+    const before = await lstat(root);
+    let inspected = 0;
+    for await (const entry of await opendir(root)) {
+      if (++inspected > 10_000)
+        throw new Fault(409, "native_state_inventory_limit", "Native database inventory exceeded its bounded limit; no state was projected.");
+      if (/^(?:state|logs|goals|memories|queue|thread_history)_\d+\.sqlite(?:-(?:wal|shm))?$/.test(entry.name))
+        throw new Fault(409, "native_state_migration_required", "This profile retains native database metadata. Reconcile its catalog and history before redirecting shared state.");
+    }
+    const after = await lstat(root);
+    if (after.isSymbolicLink() || before.dev !== after.dev || before.ino !== after.ino || before.mtimeMs !== after.mtimeMs)
+      throw new Fault(409, "native_state_inventory_changed", "Native database inventory changed; no state was projected.");
+  }
+}
+
 /** Metadata only. Old data remains visible as pending migration; normal launch
  * never treats starting a fresh shared overlay as completed legacy migration. */
 export async function legacyNativeStateWarnings(root: string, state: NativeState): Promise<string[]> {
@@ -193,6 +218,7 @@ export async function projectNativeState(state: NativeState, overlayHome: string
   const contains = (parent: string, child: string) => { const suffix = relative(parent, child); return suffix !== ".." && !suffix.startsWith("../") && !isAbsolute(suffix); };
   if (contains(state.home, overlayHome) || contains(overlayHome, state.home))
     throw new Fault(422, "native_state_overlap", "The shared corpus and authentication overlay must be separate directories.");
+  await assertCodexDatabaseRedirectSafe(state, overlayHome);
   // Preflight all collisions before creating any links or canonical entries.
   for (const entry of NATIVE_STATE_ENTRIES[state.tool]) {
     const target = join(state.home, entry.name), destination = join(overlayHome, entry.name);

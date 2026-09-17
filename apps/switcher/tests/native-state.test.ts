@@ -73,6 +73,24 @@ test("existing local state and divergent links refuse projection without deletin
   expect(await readdir(state.home)).toEqual([]);
 }));
 
+test.each([false, true])("retained SQLite metadata blocks projection before any state links: explicit=%s", explicit => fixture(async home => {
+  const state = await resolveNativeState("codex", { HOME: home });
+  const overlay = join(home, "old-account"); await mkdir(overlay, { mode: 0o700 });
+  const oldDatabase = explicit ? join(home, "old-sqlite") : overlay;
+  if (explicit) await mkdir(oldDatabase, { mode: 0o700 });
+  const config = explicit ? `sqlite_home = ${JSON.stringify(oldDatabase)}\n` : 'model="retained-model"\n';
+  await writeFile(join(overlay, "config.toml"), config, { mode: 0o600 });
+  await writeFile(join(overlay, "auth.json"), "private-auth-fixture", { mode: 0o600 });
+  await writeFile(join(oldDatabase, "thread_history_1.sqlite-wal"), "unique native metadata", { mode: 0o600 });
+  const before = await readdir(overlay);
+  await expect(projectNativeState(state, overlay)).rejects.toMatchObject({ code: "native_state_migration_required" });
+  expect(await readdir(overlay)).toEqual(before);
+  expect(await readdir(state.home)).toEqual([]);
+  expect(await readFile(join(overlay, "config.toml"), "utf8")).toBe(config);
+  expect(await readFile(join(overlay, "auth.json"), "utf8")).toBe("private-auth-fixture");
+  expect(await readFile(join(oldDatabase, "thread_history_1.sqlite-wal"), "utf8")).toBe("unique native metadata");
+}));
+
 test("Claude projects and capabilities share state while credentials, settings and plugin caches remain isolated", () => fixture(async home => {
   const state = await resolveNativeState("claude", { HOME: home });
   const overlay = join(home, "gateway");await mkdir(overlay, { mode: 0o700 });
