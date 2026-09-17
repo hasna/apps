@@ -121,6 +121,20 @@ describe("monorepo deploy context (hasna/apps)", () => {
     expect(workflow).toContain("role/projects-prod-gha-deploy");
   });
 
+  test("binds the candidate and both ECS task families to the live ARM64 platform", () => {
+    expect(workflow).toContain(
+      "EXPECTED_CPU_ARCHITECTURE: ARM64",
+    );
+    expect(workflow).toContain("runs-on: ubuntu-24.04-arm");
+    expect(workflow).toContain("Build native ARM64 image locally");
+    expect(workflow).toContain("--platform linux/arm64");
+    expect(workflow).not.toContain("--platform linux/amd64");
+    expect(workflow).toContain("live service task architecture mismatch");
+    expect(workflow).toContain("migration task architecture mismatch");
+    expect(workflow).toContain("deployed task architecture mismatch");
+    expect(workflow).toContain('architecture:$architecture');
+  });
+
   test("builds the member image from the monorepo layout, not a repo-root Dockerfile", () => {
     // The monorepo root has no Dockerfile; the member one lives at
     // apps/projects/Dockerfile. A deploy step that runs `docker build .` from

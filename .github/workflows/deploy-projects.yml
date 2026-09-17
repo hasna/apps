@@ -54,6 +54,7 @@ env:
   EXPECTED_SERVICE: projects-prod
   EXPECTED_ECR_REPOSITORY: projects
   EXPECTED_MIGRATION_FAMILY: projects-prod-migrate
+  EXPECTED_CPU_ARCHITECTURE: ARM64
   LOCAL_IMAGE: projects-deploy-candidate
   # The workflow whose successful conclusion is the ONLY automatic entry point
   # into this lane. Must equal the `name:` of .github/workflows/ci.yml and the
@@ -176,13 +177,11 @@ jobs:
     name: build + scan + migrate + deploy
     needs: gate
     if: ${{ needs.gate.outputs.proceed == 'true' }}
-    # projects-prod is an X86_64 Fargate service, so the shipped image is
-    # linux/amd64 (see the Dockerfile's --platform=linux/amd64 base pins and the
-    # fleet arch rule X86_64 -> linux/amd64). The verify step below executes the
-    # built image's bun ON this runner, so the runner arch must match the image
-    # arch: an amd64 image cannot exec on an arm64 runner ("exec format error",
-    # BUG-0038). Use a native x86_64 runner.
-    runs-on: ubuntu-latest
+    # projects-prod and projects-prod-migrate are ARM64 Fargate task
+    # definitions. Build and execute the candidate on a native ARM64 runner so
+    # the image platform is proven before AWS authentication. This binding is
+    # enforced again against both live task-definition families below.
+    runs-on: ubuntu-24.04-arm
     environment: production
     timeout-minutes: 60
     defaults:
@@ -217,17 +216,14 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
-      # projects-prod is X86_64, and the Dockerfile runtime stage is pinned to
-      # the linux/amd64 oven/bun base, so build the native linux/amd64 image the
-      # ECS service runs. --load must hand the local daemon an image this job can
-      # execute: a linux/arm64 image (or an amd64 base built under an arm64
-      # runner) fails the verify step below with "exec /usr/local/bin/bun: exec
-      # format error" (BUG-0038).
-      - name: Build native AMD64 image locally
+      # Build the same linux/arm64 platform declared by the live service and
+      # migration task definitions. --load is safe because this is a native
+      # ARM64 runner; an amd64 candidate would fail before credentials exist.
+      - name: Build native ARM64 image locally
         run: |
           set -Eeuo pipefail
           docker buildx build \
-            --platform linux/amd64 \
+            --platform linux/arm64 \
             --target runtime \
             --load \
             --label "org.opencontainers.image.revision=${SOURCE_SHA}" \
@@ -353,6 +349,7 @@ jobs:
 
           task_json="$(aws ecs describe-task-definition --task-definition "${previous_task_definition}" --output json)"
           [[ "$(jq --arg c "${WEB_CONTAINER}" '[.taskDefinition.containerDefinitions[] | select(.name == $c)] | length' <<<"${task_json}")" == "1" ]]
+          [[ "$(jq -r '.taskDefinition.runtimePlatform.cpuArchitecture // ""' <<<"${task_json}")" == "${EXPECTED_CPU_ARCHITECTURE}" ]] || { echo "live service task architecture mismatch" >&2; exit 1; }
           previous_image="$(jq -er --arg c "${WEB_CONTAINER}" '.taskDefinition.containerDefinitions[] | select(.name == $c) | .image' <<<"${task_json}")"
           {
             printf 'previous_task_definition=%s\n' "${previous_task_definition}"
@@ -459,6 +456,7 @@ jobs:
           set -Eeuo pipefail
           task_definition="$(aws ecs describe-task-definition --task-definition "${MIGRATION_FAMILY}" --query taskDefinition --output json)"
           [[ "$(jq --arg c "${MIGRATION_CONTAINER}" '[.containerDefinitions[] | select(.name == $c)] | length' <<<"${task_definition}")" == "1" ]]
+          [[ "$(jq -r '.runtimePlatform.cpuArchitecture // ""' <<<"${task_definition}")" == "${EXPECTED_CPU_ARCHITECTURE}" ]] || { echo "migration task architecture mismatch" >&2; exit 1; }
           replacement="$(jq --arg image "${IMAGE}" --arg c "${MIGRATION_CONTAINER}" '
             .containerDefinitions |= map(if .name == $c then .image = $image else . end)
             | del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy,.deregisteredAt)
@@ -587,7 +585,9 @@ jobs:
 
           deployed_definition="$(aws ecs describe-task-definition --task-definition "${DEPLOYED_TASK_DEFINITION}" --output json)"
           deployed_image="$(jq -er --arg c "${WEB_CONTAINER}" '.taskDefinition.containerDefinitions[] | select(.name == $c) | .image' <<<"${deployed_definition}")"
+          deployed_architecture="$(jq -r '.taskDefinition.runtimePlatform.cpuArchitecture // ""' <<<"${deployed_definition}")"
           [[ "${deployed_image}" == "${IMAGE}" ]] || { echo "live task definition image digest mismatch" >&2; exit 1; }
+          [[ "${deployed_architecture}" == "${EXPECTED_CPU_ARCHITECTURE}" ]] || { echo "deployed task architecture mismatch" >&2; exit 1; }
           curl --fail --silent --show-error --retry 5 --retry-all-errors --max-time 15 "${HEALTH_URL}" >/dev/null
 
           jq -n \
@@ -606,7 +606,8 @@ jobs:
             --arg deployed_image "${deployed_image}" \
             --arg health_url "${HEALTH_URL}" \
             --arg run_id "${GITHUB_RUN_ID}" \
-            '{schema:"hasna.projects.production_deploy.v1",source_sha:$source_sha,image_tag:$image_tag,image_digest:$image_digest,image:$image,account:$account,cluster:$cluster,service:$service,rollback:{task_definition:$previous_task_definition,image:$previous_image},migration:{task_definition:$migration_task_definition,task:$migration_task,exit_code:0},deployed:{task_definition:$deployed_task_definition,image:$deployed_image,health_url:$health_url},github_run_id:$run_id}' \
+            --arg architecture "${EXPECTED_CPU_ARCHITECTURE}" \
+            '{schema:"hasna.projects.production_deploy.v1",source_sha:$source_sha,image_tag:$image_tag,image_digest:$image_digest,image:$image,architecture:$architecture,account:$account,cluster:$cluster,service:$service,rollback:{task_definition:$previous_task_definition,image:$previous_image},migration:{task_definition:$migration_task_definition,task:$migration_task,exit_code:0},deployed:{task_definition:$deployed_task_definition,image:$deployed_image,architecture:$architecture,health_url:$health_url},github_run_id:$run_id}' \
             > deploy-evidence.json
 
       - name: Restore rollback anchor after a failed service rollout
@@ -644,6 +645,7 @@ jobs:
             echo "## Projects production deployment"
             echo
             echo "- source SHA: \`${SOURCE_SHA:-unverified}\`"
+            echo "- architecture: \`${EXPECTED_CPU_ARCHITECTURE}\`"
             echo "- immutable tag: \`${IMAGE_TAG:-not-created}\`"
             echo "- image digest: \`${{ steps.image.outputs.digest || 'not-pushed' }}\`"
             echo "- local critical/high: \`${{ steps.local-scan.outputs.critical || 'not-run' }}/${{ steps.local-scan.outputs.high || 'not-run' }}\`"
