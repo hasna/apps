@@ -73,7 +73,7 @@ export function registerLinkTask(program: Command): void {
       undefined
     )
     .action(async (attachmentId: string, taskId: string, options: LinkTaskOptions) => {
-      const todosUrl = options.todosUrl ?? serviceConfig("TODOS").url;
+      const todosUrl = options.todosUrl ?? (await serviceConfig("TODOS")).url;
 
       try {
         await linkAttachmentToTask(attachmentId, taskId, todosUrl);

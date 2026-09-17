@@ -7,6 +7,7 @@ import { lookup as mimeLookup } from "mime-types";
 import type { Attachment } from "./db";
 import {
   resolveAttachmentsTransport,
+  resolveServiceRequestTransport,
   type Env,
   type ResolveAttachmentsTransportOptions,
 } from "./client-config";
@@ -155,9 +156,8 @@ export function resolveAttachmentsV1(
   overrides?: ResolveStorageClientOverrides,
 ): ResolveAttachmentsV1Result {
   const authority = resolveAttachmentsTransport(env, overrides);
-  const credentials = (): { url: string; key: string } => {
-    const current = resolveAttachmentsTransport(env, overrides);
-    if (current.url !== authority.url) throw new Error("Attachments API authority changed; construct a new client explicitly.");
+  const credentials = async (): Promise<{ url: string; key: string }> => {
+    const current = await resolveServiceRequestTransport("attachments", env, overrides, authority.url);
     return { url: current.url, key: current.apiKey };
   };
   const fetchImpl = overrides?.fetchImpl ?? fetch;
@@ -197,10 +197,10 @@ export function describeApiFailure(
     : `${route} failed: HTTP ${status}`;
 }
 
-function createStorageClient(apiUrl: string, credentials: () => { url: string; key: string }, fetchImpl: JsonFetch): HasnaStorageClient {
+function createStorageClient(apiUrl: string, credentials: () => Promise<{ url: string; key: string }>, fetchImpl: JsonFetch): HasnaStorageClient {
   const baseUrl = `${apiUrl.replace(/\/+$/, "")}/v1`;
   const request = async <T>(path: string, init: RequestInit = {}): Promise<T> => {
-    const apiKey = credentials().key;
+    const apiKey = (await credentials()).key;
     const response = await fetchImpl(`${baseUrl}${path}`, {
       ...init,
       redirect: "error",
@@ -258,7 +258,7 @@ function createStorageClient(apiUrl: string, credentials: () => { url: string; k
   };
 }
 
-function makeStore(client: HasnaStorageClient, credentials: () => { url: string; key: string }, fetchImpl: JsonFetch): AttachmentsV1Store {
+function makeStore(client: HasnaStorageClient, credentials: () => Promise<{ url: string; key: string }>, fetchImpl: JsonFetch): AttachmentsV1Store {
   const uploadBody = (filename: string, bytes: Uint8Array, options: V1UploadOptions) => ({
     filename,
     content_base64: Buffer.from(bytes).toString("base64"),
@@ -298,20 +298,20 @@ function makeStore(client: HasnaStorageClient, credentials: () => { url: string;
     },
 
     async uploadFile(path: string, options: V1UploadOptions = {}): Promise<Attachment> {
-      credentials();
+      await credentials();
       const bytes = new Uint8Array(await Bun.file(path).arrayBuffer());
       return store.uploadBuffer(options.filename || basename(path), bytes, options);
     },
 
     async uploadStream(stream: NodeJS.ReadableStream, filename: string, options: V1UploadOptions = {}): Promise<Attachment> {
-      credentials();
+      await credentials();
       const chunks: Buffer[] = [];
       for await (const chunk of stream) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
       return store.uploadBuffer(options.filename || filename, Buffer.concat(chunks), options);
     },
 
     async uploadUrl(url: string, options: V1UploadOptions = {}): Promise<Attachment> {
-      credentials();
+      await credentials();
       const source = new URL(url);
       if (source.protocol !== "https:" || source.username || source.password) throw new Error("Upload source must be an HTTPS URL without credentials.");
       const response = await fetchImpl(url, { redirect: "error" });
@@ -352,7 +352,7 @@ function makeStore(client: HasnaStorageClient, credentials: () => { url: string;
       // The JSON transport can't carry a binary stream, so hit the download route
       // directly with a scoped fetch using the same env creds. The key is read
       // here only; it is never logged or returned.
-      const config = credentials();
+      const config = await credentials();
       const apiUrl = config.url;
       const apiKey = config.key;
       const response = await fetchImpl(`${apiUrl}/v1/attachments/${encodeURIComponent(id)}/download`, {

@@ -147,6 +147,6 @@ test("task references cannot inject a second path or leak credentials to another
   const request = mock(async () => response({ task: { id: "fixture" } })) as typeof fetch;
   await readTodosTask("a/b?c#d", base + "/v1", request);
   expect((request as ReturnType<typeof mock>).mock.calls[0][0]).toBe(base + "/v1/tasks/a%2Fb%3Fc%23d");
-  expect(() => withTodosAuth(base + "/api/tasks/task-one")).toThrow();
-  expect(() => withTodosAuth("https://elsewhere.example.test/v1/tasks/task-one")).toThrow();
+  await expect(withTodosAuth(base + "/api/tasks/task-one")).rejects.toThrow();
+  await expect(withTodosAuth("https://elsewhere.example.test/v1/tasks/task-one")).rejects.toThrow();
 });
