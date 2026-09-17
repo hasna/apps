@@ -8,7 +8,7 @@ import { applyConfigsWithReport } from "../lib/apply.js";
 import { findConfigsByTargetPath, findReferenceConfigsByName } from "../lib/config-target-identity.js";
 import { syncFromDir, syncToDir } from "../lib/sync-dir.js";
 import { detectMachineContext, resolveProfileVariables } from "../lib/machine.js";
-import { pagedPayload, summarizeApplyResult, summarizeConfig, summarizeProfile } from "../lib/compact-output.js";
+import { pagedPayload, summarizeApplyResult, summarizeProfile } from "../lib/compact-output.js";
 import type { ConfigAgent, ConfigCategory, ConfigFormat, ConfigKind, ConfigOutput } from "../types/index.js";
 
 // ── Tool descriptions (full, for describe_tools) ─────────────────────────────
@@ -104,18 +104,21 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
   try {
     switch (name) {
       case "list_configs": {
-        const configs = await store.listConfigs({
+        const filter = {
           category: (args["category"] as ConfigCategory) || undefined,
           agent: (args["agent"] as ConfigAgent) || undefined,
           kind: (args["kind"] as ConfigKind) || undefined,
           search: (args["search"] as string) || undefined,
+        };
+        const bounds = { limit: args["limit"], cursor: args["cursor"] };
+        const page = Boolean(args["verbose"])
+          ? await store.listConfigSummariesPage(filter, bounds)
+          : await store.listConfigIdentitiesPage(filter, bounds);
+        return ok({
+          ...page,
+          count: page.items.length,
+          hint: "Use get_config with id_or_slug for full content; list_configs verbose=true adds content-free path, description, tags, and output counts.",
         });
-        const summaries = configs.map((c) => summarizeConfig(c, { verbose: Boolean(args["verbose"]) }));
-        return ok(pagedPayload(summaries, {
-          limit: args["limit"],
-          cursor: args["cursor"],
-          hint: "Use get_config with id_or_slug for full content, or list_configs verbose=true for tags/output targets.",
-        }));
       }
       case "get_config": {
         const c = await store.getConfig(args["id_or_slug"] as string);

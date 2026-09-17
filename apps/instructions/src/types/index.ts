@@ -86,6 +86,41 @@ export interface Config {
   synced_at: string | null;
 }
 
+/** Content-free collection projection used by CLI, MCP, and `/v1?view=summary`. */
+export interface ConfigSummary {
+  id: string;
+  slug: string;
+  name: string;
+  category: ConfigCategory;
+  agent: ConfigAgent;
+  kind: ConfigKind;
+  format: ConfigFormat;
+  target_path: string | null;
+  output_count: number;
+  version: number;
+  is_template: boolean;
+  updated_at?: string;
+  description?: string | null;
+  tags?: string[];
+  outputs?: ConfigOutput[];
+}
+
+/** Smallest content-free config projection for agent-facing collection reads. */
+export interface ConfigIdentity {
+  id: string;
+  name: string;
+  slug: string;
+  kind: ConfigKind;
+  category: ConfigCategory;
+  agent: ConfigAgent;
+  format: ConfigFormat;
+  is_template: boolean;
+  version: number;
+  created_at: string;
+  updated_at: string;
+  synced_at: string | null;
+}
+
 // Raw DB row (tags as JSON string)
 export interface ConfigRow {
   id: string;

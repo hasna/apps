@@ -82,7 +82,7 @@ CORS middleware is enabled for all routes.
 
 | Method | Route | Body/query and result |
 | --- | --- | --- |
-| GET | `/v1/configs` | Filters: `category`, `agent`, `kind`, `search`; returns `{ configs, count }`. |
+| GET | `/v1/configs` | Filters: `category`, `agent`, `kind`, `search`, repeated `tag`, plus `limit`/`cursor`. Default returns bounded full records. `view=summary` returns content-free summaries; `view=identity` returns the smallest metadata projection. All forms include truthful bounded-page metadata. Full and identity views retain `configs` as a compatibility alias; the additive summary view returns one `items` array to avoid duplicating every summary row. |
 | POST | `/v1/configs` | Config create body; returns `{ config }` with 201. |
 | GET | `/v1/configs/:id` | ID or slug; returns `{ config }`. |
 | PATCH, PUT | `/v1/configs/:id` | Partial update body; returns `{ config }`. |
@@ -92,6 +92,12 @@ CORS middleware is enabled for all routes.
 | GET | `/v1/configs/:id/snapshots/:version` | Returns `{ snapshot }`. |
 | POST | `/v1/configs/:id/snapshots/prune` | Optional `{ keep }`, default 10; returns `{ pruned }`. |
 | GET | `/v1/snapshots/:id` | Looks up a snapshot by snapshot ID. |
+
+The summary projection must be deployed before releasing a client that uses it
+for human or verbose MCP listing. Clients refuse a response that contains full
+record fields instead of silently accepting an older server that ignored
+`view=summary`. Compact agent JSON uses the already-established `view=identity`
+projection.
 
 Create requires `name`, `category`, and `content`. The runtime store also
 accepts config kind, agent, target path, outputs, format, description, tags,

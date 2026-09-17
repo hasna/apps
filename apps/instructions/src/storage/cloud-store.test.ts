@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { TypedQueryClient } from "../generated/storage-kit/index.js";
-import { IdempotencyConflictError, addAssetToProfile, createConfig, executeIdempotentRequest, getProfileAssetBindingsPage, getProfileConfigBindingsPage, listConfigIdentitiesPage, listConfigsPage, listMachinesPage, listProfilesPage, listSnapshotsPage, resolveProfileForMachineRead, setProfileAssetBinding, setProfileConfigBinding, updateConfig } from "./cloud-store.js";
+import { IdempotencyConflictError, addAssetToProfile, createConfig, executeIdempotentRequest, getProfileAssetBindingsPage, getProfileConfigBindingsPage, listConfigIdentitiesPage, listConfigSummariesPage, listConfigsPage, listMachinesPage, listProfilesPage, listSnapshotsPage, resolveProfileForMachineRead, setProfileAssetBinding, setProfileConfigBinding, updateConfig } from "./cloud-store.js";
 
 interface ExecutedStatement {
   sql: string;
@@ -448,6 +448,25 @@ describe("cloud collection reads are source bounded", () => {
       expect(call.sql).toContain("OFFSET");
       expect(call.params.slice(-2)).toEqual([2, 4]);
     }
+  });
+});
+
+describe("cloud content-free config summary pages", () => {
+  test("selects bounded summary columns without instruction content", async () => {
+    const selects: string[] = [];
+    const client = {
+      async get() { return { total: 0 }; },
+      async many(sql: string) { selects.push(sql); return []; },
+    } as unknown as TypedQueryClient;
+
+    await listConfigSummariesPage(client, { tags: ["safe"] }, { limit: 5, cursor: 2 });
+
+    expect(selects).toHaveLength(1);
+    expect(selects[0]).not.toContain("SELECT *");
+    expect(selects[0]).not.toMatch(/(?:^|[,\s])content(?:[,\s]|$)/);
+    expect(selects[0]).toContain("jsonb_array_length(outputs) AS output_count");
+    expect(selects[0]).toContain("LIMIT");
+    expect(selects[0]).toContain("OFFSET");
   });
 });
 

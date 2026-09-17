@@ -309,6 +309,8 @@ describe("profile OpenAPI and generated SDK contract", () => {
 
     expect(generated).toContain("export interface BoundedProfilePage");
     expect(generated).toContain("export interface BoundedConfigPage");
+    expect(generated).toContain("export interface BoundedConfigSummaryPage");
+    expect(generated).toContain('"view"?: "summary" | "identity"');
     expect(generated).toContain("export interface ProfileResolutionRead");
     expect(generated).toContain("async listProfiles(query?:");
     expect(generated).toContain("async getProfile(id: string, query?:");

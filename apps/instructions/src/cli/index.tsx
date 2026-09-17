@@ -60,7 +60,7 @@ import {
   resolveAndRenderProviderContext,
 } from "../lib/provider-context.js";
 import { DEFAULT_LIST_LIMIT, paginate, parseLimit, truncateMiddle, truncateText } from "../lib/compact-output.js";
-import type { Config, ConfigAgent, ConfigCategory, ConfigFormat, ConfigKind, Profile, ProfileSelector, ProfileVariables } from "../types/index.js";
+import type { BoundedReadPage, Config, ConfigAgent, ConfigCategory, ConfigFormat, ConfigIdentity, ConfigKind, ConfigSummary, Profile, ProfileSelector, ProfileVariables } from "../types/index.js";
 
 import { createRequire } from "node:module";
 const pkg = createRequire(import.meta.url)("../../package.json") as { version: string };
@@ -100,6 +100,10 @@ function printJson(value: unknown): void {
   printLine(JSON.stringify(value, null, 2));
 }
 
+function printMachineJson(value: unknown, pretty = false): void {
+  printLine(JSON.stringify(value, null, pretty ? 2 : undefined));
+}
+
 function printManagedSkillRuntimeReport(report: ManagedSkillRuntimeReconcileReport): void {
   for (const runtime of report.runtimes) {
     if (!runtime.skill_present) continue;
@@ -120,7 +124,9 @@ function printManagedSkillRuntimeReport(report: ManagedSkillRuntimeReconcileRepo
   }
 }
 
-function fmtConfig(c: Config, format: string) {
+type ConfigListRow = Config | ConfigSummary;
+
+function fmtConfig(c: ConfigListRow, format: string) {
   if (format === "json") return JSON.stringify(c, null, 2);
   if (format === "compact") return `${c.slug} [${c.category}/${c.agent}] ${c.kind === "reference" ? "(ref)" : truncateMiddle(c.target_path ?? "(no path)", 72)}`;
   // table
@@ -129,7 +135,7 @@ function fmtConfig(c: Config, format: string) {
     `  ${chalk.cyan("category:")} ${c.category}  ${chalk.cyan("agent:")} ${c.agent}  ${chalk.cyan("kind:")} ${c.kind}`,
     `  ${chalk.cyan("format:")} ${c.format}  ${chalk.cyan("version:")} ${c.version}${c.target_path ? `  ${chalk.cyan("path:")} ${c.target_path}` : ""}`,
     c.description ? `  ${chalk.dim(c.description)}` : "",
-    c.tags.length > 0 ? `  ${chalk.dim("tags: " + c.tags.join(", "))}` : "",
+    c.tags?.length ? `  ${chalk.dim("tags: " + c.tags.join(", "))}` : "",
   ].filter(Boolean).join("\n");
 }
 
@@ -143,12 +149,12 @@ function pageFooter(command: string, page: { items: unknown[]; total: number; li
   console.log(chalk.dim(detailsHint));
 }
 
-function printConfigRows(configs: Config[]): void {
+function printConfigRows(configs: ConfigSummary[]): void {
   console.log(`${pad("slug", 32)} ${pad("type", 15)} ${pad("fmt", 8)} ${pad("path", 44)} out v`);
   for (const c of configs) {
     const type = `${c.category}/${c.agent}`;
     const path = c.kind === "reference" ? "(ref)" : c.target_path ?? "(no path)";
-    console.log(`${pad(c.slug, 32)} ${pad(type, 15)} ${pad(c.format, 8)} ${pad(truncateMiddle(path, 44), 44)} ${String(c.outputs.length).padStart(3)} ${c.version}`);
+    console.log(`${pad(c.slug, 32)} ${pad(type, 15)} ${pad(c.format, 8)} ${pad(truncateMiddle(path, 44), 44)} ${String(c.output_count).padStart(3)} ${c.version}`);
   }
 }
 
@@ -573,6 +579,149 @@ async function getMachineProfileContext(
   return { machine, profile, resolution, vars: resolveProfileVariables(profile, machine) };
 }
 
+const COMPACT_CONFIG_FIELDS = [
+  "id", "slug", "name", "kind", "category", "agent", "format",
+  "is_template", "version", "updated_at",
+] as const;
+const OPTIONAL_CONFIG_IDENTITY_FIELDS = ["created_at", "synced_at"] as const;
+const FULL_CONFIG_FIELDS = [
+  "id", "name", "slug", "kind", "category", "agent", "target_path", "outputs",
+  "format", "content", "description", "tags", "is_template", "version",
+  "created_at", "updated_at", "synced_at",
+] as const;
+
+type ConfigListDetail = "compact" | "full";
+
+function parseConfigListDetail(value: unknown): ConfigListDetail | undefined {
+  if (value === undefined) return undefined;
+  if (value === "compact" || value === "full") return value;
+  throw new Error('--detail must be "compact" or "full"');
+}
+
+function parseConfigListFields(value: unknown, detail: ConfigListDetail): string[] | undefined {
+  if (value === undefined) return undefined;
+  const raw = String(value);
+  if (raw.length > 1_024) throw new Error("--fields exceeds 1024 characters");
+  const fields = raw.split(",").map((field) => field.trim());
+  if (fields.length === 0 || fields.some((field) => field.length === 0)) {
+    throw new Error("--fields must contain non-empty comma-separated field names");
+  }
+  if (fields.length > 32) throw new Error("--fields accepts at most 32 fields");
+  if (new Set(fields).size !== fields.length) throw new Error("--fields must not contain duplicate names");
+  const allowed = new Set<string>(detail === "full"
+    ? FULL_CONFIG_FIELDS
+    : [...COMPACT_CONFIG_FIELDS, ...OPTIONAL_CONFIG_IDENTITY_FIELDS]);
+  const unknown = fields.filter((field) => !allowed.has(field));
+  if (unknown.length > 0) throw new Error(`Unknown ${detail} config field(s): ${unknown.join(", ")}`);
+  if (!fields.includes("id")) throw new Error("--fields must include the immutable id field");
+  if (detail !== "full" && fields.includes("content")) {
+    throw new Error('Config content requires --detail full');
+  }
+  return fields;
+}
+
+function projectConfigFields(record: Record<string, unknown>, fields: readonly string[]): Record<string, unknown> {
+  return Object.fromEntries(fields.map((field) => [field, record[field]]));
+}
+
+async function readAllConfigIdentityPages(
+  store: ConfigStore,
+  filter: Parameters<ConfigStore["listConfigIdentitiesPage"]>[0],
+): Promise<{ items: ConfigIdentity[]; source_bounded: boolean }> {
+  const items: ConfigIdentity[] = [];
+  const seen = new Set<string>();
+  let cursor = 0;
+  let expectedTotal: number | null = null;
+  let sourceBounded = true;
+  let previousId: string | null = null;
+  while (true) {
+    const page = await store.listConfigIdentitiesPage(filter, { limit: 100, cursor });
+    sourceBounded = sourceBounded && page.source_bounded;
+    if (expectedTotal === null) expectedTotal = page.total;
+    else if (page.total !== expectedTotal) throw new Error("Config collection changed while paging");
+    for (const item of page.items) {
+      if (seen.has(item.id)) throw new Error(`Config collection repeated ${item.id} while paging`);
+      if (page.source_bounded && previousId !== null && item.id <= previousId) throw new Error("Config collection order changed while paging");
+      seen.add(item.id);
+      previousId = page.source_bounded ? item.id : null;
+      items.push(item);
+    }
+    if (page.next_cursor === null) break;
+    if (page.next_cursor <= cursor) throw new Error("Config identity pagination did not advance");
+    cursor = page.next_cursor;
+  }
+  if (expectedTotal !== null && items.length !== expectedTotal) {
+    throw new Error(`Config collection returned ${items.length} of ${expectedTotal} rows`);
+  }
+  return { items, source_bounded: sourceBounded };
+}
+
+
+async function readAllConfigPages(
+  store: ConfigStore,
+  filter: Parameters<ConfigStore["listConfigsPage"]>[0],
+): Promise<{ items: Config[]; source_bounded: boolean }> {
+  const items: Config[] = [];
+  const seen = new Set<string>();
+  let cursor = 0;
+  let expectedTotal: number | null = null;
+  let sourceBounded = true;
+  let previousId: string | null = null;
+  while (true) {
+    const page = await store.listConfigsPage(filter, { limit: 100, cursor });
+    sourceBounded = sourceBounded && page.source_bounded;
+    if (expectedTotal === null) expectedTotal = page.total;
+    else if (page.total !== expectedTotal) throw new Error("Config collection changed while paging");
+    for (const item of page.items) {
+      if (seen.has(item.id)) throw new Error(`Config collection repeated ${item.id} while paging`);
+      if (page.source_bounded && previousId !== null && item.id <= previousId) throw new Error("Config collection order changed while paging");
+      seen.add(item.id);
+      previousId = page.source_bounded ? item.id : null;
+      items.push(item);
+    }
+    if (page.next_cursor === null) break;
+    if (page.next_cursor <= cursor) throw new Error("Config pagination did not advance");
+    cursor = page.next_cursor;
+  }
+  if (expectedTotal !== null && items.length !== expectedTotal) {
+    throw new Error(`Config collection returned ${items.length} of ${expectedTotal} rows`);
+  }
+  return { items, source_bounded: sourceBounded };
+}
+
+function configListEnvelope(
+  records: Record<string, unknown>[],
+  page: { total: number; limit: number | null; cursor: number; next_cursor: number | null; has_more: boolean; complete: boolean; source_bounded: boolean },
+  detail: ConfigListDetail,
+  fields: readonly string[],
+) {
+  const complete = page.cursor === 0 && !page.has_more;
+  const truncated = !complete;
+  const truncationReason = page.cursor > 0
+    ? (page.has_more ? "cursor_and_limit" : "cursor")
+    : page.has_more
+      ? "limit"
+      : null;
+  return {
+    configs: records,
+    _meta: {
+      schema_version: 1,
+      count: records.length,
+      total: page.total,
+      limit: page.limit,
+      cursor: page.cursor,
+      next_cursor: page.next_cursor,
+      has_more: page.has_more,
+      complete,
+      truncated,
+      truncation_reason: truncationReason,
+      detail,
+      fields: [...fields],
+      source_bounded: page.source_bounded,
+    },
+  };
+}
+
 // ── list ─────────────────────────────────────────────────────────────────────
 program
   .command("list")
@@ -586,27 +735,88 @@ program
   .option("-f, --format <fmt>", "output format: compact|table|json", "compact")
   .option("--brief", "shorthand for --format compact")
   .option("--verbose", "show expanded metadata for each listed config")
-  .option("--json", "output full matching records as JSON")
-  .option("--limit <n>", `max rows for human output (default ${DEFAULT_LIST_LIMIT})`)
-  .option("--cursor <n>", "zero-based pagination cursor for human output")
+  .option("--json", "output machine-readable records (legacy default: complete full array)")
+  .option("--detail <level>", "JSON detail: compact|full; enables a bounded metadata envelope")
+  .option("--fields <fields>", "comma-separated JSON fields; implies --detail compact")
+  .option("--all", "explicitly read every matching row")
+  .option("--pretty", "pretty-print modern JSON output (modern JSON is compact by default)")
+  .option("--limit <n>", `max rows (default ${DEFAULT_LIST_LIMIT} for bounded output)`)
+  .option("--cursor <n>", "zero-based pagination cursor")
   .action(async (opts) => {
-    const fmt = opts.json ? "json" : opts.verbose ? "table" : opts.brief ? "compact" : opts.format;
-    const configs = await resolveConfigStore().listConfigs({
+    const requestedDetail = parseConfigListDetail(opts.detail);
+    const modernJson = requestedDetail !== undefined || opts.fields !== undefined;
+    const jsonRequested = Boolean(opts.json || opts.format === "json");
+    if (modernJson && !jsonRequested) throw new Error("--detail and --fields require JSON output");
+    if (opts.all && !modernJson) throw new Error("--all requires JSON output with --detail or --fields");
+    if (opts.pretty && !jsonRequested) throw new Error("--pretty requires JSON output");
+    const detail: ConfigListDetail = requestedDetail ?? "compact";
+    const fields = parseConfigListFields(opts.fields, detail) ?? (detail === "full"
+      ? [...FULL_CONFIG_FIELDS]
+      : [...COMPACT_CONFIG_FIELDS]);
+    const filter = {
       category: opts.category as ConfigCategory,
       agent: opts.agent as ConfigAgent,
       kind: opts.kind as ConfigKind,
       tags: opts.tag ? [opts.tag] : undefined,
       search: opts.search,
-    });
+    };
+    const store = resolveConfigStore();
+
+    if (modernJson) {
+      if (opts.all && (opts.cursor !== undefined || opts.limit !== undefined)) {
+        throw new Error("--all cannot be combined with --limit or --cursor");
+      }
+      let page: BoundedReadPage<Config | ConfigIdentity>;
+      if (opts.all) {
+        if (detail === "full") {
+          const completeRead = await readAllConfigPages(store, filter);
+          page = {
+            items: completeRead.items, total: completeRead.items.length, limit: Math.max(completeRead.items.length, 1),
+            cursor: 0, next_cursor: null, has_more: false, complete: true, truncated: false,
+            source_bounded: completeRead.source_bounded,
+          };
+        } else {
+          const completeRead = await readAllConfigIdentityPages(store, filter);
+          page = {
+            items: completeRead.items, total: completeRead.items.length, limit: Math.max(completeRead.items.length, 1),
+            cursor: 0, next_cursor: null, has_more: false, complete: true, truncated: false,
+            source_bounded: completeRead.source_bounded,
+          };
+        }
+      } else {
+        page = detail === "full"
+          ? await store.listConfigsPage(filter, { limit: opts.limit, cursor: opts.cursor })
+          : await store.listConfigIdentitiesPage(filter, { limit: opts.limit, cursor: opts.cursor });
+      }
+      const records = page.items.map((item) => projectConfigFields(item as unknown as Record<string, unknown>, fields));
+      printMachineJson(configListEnvelope(records, {
+        total: page.total,
+        limit: opts.all ? null : page.limit,
+        cursor: page.cursor,
+        next_cursor: page.next_cursor,
+        has_more: page.has_more,
+        complete: page.complete,
+        source_bounded: page.source_bounded,
+      }, detail, fields), Boolean(opts.pretty));
+      return;
+    }
+
+    const fmt = opts.json ? "json" : opts.verbose ? "table" : opts.brief ? "compact" : opts.format;
     if (fmt === "json") {
+      const configs = opts.limit !== undefined || opts.cursor !== undefined
+        ? (await store.listConfigsPage(filter, { limit: opts.limit, cursor: opts.cursor })).items
+        : await store.listConfigs(filter);
       printJson(configs);
       return;
     }
-    if (configs.length === 0) {
+
+    const page = opts.all
+      ? (() => { throw new Error("--all is only available with --json and --detail"); })()
+      : await store.listConfigSummariesPage(filter, { limit: opts.limit, cursor: opts.cursor });
+    if (page.total === 0) {
       console.log(chalk.dim("No configs found."));
       return;
     }
-    const page = paginate(configs, { limit: opts.limit, cursor: opts.cursor });
     if (fmt === "compact") {
       printConfigRows(page.items);
     } else {
@@ -615,7 +825,7 @@ program
         console.log();
       }
     }
-    pageFooter("configs list", page, "Use --verbose for expanded rows, --json for full records, or `configs show <slug>` for content.");
+    pageFooter("configs list", page, "Use --verbose for expanded rows, --json --detail compact for metadata, or `configs show <slug>` for content.");
   });
 
 // ── show ─────────────────────────────────────────────────────────────────────

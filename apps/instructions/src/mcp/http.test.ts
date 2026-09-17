@@ -18,12 +18,15 @@ import { makeTempRoot } from "../lib/test-temp-root";
 const servers: Array<{ stop: () => void }> = [];
 let savedApiUrl: string | undefined;
 let savedApiKey: string | undefined;
+let savedLocalOptIn: string | undefined;
 
 beforeEach(() => {
   savedApiUrl = process.env["HASNA_INSTRUCTIONS_API_URL"];
   savedApiKey = process.env["HASNA_INSTRUCTIONS_API_KEY"];
+  savedLocalOptIn = process.env["HASNA_INSTRUCTIONS_LOCAL"];
   delete process.env["HASNA_INSTRUCTIONS_API_URL"];
   delete process.env["HASNA_INSTRUCTIONS_API_KEY"];
+  process.env["HASNA_INSTRUCTIONS_LOCAL"] = "1";
   process.env["HASNA_INSTRUCTIONS_DB_PATH"] = ":memory:";
   resetDatabase();
   getDatabase();
@@ -50,6 +53,8 @@ afterEach(() => {
   else delete process.env["HASNA_INSTRUCTIONS_API_URL"];
   if (savedApiKey !== undefined) process.env["HASNA_INSTRUCTIONS_API_KEY"] = savedApiKey;
   else delete process.env["HASNA_INSTRUCTIONS_API_KEY"];
+  if (savedLocalOptIn !== undefined) process.env["HASNA_INSTRUCTIONS_LOCAL"] = savedLocalOptIn;
+  else delete process.env["HASNA_INSTRUCTIONS_LOCAL"];
 });
 
 describe("configs MCP HTTP transport", () => {

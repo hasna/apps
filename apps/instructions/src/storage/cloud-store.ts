@@ -15,6 +15,8 @@ import {
   type Config,
   type ConfigFilter,
   type ConfigOutput,
+  type ConfigSummary,
+  type ConfigIdentity,
   type ConfigSnapshot,
   type CreateConfigInput,
   type CreateProfileInput,
@@ -392,6 +394,9 @@ function configFilterSql(filter: ConfigFilter): { where: string; params: unknown
     const parameter = `$${params.length}`;
     conditions.push(`(name ILIKE ${parameter} OR description ILIKE ${parameter} OR content ILIKE ${parameter})`);
   }
+  if (filter.tags?.length) {
+    for (const tag of filter.tags) add("tags @> $?::jsonb", JSON.stringify([tag]));
+  }
   return {
     where: conditions.length ? `WHERE ${conditions.join(" AND ")}` : "",
     params,
@@ -428,20 +433,43 @@ export async function listConfigs(
   );
 }
 
-export interface ConfigIdentity {
-  id: string;
-  name: string;
-  slug: string;
-  kind: string;
-  category: string;
-  agent: string;
-  format: string;
-  is_template: boolean;
-  version: number;
-  created_at: string;
-  updated_at: string;
-  synced_at: string | null;
+export async function listConfigSummariesPage(
+  client: TypedQueryClient,
+  filter: ConfigFilter = {},
+  options: BoundedReadOptions = {},
+): Promise<BoundedReadPage<ConfigSummary>> {
+  const normalized = normalizeBoundedReadOptions(options);
+  const { where, params } = configFilterSql(filter);
+  const count = await client.get<{ total: number | string }>(`SELECT COUNT(*) AS total FROM configs ${where}`, params);
+  const rows = await client.many<{
+    id: string; name: string; slug: string; kind: string; category: string; agent: string;
+    target_path: string | null; format: string; output_count: number | string; description: string | null;
+    tags: unknown; is_template: boolean; version: number; updated_at: unknown;
+  }>(
+    `SELECT id, name, slug, kind, category, agent, target_path, format,
+            jsonb_array_length(outputs) AS output_count, description, tags,
+            is_template, version, updated_at
+       FROM configs ${where} ORDER BY id LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+    [...params, normalized.limit, normalized.cursor],
+  );
+  return boundedReadPage(rows.map((row) => ({
+    id: row.id,
+    slug: row.slug,
+    name: row.name,
+    category: row.category as Config["category"],
+    agent: row.agent as Config["agent"],
+    kind: row.kind as Config["kind"],
+    format: row.format as Config["format"],
+    target_path: row.target_path,
+    output_count: Number(row.output_count ?? 0),
+    version: row.version,
+    is_template: Boolean(row.is_template),
+    updated_at: toIso(row.updated_at),
+    description: row.description,
+    tags: Array.isArray(row.tags) ? row.tags.map(String) : [],
+  })), Number(count?.total ?? 0), normalized);
 }
+
 
 export function listConfigIdentitiesPage(
   client: TypedQueryClient,

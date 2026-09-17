@@ -36,6 +36,9 @@ export {
   getConfigById,
   getConfigStats,
   listConfigs,
+  listConfigsPage,
+  listConfigIdentitiesPage,
+  listConfigSummariesPage,
   updateConfig,
 } from "./configs.js";
 export {

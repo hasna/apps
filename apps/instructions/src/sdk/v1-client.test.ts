@@ -43,6 +43,11 @@ describe("InstructionsV1Client mixed-version compatibility", () => {
     expect(configs).toMatchObject({ total: 2, limit: 1, cursor: 1, complete: true, source_bounded: false });
     expect(configs.items.map((item) => item.id)).toEqual(["c2"]);
 
+    const summaries = await client.listConfigs({ view: "summary", tag: ["safe"], limit: 100, cursor: 0 });
+    expect(summaries.items.map((item) => item.id)).toEqual(["c1", "c2"]);
+    expect(summaries.items.every((item) => !("content" in item))).toBe(true);
+    expect(JSON.stringify(summaries)).not.toContain('"content"');
+
     const identities = await client.listConfigs({ view: "identity", limit: 100, cursor: 0 });
     expect(identities.items.map((item) => item.id)).toEqual(["c1", "c2"]);
     expect(JSON.stringify(identities)).not.toContain("private");
@@ -50,6 +55,25 @@ describe("InstructionsV1Client mixed-version compatibility", () => {
 
     expect(await client.listProfiles({ limit: 100, cursor: 0 })).toMatchObject({ total: 1, complete: true, source_bounded: false });
     expect(await client.listMachines({ limit: 100, cursor: 0 })).toMatchObject({ total: 1, complete: true, source_bounded: false });
+  });
+
+  test("projects bounded full-record responses when an older server ignores summary and identity views", async () => {
+    const fetchImpl = (async () => jsonResponse({
+      configs: [{ id: "c1", name: "One", slug: "one", content: "CONTENT_CANARY", outputs: [{ target_path: "/private" }] }],
+      items: [{ id: "c1", name: "One", slug: "one", content: "CONTENT_CANARY", outputs: [{ target_path: "/private" }] }],
+      count: 1, total: 1, limit: 20, cursor: 0, next_cursor: null, has_more: false,
+      complete: true, truncated: false, source_bounded: true,
+    })) as unknown as typeof fetch;
+    const client = new InstructionsV1Client({ baseUrl: "https://api.hasna.com/instructions", fetch: fetchImpl });
+
+    for (const view of ["summary", "identity"] as const) {
+      const page = await client.listConfigs({ view });
+      expect(JSON.stringify(page)).not.toContain("CONTENT_CANARY");
+      expect(JSON.stringify(page)).not.toContain('"content"');
+      expect(JSON.stringify(page)).not.toContain('"outputs"');
+      expect(page.configs).toBeDefined();
+      expect(page.items).toEqual(page.configs!);
+    }
   });
 
   test("preserves the pre-0.7 positional RequestInit forms for snapshot methods", async () => {

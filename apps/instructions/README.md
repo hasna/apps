@@ -52,9 +52,13 @@ existing row.
 
 ```bash
 instructions --help
-instructions list                    # compact, paged summary
-instructions list --verbose          # expanded metadata, still paged
-instructions list --json             # full machine-readable records
+instructions list                                      # compact, paged summary
+instructions list --verbose                            # expanded metadata, still paged
+instructions list --json                               # legacy complete full-record array
+instructions list --json --detail compact --limit 20   # bounded identity envelope
+instructions list --json --detail compact --fields id,slug,name,version
+instructions list --json --detail full --limit 20      # explicit bounded content read
+instructions list --json --detail compact --all        # explicit complete metadata read
 instructions show <slug>             # full metadata + content
 instructions inspect <slug>          # alias for show
 instructions profile resolve
@@ -68,7 +72,9 @@ small. Human output is capped at 20 rows unless you pass `--limit`; use
 `--cursor` to continue from the next page. Detail is explicit:
 
 - `--verbose` expands list rows with descriptions, tags, and paths.
-- `--json` preserves full machine-readable records for automation.
+- Legacy `--json` with no modern detail flags preserves the complete full-record array for automation. Explicit `--limit`/`--cursor` now bound that legacy array.
+- `--detail compact` returns a content-free `{ configs, _meta }` identity envelope through the already-deployed `/v1/configs?view=identity` projection. Add `--fields` (including immutable `id`), `--all`, or `--pretty` as needed.
+- `--detail full` is the explicit content-bearing envelope; it is bounded unless `--all` is supplied.
 - `show`/`inspect` and `snapshot show` print full config or snapshot content.
 
 `instructions report --json` emits the stable `schema_version: 1` report

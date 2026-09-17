@@ -338,6 +338,53 @@ describe("CloudConfigStore CRUD mapping (over the contracts transport)", () => {
     expect(JSON.stringify(m.calls[0])).not.toContain("Bearer");
   });
 
+  test("listConfigIdentitiesPage uses the deployed metadata-only /v1 view", async () => {
+    const identity: import("../types/index.js").ConfigIdentity = {
+      id: "cfg-1", name: "Demo", slug: "demo", kind: "file", category: "rules", agent: "global",
+      format: "markdown", is_template: false, version: 1, created_at: "", updated_at: "", synced_at: null,
+    };
+    const m = fakeStorageClient(() => ({ json: page([identity]) }));
+    const store = new CloudConfigStore(m.client);
+    const result = await store.listConfigIdentitiesPage({}, { limit: 5, cursor: 0 });
+
+    expect(m.calls[0]?.path).toBe("/configs?view=identity&limit=5&cursor=0");
+    expect(result.items).toEqual([identity]);
+    expect(JSON.stringify(result.items)).not.toContain('"content"');
+    expect(JSON.stringify(result.items)).not.toContain('"target_path"');
+  });
+
+  test("listConfigIdentitiesPage refuses an older server that ignores the identity projection", async () => {
+    const m = fakeStorageClient(() => ({ json: page([SAMPLE]) }));
+    const store = new CloudConfigStore(m.client);
+
+    await expect(store.listConfigIdentitiesPage()).rejects.toThrow(/deploy the identity endpoint/);
+  });
+
+  test("listConfigSummariesPage uses the existing /v1 collection with view=summary", async () => {
+    const summary: import("../types/index.js").ConfigSummary = {
+      id: "cfg-1", slug: "demo", name: "Demo", kind: "file", category: "rules", agent: "global",
+      target_path: null, format: "markdown", output_count: 0, description: null, tags: [],
+      is_template: false, version: 1, updated_at: "",
+    };
+    const m = fakeStorageClient(() => ({ json: page([summary]) }));
+    const store = new CloudConfigStore(m.client);
+    const result = await store.listConfigSummariesPage({ category: "rules" as never, tags: ["safe"] }, { limit: 5, cursor: 0 });
+
+    expect(m.calls[0]).toMatchObject({
+      method: "GET",
+      path: "/configs?category=rules&tag=safe&view=summary&limit=5&cursor=0",
+    });
+    expect(result.items).toEqual([summary]);
+    expect(JSON.stringify(result.items)).not.toContain('"content"');
+  });
+
+  test("listConfigSummariesPage refuses an older server that ignores the summary projection", async () => {
+    const m = fakeStorageClient(() => ({ json: page([SAMPLE]) }));
+    const store = new CloudConfigStore(m.client);
+
+    await expect(store.listConfigSummariesPage()).rejects.toThrow(/deploy the summary endpoint/);
+  });
+
   test("getConfig -> GET /v1/configs/:id; 404 -> ConfigNotFoundError", async () => {
     const m = fakeStorageClient((c) =>
       c.path.endsWith("/missing") ? { status: 404, json: { error: "not found" } } : { json: { config: SAMPLE } },

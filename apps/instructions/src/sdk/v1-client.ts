@@ -2,6 +2,7 @@ import {
   GeneratedInstructionsV1Client,
   type BoundedConfigIdentityPage,
   type BoundedConfigPage,
+  type BoundedConfigSummaryPage,
   type BoundedMachinePage,
   type BoundedProfileAssetBindingPage,
   type BoundedProfileConfigBindingPage,
@@ -9,6 +10,7 @@ import {
   type BoundedProfilePage,
   type BoundedSnapshotPage,
   type ConfigIdentity,
+  type ConfigSummary,
   type ConfigSnapshot,
   type GeneratedInstructionsV1ClientOptions,
   type ProfileIdentity,
@@ -23,7 +25,8 @@ type ConfigListQuery = {
   search?: string;
   limit?: number;
   cursor?: number;
-  view?: "identity";
+  tag?: string[];
+  view?: "summary" | "identity";
 };
 type ProfileListQuery = { limit?: number; cursor?: number; view?: "identity" };
 type MachineListQuery = { limit?: number; cursor?: number; view?: "identity" };
@@ -78,6 +81,26 @@ function configIdentity(value: Record<string, unknown>): ConfigIdentity {
   };
 }
 
+function configSummary(value: Record<string, unknown>): ConfigSummary {
+  const outputs = Array.isArray(value.outputs) ? value.outputs : [];
+  return {
+    id: String(value.id ?? ""),
+    name: String(value.name ?? ""),
+    slug: String(value.slug ?? ""),
+    kind: String(value.kind ?? ""),
+    category: String(value.category ?? ""),
+    agent: String(value.agent ?? ""),
+    target_path: value.target_path == null ? null : String(value.target_path),
+    format: String(value.format ?? ""),
+    output_count: Number(value.output_count ?? outputs.length),
+    description: value.description == null ? null : String(value.description),
+    tags: Array.isArray(value.tags) ? value.tags.map(String) : [],
+    is_template: Boolean(value.is_template),
+    version: Number(value.version ?? 0),
+    updated_at: String(value.updated_at ?? ""),
+  };
+}
+
 function profileIdentity(value: Record<string, unknown>): ProfileIdentity {
   return {
     id: String(value.id ?? ""),
@@ -106,7 +129,11 @@ function normalizeLegacyPage<T>(
   count: number;
 } & Record<string, unknown> {
   const record = value && typeof value === "object" ? value as Record<string, unknown> : {};
-  if (Array.isArray(record.items)) return value as never;
+  if (Array.isArray(record.items)) {
+    if (!project) return value as never;
+    const items = (record.items as Record<string, unknown>[]).map(project);
+    return { ...record, [alias]: items, items, count: items.length } as never;
+  }
   const legacy = record[alias];
   if (!Array.isArray(legacy)) {
     throw new Error(`Instructions V1 ${alias} response is neither bounded nor a complete legacy array`);
@@ -146,14 +173,19 @@ export class InstructionsV1Client extends GeneratedInstructionsV1Client {
   override async listConfigs(
     query?: ConfigListQuery,
     init?: RequestInit,
-  ): Promise<BoundedConfigPage | BoundedConfigIdentityPage> {
+  ): Promise<BoundedConfigPage | BoundedConfigSummaryPage | BoundedConfigIdentityPage> {
     const response = await super.listConfigs(query, init);
-    return normalizeLegacyPage(
+    const project = query?.view === "identity"
+      ? configIdentity
+      : query?.view === "summary"
+        ? configSummary
+        : undefined;
+    return normalizeLegacyPage<unknown>(
       response,
       "configs",
       query,
-      query?.view === "identity" ? configIdentity : undefined,
-    ) as BoundedConfigPage | BoundedConfigIdentityPage;
+      project as ((record: Record<string, unknown>) => unknown) | undefined,
+    ) as BoundedConfigPage | BoundedConfigSummaryPage | BoundedConfigIdentityPage;
   }
 
   override async listProfiles(

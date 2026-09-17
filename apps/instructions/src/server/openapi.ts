@@ -28,6 +28,28 @@ const configSchema = {
   },
 } as const;
 
+const configSummarySchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["id", "name", "slug", "kind", "category", "agent", "target_path", "format", "output_count", "description", "tags", "is_template", "version", "updated_at"],
+  properties: {
+    id: { type: "string" },
+    name: { type: "string" },
+    slug: { type: "string" },
+    kind: { type: "string" },
+    category: { type: "string" },
+    agent: { type: "string" },
+    target_path: { type: "string", nullable: true },
+    format: { type: "string" },
+    output_count: { type: "number" },
+    description: { type: "string", nullable: true },
+    tags: { type: "array", items: { type: "string" } },
+    is_template: { type: "boolean" },
+    version: { type: "number" },
+    updated_at: { type: "string" },
+  },
+} as const;
+
 const profileSchema = {
   type: "object",
   properties: {
@@ -44,6 +66,7 @@ const profileSchema = {
 
 const configIdentitySchema = {
   type: "object",
+  additionalProperties: false,
   required: ["id", "name", "slug", "kind", "category", "agent", "format", "is_template", "version", "created_at", "updated_at", "synced_at"],
   properties: {
     id: { type: "string" },
@@ -100,6 +123,12 @@ const snapshotSchema = {
 
 const limitParameter = { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 100 } } as const;
 const cursorParameter = { name: "cursor", in: "query", schema: { type: "integer", minimum: 0, maximum: 100_000 } } as const;
+const configViewParameter = {
+  name: "view",
+  in: "query",
+  description: "Use summary for a content-free list projection, or identity for the smallest metadata-only projection.",
+  schema: { type: "string", enum: ["summary", "identity"] },
+} as const;
 const identityViewParameter = {
   name: "view",
   in: "query",
@@ -145,6 +174,7 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
       },
       schemas: {
         Config: configSchema,
+        ConfigSummary: configSummarySchema,
         ConfigIdentity: configIdentitySchema,
         Profile: profileSchema,
         ProfileIdentity: profileIdentitySchema,
@@ -372,6 +402,23 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
             source_bounded: { type: "boolean" },
           },
         },
+        BoundedConfigSummaryPage: {
+          type: "object",
+          required: ["items", "total", "limit", "cursor", "next_cursor", "has_more", "complete", "truncated", "source_bounded"],
+          properties: {
+            configs: { type: "array", items: { $ref: "#/components/schemas/ConfigSummary" } },
+            items: { type: "array", items: { $ref: "#/components/schemas/ConfigSummary" } },
+            count: { type: "number" },
+            total: { type: "number" },
+            limit: { type: "number" },
+            cursor: { type: "number" },
+            next_cursor: { type: "number", nullable: true },
+            has_more: { type: "boolean" },
+            complete: { type: "boolean" },
+            truncated: { type: "boolean", const: false },
+            source_bounded: { type: "boolean" },
+          },
+        },
         BoundedConfigIdentityPage: {
           type: "object",
           required: ["items", "total", "limit", "cursor", "next_cursor", "has_more", "complete", "truncated", "source_bounded"],
@@ -510,15 +557,17 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
             { name: "search", in: "query", schema: { type: "string", maxLength: 512 } },
             limitParameter,
             cursorParameter,
-            identityViewParameter,
+            { name: "tag", in: "query", schema: { type: "array", items: { type: "string" } } },
+            configViewParameter,
           ],
           responses: {
             "200": {
               content: {
                 "application/json": {
                   schema: {
-                    oneOf: [
+                    anyOf: [
                       { $ref: "#/components/schemas/BoundedConfigPage" },
+                      { $ref: "#/components/schemas/BoundedConfigSummaryPage" },
                       { $ref: "#/components/schemas/BoundedConfigIdentityPage" },
                     ],
                   },

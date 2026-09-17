@@ -189,14 +189,23 @@ export async function handleV1Request(
             ...(url.searchParams.get("agent") ? { agent: url.searchParams.get("agent") as never } : {}),
             ...(url.searchParams.get("kind") ? { kind: url.searchParams.get("kind") as never } : {}),
             ...(search ? { search } : {}),
+            ...(url.searchParams.getAll("tag").length ? { tags: url.searchParams.getAll("tag") } : {}),
           };
           const options = {
             limit: url.searchParams.get("limit") ?? undefined,
             cursor: url.searchParams.get("cursor") ?? undefined,
           };
-          if (url.searchParams.get("view") === "identity") {
+          const view = url.searchParams.get("view");
+          if (view !== null && view !== "identity" && view !== "summary") {
+            return errorResponse(400, "unsupported config view", { code: "INVALID_CONFIG_VIEW" });
+          }
+          if (view === "identity") {
             const page = await store.listConfigIdentitiesPage(client, filter, options);
             return json(pagePayload("configs", page));
+          }
+          if (view === "summary") {
+            const page = await store.listConfigSummariesPage(client, filter, options);
+            return json({ ...page, count: page.items.length });
           }
           const page = await store.listConfigsPage(client, filter, options);
           return json(pagePayload("configs", page));

@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach } from "bun:test";
 import { getDatabase, resetDatabase } from "./database";
-import { createConfig, getConfig, listConfigs, updateConfig, deleteConfig, getConfigStats } from "./configs";
+import { createConfig, getConfig, listConfigIdentitiesPage, listConfigSummariesPage, listConfigs, listConfigsPage, updateConfig, deleteConfig, getConfigStats } from "./configs";
 import { listSnapshots } from "./snapshots";
 import type { Database } from "bun:sqlite";
 
@@ -136,6 +136,26 @@ describe("listConfigs", () => {
     createConfig({ name: "Other", category: "tools", content: "world" }, db);
     expect(listConfigs({ search: "hello" }, db).length).toBe(1);
     expect(listConfigs({ search: "Test" }, db).length).toBe(1);
+  });
+});
+
+describe("bounded config collection projections", () => {
+  test("full, summary, and identity pages honor bounds while metadata projections omit content", () => {
+    for (let index = 0; index < 5; index++) {
+      createConfig({ name: `Config ${index}`, category: "rules", content: `CONTENT_CANARY_${index}` }, db);
+    }
+
+    const full = listConfigsPage({}, { limit: 2, cursor: 1 }, db);
+    const summary = listConfigSummariesPage({}, { limit: 2, cursor: 1 }, db);
+    const identity = listConfigIdentitiesPage({}, { limit: 2, cursor: 1 }, db);
+
+    expect(full).toMatchObject({ total: 5, limit: 2, cursor: 1, next_cursor: 3, has_more: true });
+    expect(full.items).toHaveLength(2);
+    expect(summary.items).toHaveLength(2);
+    expect(identity.items).toHaveLength(2);
+    expect(JSON.stringify(summary.items)).not.toContain("CONTENT_CANARY");
+    expect(JSON.stringify(identity.items)).not.toContain("CONTENT_CANARY");
+    expect(JSON.stringify(identity.items)).not.toContain("target_path");
   });
 });
 

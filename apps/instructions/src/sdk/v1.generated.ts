@@ -6,6 +6,8 @@
 
 export interface Config { "id"?: string; "name"?: string; "slug"?: string; "kind"?: string; "category"?: string; "agent"?: string; "target_path"?: string | null; "outputs"?: Array<Record<string, unknown>>; "format"?: string; "content"?: string; "description"?: string | null; "tags"?: Array<string>; "is_template"?: boolean; "version"?: number; "created_at"?: string; "updated_at"?: string; "synced_at"?: string | null }
 
+export interface ConfigSummary { "id": string; "name": string; "slug": string; "kind": string; "category": string; "agent": string; "target_path": string | null; "format": string; "output_count": number; "description": string | null; "tags": Array<string>; "is_template": boolean; "version": number; "updated_at": string }
+
 export interface ConfigIdentity { "id": string; "name": string; "slug": string; "kind": string; "category": string; "agent": string; "format": string; "is_template": boolean; "version": number; "created_at": string; "updated_at": string; "synced_at": string | null }
 
 export interface Profile { "id"?: string; "name"?: string; "slug"?: string; "description"?: string | null; "selectors"?: Record<string, unknown>; "variables"?: Record<string, unknown>; "created_at"?: string; "updated_at"?: string }
@@ -51,6 +53,8 @@ export interface ProfileWithConfigs { "id"?: string; "name"?: string; "slug"?: s
 export interface BoundedProfilePage { "profiles"?: Array<Profile>; "items": Array<Profile>; "count"?: number; "total": number; "limit": number; "cursor": number; "next_cursor": number | null; "has_more": boolean; "complete": boolean; "truncated": boolean; "source_bounded": boolean }
 
 export interface BoundedConfigPage { "configs"?: Array<Config>; "items": Array<Config>; "count"?: number; "total": number; "limit": number; "cursor": number; "next_cursor": number | null; "has_more": boolean; "complete": boolean; "truncated": boolean; "source_bounded": boolean }
+
+export interface BoundedConfigSummaryPage { "configs"?: Array<ConfigSummary>; "items": Array<ConfigSummary>; "count"?: number; "total": number; "limit": number; "cursor": number; "next_cursor": number | null; "has_more": boolean; "complete": boolean; "truncated": boolean; "source_bounded": boolean }
 
 export interface BoundedConfigIdentityPage { "configs"?: Array<ConfigIdentity>; "items": Array<ConfigIdentity>; "count"?: number; "total": number; "limit": number; "cursor": number; "next_cursor": number | null; "has_more": boolean; "complete": boolean; "truncated": boolean; "source_bounded": boolean }
 
@@ -131,7 +135,7 @@ export class GeneratedInstructionsV1Client {
   }
 
     /** List configs */
-    async listConfigs(query?: { "category"?: string; "agent"?: string; "kind"?: string; "search"?: string; "limit"?: number; "cursor"?: number; "view"?: "identity" }, init?: RequestInit): Promise<BoundedConfigPage | BoundedConfigIdentityPage> {
+    async listConfigs(query?: { "category"?: string; "agent"?: string; "kind"?: string; "search"?: string; "limit"?: number; "cursor"?: number; "tag"?: Array<string>; "view"?: "summary" | "identity" }, init?: RequestInit): Promise<BoundedConfigPage | BoundedConfigSummaryPage | BoundedConfigIdentityPage> {
       return this.request("GET", `/v1/configs`, {
         body: undefined,
         query,
