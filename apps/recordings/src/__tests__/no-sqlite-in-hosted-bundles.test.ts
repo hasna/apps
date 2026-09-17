@@ -7,7 +7,7 @@
 // engine it is forbidden to use, one static import away from a silent local
 // fallback. Static reachability is the property, so it is asserted on a REAL
 // bundle of the real entry points — the same entries, target and externals
-// `build:cli` / `build:mcp` use — rather than on a grep over the sources, which
+// `build:cli` / `build:mcp` / `build:lib` use — rather than on a grep over the sources, which
 // a transitive import would walk straight past.
 //
 // The local store itself is NOT expected to disappear: the opt-in
@@ -16,7 +16,8 @@
 // dist/cli and dist/mcp.
 
 import { describe, expect, test } from "bun:test";
-import { join } from "node:path";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { join, relative } from "node:path";
 
 const repoRoot = join(import.meta.dir, "..", "..");
 const SQLITE = ["bun", "sqlite"].join(":");
@@ -81,10 +82,31 @@ describe("no local database engine in the hosted bundles", () => {
     expect(await entryText(built)).not.toContain(SQLITE);
   });
 
-  // `build:lib` — the `./sdk` export subpath, which must stay self-contained.
-  test("the SDK bundle never imports the sqlite driver", async () => {
-    const built = await bundle("src/sdk/index.ts", { external: [], splitting: false });
-    expect(await entryText(built)).not.toContain(SQLITE);
+  // `build:lib` — all three public library entries use the same split build.
+  for (const [label, entry] of [
+    ["package root", "src/index.ts"],
+    ["storage export", "src/storage.ts"],
+    ["SDK export", "src/sdk/index.ts"],
+  ] as const) {
+    test(`the ${label} bundle never imports the sqlite driver`, async () => {
+      const built = await bundle(entry, { external: [], splitting: true });
+      expect(await entryText(built)).not.toContain(SQLITE);
+    });
+  }
+
+  test("the actual published client entries are SQLite-free after build", () => {
+    const entries = [
+      "dist/cli/index.js",
+      "dist/mcp/index.js",
+      "dist/index.js",
+      "dist/storage.js",
+      "dist/sdk/index.js",
+    ];
+    for (const entry of entries) {
+      const path = join(repoRoot, entry);
+      expect(existsSync(path), `${entry} must exist before the post-build ratchet`).toBe(true);
+      expect(readFileSync(path, "utf8"), entry).not.toContain(SQLITE);
+    }
   });
 
   // The engine is deferred, not deleted: the opt-in local store still works,
@@ -101,5 +123,18 @@ describe("no local database engine in the hosted bundles", () => {
     expect(carriers.length).toBe(1);
     expect(carriers[0]).toContain("chunks/sqlite-store");
     expect(await entryText(built)).toContain("chunks/sqlite-store");
+  });
+
+  test("the actual published build retains SQLite only in named local chunks", () => {
+    const chunkRoot = join(repoRoot, "dist", "chunks");
+    expect(existsSync(chunkRoot)).toBe(true);
+    const carriers = readdirSync(chunkRoot, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && entry.name.endsWith(".js"))
+      .map((entry) => join(chunkRoot, entry.name))
+      .filter((path) => readFileSync(path, "utf8").includes(SQLITE))
+      .map((path) => relative(repoRoot, path))
+      .sort();
+    expect(carriers.length).toBeGreaterThan(0);
+    expect(carriers.every((path) => path.startsWith("dist/chunks/sqlite-store-"))).toBe(true);
   });
 });
