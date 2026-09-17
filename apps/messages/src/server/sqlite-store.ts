@@ -1,3 +1,10 @@
+import {
+  discoveryQuery,
+  directoryPage,
+  PRESENCE_SCHEMA,
+  presenceValues,
+  MessagesConflictError,
+} from "../directory";
 /**
  * SQLite-backed MessagesStore — the zero-config default server store.
  *
@@ -13,7 +20,19 @@
 import { Database } from "bun:sqlite";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { Agent, Message, MessageDelivery, MessageDeliveryReport, Thread } from "../types";
+import type {
+  SendCommit,
+  SendResult,
+  AgentDiscovery,
+  AgentPresence,
+  InboxItem,
+  DiscoveredAgent,
+  Agent,
+  Message,
+  MessageDelivery,
+  MessageDeliveryReport,
+  Thread,
+} from "../types";
 import type { MessagesStore } from "../service";
 import { getDataRoot } from "../paths";
 
@@ -25,7 +44,9 @@ import { getDataRoot } from "../paths";
  * an explicit root. `src/paths.ts` owns the root resolution; the
  * file-level `HASNA_MESSAGES_SQLITE_PATH` override wins over all of it.
  */
-export function defaultSqlitePath(env: NodeJS.ProcessEnv = process.env): string {
+export function defaultSqlitePath(
+  env: NodeJS.ProcessEnv = process.env,
+): string {
   const explicit = env.HASNA_MESSAGES_SQLITE_PATH;
   if (explicit) return explicit;
   const dataRoot = getDataRoot(env);
@@ -133,7 +154,7 @@ export class SqliteMessagesStore implements MessagesStore {
     }
     this.db.exec("PRAGMA journal_mode = WAL;");
     this.db.exec("PRAGMA foreign_keys = ON;");
-    this.db.exec(SCHEMA);
+    this.db.exec(SCHEMA + PRESENCE_SCHEMA);
   }
 
   close(): void {
@@ -144,7 +165,9 @@ export class SqliteMessagesStore implements MessagesStore {
 
   async findAgentByName(name: string): Promise<Agent | null> {
     const row = this.db
-      .query("SELECT id, name, display_name, created_at, last_seen_at FROM agents WHERE name = ?")
+      .query(
+        "SELECT id, name, display_name, created_at, last_seen_at FROM agents WHERE name = ?",
+      )
       .get(name) as Agent | null;
     return row ?? null;
   }
@@ -154,24 +177,205 @@ export class SqliteMessagesStore implements MessagesStore {
       .query(
         "INSERT INTO agents (id, name, display_name, created_at, last_seen_at) VALUES (?, ?, ?, ?, ?)",
       )
-      .run(agent.id, agent.name, agent.display_name, agent.created_at, agent.last_seen_at);
+      .run(
+        agent.id,
+        agent.name,
+        agent.display_name,
+        agent.created_at,
+        agent.last_seen_at,
+      );
   }
 
   async listAgents(): Promise<Agent[]> {
     return this.db
-      .query("SELECT id, name, display_name, created_at, last_seen_at FROM agents ORDER BY name ASC")
+      .query(
+        "SELECT id, name, display_name, created_at, last_seen_at FROM agents ORDER BY name ASC",
+      )
       .all() as Agent[];
   }
 
   async touchAgent(name: string, at: string): Promise<void> {
-    this.db.query("UPDATE agents SET last_seen_at = ? WHERE name = ?").run(at, name);
+    this.db
+      .query("UPDATE agents SET last_seen_at = ? WHERE name = ?")
+      .run(at, name);
+  }
+
+  async discoverAgents(input: AgentDiscovery, now: string) {
+    const query = discoveryQuery(input, now, false);
+    const rows = this.db
+      .query(query.sql)
+      .all(...(query.args as string[])) as Array<DiscoveredAgent>;
+    return directoryPage(rows, query.limit);
+  }
+
+  async heartbeat(
+    rows: AgentPresence[],
+    labels: Map<string, string>,
+  ): Promise<void> {
+    this.db.transaction(() => {
+      for (const row of rows) {
+        this.db
+          .query(
+            "INSERT INTO agents (id, name, display_name, created_at, last_seen_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(name) DO NOTHING",
+          )
+          .run(
+            crypto.randomUUID(),
+            row.agent,
+            labels.get(row.agent) ?? null,
+            row.heartbeat_at,
+            row.heartbeat_at,
+          );
+        const result = this.db
+          .query(
+            `INSERT INTO agent_presence (agent, runtime_id, station, application, heartbeat_at, expires_at)
+          VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(agent) DO UPDATE SET
+          runtime_id = excluded.runtime_id, station = excluded.station, application = excluded.application,
+          heartbeat_at = excluded.heartbeat_at, expires_at = excluded.expires_at
+          WHERE agent_presence.runtime_id = excluded.runtime_id OR agent_presence.expires_at <= excluded.heartbeat_at`,
+          )
+          .run(...presenceValues(row));
+        if (result.changes !== 1)
+          throw new MessagesConflictError(
+            `agent already has an online receiver: ${row.agent}`,
+          );
+        this.db
+          .query(
+            "UPDATE agents SET last_seen_at = ?, display_name = COALESCE(?, display_name) WHERE name = ?",
+          )
+          .run(row.heartbeat_at, labels.get(row.agent) ?? null, row.agent);
+      }
+    })();
+  }
+
+  async runtimeInbox(
+    runtimeId: string,
+    limit: number,
+    now: string,
+  ): Promise<InboxItem[]> {
+    const rows = this.db
+      .query(
+        `SELECT m.id, m.thread_id, m.sender, m.content, m.reply_to, m.created_at, m.seq,
+      d.recipient, d.state, d.stored_at, d.delivered_at, d.read_at
+      FROM message_deliveries d JOIN messages m ON m.id = d.message_id
+      JOIN agent_presence p ON p.agent = d.recipient
+      WHERE p.runtime_id = ? AND p.expires_at > ? AND d.state = 'stored'
+      ORDER BY m.created_at, m.id LIMIT ?`,
+      )
+      .all(runtimeId, now, limit) as MessageDeliveryJoin[];
+    return rows.map((row) => ({
+      message: toMessage(row),
+      delivery: toDelivery(row)!,
+    }));
+  }
+
+  async acknowledge(
+    runtimeId: string,
+    ids: string[],
+    now: string,
+  ): Promise<number> {
+    return this.db
+      .query(
+        `UPDATE message_deliveries SET state = 'delivered', delivered_at = ?
+      WHERE state = 'stored' AND message_id IN (${ids.map(() => "?").join(",")})
+      AND EXISTS (SELECT 1 FROM agent_presence p WHERE p.agent = message_deliveries.recipient AND p.runtime_id = ? AND p.expires_at > ?)`,
+      )
+      .run(now, ...ids, runtimeId, now).changes;
+  }
+
+  async commitSend(input: SendCommit): Promise<SendResult> {
+    return this.db.transaction(() => {
+      const { message: m, thread: t, delivery: d } = input;
+      if (input.requestKey) {
+        const previous = this.db
+          .query(
+            "SELECT request_hash, message_id FROM message_requests WHERE request_key = ?",
+          )
+          .get(input.requestKey) as {
+          request_hash: string;
+          message_id: string;
+        } | null;
+        if (previous) {
+          if (previous.request_hash !== input.requestHash)
+            throw new MessagesConflictError(
+              "idempotency_key was already used with a different request",
+            );
+          const row = this.db
+            .query("SELECT * FROM messages WHERE id = ?")
+            .get(previous.message_id) as MessageRow;
+          const delivery = this.db
+            .query("SELECT * FROM message_deliveries WHERE message_id = ?")
+            .get(row.id) as MessageDelivery;
+          const thread = this.db
+            .query("SELECT * FROM threads WHERE id = ?")
+            .get(row.thread_id) as Thread;
+          return {
+            message: toMessage(row),
+            thread,
+            deliveries: [
+              {
+                recipient: delivery.recipient,
+                state: delivery.state,
+                stored_at: delivery.stored_at,
+                delivered_at: delivery.delivered_at,
+                read_at: delivery.read_at,
+              },
+            ],
+          };
+        }
+        this.db
+          .query(
+            "INSERT INTO message_requests (request_key, request_hash, message_id) VALUES (?, ?, ?)",
+          )
+          .run(input.requestKey, input.requestHash!, m.id);
+      }
+      this.db
+        .query(
+          `INSERT INTO threads (id, agent_a, agent_b, last_message_at, created_at) VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET last_message_at = excluded.last_message_at`,
+        )
+        .run(t.id, t.agent_a, t.agent_b, t.last_message_at, t.created_at);
+      for (const name of [t.agent_a, t.agent_b])
+        this.db
+          .query(
+            "INSERT INTO thread_participants (thread_id, agent, joined_at, closed_at) VALUES (?, ?, ?, NULL) ON CONFLICT(thread_id, agent) DO NOTHING",
+          )
+          .run(t.id, name, m.created_at);
+      this.db
+        .query(
+          `INSERT INTO messages (id, thread_id, sender, content, reply_to, created_at, seq)
+        VALUES (?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(seq), 0) + 1 FROM messages WHERE thread_id = ?))`,
+        )
+        .run(
+          m.id,
+          m.thread_id,
+          m.from_agent,
+          m.content,
+          m.reply_to,
+          m.created_at,
+          t.id,
+        );
+      this.db
+        .query(
+          "INSERT INTO message_deliveries (message_id, recipient, state, stored_at, delivered_at, read_at) VALUES (?, ?, 'stored', ?, NULL, NULL)",
+        )
+        .run(m.id, d.recipient, d.stored_at);
+      const row = this.db
+        .query("SELECT * FROM messages WHERE id = ?")
+        .get(m.id) as MessageRow;
+      const thread = this.db
+        .query("SELECT * FROM threads WHERE id = ?")
+        .get(t.id) as Thread;
+      return { message: toMessage(row), thread, deliveries: [d] };
+    })();
   }
 
   // --- threads ---
 
   async findThread(id: string): Promise<Thread | null> {
     const row = this.db
-      .query("SELECT id, agent_a, agent_b, last_message_at, created_at FROM threads WHERE id = ?")
+      .query(
+        "SELECT id, agent_a, agent_b, last_message_at, created_at FROM threads WHERE id = ?",
+      )
       .get(id) as Thread | null;
     return row ?? null;
   }
@@ -183,10 +387,20 @@ export class SqliteMessagesStore implements MessagesStore {
          VALUES (?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET last_message_at = excluded.last_message_at`,
       )
-      .run(thread.id, thread.agent_a, thread.agent_b, thread.last_message_at, thread.created_at);
+      .run(
+        thread.id,
+        thread.agent_a,
+        thread.agent_b,
+        thread.last_message_at,
+        thread.created_at,
+      );
   }
 
-  async ensureParticipant(threadId: string, agent: string, joinedAt: string): Promise<void> {
+  async ensureParticipant(
+    threadId: string,
+    agent: string,
+    joinedAt: string,
+  ): Promise<void> {
     this.db
       .query(
         `INSERT INTO thread_participants (thread_id, agent, joined_at, closed_at)
@@ -196,15 +410,26 @@ export class SqliteMessagesStore implements MessagesStore {
       .run(threadId, agent, joinedAt);
   }
 
-  async setParticipantClosed(threadId: string, agent: string, closedAt: string | null): Promise<void> {
+  async setParticipantClosed(
+    threadId: string,
+    agent: string,
+    closedAt: string | null,
+  ): Promise<void> {
     this.db
-      .query("UPDATE thread_participants SET closed_at = ? WHERE thread_id = ? AND agent = ?")
+      .query(
+        "UPDATE thread_participants SET closed_at = ? WHERE thread_id = ? AND agent = ?",
+      )
       .run(closedAt, threadId, agent);
   }
 
-  async participantClosedAt(threadId: string, agent: string): Promise<string | null> {
+  async participantClosedAt(
+    threadId: string,
+    agent: string,
+  ): Promise<string | null> {
     const row = this.db
-      .query("SELECT closed_at FROM thread_participants WHERE thread_id = ? AND agent = ?")
+      .query(
+        "SELECT closed_at FROM thread_participants WHERE thread_id = ? AND agent = ?",
+      )
       .get(threadId, agent) as { closed_at: string | null } | null;
     return row?.closed_at ?? null;
   }
@@ -219,7 +444,9 @@ export class SqliteMessagesStore implements MessagesStore {
          WHERE (t.agent_a = ? OR t.agent_b = ?) ${openFilter}
          ORDER BY COALESCE(t.last_message_at, t.created_at) DESC`,
       )
-      .all(agent, agent, agent) as Array<Omit<Thread, "last_message_at"> & { last_message_at: string | null }>;
+      .all(agent, agent, agent) as Array<
+      Omit<Thread, "last_message_at"> & { last_message_at: string | null }
+    >;
     return rows;
   }
 
@@ -234,20 +461,40 @@ export class SqliteMessagesStore implements MessagesStore {
         `INSERT INTO messages (id, thread_id, sender, content, reply_to, created_at, seq)
          SELECT ?, ?, ?, ?, ?, ?, COALESCE(MAX(seq), 0) + 1 FROM messages WHERE thread_id = ?`,
       )
-      .run(message.id, message.thread_id, message.from_agent, message.content, message.reply_to, message.created_at, message.thread_id);
+      .run(
+        message.id,
+        message.thread_id,
+        message.from_agent,
+        message.content,
+        message.reply_to,
+        message.created_at,
+        message.thread_id,
+      );
     const row = this.db
-      .query("SELECT id, thread_id, sender, content, reply_to, created_at, seq FROM messages WHERE id = ?")
+      .query(
+        "SELECT id, thread_id, sender, content, reply_to, created_at, seq FROM messages WHERE id = ?",
+      )
       .get(message.id) as MessageRow;
     return toMessage(row);
   }
 
-  async insertDelivery(messageId: string, delivery: MessageDelivery): Promise<void> {
+  async insertDelivery(
+    messageId: string,
+    delivery: MessageDelivery,
+  ): Promise<void> {
     this.db
       .query(
         `INSERT INTO message_deliveries (message_id, recipient, state, stored_at, delivered_at, read_at)
          VALUES (?, ?, ?, ?, ?, ?)`,
       )
-      .run(messageId, delivery.recipient, delivery.state, delivery.stored_at, delivery.delivered_at, delivery.read_at);
+      .run(
+        messageId,
+        delivery.recipient,
+        delivery.state,
+        delivery.stored_at,
+        delivery.delivered_at,
+        delivery.read_at,
+      );
   }
 
   async listMessages(threadId: string, limit?: number): Promise<Message[]> {
@@ -273,7 +520,10 @@ export class SqliteMessagesStore implements MessagesStore {
     return rows.map(toMessage);
   }
 
-  async messagesWithDelivery(threadId: string, agent: string): Promise<Array<{ message: Message; delivery: MessageDelivery | null }>> {
+  async messagesWithDelivery(
+    threadId: string,
+    agent: string,
+  ): Promise<Array<{ message: Message; delivery: MessageDelivery | null }>> {
     const rows = this.db
       .query(
         `SELECT m.id, m.thread_id, m.sender, m.content, m.reply_to, m.created_at, m.seq,
@@ -313,7 +563,10 @@ export class SqliteMessagesStore implements MessagesStore {
     return [...byMessage.values()];
   }
 
-  async deliverTo(recipient: string, at: string): Promise<Array<{ message: Message; delivery: MessageDelivery }>> {
+  async deliverTo(
+    recipient: string,
+    at: string,
+  ): Promise<Array<{ message: Message; delivery: MessageDelivery }>> {
     // 1. Capture the stored (undelivered) rows for the recipient.
     const stored = this.db
       .query(
@@ -348,7 +601,11 @@ export class SqliteMessagesStore implements MessagesStore {
     }));
   }
 
-  async markThreadRead(threadId: string, agent: string, at: string): Promise<void> {
+  async markThreadRead(
+    threadId: string,
+    agent: string,
+    at: string,
+  ): Promise<void> {
     this.db
       .query(
         `UPDATE message_deliveries SET state = 'read', read_at = ?
@@ -358,7 +615,11 @@ export class SqliteMessagesStore implements MessagesStore {
       .run(at, threadId, agent);
   }
 
-  async markMessageRead(messageId: string, agent: string, at: string): Promise<void> {
+  async markMessageRead(
+    messageId: string,
+    agent: string,
+    at: string,
+  ): Promise<void> {
     this.db
       .query(
         `UPDATE message_deliveries SET state = 'read', read_at = ?

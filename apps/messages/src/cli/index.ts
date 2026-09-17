@@ -59,17 +59,28 @@ function cliResolveOptions(opts: CliOpts): MessagesClientResolveOptions {
  * @hasna/contracts resolver. Fails closed: hosted with no credential throws
  * and the top-level handler exits non-zero with the actionable error.
  */
-function resolveStore(opts: CliOpts): { transport: "http" | "local"; local?: MessagesService; remote?: ReturnType<typeof createMessagesClient> } {
-  const report = resolveMessagesClientTransport(process.env, cliResolveOptions(opts));
+function resolveStore(opts: CliOpts): {
+  transport: "http" | "local";
+  local?: MessagesService;
+  remote?: ReturnType<typeof createMessagesClient>;
+} {
+  const report = resolveMessagesClientTransport(
+    process.env,
+    cliResolveOptions(opts),
+  );
   if (report.transport === "http") {
     const client = createMessagesClient(process.env, {
       ...(opts.url !== undefined ? { baseUrl: opts.url } : {}),
       ...(opts.apiKey !== undefined ? { apiKey: opts.apiKey } : {}),
     });
-    if (!client) throw new Error("HTTP transport resolved but no client could be created");
+    if (!client)
+      throw new Error("HTTP transport resolved but no client could be created");
     return { transport: "http", remote: client };
   }
-  return { transport: "local", local: new MessagesService(new SqliteMessagesStore()) };
+  return {
+    transport: "local",
+    local: new MessagesService(new SqliteMessagesStore()),
+  };
 }
 
 /**
@@ -111,7 +122,10 @@ function apiStatus(opts: CliOpts): MessagesApiStatus {
   };
   let report: MessagesClientTransportReport;
   try {
-    report = resolveMessagesClientTransport(process.env, cliResolveOptions(opts));
+    report = resolveMessagesClientTransport(
+      process.env,
+      cliResolveOptions(opts),
+    );
   } catch (error) {
     return {
       ...base,
@@ -148,14 +162,19 @@ function apiStatus(opts: CliOpts): MessagesApiStatus {
  * surface and commander rejects unknown options (hasna/apps#1602).
  */
 function withJsonFlag(cmd: Command): Command {
-  return cmd.option("--json", "Output as JSON (already the only output format)");
+  return cmd.option(
+    "--json",
+    "Output as JSON (already the only output format)",
+  );
 }
 
 const program = new Command();
 
 program
   .name("messages")
-  .description("Direct agent-to-agent messaging with threads (DMs + DM-threads)")
+  .description(
+    "Direct agent-to-agent messaging with threads (DMs + DM-threads)",
+  )
   .version(version);
 
 // --- identity --------------------------------------------------------------
@@ -164,37 +183,158 @@ withJsonFlag(program.command("register"))
   .description("Register (or return) an agent identity")
   .option("--name <agent>", `agent name ${AGENT_DEFAULT_HINT}`)
   .option("--display-name <text>", "human/seat-friendly label")
-  .option("--url <url>", "messages-serve base URL (explicit authority pin; no ambient credential is attached without --api-key)")
-  .option("--api-key <key>", "API key for the remote server (a deliberate pin; never re-resolved)")
+  .option(
+    "--url <url>",
+    "messages-serve base URL (explicit authority pin; no ambient credential is attached without --api-key)",
+  )
+  .option(
+    "--api-key <key>",
+    "API key for the remote server (a deliberate pin; never re-resolved)",
+  )
   .action(async (opts: { name?: string; displayName?: string } & CliOpts) => {
     const store = resolveStore(opts);
     if (store.transport === "http") {
-      print(await store.remote!.registerAgent(requireAgent(opts.name, "--name"), opts.displayName));
+      print(
+        await store.remote!.registerAgent(
+          requireAgent(opts.name, "--name"),
+          opts.displayName,
+        ),
+      );
       return;
     }
-    print({ agent: await store.local!.registerAgent(requireAgent(opts.name, "--name"), opts.displayName) });
+    print({
+      agent: await store.local!.registerAgent(
+        requireAgent(opts.name, "--name"),
+        opts.displayName,
+      ),
+    });
   });
 
 withJsonFlag(program.command("agents"))
   .description("List registered agent identities")
-  .option("--url <url>", "messages-serve base URL (explicit authority pin; no ambient credential is attached without --api-key)")
-  .option("--api-key <key>", "API key for the remote server (a deliberate pin; never re-resolved)")
+  .option(
+    "--url <url>",
+    "messages-serve base URL (explicit authority pin; no ambient credential is attached without --api-key)",
+  )
+  .option(
+    "--api-key <key>",
+    "API key for the remote server (a deliberate pin; never re-resolved)",
+  )
   .action(async (opts: CliOpts) => {
     const store = resolveStore(opts);
-    const agents = store.transport === "http" ? (await store.remote!.listAgents()).agents : await store.local!.listAgents();
+    const agents =
+      store.transport === "http"
+        ? (await store.remote!.listAgents()).agents
+        : await store.local!.listAgents();
     print(agents);
+  });
+
+withJsonFlag(program.command("discover"))
+  .description(
+    "Discover agents across stations; online means a receiver has a current heartbeat",
+  )
+  .option("--search <text>", "match agent name or display name")
+  .option("--station <name>", "filter by station")
+  .option("--application <name>", "filter by application")
+  .option("--online", "only online receivers")
+  .option("--offline", "only offline or unknown receivers")
+  .option("--limit <count>", "page size, 1–500", "100")
+  .option("--cursor <cursor>", "next_cursor from the preceding page")
+  .option("--url <url>", "messages-serve base URL")
+  .option("--api-key <key>", "explicit API key")
+  .action(async (opts) => {
+    if (opts.online && opts.offline)
+      throw new Error("choose --online or --offline");
+    const store = resolveStore(opts);
+    const svc = store.remote ?? store.local!;
+    print(
+      await svc.discoverAgents({
+        search: opts.search,
+        station: opts.station,
+        application: opts.application,
+        online: opts.online ? true : opts.offline ? false : undefined,
+        limit: Number(opts.limit),
+        cursor: opts.cursor,
+      }),
+    );
+  });
+
+withJsonFlag(program.command("heartbeat"))
+  .description(
+    "Advertise a receiver for 90 seconds; repeat while it can receive messages",
+  )
+  .requiredOption("--runtime <id>", "stable receiver runtime identity")
+  .option("--station <name>", "station label")
+  .option("--application <name>", "application label")
+  .requiredOption("--agents <names...>", "agents hosted by this receiver")
+  .option("--url <url>", "messages-serve base URL")
+  .option("--api-key <key>", "explicit API key")
+  .action(async (opts) => {
+    const store = resolveStore(opts);
+    print(
+      await (store.remote ?? store.local!).heartbeat({
+        runtime_id: opts.runtime,
+        station: opts.station,
+        application: opts.application,
+        agents: opts.agents.map((name: string) => ({ name })),
+      }),
+    );
+  });
+
+withJsonFlag(program.command("inbox"))
+  .description(
+    "Read a runtime's pending messages without acknowledging them; safe to retry",
+  )
+  .requiredOption("--runtime <id>", "receiving runtime identity")
+  .option("--limit <count>", "batch size, 1–500", "100")
+  .option("--wait-ms <ms>", "remote long-poll duration, 0–15000", "0")
+  .option("--url <url>", "messages-serve base URL")
+  .option("--api-key <key>", "explicit API key")
+  .action(async (opts) => {
+    const store = resolveStore(opts);
+    print(
+      store.remote
+        ? await store.remote.runtimeInbox(
+            opts.runtime,
+            Number(opts.limit),
+            Number(opts.waitMs),
+          )
+        : await store.local!.runtimeInbox(opts.runtime, Number(opts.limit)),
+    );
+  });
+
+withJsonFlag(program.command("ack"))
+  .description(
+    "Acknowledge messages only after saving them in the receiving runtime",
+  )
+  .requiredOption("--runtime <id>", "receiving runtime identity")
+  .requiredOption("--ids <ids...>", "durably admitted message ids")
+  .option("--url <url>", "messages-serve base URL")
+  .option("--api-key <key>", "explicit API key")
+  .action(async (opts) => {
+    const store = resolveStore(opts);
+    print(
+      await (store.remote ?? store.local!).acknowledge(opts.runtime, opts.ids),
+    );
   });
 
 withJsonFlag(program.command("whoami"))
   .description("Show an agent identity (or register it if absent)")
   .option("--agent <agent>", `agent name ${AGENT_DEFAULT_HINT}`)
-  .option("--url <url>", "messages-serve base URL (explicit authority pin; no ambient credential is attached without --api-key)")
-  .option("--api-key <key>", "API key for the remote server (a deliberate pin; never re-resolved)")
+  .option(
+    "--url <url>",
+    "messages-serve base URL (explicit authority pin; no ambient credential is attached without --api-key)",
+  )
+  .option(
+    "--api-key <key>",
+    "API key for the remote server (a deliberate pin; never re-resolved)",
+  )
   .action(async (opts: { agent?: string } & CliOpts) => {
     const store = resolveStore(opts);
-    const agent = store.transport === "http"
-      ? (await store.remote!.registerAgent(requireAgent(opts.agent))).agent
-      : await store.local!.registerAgent(requireAgent(opts.agent));
+    const agent =
+      store.transport === "http"
+        ? (await store.remote!.registerAgent(requireAgent(opts.agent))).agent
+        : await store.local!.registerAgent(requireAgent(opts.agent));
     // The identity record is spread at the top level so existing scripts that
     // read `.name` keep working; `api_url` and `transport` are the uniform
     // fleet fields required by hasna/apps#1588.
@@ -205,44 +345,94 @@ withJsonFlag(program.command("whoami"))
 // --- messaging -------------------------------------------------------------
 
 withJsonFlag(program.command("send"))
-  .description("Send a direct message from one agent to another (per-recipient delivery state 'stored')")
+  .description(
+    "Send a direct message from one agent to another (per-recipient delivery state 'stored')",
+  )
   .option("--from <agent>", `sending agent ${AGENT_DEFAULT_HINT}`)
   .requiredOption("--to <agent>", "receiving agent")
   .requiredOption("--content <text>", "message body")
   .option("--reply-to <id>", "message id being replied to (threads)")
-  .option("--url <url>", "messages-serve base URL (explicit authority pin; no ambient credential is attached without --api-key)")
-  .option("--api-key <key>", "API key for the remote server (a deliberate pin; never re-resolved)")
-  .action(async (opts: { from?: string; to: string; content: string; replyTo?: string } & CliOpts) => {
-    const store = resolveStore(opts);
-    const result = store.transport === "http"
-      ? await store.remote!.send(requireAgent(opts.from, "--from"), opts.to, opts.content, opts.replyTo)
-      : await store.local!.send({ from_agent: requireAgent(opts.from, "--from"), to_agent: opts.to, content: opts.content, reply_to: opts.replyTo ?? null });
-    print(result);
-  });
+  .option("--idempotency-key <key>", "stable retry key for this exact send")
+  .option(
+    "--url <url>",
+    "messages-serve base URL (explicit authority pin; no ambient credential is attached without --api-key)",
+  )
+  .option(
+    "--api-key <key>",
+    "API key for the remote server (a deliberate pin; never re-resolved)",
+  )
+  .action(
+    async (
+      opts: {
+        from?: string;
+        to: string;
+        content: string;
+        replyTo?: string;
+        idempotencyKey?: string;
+      } & CliOpts,
+    ) => {
+      const store = resolveStore(opts);
+      const result =
+        store.transport === "http"
+          ? await store.remote!.send(
+              requireAgent(opts.from, "--from"),
+              opts.to,
+              opts.content,
+              opts.replyTo,
+              opts.idempotencyKey,
+            )
+          : await store.local!.send({
+              from_agent: requireAgent(opts.from, "--from"),
+              to_agent: opts.to,
+              content: opts.content,
+              reply_to: opts.replyTo ?? null,
+              idempotency_key: opts.idempotencyKey,
+            });
+      print(result);
+    },
+  );
 
 withJsonFlag(program.command("receive"))
-  .description("Drain the agent's inbox: transition stored -> delivered and print the delivered messages")
+  .description(
+    "Drain the agent's inbox: transition stored -> delivered and print the delivered messages",
+  )
   .option("--agent <agent>", `the agent receiving ${AGENT_DEFAULT_HINT}`)
-  .option("--url <url>", "messages-serve base URL (explicit authority pin; no ambient credential is attached without --api-key)")
-  .option("--api-key <key>", "API key for the remote server (a deliberate pin; never re-resolved)")
+  .option(
+    "--url <url>",
+    "messages-serve base URL (explicit authority pin; no ambient credential is attached without --api-key)",
+  )
+  .option(
+    "--api-key <key>",
+    "API key for the remote server (a deliberate pin; never re-resolved)",
+  )
   .action(async (opts: { agent?: string } & CliOpts) => {
     const store = resolveStore(opts);
-    const messages = store.transport === "http"
-      ? (await store.remote!.receive(requireAgent(opts.agent))).messages
-      : await store.local!.receive(requireAgent(opts.agent));
+    const messages =
+      store.transport === "http"
+        ? (await store.remote!.receive(requireAgent(opts.agent))).messages
+        : await store.local!.receive(requireAgent(opts.agent));
     print(messages);
   });
 
 withJsonFlag(program.command("delivery"))
-  .description("Show per-recipient delivery state for a thread (stored | delivered | read)")
+  .description(
+    "Show per-recipient delivery state for a thread (stored | delivered | read)",
+  )
   .requiredOption("--id <threadId>", "thread id")
-  .option("--url <url>", "messages-serve base URL (explicit authority pin; no ambient credential is attached without --api-key)")
-  .option("--api-key <key>", "API key for the remote server (a deliberate pin; never re-resolved)")
+  .option(
+    "--url <url>",
+    "messages-serve base URL (explicit authority pin; no ambient credential is attached without --api-key)",
+  )
+  .option(
+    "--api-key <key>",
+    "API key for the remote server (a deliberate pin; never re-resolved)",
+  )
   .action(async (opts: { id: string } & CliOpts) => {
     const store = resolveStore(opts);
-    const deliveries = store.transport === "http"
-      ? (await store.remote!.deliveryStatus(opts.id)).deliveries
-      : await store.local!.deliveryStatus(opts.id);
+    const deliveries =
+      store.transport === "http"
+        ? (await store.remote!.deliveryStatus(opts.id)).deliveries
+        : await store.local!.deliveryStatus(opts.id);
     print(deliveries);
   });
 
@@ -250,37 +440,65 @@ withJsonFlag(program.command("delivery"))
 
 withJsonFlag(program.command("threads"))
   .description("List threads involving an agent, with unread counts")
-  .option("--agent <agent>", `the agent whose threads to list ${AGENT_DEFAULT_HINT}`)
+  .option(
+    "--agent <agent>",
+    `the agent whose threads to list ${AGENT_DEFAULT_HINT}`,
+  )
   .option("--all", "include threads the agent has closed")
-  .option("--url <url>", "messages-serve base URL (explicit authority pin; no ambient credential is attached without --api-key)")
-  .option("--api-key <key>", "API key for the remote server (a deliberate pin; never re-resolved)")
+  .option(
+    "--url <url>",
+    "messages-serve base URL (explicit authority pin; no ambient credential is attached without --api-key)",
+  )
+  .option(
+    "--api-key <key>",
+    "API key for the remote server (a deliberate pin; never re-resolved)",
+  )
   .action(async (opts: { agent?: string; all?: boolean } & CliOpts) => {
     const store = resolveStore(opts);
-    const threads = store.transport === "http"
-      ? (await store.remote!.threads(requireAgent(opts.agent), !opts.all)).threads
-      : await store.local!.threads(requireAgent(opts.agent), { openOnly: !opts.all });
+    const threads =
+      store.transport === "http"
+        ? (await store.remote!.threads(requireAgent(opts.agent), !opts.all))
+            .threads
+        : await store.local!.threads(requireAgent(opts.agent), {
+            openOnly: !opts.all,
+          });
     print(threads);
   });
 
 withJsonFlag(program.command("thread"))
-  .description("Expand a thread: its messages with your per-message delivery state (does NOT mark read)")
+  .description(
+    "Expand a thread: its messages with your per-message delivery state (does NOT mark read)",
+  )
   .requiredOption("--id <threadId>", "thread id")
   .option("--agent <agent>", `the agent expanding ${AGENT_DEFAULT_HINT}`)
-  .option("--url <url>", "messages-serve base URL (explicit authority pin; no ambient credential is attached without --api-key)")
-  .option("--api-key <key>", "API key for the remote server (a deliberate pin; never re-resolved)")
+  .option(
+    "--url <url>",
+    "messages-serve base URL (explicit authority pin; no ambient credential is attached without --api-key)",
+  )
+  .option(
+    "--api-key <key>",
+    "API key for the remote server (a deliberate pin; never re-resolved)",
+  )
   .action(async (opts: { id: string; agent?: string } & CliOpts) => {
     const store = resolveStore(opts);
-    const result = store.transport === "http"
-      ? await store.remote!.thread(opts.id, requireAgent(opts.agent))
-      : await store.local!.expandThread(opts.id, requireAgent(opts.agent));
+    const result =
+      store.transport === "http"
+        ? await store.remote!.thread(opts.id, requireAgent(opts.agent))
+        : await store.local!.expandThread(opts.id, requireAgent(opts.agent));
     print(result);
   });
 
 withJsonFlag(program.command("unread"))
   .description("List threads with unread messages for an agent (and the total)")
   .option("--agent <agent>", `the agent ${AGENT_DEFAULT_HINT}`)
-  .option("--url <url>", "messages-serve base URL (explicit authority pin; no ambient credential is attached without --api-key)")
-  .option("--api-key <key>", "API key for the remote server (a deliberate pin; never re-resolved)")
+  .option(
+    "--url <url>",
+    "messages-serve base URL (explicit authority pin; no ambient credential is attached without --api-key)",
+  )
+  .option(
+    "--api-key <key>",
+    "API key for the remote server (a deliberate pin; never re-resolved)",
+  )
   .action(async (opts: { agent?: string } & CliOpts) => {
     const store = resolveStore(opts);
     if (store.transport === "http") {
@@ -288,15 +506,26 @@ withJsonFlag(program.command("unread"))
       return;
     }
     const threads = await store.local!.unreadThreads(requireAgent(opts.agent));
-    print({ threads, total: threads.reduce((sum, t) => sum + t.unread_count, 0) });
+    print({
+      threads,
+      total: threads.reduce((sum, t) => sum + t.unread_count, 0),
+    });
   });
 
 withJsonFlag(program.command("read"))
-  .description("Mark a thread read from an agent's perspective (stored/delivered -> read)")
+  .description(
+    "Mark a thread read from an agent's perspective (stored/delivered -> read)",
+  )
   .requiredOption("--id <threadId>", "thread id")
   .option("--agent <agent>", `the agent marking it read ${AGENT_DEFAULT_HINT}`)
-  .option("--url <url>", "messages-serve base URL (explicit authority pin; no ambient credential is attached without --api-key)")
-  .option("--api-key <key>", "API key for the remote server (a deliberate pin; never re-resolved)")
+  .option(
+    "--url <url>",
+    "messages-serve base URL (explicit authority pin; no ambient credential is attached without --api-key)",
+  )
+  .option(
+    "--api-key <key>",
+    "API key for the remote server (a deliberate pin; never re-resolved)",
+  )
   .action(async (opts: { id: string; agent?: string } & CliOpts) => {
     const store = resolveStore(opts);
     if (store.transport === "http") {
@@ -308,16 +537,26 @@ withJsonFlag(program.command("read"))
   });
 
 withJsonFlag(program.command("close"))
-  .description("Close a thread from an agent's perspective (excluded from the default list)")
+  .description(
+    "Close a thread from an agent's perspective (excluded from the default list)",
+  )
   .requiredOption("--id <threadId>", "thread id")
   .option("--agent <agent>", `the agent closing it ${AGENT_DEFAULT_HINT}`)
-  .option("--url <url>", "messages-serve base URL (explicit authority pin; no ambient credential is attached without --api-key)")
-  .option("--api-key <key>", "API key for the remote server (a deliberate pin; never re-resolved)")
+  .option(
+    "--url <url>",
+    "messages-serve base URL (explicit authority pin; no ambient credential is attached without --api-key)",
+  )
+  .option(
+    "--api-key <key>",
+    "API key for the remote server (a deliberate pin; never re-resolved)",
+  )
   .action(async (opts: { id: string; agent?: string } & CliOpts) => {
     const store = resolveStore(opts);
-    const thread = store.transport === "http"
-      ? (await store.remote!.closeThread(opts.id, requireAgent(opts.agent))).thread
-      : await store.local!.closeThread(opts.id, requireAgent(opts.agent));
+    const thread =
+      store.transport === "http"
+        ? (await store.remote!.closeThread(opts.id, requireAgent(opts.agent)))
+            .thread
+        : await store.local!.closeThread(opts.id, requireAgent(opts.agent));
     print({ ok: true, thread });
   });
 
@@ -325,13 +564,21 @@ withJsonFlag(program.command("reopen"))
   .description("Reopen a thread from an agent's perspective")
   .requiredOption("--id <threadId>", "thread id")
   .option("--agent <agent>", `the agent reopening it ${AGENT_DEFAULT_HINT}`)
-  .option("--url <url>", "messages-serve base URL (explicit authority pin; no ambient credential is attached without --api-key)")
-  .option("--api-key <key>", "API key for the remote server (a deliberate pin; never re-resolved)")
+  .option(
+    "--url <url>",
+    "messages-serve base URL (explicit authority pin; no ambient credential is attached without --api-key)",
+  )
+  .option(
+    "--api-key <key>",
+    "API key for the remote server (a deliberate pin; never re-resolved)",
+  )
   .action(async (opts: { id: string; agent?: string } & CliOpts) => {
     const store = resolveStore(opts);
-    const thread = store.transport === "http"
-      ? (await store.remote!.reopenThread(opts.id, requireAgent(opts.agent))).thread
-      : await store.local!.reopenThread(opts.id, requireAgent(opts.agent));
+    const thread =
+      store.transport === "http"
+        ? (await store.remote!.reopenThread(opts.id, requireAgent(opts.agent)))
+            .thread
+        : await store.local!.reopenThread(opts.id, requireAgent(opts.agent));
     print({ ok: true, thread });
   });
 
@@ -339,8 +586,14 @@ withJsonFlag(program.command("reopen"))
 
 withJsonFlag(program.command("status"))
   .description("Show the resolved API authority, transport and key presence")
-  .option("--url <url>", "messages-serve base URL (explicit authority pin; no ambient credential is attached without --api-key)")
-  .option("--api-key <key>", "API key for the remote server (a deliberate pin; never re-resolved)")
+  .option(
+    "--url <url>",
+    "messages-serve base URL (explicit authority pin; no ambient credential is attached without --api-key)",
+  )
+  .option(
+    "--api-key <key>",
+    "API key for the remote server (a deliberate pin; never re-resolved)",
+  )
   .action((opts: { json?: boolean } & CliOpts) => {
     const status = apiStatus(opts);
     if (opts.json) {
@@ -376,6 +629,8 @@ program
 try {
   await program.parseAsync(process.argv);
 } catch (err) {
-  console.error(`messages: ${err instanceof Error ? err.message : String(err)}`);
+  console.error(
+    `messages: ${err instanceof Error ? err.message : String(err)}`,
+  );
   process.exit(1);
 }

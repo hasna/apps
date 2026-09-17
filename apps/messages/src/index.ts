@@ -9,10 +9,21 @@
  * DMs + DM-threads; conversations owns channels/announcements/channel-
  * threads. This package never reads conversations' store and vice versa.
  */
-export { MessagesService, threadKeyFor, newThreadId, DELIVERY_STATES } from "./service";
+export {
+  MessagesService,
+  threadKeyFor,
+  newThreadId,
+  DELIVERY_STATES,
+} from "./service";
 export type { MessagesStore } from "./service";
 export type {
   Agent,
+  AgentDiscovery,
+  AgentHeartbeat,
+  AgentPresence,
+  DiscoveredAgent,
+  AgentPage,
+  InboxItem,
   DeliveryState,
   Message,
   MessageDelivery,

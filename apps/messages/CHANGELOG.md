@@ -1,5 +1,64 @@
 # @hasna/messages
 
+## 0.4.0
+
+### Minor Changes
+
+- af6f823: `messages status` and the uniform `API:` authority line (hasna/apps#1588,
+  hasna/apps#1601).
+
+  - New `messages status` command prints `API: https://api.hasna.com/messages/v1`
+    — the resolved `/v1` authority, never a bare origin and never the raw
+    configured base — plus the transport and whether an API key is present.
+    `--json` reports the same as `app`, `version`, `transport`, `api_url`,
+    `api_base` and `api_key_present`. It constructs no store and opens no
+    database, and exits non-zero when neither `HASNA_MESSAGES_API_URL` nor
+    `HASNA_MESSAGES_LOCAL=1` is configured.
+  - `messages whoami` output carries `api_url` and `transport` alongside the
+    identity record.
+  - New `resolveMessagesApiBase` on the `./sdk` export, plus `MessagesClient.apiUrl`:
+    the client keeps the configured path prefix (`https://api.hasna.com/messages`
+    → `https://api.hasna.com/messages/v1/agents`), does not double a base that
+    already ends in `/v1`, and refuses a base carrying userinfo, a query or a
+    fragment instead of building a malformed request URL.
+
+- 6b7f203: `/v1/*` authenticates with fleet contracts keys instead of one static string
+  (hasna/apps#1595).
+
+  - `messages-serve` now verifies `hasna_messages_<body>.<sig>` tokens with
+    `@hasna/contracts/auth`, enforcing `messages:read` on GET/HEAD and
+    `messages:write` on every mutation, and layering revocation and expiry on the
+    app's own Postgres (`api_keys`, created idempotently). This is what lets
+    `hasna/oss/messages/api-key` be minted, rotated and revoked like every other
+    hosted app's key; a single shared string had no kid, no scopes and no way to
+    be revoked.
+  - The signing secret resolves `API_KEY_SIGNING_SECRET` →
+    `HASNA_MESSAGES_API_SIGNING_KEY` → `HASNA_API_SIGNING_KEY`, trimmed
+    (hasna/apps#1543).
+  - **Deprecated, accepted for one more release:** `HASNA_MESSAGES_API_KEY`. When
+    set, the static key still authenticates and the server warns once on first
+    use. Mint a fleet key and configure a signing secret before the next release,
+    which removes the static branch.
+  - With no signing secret and no static key the server stays open on loopback
+    only, unchanged and still enforced by the bind gate.
+
+### Patch Changes
+
+- 9084fdd: Identity flags default from the station environment, and every data command
+  accepts `--json` (hasna/apps#1602).
+
+  - `--agent` / `--from` / `--name` are no longer mandatory: they resolve
+    explicit flag → `HASNA_MESSAGES_AGENT_ID` → `MESSAGES_AGENT_ID` →
+    `CONVERSATIONS_AGENT_ID`, and fail closed with an actionable error naming the
+    flag and all three keys when none resolves. An explicit flag still wins, and
+    a blank value is treated as absent rather than as an empty agent name.
+  - `register`, `agents`, `whoami`, `send`, `receive`, `delivery`, `threads`,
+    `thread`, `unread`, `read`, `close` and `reopen` accept `--json` instead of
+    rejecting it as an unknown option; the output was already JSON.
+
+- c736f83: Every data command (`register`, `agents`, `whoami`, `send`, `receive`, `delivery`, `threads`, `thread`, `unread`, `read`, `close`, `reopen`) now accepts `--json` — output is already JSON, the flag just stops being rejected by commander's unknown-option handling (hasna/apps#1602).
+- Add optional station/application identity, expiring receiver presence, paginated agent discovery, batched durable inbox reads and acknowledgements, and atomic idempotent sends across HTTP, CLI, MCP and SDK. SQLite and PostgreSQL share the same semantics; offline recipients no longer gain activity timestamps when somebody sends them a message.
+
 ## 0.3.0
 
 ### Minor Changes

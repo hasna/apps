@@ -12,6 +12,138 @@ export const openapi = {
   },
   servers: [{ url: "/v1" }],
   paths: {
+    "/agents/discover": {
+      get: {
+        operationId: "discoverAgents",
+        summary:
+          "Discover agents by station, application and receiver presence",
+        parameters: [
+          ...["search", "station", "application", "cursor"].map((name) => ({
+            name,
+            in: "query",
+            schema: { type: "string" },
+          })),
+          { name: "online", in: "query", schema: { type: "boolean" } },
+          {
+            name: "limit",
+            in: "query",
+            schema: { type: "integer", minimum: 1, maximum: 500, default: 100 },
+          },
+        ],
+        responses: {
+          "200": {
+            description:
+              "agents with optional station/application, online receiver presence, and next_cursor",
+          },
+        },
+      },
+    },
+    "/agents/heartbeat": {
+      post: {
+        operationId: "heartbeat",
+        summary: "Renew receiver presence for a batch of agents for 90 seconds",
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["runtime_id", "agents"],
+                properties: {
+                  runtime_id: { type: "string", maxLength: 128 },
+                  station: { type: "string", maxLength: 128 },
+                  application: { type: "string", maxLength: 128 },
+                  agents: {
+                    type: "array",
+                    minItems: 1,
+                    maxItems: 500,
+                    items: {
+                      type: "object",
+                      required: ["name"],
+                      properties: {
+                        name: { type: "string", maxLength: 256 },
+                        display_name: { type: "string", maxLength: 200 },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          "200": { description: "count and expires_at" },
+          "409": {
+            description:
+              "A listed agent already has another online receiver; the batch is rolled back",
+          },
+        },
+      },
+    },
+    "/inbox": {
+      get: {
+        operationId: "runtimeInbox",
+        summary:
+          "Read pending runtime messages without consuming them; acknowledge only after durable admission",
+        parameters: [
+          {
+            name: "runtime_id",
+            in: "query",
+            required: true,
+            schema: { type: "string" },
+          },
+          {
+            name: "limit",
+            in: "query",
+            schema: { type: "integer", minimum: 1, maximum: 500, default: 100 },
+          },
+          {
+            name: "wait_ms",
+            in: "query",
+            schema: { type: "integer", minimum: 0, maximum: 15000, default: 0 },
+          },
+        ],
+        responses: {
+          "200": {
+            description:
+              "messages: array of message and delivery pairs; interrupted reads can be replayed",
+          },
+        },
+      },
+    },
+    "/inbox/ack": {
+      post: {
+        operationId: "acknowledge",
+        summary:
+          "Acknowledge durably admitted messages for their current runtime; safe to repeat",
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["runtime_id", "message_ids"],
+                properties: {
+                  runtime_id: { type: "string" },
+                  message_ids: {
+                    type: "array",
+                    minItems: 1,
+                    maxItems: 500,
+                    items: { type: "string" },
+                  },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          "200": {
+            description:
+              "acknowledged: number of stored deliveries transitioned; read state is preserved",
+          },
+        },
+      },
+    },
     "/auth/register": {
       post: {
         operationId: "registerAgent",
@@ -47,7 +179,8 @@ export const openapi = {
     "/messages": {
       post: {
         operationId: "sendMessage",
-        summary: "Send a direct message (creates/continues a thread; recipient delivery state starts 'stored')",
+        summary:
+          "Send a direct message (creates/continues a thread; recipient delivery state starts 'stored')",
         requestBody: {
           required: true,
           content: {
@@ -60,13 +193,21 @@ export const openapi = {
                   to: { type: "string" },
                   content: { type: "string" },
                   reply_to: { type: "string", nullable: true },
+                  idempotency_key: {
+                    type: "string",
+                    maxLength: 200,
+                    description:
+                      "Stable per-sender retry key; a changed request returns 409",
+                  },
                 },
               },
             },
           },
         },
         responses: {
-          "201": { description: "Message, thread and per-recipient deliveries" },
+          "201": {
+            description: "Message, thread and per-recipient deliveries",
+          },
           "400": { description: "Validation error" },
           "401": { description: "Missing or invalid x-api-key" },
         },
@@ -75,9 +216,15 @@ export const openapi = {
     "/messages/receive": {
       get: {
         operationId: "receiveMessages",
-        summary: "Drain the agent's inbox: stored -> delivered, returns the delivered messages",
+        summary:
+          "Drain the agent's inbox: stored -> delivered, returns the delivered messages",
         parameters: [
-          { name: "agent", in: "query", required: true, schema: { type: "string" } },
+          {
+            name: "agent",
+            in: "query",
+            required: true,
+            schema: { type: "string" },
+          },
         ],
         responses: {
           "200": { description: "Delivered messages" },
@@ -90,7 +237,12 @@ export const openapi = {
         operationId: "deliveryStatus",
         summary: "Per-message per-recipient delivery state for a thread",
         parameters: [
-          { name: "thread", in: "query", required: true, schema: { type: "string" } },
+          {
+            name: "thread",
+            in: "query",
+            required: true,
+            schema: { type: "string" },
+          },
         ],
         responses: {
           "200": { description: "Delivery reports" },
@@ -103,8 +255,18 @@ export const openapi = {
         operationId: "listThreads",
         summary: "List threads involving an agent, with unread counts",
         parameters: [
-          { name: "agent", in: "query", required: true, schema: { type: "string" } },
-          { name: "open_only", in: "query", required: false, schema: { type: "string", enum: ["0", "1"] } },
+          {
+            name: "agent",
+            in: "query",
+            required: true,
+            schema: { type: "string" },
+          },
+          {
+            name: "open_only",
+            in: "query",
+            required: false,
+            schema: { type: "string", enum: ["0", "1"] },
+          },
         ],
         responses: {
           "200": { description: "Thread summaries" },
@@ -117,7 +279,12 @@ export const openapi = {
         operationId: "unreadThreads",
         summary: "Threads with unread messages for an agent (and the total)",
         parameters: [
-          { name: "agent", in: "query", required: true, schema: { type: "string" } },
+          {
+            name: "agent",
+            in: "query",
+            required: true,
+            schema: { type: "string" },
+          },
         ],
         responses: {
           "200": { description: "Unread threads + total" },
@@ -128,10 +295,21 @@ export const openapi = {
     "/threads/{threadId}": {
       get: {
         operationId: "expandThread",
-        summary: "Expand a thread: messages with the requesting agent's delivery state (does NOT mark read)",
+        summary:
+          "Expand a thread: messages with the requesting agent's delivery state (does NOT mark read)",
         parameters: [
-          { name: "threadId", in: "path", required: true, schema: { type: "string" } },
-          { name: "agent", in: "query", required: true, schema: { type: "string" } },
+          {
+            name: "threadId",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+          },
+          {
+            name: "agent",
+            in: "query",
+            required: true,
+            schema: { type: "string" },
+          },
         ],
         responses: {
           "200": { description: "Thread, messages, unread count" },
@@ -144,8 +322,18 @@ export const openapi = {
         operationId: "listThreadMessages",
         summary: "Full message history of a thread, oldest first",
         parameters: [
-          { name: "threadId", in: "path", required: true, schema: { type: "string" } },
-          { name: "limit", in: "query", required: false, schema: { type: "integer" } },
+          {
+            name: "threadId",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+          },
+          {
+            name: "limit",
+            in: "query",
+            required: false,
+            schema: { type: "integer" },
+          },
         ],
         responses: {
           "200": { description: "Messages, oldest first" },
@@ -158,8 +346,18 @@ export const openapi = {
         operationId: "threadUnread",
         summary: "Unread count of a thread for an agent",
         parameters: [
-          { name: "threadId", in: "path", required: true, schema: { type: "string" } },
-          { name: "agent", in: "query", required: true, schema: { type: "string" } },
+          {
+            name: "threadId",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+          },
+          {
+            name: "agent",
+            in: "query",
+            required: true,
+            schema: { type: "string" },
+          },
         ],
         responses: { "200": { description: "Unread count" } },
       },
@@ -167,9 +365,15 @@ export const openapi = {
     "/threads/{threadId}/read": {
       post: {
         operationId: "markThreadRead",
-        summary: "Mark a thread read from an agent's perspective (stored/delivered -> read)",
+        summary:
+          "Mark a thread read from an agent's perspective (stored/delivered -> read)",
         parameters: [
-          { name: "threadId", in: "path", required: true, schema: { type: "string" } },
+          {
+            name: "threadId",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+          },
         ],
         requestBody: {
           required: true,
@@ -191,7 +395,12 @@ export const openapi = {
         operationId: "closeThread",
         summary: "Close a thread from an agent's perspective",
         parameters: [
-          { name: "threadId", in: "path", required: true, schema: { type: "string" } },
+          {
+            name: "threadId",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+          },
         ],
         requestBody: {
           required: true,
@@ -213,7 +422,12 @@ export const openapi = {
         operationId: "reopenThread",
         summary: "Reopen a thread from an agent's perspective",
         parameters: [
-          { name: "threadId", in: "path", required: true, schema: { type: "string" } },
+          {
+            name: "threadId",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+          },
         ],
         requestBody: {
           required: true,
@@ -235,7 +449,12 @@ export const openapi = {
         operationId: "markMessageRead",
         summary: "Mark a single message read from an agent's perspective",
         parameters: [
-          { name: "messageId", in: "path", required: true, schema: { type: "string" } },
+          {
+            name: "messageId",
+            in: "path",
+            required: true,
+            schema: { type: "string" },
+          },
         ],
         requestBody: {
           required: true,

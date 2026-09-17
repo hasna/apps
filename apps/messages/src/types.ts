@@ -73,6 +73,8 @@ export interface DeliveredMessage extends Message {
 }
 
 export interface NewMessage {
+  /** Stable per-sender retry key. Reuse only with the identical request. */
+  idempotency_key?: string;
   from_agent: string;
   to_agent: string;
   content: string;
@@ -109,4 +111,58 @@ export interface SendResult {
 export interface MessageDeliveryReport {
   message: Message;
   deliveries: MessageDelivery[];
+}
+
+/** A runtime is the receiver hosting one or more agents on a station. */
+export interface AgentHeartbeat {
+  runtime_id: string;
+  station?: string;
+  application?: string;
+  agents: Array<{ name: string; display_name?: string }>;
+}
+
+export interface AgentPresence {
+  agent: string;
+  runtime_id: string;
+  station: string | null;
+  application: string | null;
+  heartbeat_at: string;
+  expires_at: string;
+}
+
+export interface DiscoveredAgent extends Agent {
+  station: string | null;
+  application: string | null;
+  runtime_id: string | null;
+  heartbeat_at: string | null;
+  expires_at: string | null;
+  /** Receiver reachability; does not imply that a model is currently working. */
+  online: boolean;
+}
+
+export interface AgentDiscovery {
+  search?: string;
+  station?: string;
+  application?: string;
+  online?: boolean;
+  cursor?: string;
+  limit?: number;
+}
+
+export interface AgentPage {
+  agents: DiscoveredAgent[];
+  next_cursor: string | null;
+}
+
+export interface InboxItem {
+  message: Message;
+  delivery: MessageDelivery;
+}
+
+export interface SendCommit {
+  thread: Thread;
+  message: Omit<Message, "seq">;
+  delivery: MessageDelivery;
+  requestKey?: string;
+  requestHash?: string;
 }

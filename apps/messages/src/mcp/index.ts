@@ -20,7 +20,11 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { createMessagesClient, resolveMessagesClientTransport, MessagesClient } from "../sdk";
+import {
+  createMessagesClient,
+  resolveMessagesClientTransport,
+  MessagesClient,
+} from "../sdk";
 import { MessagesService } from "../service";
 import { SqliteMessagesStore } from "../server/sqlite-store";
 import { version } from "../version";
@@ -56,7 +60,9 @@ Options:
 try {
   resolveMessagesClientTransport(process.env);
 } catch (err) {
-  console.error(`messages-mcp: ${err instanceof Error ? err.message : String(err)}`);
+  console.error(
+    `messages-mcp: ${err instanceof Error ? err.message : String(err)}`,
+  );
   process.exit(1);
 }
 
@@ -71,7 +77,8 @@ function service(): Service {
   const report = resolveMessagesClientTransport(process.env);
   if (report.transport === "http") {
     const client = createMessagesClient(process.env);
-    if (!client) throw new Error("HTTP transport resolved but no client could be created");
+    if (!client)
+      throw new Error("HTTP transport resolved but no client could be created");
     return client;
   }
   return new MessagesService(new SqliteMessagesStore());
@@ -89,15 +96,37 @@ async function listAgents(svc: Service) {
   return svc.listAgents();
 }
 
-async function send(svc: Service, args: { from: string; to: string; content: string; replyTo?: string }) {
+async function send(
+  svc: Service,
+  args: {
+    from: string;
+    to: string;
+    content: string;
+    replyTo?: string;
+    idempotencyKey?: string;
+  },
+) {
   if (svc instanceof MessagesService) {
-    return svc.send({ from_agent: args.from, to_agent: args.to, content: args.content, reply_to: args.replyTo ?? null });
+    return svc.send({
+      from_agent: args.from,
+      to_agent: args.to,
+      content: args.content,
+      reply_to: args.replyTo ?? null,
+      idempotency_key: args.idempotencyKey,
+    });
   }
-  return svc.send(args.from, args.to, args.content, args.replyTo);
+  return svc.send(
+    args.from,
+    args.to,
+    args.content,
+    args.replyTo,
+    args.idempotencyKey,
+  );
 }
 
 async function threads(svc: Service, agent: string, openOnly: boolean) {
-  if (svc instanceof MessagesService) return { threads: await svc.threads(agent, { openOnly }) };
+  if (svc instanceof MessagesService)
+    return { threads: await svc.threads(agent, { openOnly }) };
   return svc.threads(agent, openOnly);
 }
 
@@ -109,18 +138,23 @@ async function expandThread(svc: Service, threadId: string, agent: string) {
 async function unread(svc: Service, agent: string) {
   if (svc instanceof MessagesService) {
     const list = await svc.unreadThreads(agent);
-    return { threads: list, total: list.reduce((sum, t) => sum + t.unread_count, 0) };
+    return {
+      threads: list,
+      total: list.reduce((sum, t) => sum + t.unread_count, 0),
+    };
   }
   return svc.unread(agent);
 }
 
 async function closeThread(svc: Service, threadId: string, agent: string) {
-  if (svc instanceof MessagesService) return { thread: await svc.closeThread(threadId, agent) };
+  if (svc instanceof MessagesService)
+    return { thread: await svc.closeThread(threadId, agent) };
   return svc.closeThread(threadId, agent);
 }
 
 async function reopenThread(svc: Service, threadId: string, agent: string) {
-  if (svc instanceof MessagesService) return { thread: await svc.reopenThread(threadId, agent) };
+  if (svc instanceof MessagesService)
+    return { thread: await svc.reopenThread(threadId, agent) };
   return svc.reopenThread(threadId, agent);
 }
 
@@ -130,12 +164,14 @@ async function markRead(svc: Service, threadId: string, agent: string) {
 }
 
 async function receive(svc: Service, agent: string) {
-  if (svc instanceof MessagesService) return { messages: await svc.receive(agent) };
+  if (svc instanceof MessagesService)
+    return { messages: await svc.receive(agent) };
   return svc.receive(agent);
 }
 
 async function deliveryStatus(svc: Service, threadId: string) {
-  if (svc instanceof MessagesService) return { deliveries: await svc.deliveryStatus(threadId) };
+  if (svc instanceof MessagesService)
+    return { deliveries: await svc.deliveryStatus(threadId) };
   return svc.deliveryStatus(threadId);
 }
 
@@ -145,10 +181,110 @@ const server = new McpServer({
 });
 
 server.registerTool(
+  "messages_discover",
+  {
+    title: "Discover agents across stations",
+    description:
+      "Find registered peers by station, application, name or receiver availability. Offline identities remain addressable. online means the receiver is reachable, not that a model is busy. Use next_cursor for the next page.",
+    inputSchema: {
+      search: z.string().optional(),
+      station: z.string().optional(),
+      application: z.string().optional(),
+      online: z.boolean().optional(),
+      cursor: z.string().optional(),
+      limit: z.number().int().min(1).max(500).optional(),
+    },
+  },
+  async (args) => ({
+    content: [
+      {
+        type: "text" as const,
+        text: JSON.stringify(await service().discoverAgents(args)),
+      },
+    ],
+  }),
+);
+
+server.registerTool(
+  "messages_heartbeat",
+  {
+    title: "Advertise a receiving runtime",
+    description:
+      "Runtime integration: advertise hosted agents with station and application labels. Presence expires after 90 seconds; renew only while this runtime can receive. Conflicting live owners are refused.",
+    inputSchema: {
+      runtime_id: z.string(),
+      station: z.string().optional(),
+      application: z.string().optional(),
+      agents: z
+        .array(
+          z.object({ name: z.string(), display_name: z.string().optional() }),
+        )
+        .min(1)
+        .max(500),
+    },
+  },
+  async (args) => ({
+    content: [
+      {
+        type: "text" as const,
+        text: JSON.stringify(await service().heartbeat(args)),
+      },
+    ],
+  }),
+);
+
+server.registerTool(
+  "messages_inbox",
+  {
+    title: "Read a runtime inbox",
+    description:
+      "Read pending messages for a receiving runtime without consuming them. Save each message durably before messages_ack. Interrupted reads can be replayed.",
+    inputSchema: {
+      runtime_id: z.string(),
+      limit: z.number().int().min(1).max(500).optional(),
+    },
+  },
+  async (args) => ({
+    content: [
+      {
+        type: "text" as const,
+        text: JSON.stringify(
+          await service().runtimeInbox(args.runtime_id, args.limit),
+        ),
+      },
+    ],
+  }),
+);
+
+server.registerTool(
+  "messages_ack",
+  {
+    title: "Acknowledge durable message admission",
+    description:
+      "Mark only messages saved by this runtime as delivered. Safe to repeat; never marks read or changes another runtime's deliveries.",
+    inputSchema: {
+      runtime_id: z.string(),
+      message_ids: z.array(z.string()).min(1).max(500),
+    },
+  },
+  async (args) => ({
+    content: [
+      {
+        type: "text" as const,
+        text: JSON.stringify(
+          await service().acknowledge(args.runtime_id, args.message_ids),
+        ),
+      },
+    ],
+  }),
+);
+
+server.registerTool(
   "messages_register",
   {
     title: "Register an agent identity",
-    description: "Register (or return) an agent identity. Agent identity is first-class: messages are addressed by registered agent names.",
+    description:
+      "Register (or return) an agent identity. Agent identity is first-class: messages are addressed by registered agent names.",
     inputSchema: {
       name: z.string().describe("Agent name"),
       displayName: z.string().optional().describe("Human/seat-friendly label"),
@@ -156,7 +292,9 @@ server.registerTool(
   },
   async (args) => {
     const result = await registerAgent(service(), args.name, args.displayName);
-    return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+    return {
+      content: [{ type: "text" as const, text: JSON.stringify(result) }],
+    };
   },
 );
 
@@ -169,7 +307,9 @@ server.registerTool(
   },
   async () => {
     const result = await listAgents(service());
-    return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+    return {
+      content: [{ type: "text" as const, text: JSON.stringify(result) }],
+    };
   },
 );
 
@@ -177,17 +317,29 @@ server.registerTool(
   "messages_send",
   {
     title: "Send a direct message",
-    description: "Send a direct message from one agent to another, creating or continuing a thread. The recipient's delivery state starts 'stored' — it becomes 'delivered' when they drain their inbox (messages_receive) and 'read' when they mark it read.",
+    description:
+      "Send a direct message from one agent to another, creating or continuing a thread. The recipient's delivery state starts 'stored' — it becomes 'delivered' when they drain their inbox (messages_receive) and 'read' when they mark it read.",
     inputSchema: {
       from: z.string().describe("Sending agent"),
       to: z.string().describe("Receiving agent"),
       content: z.string().describe("Message body"),
-      replyTo: z.string().optional().describe("Message id being replied to (threads)"),
+      replyTo: z
+        .string()
+        .optional()
+        .describe("Message id being replied to (threads)"),
+      idempotencyKey: z
+        .string()
+        .optional()
+        .describe(
+          "Stable key for retrying this exact send without creating a duplicate",
+        ),
     },
   },
   async (args) => {
     const result = await send(service(), args);
-    return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+    return {
+      content: [{ type: "text" as const, text: JSON.stringify(result) }],
+    };
   },
 );
 
@@ -195,15 +347,21 @@ server.registerTool(
   "messages_threads",
   {
     title: "List threads",
-    description: "List threads involving an agent, with unread counts and closed state.",
+    description:
+      "List threads involving an agent, with unread counts and closed state.",
     inputSchema: {
       agent: z.string().describe("The agent whose threads to list"),
-      openOnly: z.boolean().optional().describe("Exclude closed threads (default true)"),
+      openOnly: z
+        .boolean()
+        .optional()
+        .describe("Exclude closed threads (default true)"),
     },
   },
   async (args) => {
     const result = await threads(service(), args.agent, args.openOnly ?? true);
-    return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+    return {
+      content: [{ type: "text" as const, text: JSON.stringify(result) }],
+    };
   },
 );
 
@@ -211,7 +369,8 @@ server.registerTool(
   "messages_thread",
   {
     title: "Expand a thread",
-    description: "Expand a thread: its messages (oldest first) with the requesting agent's per-message delivery state. Does NOT mark anything read.",
+    description:
+      "Expand a thread: its messages (oldest first) with the requesting agent's per-message delivery state. Does NOT mark anything read.",
     inputSchema: {
       threadId: z.string().describe("Thread id"),
       agent: z.string().describe("The agent expanding"),
@@ -219,7 +378,9 @@ server.registerTool(
   },
   async (args) => {
     const result = await expandThread(service(), args.threadId, args.agent);
-    return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+    return {
+      content: [{ type: "text" as const, text: JSON.stringify(result) }],
+    };
   },
 );
 
@@ -227,12 +388,15 @@ server.registerTool(
   "messages_unread",
   {
     title: "Unread threads",
-    description: "List threads with unread messages for an agent (and the total).",
+    description:
+      "List threads with unread messages for an agent (and the total).",
     inputSchema: { agent: z.string().describe("The agent") },
   },
   async (args) => {
     const result = await unread(service(), args.agent);
-    return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+    return {
+      content: [{ type: "text" as const, text: JSON.stringify(result) }],
+    };
   },
 );
 
@@ -240,7 +404,8 @@ server.registerTool(
   "messages_thread_close",
   {
     title: "Close a thread",
-    description: "Close a thread from an agent's perspective (excluded from the default thread list; reopen to bring it back).",
+    description:
+      "Close a thread from an agent's perspective (excluded from the default thread list; reopen to bring it back).",
     inputSchema: {
       threadId: z.string().describe("Thread id"),
       agent: z.string().describe("The agent closing it"),
@@ -248,7 +413,9 @@ server.registerTool(
   },
   async (args) => {
     const result = await closeThread(service(), args.threadId, args.agent);
-    return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+    return {
+      content: [{ type: "text" as const, text: JSON.stringify(result) }],
+    };
   },
 );
 
@@ -264,7 +431,9 @@ server.registerTool(
   },
   async (args) => {
     const result = await reopenThread(service(), args.threadId, args.agent);
-    return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+    return {
+      content: [{ type: "text" as const, text: JSON.stringify(result) }],
+    };
   },
 );
 
@@ -272,7 +441,8 @@ server.registerTool(
   "messages_mark_read",
   {
     title: "Mark a thread read",
-    description: "Mark a thread read from an agent's perspective (stored/delivered -> read).",
+    description:
+      "Mark a thread read from an agent's perspective (stored/delivered -> read).",
     inputSchema: {
       threadId: z.string().describe("Thread id"),
       agent: z.string().describe("The agent marking it read"),
@@ -280,7 +450,9 @@ server.registerTool(
   },
   async (args) => {
     await markRead(service(), args.threadId, args.agent);
-    return { content: [{ type: "text" as const, text: JSON.stringify({ ok: true }) }] };
+    return {
+      content: [{ type: "text" as const, text: JSON.stringify({ ok: true }) }],
+    };
   },
 );
 
@@ -288,12 +460,15 @@ server.registerTool(
   "messages_receive",
   {
     title: "Receive (drain) delivered messages",
-    description: "Drain the agent's inbox: transition stored -> delivered for the agent's undelivered messages and return them. This is the delivery verb that distinguishes a stored-but-undelivered message from a delivered one.",
+    description:
+      "Drain the agent's inbox: transition stored -> delivered for the agent's undelivered messages and return them. This is the delivery verb that distinguishes a stored-but-undelivered message from a delivered one.",
     inputSchema: { agent: z.string().describe("The agent receiving") },
   },
   async (args) => {
     const result = await receive(service(), args.agent);
-    return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+    return {
+      content: [{ type: "text" as const, text: JSON.stringify(result) }],
+    };
   },
 );
 
@@ -301,12 +476,15 @@ server.registerTool(
   "messages_delivery",
   {
     title: "Delivery status",
-    description: "Show per-message per-recipient delivery state for a thread (stored | delivered | read). The sender's view of whether each message was actually delivered.",
+    description:
+      "Show per-message per-recipient delivery state for a thread (stored | delivered | read). The sender's view of whether each message was actually delivered.",
     inputSchema: { threadId: z.string().describe("Thread id") },
   },
   async (args) => {
     const result = await deliveryStatus(service(), args.threadId);
-    return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+    return {
+      content: [{ type: "text" as const, text: JSON.stringify(result) }],
+    };
   },
 );
 

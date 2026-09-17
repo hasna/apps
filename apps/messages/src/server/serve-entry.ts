@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { MessagesConflictError, MessagesInputError } from "../directory";
 /**
  * messages-serve — the HTTP API surface of @hasna/messages.
  *
@@ -21,7 +22,12 @@
  */
 import { createHash } from "node:crypto";
 import { MessagesService } from "../service";
-import { createAuthGate, resolveSigningSecret, resolveStaticKey, type AuthGate } from "./auth";
+import {
+  createAuthGate,
+  resolveSigningSecret,
+  resolveStaticKey,
+  type AuthGate,
+} from "./auth";
 import { resolveStore } from "./store";
 import { version } from "../version";
 import { openapi } from "./openapi";
@@ -54,7 +60,9 @@ Options:
   process.exit(0);
 }
 
-const PORT = Number(process.env.HASNA_MESSAGES_PORT ?? process.env.MESSAGES_PORT ?? 8081);
+const PORT = Number(
+  process.env.HASNA_MESSAGES_PORT ?? process.env.MESSAGES_PORT ?? 8081,
+);
 // Loopback by default: the unauthenticated "no API key" mode is only a
 // trusted-localhost mode when the socket is actually on loopback.
 const HOST = process.env.HASNA_MESSAGES_HOST ?? "127.0.0.1";
@@ -135,7 +143,9 @@ function envAuthGate(): AuthGate {
   return gate;
 }
 
-export function buildHandler(deps: ServeDeps): (req: Request) => Promise<Response> {
+export function buildHandler(
+  deps: ServeDeps,
+): (req: Request) => Promise<Response> {
   const { service } = deps;
 
   return async (req: Request): Promise<Response> => {
@@ -144,14 +154,23 @@ export function buildHandler(deps: ServeDeps): (req: Request) => Promise<Respons
 
     // Public contract endpoints.
     if (path === "/health" || path === "/ready") {
-      return json({ ok: true, service: "@hasna/messages", backend: deps.backend });
+      return json({
+        ok: true,
+        service: "@hasna/messages",
+        backend: deps.backend,
+      });
     }
     if (path === "/version") {
       return json({ name: "@hasna/messages", version, backend: deps.backend });
     }
     if (path === "/v1/openapi.json") return json(openapi);
     if (path === "/v1" || path === "/v1/") {
-      return json({ name: "@hasna/messages", version, dialect: "messages/v1", open_source: "@hasna/messages" });
+      return json({
+        name: "@hasna/messages",
+        version,
+        dialect: "messages/v1",
+        open_source: "@hasna/messages",
+      });
     }
 
     // Credential gate for /v1/* — contracts key store, with the legacy static
@@ -159,17 +178,92 @@ export function buildHandler(deps: ServeDeps): (req: Request) => Promise<Respons
     // `/v1/openapi.json` are answered above and stay public: they are the
     // service's self-description, not data.
     if (path.startsWith("/v1/")) {
-      const denial = await (deps.auth ?? envAuthGate()).check(req, req.method, path);
+      const denial = await (deps.auth ?? envAuthGate()).check(
+        req,
+        req.method,
+        path,
+      );
       if (denial) return denial;
     }
 
     try {
+      if (req.method === "GET" && path === "/v1/agents/discover") {
+        const q = url.searchParams;
+        if (q.has("online") && !["true", "false"].includes(q.get("online")!))
+          throw new MessagesInputError("online must be true or false");
+        return json(
+          await service.discoverAgents({
+            search: q.get("search") ?? undefined,
+            station: q.get("station") ?? undefined,
+            application: q.get("application") ?? undefined,
+            cursor: q.get("cursor") ?? undefined,
+            online: q.has("online") ? q.get("online") === "true" : undefined,
+            limit: q.has("limit") ? Number(q.get("limit")) : undefined,
+          }),
+        );
+      }
+      if (req.method === "POST" && path === "/v1/agents/heartbeat") {
+        const body = await readBody(req);
+        return json(
+          await service.heartbeat(
+            body as unknown as import("../types").AgentHeartbeat,
+          ),
+        );
+      }
+      if (req.method === "GET" && path === "/v1/inbox") {
+        const runtime = url.searchParams.get("runtime_id") ?? "";
+        const limit = url.searchParams.has("limit")
+          ? Number(url.searchParams.get("limit"))
+          : undefined;
+        const wait = Number(url.searchParams.get("wait_ms") ?? 0);
+        if (!Number.isSafeInteger(wait) || wait < 0 || wait > 15_000)
+          throw new MessagesInputError(
+            "wait_ms must be an integer from 0 to 15000",
+          );
+        const deadline = Date.now() + wait;
+        let result = await service.runtimeInbox(runtime, limit);
+        while (
+          !result.messages.length &&
+          Date.now() < deadline &&
+          !req.signal.aborted
+        ) {
+          await new Promise<void>((resolve) => {
+            const done = () => {
+              clearTimeout(timer);
+              req.signal.removeEventListener("abort", done);
+              resolve();
+            };
+            const timer = setTimeout(
+              done,
+              Math.min(1000, deadline - Date.now()),
+            );
+            req.signal.addEventListener("abort", done, { once: true });
+            if (req.signal.aborted) done();
+          });
+          if (req.signal.aborted) break;
+          result = await service.runtimeInbox(runtime, limit);
+        }
+        return json(result);
+      }
+      if (req.method === "POST" && path === "/v1/inbox/ack") {
+        const body = await readBody(req);
+        return json(
+          await service.acknowledge(
+            body.runtime_id as string,
+            body.message_ids as string[],
+          ),
+        );
+      }
+
       // --- identity ---
       if (req.method === "POST" && path === "/v1/auth/register") {
         const body = await readBody(req);
         const name = str(body.name);
         if (!name) return error(400, "name is required");
-        const agent: Agent = await service.registerAgent(name, body.display_name ? str(body.display_name) : undefined);
+        const agent: Agent = await service.registerAgent(
+          name,
+          body.display_name ? str(body.display_name) : undefined,
+        );
         return json({ agent }, 201);
       }
 
@@ -180,7 +274,19 @@ export function buildHandler(deps: ServeDeps): (req: Request) => Promise<Respons
       // --- messaging ---
       if (req.method === "POST" && path === "/v1/messages") {
         const body = await readBody(req);
+        const headerKey = req.headers.get("idempotency-key");
+        if (
+          headerKey &&
+          body.idempotency_key !== undefined &&
+          headerKey !== body.idempotency_key
+        )
+          throw new MessagesInputError(
+            "header and body idempotency keys must match",
+          );
         const result: SendResult = await service.send({
+          idempotency_key: (body.idempotency_key ?? headerKey ?? undefined) as
+            | string
+            | undefined,
           from_agent: str(body.from),
           to_agent: str(body.to),
           content: str(body.content),
@@ -199,7 +305,8 @@ export function buildHandler(deps: ServeDeps): (req: Request) => Promise<Respons
       if (req.method === "GET" && path === "/v1/messages/delivery") {
         const threadId = url.searchParams.get("thread");
         if (!threadId) return error(400, "thread query parameter is required");
-        const deliveries: MessageDeliveryReport[] = await service.deliveryStatus(threadId);
+        const deliveries: MessageDeliveryReport[] =
+          await service.deliveryStatus(threadId);
         return json({ deliveries });
       }
 
@@ -208,7 +315,9 @@ export function buildHandler(deps: ServeDeps): (req: Request) => Promise<Respons
         const agent = url.searchParams.get("agent");
         if (!agent) return error(400, "agent query parameter is required");
         const openOnly = url.searchParams.get("open_only") !== "0";
-        const threads: ThreadSummary[] = await service.threads(agent, { openOnly });
+        const threads: ThreadSummary[] = await service.threads(agent, {
+          openOnly,
+        });
         return json({ threads });
       }
 
@@ -216,23 +325,33 @@ export function buildHandler(deps: ServeDeps): (req: Request) => Promise<Respons
         const agent = url.searchParams.get("agent");
         if (!agent) return error(400, "agent query parameter is required");
         const threads: ThreadSummary[] = await service.unreadThreads(agent);
-        return json({ threads, total: threads.reduce((sum, t) => sum + t.unread_count, 0) });
+        return json({
+          threads,
+          total: threads.reduce((sum, t) => sum + t.unread_count, 0),
+        });
       }
 
-      const threadMatch = path.match(/^\/v1\/threads\/([^/]+)(?:\/(messages|unread|read|close|reopen))?$/);
+      const threadMatch = path.match(
+        /^\/v1\/threads\/([^/]+)(?:\/(messages|unread|read|close|reopen))?$/,
+      );
       if (threadMatch) {
         const threadId = decodeURIComponent(threadMatch[1]!);
         const sub = threadMatch[2];
         if (req.method === "GET" && sub === "messages") {
           const limitRaw = url.searchParams.get("limit");
           const limit = limitRaw ? Number(limitRaw) : undefined;
-          const messages: Message[] = await service.threadMessages(threadId, limit);
+          const messages: Message[] = await service.threadMessages(
+            threadId,
+            limit,
+          );
           return json({ messages });
         }
         if (req.method === "GET" && sub === "unread") {
           const agent = url.searchParams.get("agent");
           if (!agent) return error(400, "agent query parameter is required");
-          return json({ unread_count: await service.threadUnread(threadId, agent) });
+          return json({
+            unread_count: await service.threadUnread(threadId, agent),
+          });
         }
         if (req.method === "POST" && sub === "read") {
           const body = await readBody(req);
@@ -275,7 +394,7 @@ export function buildHandler(deps: ServeDeps): (req: Request) => Promise<Respons
       return error(404, "not found");
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      return error(400, message);
+      return error(err instanceof MessagesConflictError ? 409 : 400, message);
     }
   };
 }
@@ -285,7 +404,8 @@ export function buildHandler(deps: ServeDeps): (req: Request) => Promise<Respons
  * static key), otherwise /v1/* (DM read and write routes) would be exposed
  * unauthenticated to network peers. */
 export function assertSafeBind(host: string, hasCredential: boolean): void {
-  const loopback = host === "127.0.0.1" || host === "localhost" || host === "::1";
+  const loopback =
+    host === "127.0.0.1" || host === "localhost" || host === "::1";
   if (!loopback && !hasCredential) {
     throw new Error(
       `refusing to bind ${host} without a configured credential (API_KEY_SIGNING_SECRET or HASNA_MESSAGES_API_KEY): ` +
