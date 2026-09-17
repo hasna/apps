@@ -21,6 +21,7 @@ import {
   cloudGetTask,
   cloudUpdateTask,
   cloudDeleteTask,
+  cloudUpsertTaskByFingerprint,
   cloudResolveProjectRef,
   cloudResolveTaskRef,
   cloudResolveTaskListRef,
@@ -226,9 +227,18 @@ export function registerTaskCrudTools(server: McpServer, ctx: TaskCrudContext) {
               await validateMcpAssignee(assigned_to, Boolean(params.allow_seat)),
             );
           }
+          // http authority routing: POST /v1/tasks/upsert. Every other task-crud
+          // tool already had a cloud arm; upsert_task was the one door still
+          // writing the fingerprint row into this machine's local sqlite.
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            if (project_id) resolved.project_id = await cloudResolveProjectRef(cloud, project_id);
+            if (task_list_id) resolved.task_list_id = await cloudResolveTaskListRef(cloud, task_list_id);
+            const remote = await cloudUpsertTaskByFingerprint(cloud, resolved as Parameters<typeof cloudUpsertTaskByFingerprint>[1]);
+            return { content: [{ type: "text" as const, text: compactJson({ created: remote.created, task: JSON.parse(mutationTaskResponse(remote.task)) }) }] };
+          }
           if (project_id) resolved.project_id = resolveId(project_id, "projects");
           if (task_list_id) resolved.task_list_id = resolveId(task_list_id, "task_lists");
-
           const result = upsertTaskByFingerprint(resolved as Parameters<typeof upsertTaskByFingerprint>[0]);
           return { content: [{ type: "text" as const, text: compactJson({ created: result.created, task: JSON.parse(mutationTaskResponse(result.task)) }) }] };
         } catch (e) {

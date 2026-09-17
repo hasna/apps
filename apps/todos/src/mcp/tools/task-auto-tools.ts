@@ -7,7 +7,20 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { Task } from "../../types/index.js";
-import { getTodosCloudClient, cloudGetStats, cloudCountTasks, cloudListProjects, cloudListAgents } from "../../cli/cloud-router.js";
+import {
+  getTodosCloudClient,
+  cloudGetStats,
+  cloudCountTasks,
+  cloudListProjects,
+  cloudListAgents,
+  cloudListTasks,
+  cloudStaleTasks,
+  cloudEscalatedTasks,
+  cloudAllDependencies,
+  cloudBlockingDepsMap,
+  cloudGetTasksByIds,
+  cloudGetIntegrityReport,
+} from "../../cli/cloud-router.js";
 import { assignedToAliasSet, getDatabase } from "../../db/database.js";
 
 interface TaskAutoContext {
@@ -118,12 +131,31 @@ export function registerTaskAutoTools(server: McpServer, ctx: TaskAutoContext) {
       },
       async ({ agent_id }) => {
         try {
-          const { listTasks, getBlockedTasks } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const focus = ctx.getAgentFocus(agent_id || "");
           const effectiveAgentId = focus ? focus.agent_id : agent_id || "";
           if (!effectiveAgentId) {
             return { content: [{ type: "text" as const, text: "No agent_id provided and no agent focus is active." }], isError: true };
           }
+          // http authority routing: GET /v1/tasks?assigned_to=… plus
+          // GET /v1/dependencies for the blocked count. Reading the workload
+          // locally reported 0 on any station whose tasks live in the cloud.
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const remoteAssigned = await cloudListTasks(cloud, { assigned_to: effectiveAgentId, limit: 500 } as never);
+            const remoteNow = Date.now();
+            const remoteDueSoon = remoteNow + 24 * 60 * 60 * 1000;
+            const remoteBlocked = await cloudBlockingDepsMap(cloud, remoteAssigned.filter((t) => !["completed", "cancelled", "failed"].includes(t.status)));
+            const remoteLines = [
+              `Agent: ${effectiveAgentId}`,
+              `In Progress: ${remoteAssigned.filter((t) => t.status === "in_progress").length}`,
+              `Pending: ${remoteAssigned.filter((t) => t.status === "pending").length}`,
+              `Completed (recent): ${remoteAssigned.filter((t) => t.status === "completed" && t.completed_at && remoteNow - new Date(t.completed_at).getTime() <= 7 * 24 * 60 * 60 * 1000).length}`,
+              `Due Soon: ${remoteAssigned.filter((t) => t.due_at && new Date(t.due_at).getTime() <= remoteDueSoon && new Date(t.due_at).getTime() >= remoteNow && !["completed", "cancelled", "failed"].includes(t.status)).length}`,
+              `Blocked: ${remoteBlocked.size}`,
+            ];
+            return { content: [{ type: "text" as const, text: remoteLines.join("\n") }] };
+          }
+          const { listTasks, getBlockedTasks } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const assigned = listTasks({ assigned_to: effectiveAgentId, limit: 500 }, undefined) as Task[];
           const now = Date.now();
           const dueSoonCutoff = now + 24 * 60 * 60 * 1000;
@@ -243,6 +275,22 @@ export function registerTaskAutoTools(server: McpServer, ctx: TaskAutoContext) {
       },
       async ({ hours = 24, project_id, agent_id }) => {
         try {
+          // http authority routing: GET /v1/tasks (server-side project/assignee
+          // filters), deadline window applied to the shared rows.
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const horizon = Date.now() + hours * 60 * 60 * 1000;
+            const remote = (await cloudListTasks(cloud, {
+              ...(project_id ? { project_id } : {}),
+              ...(agent_id ? { assigned_to: agent_id } : {}),
+            } as never))
+              .filter((t) => t.due_at && !["completed", "cancelled", "failed"].includes(t.status)
+                && new Date(t.due_at).getTime() <= horizon && new Date(t.due_at).getTime() >= Date.now())
+              .sort((a, b) => (a.due_at ?? "").localeCompare(b.due_at ?? ""));
+            if (remote.length === 0) return { content: [{ type: "text" as const, text: "No deadlines approaching." }] };
+            const remoteLines = remote.map((t) => `${(t.short_id || t.id.slice(0, 8))} ${t.title} due ${t.due_at}`);
+            return { content: [{ type: "text" as const, text: `${remote.length} task(s) due within ${hours}h:\n${remoteLines.join("\n")}` }] };
+          }
           const { notifyUpcomingDeadlines } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const resolvedProjectId = project_id ? resolveId(project_id, "projects") : undefined;
           const resolvedAgentId = agent_id ? resolveId(agent_id, "agents") : undefined;
@@ -268,6 +316,15 @@ export function registerTaskAutoTools(server: McpServer, ctx: TaskAutoContext) {
       },
       async ({ project_id, agent_id, limit }) => {
         try {
+          // http authority routing: the shared escalation computation
+          // (GET /v1/tasks) instead of this machine's rows.
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const remote = (await cloudEscalatedTasks(cloud, { project_id, agent_id })).slice(0, limit || 50);
+            if (remote.length === 0) return { content: [{ type: "text" as const, text: "No SLA breaches or overdue tasks." }] };
+            const remoteLines = remote.map((item) => `${item.task.short_id || item.task.id.slice(0, 8)} ${item.task.title} ${item.reasons.join(",")} breached ${item.breached_at}`);
+            return { content: [{ type: "text" as const, text: `${remote.length} escalation(s):\n${remoteLines.join("\n")}` }] };
+          }
           const { getEscalatedTasks } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const resolvedProjectId = project_id ? resolveId(project_id, "projects") : undefined;
           const resolvedAgentId = agent_id ? resolveId(agent_id, "agents") : undefined;
@@ -296,6 +353,15 @@ export function registerTaskAutoTools(server: McpServer, ctx: TaskAutoContext) {
       },
       async ({ hours = 48, minutes, project_id }) => {
         try {
+          // http authority routing: GET /v1/tasks?status=in_progress, staleness
+          // applied to the shared rows (parity with the CLI `stale` verb).
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const remote = await cloudStaleTasks(cloud, minutes ?? hours * 60, (project_id ? { project_id } : {}) as never);
+            if (remote.length === 0) return { content: [{ type: "text" as const, text: "No stale tasks." }] };
+            const remoteLines = remote.map((t) => `${(t.short_id || t.id.slice(0, 8))} [${t.status}] ${t.title} — last updated ${t.updated_at}`);
+            return { content: [{ type: "text" as const, text: `${remote.length} stale task(s):\n${remoteLines.join("\n")}` }] };
+          }
           const { getStaleTasks } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const resolvedProjectId = project_id ? resolveId(project_id, "projects") : undefined;
           const tasks = getStaleTasks({ hours, minutes, project_id: resolvedProjectId });
@@ -320,6 +386,17 @@ export function registerTaskAutoTools(server: McpServer, ctx: TaskAutoContext) {
       },
       async ({ project_id }) => {
         try {
+          // http authority routing: GET /v1/tasks + GET /v1/dependencies.
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const candidates = (await cloudListTasks(cloud, (project_id ? { project_id } : {}) as never))
+              .filter((t) => !["completed", "cancelled"].includes(t.status));
+            const blocking = await cloudBlockingDepsMap(cloud, candidates);
+            const remote = candidates.filter((t) => blocking.has(t.id));
+            if (remote.length === 0) return { content: [{ type: "text" as const, text: "No blocked tasks." }] };
+            const remoteLines = remote.map((t) => `${(t.short_id || t.id.slice(0, 8))} [${t.status}] ${t.title} — blocked by ${(blocking.get(t.id) ?? []).map((b) => b.id.slice(0, 8)).join(", ")}`);
+            return { content: [{ type: "text" as const, text: `${remote.length} blocked task(s):\n${remoteLines.join("\n")}` }] };
+          }
           const { getBlockedTasks } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const resolvedProjectId = project_id ? resolveId(project_id, "projects") : undefined;
           const tasks = getBlockedTasks(resolvedProjectId);
@@ -342,6 +419,25 @@ export function registerTaskAutoTools(server: McpServer, ctx: TaskAutoContext) {
       },
       async ({ project_id }) => {
         try {
+          // http authority routing: GET /v1/dependencies gives the edges; the
+          // blockers are then read back with GET /v1/tasks/:id.
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const edges = await cloudAllDependencies(cloud);
+            const dependentCount = new Map<string, number>();
+            for (const edge of edges) {
+              if (!edge.task_id || !edge.depends_on) continue;
+              dependentCount.set(edge.depends_on, (dependentCount.get(edge.depends_on) ?? 0) + 1);
+            }
+            const blockers = await cloudGetTasksByIds(cloud, [...dependentCount.keys()]);
+            const remote = [...blockers.values()]
+              .filter((t) => !["completed", "cancelled"].includes(t.status))
+              .filter((t) => !project_id || t.project_id === project_id)
+              .sort((a, b) => (dependentCount.get(b.id) ?? 0) - (dependentCount.get(a.id) ?? 0));
+            if (remote.length === 0) return { content: [{ type: "text" as const, text: "No tasks blocking others." }] };
+            const remoteLines = remote.map((t) => `${(t.short_id || t.id.slice(0, 8))} [${t.status}] ${t.title} — blocking ${dependentCount.get(t.id) ?? 0} task(s)`);
+            return { content: [{ type: "text" as const, text: `${remote.length} blocking task(s):\n${remoteLines.join("\n")}` }] };
+          }
           const { getBlockingTasks } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const resolvedProjectId = project_id ? resolveId(project_id, "projects") : undefined;
           const tasks = getBlockingTasks(resolvedProjectId);
@@ -420,6 +516,18 @@ export function registerTaskAutoTools(server: McpServer, ctx: TaskAutoContext) {
       },
       async ({ apply }) => {
         try {
+          // http authority routing: GET /v1/integrity is the hosted analogue of
+          // the local doctor's read. `apply` is refused rather than silently
+          // reported as a no-op — the hosted store has no client-side repair.
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            if (apply) {
+              return { content: [{ type: "text" as const, text: "run_doctor --apply is not available on the hosted authority: repairs are server-side. Re-run without apply for the hosted integrity report." }], isError: true };
+            }
+            const report = await cloudGetIntegrityReport(cloud);
+            if (!report) throw new Error("The configured Todos authority returned no integrity report");
+            return { content: [{ type: "text" as const, text: JSON.stringify({ source: "cloud", integrity: report }, null, 2) }] };
+          }
           const { runTodosDoctor } = require("../../lib/doctor.js") as typeof import("../../lib/doctor.js");
           const result = runTodosDoctor({ apply: Boolean(apply) });
           return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
