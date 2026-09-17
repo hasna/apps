@@ -248,16 +248,30 @@ describe("registry: the written inventory of hosted apps", () => {
     expect(messages!.keySecretId).toBe("hasna/oss/messages/api-key");
   });
 
-  test("Print uses the canonical API route with bearer authentication", () => {
-    const print = registry.find((a) => a.app === "print");
-    expect(print).toBeDefined();
-    expect(print!.source).toBe("external");
-    expect(print!.baseUrl).toBe("https://api.hasna.com/print");
-    expect(print!.targetClientBase).toBe("https://api.hasna.com/print");
-    expect(print!.probeAuth).toBe("bearer");
-    expect(print!.probePath).toBe("/v1/printers");
-    expect(print!.keySecretId).toBe("hasna/oss/print/api-key");
-    expect(print!.notes).toContain("hasna-internal/internal-apps");
+  test("Print stays out of the active registry until its bearer boundary is proven", async () => {
+    expect(registry.find((a) => a.app === "print")).toBeUndefined();
+
+    // The intended public contract remains stable for the future activation PR,
+    // but it is not admitted to the live drift/provision inventory while both
+    // canonical endpoints return 404 instead of an authenticated boundary.
+    expect(defaultBaseUrlFor("print")).toBe("https://api.hasna.com/print");
+    expect(probeUrlFor(defaultBaseUrlFor("print"), "/v1/printers"))
+      .toBe("https://api.hasna.com/print/v1/printers");
+
+    const calls: string[] = [];
+    const io: Io = {
+      readSecret: async () => { calls.push("secret"); return null; },
+      aws: async () => { calls.push("aws"); return ""; },
+      probe: async () => { calls.push("probe"); return 404; },
+    };
+    const error = console.error;
+    console.error = () => {};
+    try {
+      expect(await main(["provision", "--app", "print"], io)).toBe(2);
+    } finally {
+      console.error = error;
+    }
+    expect(calls).toEqual([]);
   });
 
   test("messages carries the note that this repo cannot finish its rollout", () => {
