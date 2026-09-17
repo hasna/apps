@@ -194,9 +194,22 @@ Reviewed Hermes installations need fresh source and directory coverage in their
 reviewed bindings without changing existing source-only reviews.
 
 Hook installation preserves unrelated configuration, hooks, and plugin assets.
-It disables discovered Codex native skills; exact system-skill trees can remain
-only with their hash-bound disabled paths; migration preserves these package files. A client that restores or changes
-packaged skills requires a fresh inventory and disable plan. Native exports are
+For Codex it sets `skills.bundled.enabled = false` in user configuration, preserving
+the `skills-cli` bridge and disabling discovered native skill paths. This prevents
+supported Codex clients from installing or loading their bundled `.system` skills.
+The setting and its discovery witness are enrolled in the same configuration
+transaction; existing installations must rerun `skills hook install`. Missing or
+re-enabled bundled protection fails `skills hook check` before context loads.
+Ordinary `[skills.bundled]` and legacy `[[skills.config]]` tables are supported;
+inline or dotted target definitions that require rewriting refuse before changes.
+Convert those definitions to ordinary tables while preserving their values, then
+rerun installation. The control has been verified with Codex 0.153.0, 0.153.4 and
+0.154.0; this is not a claim that every older build supports it. Use a client that
+supports `skills.bundled.enabled`; Skills does not infer support from version text
+or silently substitute path-only protection. Existing exact system-skill trees can
+remain only with their hash-bound disabled paths; migration preserves these package
+files. A client that restores or changes packaged skills requires a fresh inventory
+and disable plan. Native exports are
 refused while managed CLI loading is active. Migration preserves ordinary skill
 directories in private archives; `--include-unmanaged` includes user-authored
 copies, and `--include-vendor` retires vendor `SKILL.md` discovery files while

@@ -435,7 +435,7 @@ test("built hook installation preserves config and migration preserves unique ed
 // Explicit local proof only: CI does not require a separately installed Codex binary.
 // All hook sources are this test's generated configuration. No production provider or credential is used.
 const nativeCodex = process.env.HASNA_SKILLS_NATIVE_CODEX_BIN;
-test.skipIf(!nativeCodex)("installed Codex delivers the managed UserPromptSubmit body to a local mock model", async () => {
+test.skipIf(!nativeCodex)("installed Codex delivers managed context without reseeding bundled native skills", async () => {
   const f = await fixture(); let modelServer: ReturnType<typeof Bun.serve> | undefined;
   try {
     await f.a.install(); await f.a.ok(["profiles", "set", "engineering", "--file", f.versions[0]!.file, "--json"]);
@@ -454,13 +454,8 @@ test.skipIf(!nativeCodex)("installed Codex delivers the managed UserPromptSubmit
     } });
     const codexHome = join(f.a.home, ".codex"), localProvider = `http://127.0.0.1:${modelServer.port}/v1`;
     put(join(codexHome, "config.toml"), `model = "fixture-model"\nmodel_provider = "fixture"\n[model_providers.fixture]\nname = "Local fixture"\nbase_url = ${JSON.stringify(localProvider)}\nwire_api = "responses"\nrequires_openai_auth = false\nrequest_max_retries = 0\nstream_max_retries = 0\n`);
-    // A new Codex home materializes its packaged .system skills on first startup.
-    // The first managed hook must refuse those unbound instructions before the model call.
-    const initialize = Bun.spawn([nativeCodex!, "exec", "--json", "--skip-git-repo-check", "--dangerously-bypass-hook-trust", "--sandbox", "read-only", "review this fixture; respond without tools"], { cwd: f.a.project, env: { ...f.a.env, CODEX_HOME: codexHome }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
-    const initializeTimer = setTimeout(() => initialize.kill("SIGKILL"), 15000);
-    try { await Promise.all([new Response(initialize.stdout).text(), new Response(initialize.stderr).text(), initialize.exited]); } finally { clearTimeout(initializeTimer); }
-    expect(requests).toHaveLength(0);
-    expect(existsSync(join(codexHome, "skills", ".system"))).toBe(true);
+    // Re-enroll after editing the fixture's model provider. The very first
+    // Codex startup must leave bundled documents absent and the bridge usable.
     await f.a.install();
     const child = Bun.spawn([nativeCodex!, "exec", "--json", "--skip-git-repo-check", "--dangerously-bypass-hook-trust", "--sandbox", "read-only", "review this fixture; respond without tools"], { cwd: f.a.project, env: { ...f.a.env, CODEX_HOME: codexHome }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
     const timer = setTimeout(() => child.kill("SIGKILL"), 15_000);
@@ -474,6 +469,7 @@ test.skipIf(!nativeCodex)("installed Codex delivers the managed UserPromptSubmit
       expect(requests[0]).toContain("skills-cli");
       expect(requests[0]).not.toContain("skill-creator");
       expect(requests[0]).not.toContain("skill-installer");
+      expect(existsSync(join(codexHome, "skills", ".system"))).toBe(false);
       expect(f.requests.some(path => path === "PUT /api/v1/stations/station-a/state")).toBe(true);
     } finally { clearTimeout(timer); }
   } finally { modelServer?.stop(true); await f.close(); }
