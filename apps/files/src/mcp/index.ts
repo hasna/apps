@@ -12,6 +12,7 @@ import { buildExtractionSnapshot, extractTextSnapshotFromFile } from "../lib/ext
 import { doctorKnowledgeSources } from "../lib/knowledge-doctor.js";
 import { exportKnowledgeSourceManifest } from "../lib/knowledge-manifest.js";
 import { resolveKnowledgeSourceRef } from "../lib/knowledge-resolver.js";
+import { assertHostedExtractionIdentity, doctorKnowledgeSourcesViaApi, resolveKnowledgeSourceRefViaApi } from "../lib/knowledge-resolver-api.js";
 import { buildFilesContextPack, buildFilesSearchPack } from "../lib/context-pack.js";
 import { acknowledgeKnowledgeSourceOutbox, pollKnowledgeSourceOutbox } from "../db/knowledge-outbox.js";
 import { parseOpenFilesSourceRef } from "../lib/source-ref.js";
@@ -1113,6 +1114,7 @@ registerTool("extract_file_snapshot", "Return a deterministic extraction snapsho
         max_segment_chars: segment_chars,
         redact_patterns: redact_patterns as string[] | undefined,
       });
+      assertHostedExtractionIdentity(result, id);
       const snapshot = buildExtractionSnapshot(result);
       return { content: [{ type: "text", text: JSON.stringify(snapshot, null, 2) }] };
     } catch (error) {
@@ -1199,20 +1201,32 @@ registerTool("resolve_knowledge_source", "Resolve an open-files:// source ref wi
   agent_id: z.string().optional(),
   session_id: z.string().optional(),
 }, async (params) => {
+  const resolverOptions = {
+    mode: params.mode as KnowledgeSourceResolveMode,
+    purpose: params.purpose,
+    max_bytes: params.max_bytes,
+    max_segment_chars: params.segment_chars,
+    allowed_mimes: params.allowed_mimes,
+    allow_binary: params.allow_binary,
+    signed_url_expires_in: params.signed_url_expires_in,
+    agent_id: params.agent_id,
+    session_id: params.session_id,
+  };
+  const api = apiStore();
+  if (api) {
+    // Hosted: every resolve mode is composed from the /v1 file routes
+    // (metadata, content, extract-text, sign-download). No local island.
+    try {
+      const result = await resolveKnowledgeSourceRefViaApi(api, params.source_ref, resolverOptions);
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    } catch (error) {
+      return mcpError(error instanceof Error ? error.message : String(error));
+    }
+  }
   const denied = requireLocalTransport("resolve_knowledge_source");
   if (denied) return denied;
   try {
-    const result = await resolveKnowledgeSourceRef(params.source_ref, {
-      mode: params.mode as KnowledgeSourceResolveMode,
-      purpose: params.purpose,
-      max_bytes: params.max_bytes,
-      max_segment_chars: params.segment_chars,
-      allowed_mimes: params.allowed_mimes,
-      allow_binary: params.allow_binary,
-      signed_url_expires_in: params.signed_url_expires_in,
-      agent_id: params.agent_id,
-      session_id: params.session_id,
-    });
+    const result = await resolveKnowledgeSourceRef(params.source_ref, resolverOptions);
     return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
   } catch (error) {
     return { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }], isError: true };
@@ -1233,23 +1247,35 @@ registerTool("doctor_knowledge_sources", "Diagnose open-files source refs for kn
   max_bytes: z.number().optional().default(262144),
   segment_chars: z.number().optional().default(4000),
 }, async (params) => {
+  const doctorOptions = {
+    source_refs: params.source_refs,
+    source_id: params.source_id,
+    collection_id: params.collection_id,
+    project_id: params.project_id,
+    tag: params.tag,
+    status: params.status,
+    limit: params.limit,
+    purpose: params.purpose,
+    require_extracted_text: params.require_extracted_text,
+    check_extracted_text: params.check_extracted_text,
+    max_bytes: params.max_bytes,
+    max_segment_chars: params.segment_chars,
+  };
+  const api = apiStore();
+  if (api) {
+    // Hosted: refs come from GET /v1/files and each one is checked through
+    // the same hosted resolver, so the report shape matches the on-box path.
+    try {
+      const result = await doctorKnowledgeSourcesViaApi(api, doctorOptions);
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    } catch (error) {
+      return mcpError(error instanceof Error ? error.message : String(error));
+    }
+  }
   const denied = requireLocalTransport("doctor_knowledge_sources");
   if (denied) return denied;
   try {
-    const result = await doctorKnowledgeSources({
-      source_refs: params.source_refs,
-      source_id: params.source_id,
-      collection_id: params.collection_id,
-      project_id: params.project_id,
-      tag: params.tag,
-      status: params.status,
-      limit: params.limit,
-      purpose: params.purpose,
-      require_extracted_text: params.require_extracted_text,
-      check_extracted_text: params.check_extracted_text,
-      max_bytes: params.max_bytes,
-      max_segment_chars: params.segment_chars,
-    });
+    const result = await doctorKnowledgeSources(doctorOptions);
     return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
   } catch (error) {
     return { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }], isError: true };
@@ -1262,6 +1288,22 @@ registerTool("resolve_extracted_text", "Resolve extracted text for an open-files
   max_bytes: z.number().optional().default(1048576),
   segment_chars: z.number().optional().default(4000),
 }, async ({ source_ref, purpose, max_bytes, segment_chars }) => {
+  const api = apiStore();
+  if (api) {
+    // Hosted: POST /v1/files/{id}/extract-text does the extraction server-side.
+    try {
+      parseOpenFilesSourceRef(source_ref);
+      const result = await resolveKnowledgeSourceRefViaApi(api, source_ref, {
+        mode: "extracted_text",
+        purpose,
+        max_bytes,
+        max_segment_chars: segment_chars,
+      });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    } catch (error) {
+      return mcpError(error instanceof Error ? error.message : String(error));
+    }
+  }
   const denied = requireLocalTransport("resolve_extracted_text");
   if (denied) return denied;
   try {

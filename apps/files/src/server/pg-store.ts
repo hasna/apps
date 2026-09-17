@@ -377,7 +377,7 @@ export async function listFiles(client: TypedQueryClient, opts: ListFilesQuery):
     }
   }
 
-  add("f.status = $?", opts.status ?? "active");
+  if (opts.status !== "all") add("f.status = $?", opts.status ?? "active");
   if (opts.source_id) add("f.source_id = $?", opts.source_id);
   if (opts.machine_id) add("f.machine_id = $?", opts.machine_id);
   if (opts.ext) add("f.ext = $?", normalizeExtensionFilter(opts.ext));
