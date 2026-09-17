@@ -1,5 +1,5 @@
 ---
-"@hasna/contacts": minor
+"@hasna/contacts": patch
 ---
 
 `add_email_to_contact` and `add_phone_to_contact` now use the hosted `/v1` API
@@ -11,8 +11,10 @@ canonical /v1 API` — the local implementation was retired and no hosted one
 was ever added, so every call died. They now append the address or number
 through the contact route the server already serves,
 `PATCH /v1/contacts/:id` with `emails_add` / `phones_add`, which inserts into
-`emails` / `phones` duplicate-safely on the server and echoes the contact back.
-Each tool returns the newly stored record, as before.
+`emails` / `phones`, skips methods already present on the contact, and echoes
+back the updated contact. Each tool preserves its previous full-contact output
+contract and refuses a malformed successful response instead of reporting a
+false mutation success.
 
 No new endpoint, no local store, no SQLite: the client still refuses to run
 without a hosted credential, and a new test drives the real tool handlers over

@@ -33,13 +33,13 @@ function walk(dir: string): string[] {
 
 type Call = { method: string; url: string; body: unknown };
 
-function stubFetch(calls: Call[], contact: Record<string, unknown>): void {
+function stubFetch(calls: Call[], responseBody: unknown): void {
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = input instanceof Request ? input.url : String(input);
     const method = (init?.method ?? "GET").toUpperCase();
     const raw = typeof init?.body === "string" ? init.body : undefined;
     calls.push({ method, url, body: raw ? JSON.parse(raw) : undefined });
-    return new Response(JSON.stringify({ contact }), {
+    return new Response(JSON.stringify(responseBody), {
       status: 200,
       headers: { "Content-Type": "application/json" },
     });
@@ -54,6 +54,11 @@ beforeEach(() => {
   // CONTACTS_DB_PATH is a RETIRED selector and the resolver refuses it.
   for (const key of Object.keys(process.env)) if (/CONTACTS/.test(key)) delete process.env[key];
   process.env.HOME = home;
+  process.env.HASNA_HOME = home;
+  process.env.HASNA_DATA_HOME = home;
+  process.env.HASNA_STATE_HOME = home;
+  process.env.HASNA_CONFIG_HOME = home;
+  delete process.env.HASNA_PROFILE;
   // Keep the station's real Keychain out of the resolution: on station03 the
   // stored api-url disagrees with this test authority and the resolver (rightly)
   // refuses the mismatch. An unknown station has no Keychain tier at all.
@@ -72,16 +77,16 @@ afterEach(() => {
 });
 
 describe("MCP contact-method tools on the hosted /v1 path", () => {
-  test("add_email_to_contact PATCHes /v1/contacts/:id with emails_add and returns the new address", async () => {
+  test("add_email_to_contact PATCHes /v1/contacts/:id and returns the updated contact", async () => {
     const calls: Call[] = [];
-    stubFetch(calls, {
+    stubFetch(calls, { contact: {
       id: "contact-1",
       display_name: "Ada Lovelace",
       emails: [
-        { id: "email-0", address: "ada@old.example", type: "personal", is_primary: false },
-        { id: "email-1", address: "ada@example.com", type: "work", is_primary: true },
+        { id: "email-0", contact_id: "contact-1", address: "ada@old.example", type: "personal", is_primary: false },
+        { id: "email-1", contact_id: "contact-1", address: "ada@example.com", type: "work", is_primary: true },
       ],
-    });
+    } });
 
     const result = await allHandlers.add_email_to_contact!({
       contact_id: "contact-1",
@@ -98,19 +103,22 @@ describe("MCP contact-method tools on the hosted /v1 path", () => {
       },
     ]);
     expect(JSON.parse(result.content[0]!.text as string)).toMatchObject({
-      id: "email-1",
-      address: "ada@example.com",
+      id: "contact-1",
+      emails: [
+        { id: "email-0", address: "ada@old.example" },
+        { id: "email-1", address: "ada@example.com" },
+      ],
     });
     expect(walk(home)).toEqual([]);
   });
 
-  test("add_phone_to_contact PATCHes /v1/contacts/:id with phones_add and returns the new number", async () => {
+  test("add_phone_to_contact PATCHes /v1/contacts/:id and returns the updated contact", async () => {
     const calls: Call[] = [];
-    stubFetch(calls, {
+    stubFetch(calls, { contact: {
       id: "contact-2",
       display_name: "Grace Hopper",
-      phones: [{ id: "phone-1", number: "+15550001111", type: "mobile", country_code: "1", is_primary: false }],
-    });
+      phones: [{ id: "phone-1", contact_id: "contact-2", number: "+15550001111", type: "mobile", country_code: "1", is_primary: false }],
+    } });
 
     const result = await allHandlers.add_phone_to_contact!({
       contact_id: "contact-2",
@@ -127,23 +135,69 @@ describe("MCP contact-method tools on the hosted /v1 path", () => {
       },
     ]);
     expect(JSON.parse(result.content[0]!.text as string)).toMatchObject({
-      id: "phone-1",
-      number: "+15550001111",
+      id: "contact-2",
+      phones: [{ id: "phone-1", number: "+15550001111" }],
     });
     expect(walk(home)).toEqual([]);
   });
 
-  test("neither tool throws ApiUnavailableError any more", async () => {
+  test("duplicate-safe responses preserve the full-contact output contract", async () => {
     const calls: Call[] = [];
-    stubFetch(calls, { id: "contact-3", emails: [], phones: [] });
+    stubFetch(calls, { contact: {
+      id: "contact-3",
+      emails: [{ id: "email-3", contact_id: "contact-3", address: "X@Example.com" }],
+      phones: [{ id: "phone-3", contact_id: "contact-3", number: "+15550002222" }],
+    } });
 
-    await allHandlers.add_email_to_contact!({ contact_id: "contact-3", address: "x@example.com" });
-    await allHandlers.add_phone_to_contact!({ contact_id: "contact-3", number: "+15550002222" });
+    const emailResult = await allHandlers.add_email_to_contact!({ contact_id: "contact-3", address: "x@example.com" });
+    const phoneResult = await allHandlers.add_phone_to_contact!({ contact_id: "contact-3", number: "+15550002222" });
 
     expect(calls.map((c) => `${c.method} ${new URL(c.url).pathname}`)).toEqual([
       "PATCH /v1/contacts/contact-3",
       "PATCH /v1/contacts/contact-3",
     ]);
-    expect(walk(home).filter((f) => f.includes(".db"))).toEqual([]);
+    expect(JSON.parse(emailResult.content[0]!.text as string)).toMatchObject({ id: "contact-3" });
+    expect(JSON.parse(phoneResult.content[0]!.text as string)).toMatchObject({ id: "contact-3" });
+    expect(walk(home)).toEqual([]);
+  });
+
+  test.each([
+    ["missing contact envelope", {}],
+    ["null contact", { contact: null }],
+    ["mismatched contact", { contact: { id: "contact-other", emails: [{ id: "email-4", contact_id: "contact-other", address: "x@example.com" }] } }],
+    ["missing appended method", { contact: { id: "contact-4", emails: [] } }],
+    ["method owned by another contact", { contact: { id: "contact-4", emails: [{ id: "email-4", contact_id: "contact-other", address: "x@example.com" }] } }],
+  ])("rejects a malformed successful response: %s", async (_case, responseBody) => {
+    const calls: Call[] = [];
+    stubFetch(calls, responseBody);
+
+    await expect(allHandlers.add_email_to_contact!({ contact_id: "contact-4", address: "x@example.com" }))
+      .rejects.toThrow(/malformed \/v1 response for addEmailToContact/);
+    expect(calls).toHaveLength(1);
+    expect(walk(home)).toEqual([]);
+  });
+
+
+  test("rejects a phone response that omits the requested number", async () => {
+    const calls: Call[] = [];
+    stubFetch(calls, { contact: { id: "contact-6", phones: [] } });
+
+    await expect(allHandlers.add_phone_to_contact!({ contact_id: "contact-6", number: "+15550004444" }))
+      .rejects.toThrow(/malformed \/v1 response for addPhoneToContact/);
+    expect(calls).toHaveLength(1);
+    expect(walk(home)).toEqual([]);
+  });
+
+  test("propagates hosted transport failure without falling back to local storage", async () => {
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      throw new Error("hosted transport unavailable");
+    }) as unknown as typeof fetch;
+
+    await expect(allHandlers.add_phone_to_contact!({ contact_id: "contact-5", number: "+15550003333" }))
+      .rejects.toThrow("hosted transport unavailable");
+    expect(calls).toBeGreaterThan(0);
+    expect(walk(home)).toEqual([]);
   });
 });

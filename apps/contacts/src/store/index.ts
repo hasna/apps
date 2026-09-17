@@ -368,23 +368,52 @@ function stripUndefined(input: Record<string, unknown>): Record<string, unknown>
   return out;
 }
 
+class ContactsApiResponseError extends Error {
+  constructor(operation: string, detail: string) {
+    super(`contacts: malformed /v1 response for ${operation}: ${detail}`);
+    this.name = "ContactsApiResponseError";
+  }
+}
+
 /**
- * Find the contact method the caller just appended inside the contact the
- * `/v1` route echoes back, so `addEmailToContact` / `addPhoneToContact` keep
- * returning the single record their callers print. Falls back to `undefined`
- * when the server response does not carry the collection (the caller then
- * returns the contact itself rather than inventing a record).
+ * Validate the canonical contact PATCH response before reporting a successful
+ * append. The route contract is `{ contact: ContactWithDetails }`; accepting a
+ * raw body or a missing/mismatched method would turn a malformed 2xx response
+ * into a false success and could expose the wrong contact through MCP output.
  */
-function pickContactMethod(
-  contact: unknown,
+function requireAppendedContact(
+  response: unknown,
+  contactId: string,
   collection: "emails" | "phones",
   matchKey: "address" | "number",
-  value: string | undefined,
-): unknown {
-  const items = pick<unknown[]>(contact, collection);
-  if (!Array.isArray(items) || value === undefined) return undefined;
-  const wanted = String(value).toLowerCase();
-  return items.find((item) => String(pick<string>(item, matchKey) ?? "").toLowerCase() === wanted);
+  value: string,
+): Contact {
+  const operation = collection === "emails" ? "addEmailToContact" : "addPhoneToContact";
+  const contact = pick<Record<string, unknown>>(response, "contact");
+  if (!contact || typeof contact !== "object" || Array.isArray(contact)) {
+    throw new ContactsApiResponseError(operation, "expected an object at response.contact");
+  }
+  if (contact.id !== contactId) {
+    throw new ContactsApiResponseError(operation, "response.contact.id did not match the requested contact");
+  }
+  const items = contact[collection];
+  if (!Array.isArray(items)) {
+    throw new ContactsApiResponseError(operation, `response.contact.${collection} was not an array`);
+  }
+  const normalize = collection === "emails" ? (input: string) => input.toLowerCase() : (input: string) => input;
+  const wanted = normalize(value);
+  const appended = items.find((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return false;
+    const record = item as Record<string, unknown>;
+    return typeof record.id === "string" &&
+      record.contact_id === contactId &&
+      typeof record[matchKey] === "string" &&
+      normalize(record[matchKey]) === wanted;
+  });
+  if (!appended) {
+    throw new ContactsApiResponseError(operation, `response.contact.${collection} did not contain the requested value`);
+  }
+  return contact as unknown as Contact;
 }
 
 class ApiStore implements Store {
@@ -456,24 +485,22 @@ class ApiStore implements Store {
   /**
    * Append an email address through the existing contact route. `/v1` models
    * contact methods as part of the contact resource: `PATCH /v1/contacts/:id`
-   * with `emails_add` inserts into `emails` (duplicate-safe, server side) and
-   * returns the contact with its full `emails` array. No dedicated
+   * with `emails_add` skips an address already present on that contact and
+   * returns the updated contact with its full `emails` array. No dedicated
    * `/v1/emails` route is needed, and none exists on the deployed server.
    */
-  async addEmailToContact(contactId: string, email: CreateEmailInput) {
+  async addEmailToContact(contactId: string, email: CreateEmailInput): Promise<Contact> {
     const res = await this.patch(`/contacts/${this.enc(contactId)}`, {
       emails_add: [stripUndefined(email as unknown as Record<string, unknown>)],
     });
-    const contact = (pick(res, "contact") ?? res) as Contact | null;
-    return pickContactMethod(contact, "emails", "address", email?.address) ?? contact;
+    return requireAppendedContact(res, contactId, "emails", "address", email.address);
   }
   /** Append a phone number through `PATCH /v1/contacts/:id` (`phones_add`). */
-  async addPhoneToContact(contactId: string, phone: CreatePhoneInput) {
+  async addPhoneToContact(contactId: string, phone: CreatePhoneInput): Promise<Contact> {
     const res = await this.patch(`/contacts/${this.enc(contactId)}`, {
       phones_add: [stripUndefined(phone as unknown as Record<string, unknown>)],
     });
-    const contact = (pick(res, "contact") ?? res) as Contact | null;
-    return pickContactMethod(contact, "phones", "number", phone?.number) ?? contact;
+    return requireAppendedContact(res, contactId, "phones", "number", phone.number);
   }
   async archiveContact(): Promise<never> { return unavailable("archiveContact"); }
   async unarchiveContact(): Promise<never> { return unavailable("unarchiveContact"); }
