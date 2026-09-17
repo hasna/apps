@@ -608,6 +608,9 @@ Hosted compact reads require the server's `projects.list.v2` filter attestation;
 an older deployment that could ignore query/tag/eval filters is refused rather
 than returning a mislabeled page. Deploy the matching `projects-serve` before
 rolling out a client that uses these additive compact surfaces.
+The same fail-closed attestation applies whenever `--query-scope` is explicit,
+including human, JSON-array, and render-spec list output; no CLI path may send
+the new scope and silently accept a legacy producer's unscoped answer.
 
 Searches made through the compact contract default to `--query-scope
 discovery` (name, slug, description, and tags), so a common parent folder

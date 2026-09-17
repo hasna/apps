@@ -2568,7 +2568,7 @@ function registerProjectCommands(program: Command): void {
     .option("--kind <kind>", "Filter by kind")
     .option("--status <status>", "Filter by status")
     .option("--query <text>", "Search project fields selected by --query-scope")
-    .option("--query-scope <scope>", "Search scope: identity, discovery, structured, or all (compact default: discovery; omitted preserves legacy matching)")
+    .option("--query-scope <scope>", "Search scope: identity, discovery, structured, or all (hosted use requires projects.list.v2 attestation)")
     .option("--tags <tags>", "Comma-separated tag filter")
     .option("--label <labels>", "Comma-separated label filter (labels are stored as tags)")
     .option("--labels <labels>", "Comma-separated label filter (alias for --label)")
@@ -2623,6 +2623,7 @@ function registerProjectCommands(program: Command): void {
           status: parseStatus(opts.status),
           query: opts.query,
           ...(opts.queryScope || machineEnvelope ? { query_scope: queryScope } : {}),
+          ...(opts.queryScope !== undefined ? { require_list_v2_contract: true } : {}),
           tags: splitLabelFilters(opts.tags, opts.label, opts.labels),
           offset: parseNonNegativeInteger(opts.offset, "--offset"),
         };

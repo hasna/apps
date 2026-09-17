@@ -2968,6 +2968,106 @@ describe("project-first CLI surface", () => {
     rmSync(root, { recursive: true, force: true });
   }, 60000);
 
+  test("explicit query scope fails closed on an old hosted producer for JSON, human, and render paths", async () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-cli-query-scope-attestation-"));
+    const port = reserveFreePort();
+    const observedScopes: Array<string | null> = [];
+    let attested = false;
+    const pathOnlyProject = {
+      id: "wks_oldscopeproducer",
+      slug: "path-only-project",
+      name: "Path Only Project",
+      description: null,
+      kind: "project",
+      status: "active",
+      root_id: null,
+      recipe_id: null,
+      canonical_machine: null,
+      primary_path: join(root, "projects", "path-only-project"),
+      git_remote: null,
+      s3_bucket: null,
+      s3_prefix: null,
+      tags: [],
+      integrations: {},
+      metadata: {},
+      last_opened_at: null,
+      created_at: "2026-09-17T00:00:00.000Z",
+      updated_at: "2026-09-17T00:00:00.000Z",
+      synced_at: null,
+    };
+    const attestedProject = {
+      ...pathOnlyProject,
+      id: "wks_attestedscope",
+      slug: "attested-projects-match",
+      name: "Projects Attested Match",
+    };
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port,
+      fetch(req) {
+        const url = new URL(req.url);
+        if (url.pathname !== "/v1/projects") return Response.json({ error: "not found" }, { status: 404 });
+        observedScopes.push(url.searchParams.get("query_scope"));
+        const offset = Number(url.searchParams.get("offset") ?? 0);
+        // Legacy producer: it ignores query_scope and returns a row that only
+        // matches through primary_path, with no projects.list.v2 attestation.
+        return Response.json({
+          ...(attested ? {
+            filter_contract: "projects.list.v2",
+            applied_filters: {
+              query_scope: "discovery",
+              tags: [],
+              exclude_evals: true,
+              exclude_registry_fixtures: true,
+            },
+          } : {}),
+          workspaces: offset === 0 ? [attested ? attestedProject : pathOnlyProject] : [],
+          count: offset === 0 ? 1 : 0,
+          total: 1,
+          offset,
+          limit: Number(url.searchParams.get("limit") ?? 100),
+          has_more: false,
+          complete: offset === 0,
+        });
+      },
+    });
+    const env = {
+      HASNA_PROJECTS_API_URL: `http://127.0.0.1:${port}`,
+      HASNA_PROJECTS_API_KEY: "query-scope-test-key",
+      HASNA_PROJECTS_HOME: join(root, "home"),
+    };
+    try {
+      for (const args of [
+        ["list", "--query", "projects", "--query-scope", "discovery", "--json", "--limit", "1"],
+        ["list", "--query", "projects", "--query-scope", "discovery", "--limit", "1"],
+        ["list", "--query", "projects", "--query-scope", "discovery", "--render-spec", "--limit", "1"],
+      ]) {
+        const result = await runProjectsAsync(args, env);
+        expect(result.exitCode).not.toBe(0);
+        expect(text(result.stdout)).toBe("");
+        expect(text(result.stderr)).toContain("projects.list.v2");
+        expect(text(result.stderr)).not.toContain("path-only-project");
+      }
+      expect(observedScopes).toEqual(["discovery", "discovery", "discovery"]);
+
+      attested = true;
+      for (const args of [
+        ["list", "--query", "projects", "--query-scope", "discovery", "--json", "--limit", "1"],
+        ["list", "--query", "projects", "--query-scope", "discovery", "--limit", "1"],
+        ["list", "--query", "projects", "--query-scope", "discovery", "--render-spec", "--limit", "1"],
+      ]) {
+        const result = await runProjectsAsync(args, env);
+        expect(result.exitCode, text(result.stderr)).toBe(0);
+        expect(text(result.stdout)).toContain("attested-projects-match");
+        expect(text(result.stderr)).toBe("");
+      }
+      expect(observedScopes.every((scope) => scope === "discovery")).toBe(true);
+    } finally {
+      server.stop(true);
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30000);
+
   test("top-level list JSON output is not truncated above 64 KiB", async () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-large-list-json-"));
     const dbPath = join(root, "projects.db");
