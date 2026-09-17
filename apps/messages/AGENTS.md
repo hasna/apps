@@ -39,8 +39,10 @@ DEPRECATED notices.
 The on-box store lives in `src/local-store.ts`, is emitted as its own
 `dist/local-store.js`, and is reachable only through `loadLocalMessagesService`
 (`src/local-store-loader.ts`) — which re-checks `selectsMessagesLocalStore()`
-and throws otherwise, so no hosted run can open SQLite. The specifier is
-computed at runtime (`src/runtime-module.ts`) because `bun build` INLINES a
+and throws otherwise, so no hosted run can open SQLite. Tier-1 `--url`,
+`--api-key`, and profile intent always outrank the local opt-in; with no tier-1
+intent, explicit local mode must still avoid ambient Keychain/disk reads. The
+specifier is computed at runtime (`src/runtime-module.ts`) because `bun build` INLINES a
 literal `await import("./x")` into the calling bundle; the same trick keeps the
 server out of the CLI (`messages serve` → `src/serve-loader.ts` → `bin/serve.js`).
 

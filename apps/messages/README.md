@@ -55,9 +55,11 @@ or to a local store — it never opens Postgres directly.
 (`messages`) and `bin/mcp.js` (`messages-mcp`) contain no `bun:sqlite` at all:
 the on-box store is emitted once as `dist/local-store.js` and loaded through
 one gated dynamic import (`src/local-store-loader.ts`) that refuses unless the
-explicit `HASNA_MESSAGES_LOCAL=1` opt-in selected it — a configured authority
-or credential outranks the flag. `messages serve` likewise loads the sibling
-`messages-serve` bundle at runtime, so the server and its storage backends
+explicit `HASNA_MESSAGES_LOCAL=1` opt-in selected it — a configured authority,
+credential, or tier-1 `--url`/`--api-key`/profile argument outranks the flag.
+Without a tier-1 argument, explicit local mode still short-circuits before any
+ambient Keychain or credentials-file read. `messages serve` likewise loads the
+sibling `messages-serve` bundle at runtime, so the server and its storage backends
 stay out of the client bin too.
 
 ## Credentials (client surfaces)

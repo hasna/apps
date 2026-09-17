@@ -36,10 +36,12 @@
  *
  * THE ON-BOX STORE IS A DELIBERATE OPT-IN, NEVER A FALLBACK FROM FAILURE. The
  * on-box SQLite store is reachable ONLY when the environment configures no
- * authority and no credential AND the operator set `HASNA_MESSAGES_LOCAL=1`
- * (alias `MESSAGES_LOCAL=1`). It is answered BEFORE the resolver runs, so an
- * unhosted run reads neither the Keychain nor the credential file, and it
- * announces itself once, on stderr, so "local" is never a silent state.
+ * authority and no credential, the caller supplies no tier-1 authority,
+ * credential or profile, AND the operator set `HASNA_MESSAGES_LOCAL=1`
+ * (alias `MESSAGES_LOCAL=1`). A tier-1 argument always outranks the opt-in.
+ * Otherwise local is answered BEFORE the resolver runs, so an unhosted run
+ * reads neither the Keychain nor the credential file, and it announces itself
+ * once, on stderr, so "local" is never a silent state.
  *
  * REMOVED, and never inputs again: the legacy mode-selector opt-in spellings,
  * and every `~/.hasna/fleet-env`, `~/.hasna/cloud`, `~/.config/hasna`
@@ -261,6 +263,26 @@ export function resolverCredentialOptions(
   return merged;
 }
 
+/**
+ * Does the caller supply tier-1 hosted intent?
+ *
+ * This deliberately excludes `credentials.keychain`: injecting or disabling
+ * the ambient Keychain seam is test/runtime plumbing, not a request to leave
+ * explicit local mode. A key or profile is different: even a blank value is a
+ * deliberate tier-1 input and must be validated/refused by the shared resolver,
+ * never resolved around into SQLite.
+ */
+export function hasMessagesExplicitHostedIntent(
+  options: MessagesClientResolveOptions = {},
+): boolean {
+  return (
+    options.baseUrl !== undefined ||
+    options.apiKey !== undefined ||
+    options.credentials?.apiKey !== undefined ||
+    options.credentials?.profile !== undefined
+  );
+}
+
 /** The fail-closed error: the resolver's own refusal plus the local opt-in. */
 export function messagesUnconfiguredError(cause: unknown): Error {
   const detail = cause instanceof Error ? cause.message : String(cause);
@@ -338,10 +360,16 @@ export function resolveMessagesClientTransport(
     };
   }
 
-  // The on-box store is reachable ONLY under the explicit opt-in, answered
-  // from the env dictionary alone — no Keychain item and no credential file is
-  // read for it (the isolation guarantee).
-  if (selectsMessagesLocalStore(env)) {
+  // The on-box store is reachable ONLY under the explicit opt-in when the
+  // caller supplied no tier-1 hosted intent. An explicit key/profile outranks
+  // local even when HASNA_MESSAGES_LOCAL=1; the shared resolver then validates
+  // it and resolves the authority through the normal env/Keychain/disk/default
+  // ladder. Without tier-1 intent, local is still answered from the env
+  // dictionary alone — no Keychain item or credential file is read.
+  if (
+    !hasMessagesExplicitHostedIntent(options) &&
+    selectsMessagesLocalStore(env)
+  ) {
     announceMessagesLocalMode();
     return {
       transport: "local",

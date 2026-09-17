@@ -123,6 +123,26 @@ describe("the explicit local opt-in", () => {
     expect(report.apiKeyTier).toBe("env");
   });
 
+  test("a tier-1 explicit API key outranks the local opt-in and selects the gateway", () => {
+    const report = resolveMessagesClientTransport(
+      envWith({ HASNA_MESSAGES_LOCAL: "1" }),
+      { apiKey: "explicit-key" },
+    );
+    expect(report.transport).toBe("http");
+    expect(report.baseUrl).toBe(`${MESSAGES_DEFAULT_API_URL}/v1`);
+    expect(report.apiKeyTier).toBe("argument");
+    expect(report.localOptIn).toBe(false);
+  });
+
+  test("a blank tier-1 API key is refused rather than resolved around into local", () => {
+    expect(() =>
+      resolveMessagesClientTransport(
+        envWith({ HASNA_MESSAGES_LOCAL: "1" }),
+        { apiKey: "  " },
+      ),
+    ).toThrow(/blank|empty/i);
+  });
+
   test("declared-but-blank variables count as unset for the opt-in decision", () => {
     // A scrubbed wrapper leaves blanks; blank means "not configured" at the
     // messages seam, so the opt-in still applies.

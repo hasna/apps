@@ -195,6 +195,25 @@ describe("messages CLI", () => {
     expect(res.stderr).toContain("no API key could be resolved");
   });
 
+  test("a spawned --api-key outranks HASNA_MESSAGES_LOCAL=1 and creates no SQLite store", () => {
+    const noDbRoot = path.join(tmpDir, "explicit-key-no-local-db");
+    const explicit = runCli(["status", "--json", "--api-key", "fixture-tier-one-key"], {
+      HASNA_MESSAGES_SQLITE_PATH: path.join(noDbRoot, "messages.db"),
+      HASNA_DATA_HOME: noDbRoot,
+    });
+    expect(explicit.status).toBe(0);
+    const report = JSON.parse(explicit.stdout) as {
+      transport: string;
+      api_url: string;
+      api_key_tier: string | null;
+    };
+    expect(report.transport).toBe("http");
+    expect(report.api_url).toBe("https://api.hasna.com/messages/v1");
+    expect(report.api_key_tier).toBe("argument");
+    expect(explicit.stderr).not.toContain("local mode");
+    expect(fs.existsSync(noDbRoot)).toBe(false);
+  });
+
   test("status reports a --url pin with no ambient credential (#1794)", async () => {
     const res = runCli(["status", "--json", "--url", "http://localhost:8123"]);
     expect(res.status).toBe(0);
