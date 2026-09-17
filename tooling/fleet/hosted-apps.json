@@ -180,13 +180,6 @@
       "notes": "Built in hasna-products/nest. Direct Google OAuth and email/password authorize each user through current membership; there is no shared fleet API key or mint target. The origin override remains until the Nest gateway route is published and verified. The reserved disabled legacy Nest route needs a canonical ownership handoff before enablement. The issuer remains getnest.sh/api/auth when the API base moves; public boundary probes do not prove sign-in or tenant isolation."
     },
     {
-      "app": "print",
-      "source": "external",
-      "probeAuth": "bearer",
-      "probePath": "/v1/printers",
-      "notes": "Built in hasna-internal/internal-apps and served by the station03 print control node through the canonical API gateway."
-    },
-    {
       "app": "sandboxes",
       "source": "external",
       "notes": "Built in hasna-internal/internal-apps."
