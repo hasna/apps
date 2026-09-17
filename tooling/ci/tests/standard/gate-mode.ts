@@ -28,6 +28,7 @@ export const GATE_MODES: Record<string, GateMode> = {
   "client-fail-closed": "report",
   "client-sqlite-isolation": "report",
   "nested-packages": "report",
+  "output-efficiency": "report",
 };
 
 export function gateMode(gate: string): GateMode {

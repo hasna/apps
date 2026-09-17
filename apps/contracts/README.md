@@ -1290,3 +1290,56 @@ Keychain, and the `HASNA_<APP>_*` environment, with the fleet gateway as the URL
 default (see `CONTRACT.md` §3a). The deprecated `~/.hasna/fleet-env/*.env` and
 retired `~/.hasna/cloud/*.env` locations are never read; CHANGELOG 0.14.2 is the
 historical record of the earlier disk-first chain.
+
+## Output-efficiency contract
+
+`@hasna/contracts/output` provides execution-free helpers for compact field
+projection, truthful page receipts, deterministic JSON/JSONL, exact UTF-8 byte
+measurement, and ordered page fitting:
+
+```ts
+import {
+  createPageEnvelope,
+  fitPageToByteBudget,
+  projectRecords,
+  serializeJson,
+} from "@hasna/contracts/output";
+
+const items = projectRecords(records, ["name", "status"], {
+  requiredFields: ["id"],
+});
+const page = createPageEnvelope({
+  items,
+  limit: 20,
+  cursor: 0,
+  nextCursor: 20,
+  hasMore: true,
+  complete: false,
+  total: 560,
+  detail: "compact",
+  fields: ["id", "name", "status"],
+});
+const bounded = fitPageToByteBudget(page, {
+  maxBytes: 32 * 1024,
+  nextCursorForIndex: (index) => index,
+});
+process.stdout.write(bounded.text);
+```
+
+`complete` means the envelope contains the entire requested population; a
+terminal page can therefore have `has_more: false` while remaining
+`complete: false`. Local byte clipping requires a continuation cursor and is
+recorded as `truncated` with a `byte_budget` reason. JSON is compact by default,
+record keys are sorted deterministically, and byte counts are UTF-8 wire bytes.
+The module performs no I/O and does not import CLI, MCP, credential, URL, or
+hosted-transport code.
+
+The fleet output-efficiency census is advisory at first. A report-only result is
+an adoption measurement, not proof that an application is efficient at runtime.
+See [`docs/OUTPUT_EFFICIENCY.md`](docs/OUTPUT_EFFICIENCY.md).
+
+The returned page structure is frozen after validation. Byte fitting measures
+this module's JSON envelope; an adapter adding an MCP or other transport wrapper
+must budget that wrapper separately. Its explicit cursor callback must be
+side-effect-free and deterministic. A JSONL receipt can be omitted only for a
+proven complete, non-truncated page.
