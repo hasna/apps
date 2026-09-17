@@ -37,6 +37,7 @@ const { createHasnaHttpTransport, HasnaHttpError } = await import("../dist/clien
 const { createHasnaStorageClient } = await import("../dist/client/storage.js");
 const todos = await import("../dist/todos/index.js");
 const { secureLocalStorePolicy } = await import("../dist/secure-local-store.js");
+const output = await import("../dist/output.js");
 
 if (typeof scanNoCloudTarget !== "function") {
   throw new Error("dist/no-cloud.js did not export scanNoCloudTarget");
@@ -49,6 +50,22 @@ if (typeof createHasnaStorageClient !== "function") {
 }
 if (typeof secureLocalStorePolicy !== "function") {
   throw new Error("dist/secure-local-store.js did not export secureLocalStorePolicy");
+}
+if (typeof output.createPageEnvelope !== "function" || typeof output.serializeJson !== "function") {
+  throw new Error("dist/output.js did not expose the output-efficiency contract");
+}
+const outputSmokePage = output.createPageEnvelope({
+  items: [{ id: "dist-smoke" }],
+  limit: 1,
+  hasMore: false,
+  complete: true,
+  total: 1,
+});
+if (output.serializeJson({ z: 1, a: 2 }) !== '{"a":2,"z":1}') {
+  throw new Error("dist/output.js serialization was not deterministic");
+}
+if (outputSmokePage._meta.count !== 1 || outputSmokePage._meta.complete !== true) {
+  throw new Error("dist/output.js page envelope lost its truth metadata");
 }
 
 type CommandResult = ReturnType<typeof Bun.spawnSync>;
