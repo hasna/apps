@@ -24,8 +24,10 @@ function cliEnv(extra: Record<string, string> = {}): Record<string, string> {
     // client config — env (API_URL + API_KEY, canonical and alias prefixes) and
     // the fleet app-config on disk (HOME pointed at the temp dir) — so tests
     // never touch the real shortlinks API from a machine that has it
-    // configured.
+    // configured. Local storage has ONE door since 0.4.0 — the env opt-in —
+    // so these local-mode runs declare it; `--db` only names the file.
     HOME: tempHome,
+    HASNA_SHORTLINKS_LOCAL: "1",
     HASNA_SHORTLINKS_API_URL: "",
     HASNA_SHORTLINKS_API_KEY: "",
     SHORTLINKS_API_URL: "",

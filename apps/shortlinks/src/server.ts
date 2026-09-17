@@ -1,4 +1,11 @@
-import { ShortlinksStore } from "./store.js";
+// Public redirect-server helpers never choose a backend implicitly. Hosted
+// callers resolve the canonical app-base credential authority through
+// ./client-store.ts and inject the resulting store; an omitted store is allowed
+// only under the explicit HASNA_SHORTLINKS_LOCAL=1 opt-in. The on-box store is
+// then loaded through the same gated dynamic-import seam, keeping `bun:sqlite`
+// out of the CLI, MCP, and SDK client artifacts.
+import { isLocalOptIn, LOCAL_OPT_IN_ENV_KEY, openExplicitLocalStore } from "./client-store.js";
+import type { Env } from "./store-interface.js";
 import type { ClickInput, Link } from "./types.js";
 import {
   normalizeIpLiteral,
@@ -20,8 +27,14 @@ export interface RecordClickErrorContext {
 }
 
 export interface ShortlinksHandlerOptions {
+  /** Inject the already-resolved hosted or local store. Required unless local mode is explicitly selected. */
   store?: ShortlinksRuntimeStore;
+  /** Local database path. Never an opt-in by itself. */
   dbPath?: string;
+  /** Environment used only to verify and resolve the explicit local-store opt-in. */
+  env?: Env;
+  /** Optional sink for the explicit-local notice. */
+  notice?: (line: string) => void;
   defaultHost?: string;
   redirectStatus?: 301 | 302 | 307 | 308;
   onRecordClickError?: (error: unknown, context: RecordClickErrorContext) => void | Promise<void>;
@@ -87,10 +100,30 @@ function logRecordClickError(link: Link): void {
 }
 
 export function createShortlinksHandler(options: ShortlinksHandlerOptions = {}): (request: Request) => Response | Promise<Response> {
-  const store = options.store || new ShortlinksStore(options.dbPath);
   const redirectStatus = options.redirectStatus || 302;
+  const env = options.env ?? process.env;
+  if (!options.store && !isLocalOptIn(env)) {
+    throw new Error(
+      `createShortlinksHandler requires an injected store, or ${LOCAL_OPT_IN_ENV_KEY}=1 ` +
+      `(alias SHORTLINKS_LOCAL=1) to explicitly authorize the on-box SQLite store.`,
+    );
+  }
+
+  // The local store is opened lazily and once only after the explicit opt-in
+  // was verified above. Hosted callers must inject their resolved HTTP store;
+  // this public helper never reads a credential or invents an authority.
+  let ownStore: Promise<ShortlinksRuntimeStore> | null = null;
+  const getStore = (): ShortlinksRuntimeStore | Promise<ShortlinksRuntimeStore> => {
+    if (options.store) return options.store;
+    ownStore ??= openExplicitLocalStore(env, {
+      dbPath: options.dbPath,
+      notice: options.notice,
+    });
+    return ownStore;
+  };
 
   return async (request: Request): Promise<Response> => {
+    const store = await getStore();
     const url = new URL(request.url);
     if (url.pathname === "/healthz") {
       return json({ ok: true, service: "shortlinks", stats: await store.totalStats() });

@@ -15,7 +15,7 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { resolveClientTransport } from "@hasna/contracts/client";
 import { shortlinksResolverInputs } from "../client-resolver-inputs.js";
-import { resolveStore, type Store } from "../client-store.js";
+import { LOCAL_OPT_IN_ENV_KEY, resolveStore, type Store } from "../client-store.js";
 import { projectDestinationUrl, projectForOutput } from "./projection.js";
 import type { TotalStats } from "../store-interface.js";
 import { getConfigPath, getDataDir, getDatabasePath, loadConfig, saveConfig, updateConfig } from "../config.js";
@@ -64,12 +64,14 @@ function handleError(error: unknown): never {
  * credential — the Keychain item, ~/.hasna/shortlinks/config/credentials, or
  * HASNA_SHORTLINKS_API_KEY, with the authority defaulting to the fleet gateway
  * — otherwise the CLI FAILS CLOSED with an error naming the credential chain
- * unless the local backend was explicitly opted into (HASNA_SHORTLINKS_LOCAL=1 /
- * SHORTLINKS_LOCAL=1 or --db <path>), which is announced on stderr.
+ * unless the local backend was explicitly opted into (HASNA_SHORTLINKS_LOCAL=1,
+ * alias SHORTLINKS_LOCAL=1), which is announced on stderr. `--db <path>` only
+ * names the file for such a run; on its own it is refused, never a second door
+ * into local storage.
  * There is no DSN/postgres client path: a client never touches the raw RDS.
  */
 async function withRuntimeStore<T>(fn: (store: Store) => T | Promise<T>): Promise<T> {
-  const store = resolveStore(process.env, { dbPath: program.opts().db });
+  const store = await resolveStore(process.env, { dbPath: program.opts().db });
   try {
     return await fn(store);
   } finally {
@@ -525,7 +527,7 @@ program
   .name("shortlinks")
   .description("Shortlink manager with custom domains, click tracking, and Cloudflare helpers — hosted /v1 API storage, or on-box SQLite with an explicit local opt-in")
   .version(getPackageVersion())
-  .option("--db <path>", "SQLite database path (local backend only)")
+  .option("--db <path>", `SQLite database file for the on-box store; requires the local opt-in ${LOCAL_OPT_IN_ENV_KEY}=1`)
   .option("-j, --json", "Output JSON for agents and scripts");
 
 program
@@ -967,10 +969,11 @@ program
     try {
       // The redirect server reads/records through the same Store seam as every
       // other command: the cloud ApiStore when a shortlinks credential
-      // resolves, the on-box LocalStore only under an explicit opt-in (--db /
-      // SHORTLINKS_LOCAL=1), otherwise the resolution fails closed. No DSN path
-      // here — a client never opens the raw RDS.
-      const store = resolveStore(process.env, { dbPath: program.opts().db });
+      // resolves, the on-box LocalStore only under the explicit environment
+      // opt-in (HASNA_SHORTLINKS_LOCAL=1 / SHORTLINKS_LOCAL=1; --db only names
+      // its file), otherwise the resolution fails closed. No DSN path here —
+      // a client never opens the raw RDS.
+      const store = await resolveStore(process.env, { dbPath: program.opts().db });
       const server = serveShortlinks({
         store,
         host: opts.host,
