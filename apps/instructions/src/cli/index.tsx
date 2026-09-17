@@ -2,10 +2,10 @@
 import { registerEventsCommands } from "@hasna/events/commander";
 import { program } from "commander";
 import chalk from "chalk";
-import { existsSync, lstatSync, readFileSync, readSync, writeSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readSync, renameSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join, resolve } from "node:path";
-import { applyConfigsWithReport, expandPath, normalizeTargetPath } from "../lib/apply.js";
+import { basename, dirname, join, resolve } from "node:path";
+import { applyConfigsWithReport, compactPathForConfigHome, expandPath, normalizeTargetPath } from "../lib/apply.js";
 import { findConfigsByTargetPath, findDuplicateTargetPathGroups, findReferenceConfigsByName, findDuplicateReferenceNameGroups } from "../lib/config-target-identity.js";
 import { diffConfig, syncKnown, syncToDisk, syncProject, detectCategory, detectAgent, detectFormat, KNOWN_CONFIGS } from "../lib/sync.js";
 import { syncFromDir } from "../lib/sync-dir.js";
@@ -18,6 +18,7 @@ import { applySessionRender, restoreSessionRenderSnapshot } from "../lib/session
 import type { ClaudeOwnedAuthority } from "../lib/session-authority.js";
 import { normalizeSessionInstructionSourceId, planSessionRender, resolveSessionPath, sourceFromConfig, sourceFromFilePath, sourcesFromIdentityExport, SESSION_INSTRUCTION_LAYERS, SESSION_RENDER_TOOLS, type SessionInstructionLayer, type SessionInstructionSource, type SessionRenderFile, type SessionRenderPlan, type SessionRenderTool } from "../lib/session-render.js";
 import { getRawStoreRoot } from "../lib/raw-store-root.js";
+import { selectsInstructionsLocalStore } from "../lib/local-opt-in.js";
 import { normalizeProfileAssetBinding } from "../lib/asset-plan.js";
 import { normalizeProfileConfigBinding, planProfileSessionRender, type InstructionGraphRenderPlan } from "../lib/instruction-graph.js";
 import { accountedGlobalSourceSlugs, computeGlobalSourceCoverage, formatGlobalSourceCoverageWarnings, type GlobalSourceCoverageResult } from "../lib/global-source-coverage.js";
@@ -695,7 +696,13 @@ program
     const storedFmt = detectFormat(abs);
     const fmt = redactFormatForTarget(abs, storedFmt);
     const { content, redacted, isTemplate } = redactContent(rawContent, fmt);
-    const targetPath = abs.startsWith(homedir()) ? abs.replace(homedir(), "~") : abs;
+    // Store `~/...` relative to the SAME effective config home that apply
+    // later uses to expand it. Using os.homedir() here while expandPath()
+    // honored CONFIGS_HOME made an isolated root turn into
+    // `<CONFIGS_HOME>/<absolute-path-without-os-home>` and could write the
+    // wrong file. Keep the boundary segment-safe so `/home/user2` is never
+    // treated as a child of `/home/user`.
+    const targetPath = compactPathForConfigHome(abs);
     const name = opts.name || filePath.split("/").pop()!;
     const store = resolveConfigStore();
 
@@ -1008,32 +1015,29 @@ program
 // ── export ────────────────────────────────────────────────────────────────────
 program
   .command("export")
-  .description("Export configs as a tar.gz bundle")
-  .option("-o, --output <path>", "output file", "./configs-export.tar.gz")
+  .description("Export the complete Instructions configuration domain as a tar.gz bundle")
+  .option("-o, --output <path>", "output file", "./instructions-domain-export.tar.gz")
   .option("-c, --category <cat>", "filter by category")
   .action(async (opts) => {
     const result = await exportConfigs(opts.output, {
       filter: opts.category ? { category: opts.category as ConfigCategory } : undefined,
       store: resolveConfigStore(),
     });
-    console.log(chalk.green("✓") + ` Exported ${result.count} configs to ${result.path}`);
+    console.log(chalk.green("✓") + ` Exported domain to ${result.path}: configs=${result.counts.configs} snapshots=${result.counts.config_snapshots} profiles=${result.counts.profiles} profile_bindings=${result.counts.profile_config_bindings} assets=${result.counts.profile_asset_bindings} machines=${result.counts.machines}`);
   });
 
 // ── import ────────────────────────────────────────────────────────────────────
 program
   .command("import <file>")
-  .description("Import configs from a tar.gz bundle")
-  .option("--overwrite", "overwrite existing configs")
+  .description("Restore a v2 Instructions domain archive into an empty destination, or import legacy v1")
+  .option("--overwrite", "overwrite existing configs in a legacy v1 archive (v2 rejects this option)")
   .action(async (file, opts) => {
     const result = await importConfigs(file, {
       conflict: opts.overwrite ? "overwrite" : "skip",
       store: resolveConfigStore(),
     });
+    if (result.errors.length > 0) throw new Error(`Import failed: ${result.errors.join("; ")}`);
     console.log(chalk.green("✓") + ` Import complete: +${result.created} updated:${result.updated} skipped:${result.skipped}`);
-    if (result.errors.length > 0) {
-      console.log(chalk.red("Errors:"));
-      for (const e of result.errors) console.log(chalk.red("  " + e));
-    }
   });
 
 // ── whoami ────────────────────────────────────────────────────────────────────
@@ -1467,7 +1471,7 @@ sessionCmd.command("plan")
   .description("Produce a dry-run render plan for profile-scoped instruction injection")
   .requiredOption("--tool <tool>", `target tool (${SESSION_RENDER_TOOLS.join("|")})`)
   .requiredOption("--profile <profile>", "account/profile name that owns the rendered instruction home")
-  .option("--target-home <path>", "override generated profile-scoped target home")
+  .option("--target-home <path>", "native instruction home; Grok: GROK_HOME, Devin: user config directory (global AGENTS.md unless --project-root is set)")
   .option("--project-root <path>", "repository root for project-scoped adapters such as Cursor")
   .option("--session-id <id>", "session id to include in the manifest")
   .option("--source <layer:id=path>", `instruction source file; layers: ${SESSION_SOURCE_LAYER_HELP}`, collectOption, [])
@@ -1548,7 +1552,7 @@ sessionCmd.command("apply")
   .description("Write a session render plan to its managed target home or explicit project root")
   .requiredOption("--tool <tool>", `target tool (${SESSION_RENDER_TOOLS.join("|")})`)
   .requiredOption("--profile <profile>", "account/profile name that owns the rendered instruction home")
-  .option("--target-home <path>", "override generated profile-scoped target home")
+  .option("--target-home <path>", "native instruction home; Grok: GROK_HOME, Devin: user config directory (global AGENTS.md unless --project-root is set)")
   .option("--project-root <path>", "repository root for project-scoped adapters such as Cursor")
   .option("--session-id <id>", "session id to include in the manifest")
   .option("--source <layer:id=path>", `instruction source file; layers: ${SESSION_SOURCE_LAYER_HELP}`, collectOption, [])
@@ -2447,6 +2451,58 @@ mcpCmd.command("uninstall")
     if (failed) process.exitCode = 1;
   });
 
+// ── legacy local-store migration ─────────────────────────────────────────────
+program
+  .command("migrate-legacy")
+  .description("Migrate the historical ~/.hasna/configs/configs.db store into the current local Instructions SQLite store")
+  .option("--source <path>", "legacy configs.db path")
+  .option("--destination <path>", "current instructions.db path")
+  .option("--backup <path>", "exclusive destination backup path")
+  .option("--apply", "apply the migration (default is a no-write dry-run)")
+  .option("--merge-preserve-destination", "merge into a non-empty destination without overwriting existing rows")
+  .option("--confirm-local", "confirm this is an explicit on-box local-store operation")
+  .option("--json", "print a structured metadata-only result")
+  .action(async (opts) => {
+    if (!selectsInstructionsLocalStore(process.env)) {
+      throw new Error(
+        "migrate-legacy is local-only: set HASNA_INSTRUCTIONS_LOCAL=1 and remove every hosted Instructions authority/credential first",
+      );
+    }
+    if (!opts.confirmLocal) {
+      throw new Error("migrate-legacy requires --confirm-local");
+    }
+    const destinationPath = resolve(
+      opts.destination || process.env["HASNA_INSTRUCTIONS_DB_PATH"] || join(getRawStoreRoot(), "instructions.db"),
+    );
+    // Keep bun:sqlite behind a dynamic import. The hosted CLI/MCP entry chunks
+    // remain SQLite-free, and this code is loaded only for the explicit local
+    // migration command.
+    const database = await import("../db/database.js");
+    database.getDatabase(destinationPath);
+    database.resetDatabase();
+    const { migrateLegacyInstructionsStore } = await import("../lib/legacy-store-migration.js");
+    const result = migrateLegacyInstructionsStore({
+      ...(opts.source ? { sourcePath: resolve(opts.source) } : {}),
+      destinationPath,
+      ...(opts.backup ? { backupPath: resolve(opts.backup) } : {}),
+      dryRun: !opts.apply,
+      ...(opts.mergePreserveDestination ? { mergePolicy: "preserve-destination" as const } : {}),
+      operatorConfirmed: true,
+    });
+    if (opts.json) {
+      printJson(result);
+      return;
+    }
+    const total = Object.values(result.migrated).reduce((sum, count) => sum + count, 0);
+    const skipped = Object.values(result.skipped).reduce((sum, count) => sum + count, 0);
+    const mode = result.dryRun ? "Dry-run" : "Migrated";
+    console.log(chalk.green("✓") + ` ${mode}: ${total} row(s), skipped ${skipped}, conflicts ${result.conflicts}`);
+    if (result.snapshotsCreated > 0) {
+      console.log(chalk.dim(`  created ${result.snapshotsCreated} missing current-version snapshot(s)`));
+    }
+    if (result.backupCreated) console.log(chalk.dim("  destination backup created before mutation"));
+  });
+
 // ── init ──────────────────────────────────────────────────────────────────────
 program
   .command("init")
@@ -2525,8 +2581,15 @@ program
   .command("status")
   .description("Health check: total configs, drift from disk, unredacted secrets")
   .option("--json", "output metadata-only JSON")
-  .action(async (opts: { json?: boolean }) => {
-    const status = await getConfigsStatus(resolveConfigStore());
+  .option(
+    "--deep",
+    "also count profile links and snapshots (one API round trip per profile and per config: ~35s against a 258-config hosted store, free locally)",
+  )
+  .action(async (opts: { json?: boolean; deep?: boolean }) => {
+    // Against the hosted API the per-row counts are reported as null unless
+    // --deep is passed: they cost one request per config, which is what made
+    // this command look hung on a station (see STATUS_FANOUT_CONCURRENCY).
+    const status = await getConfigsStatus(resolveConfigStore(), { deep: opts.deep });
 
     if (opts.json) {
       printJson(status);
@@ -2596,6 +2659,183 @@ managedSkillsCmd
 // ── diff --all ────────────────────────────────────────────────────────────────
 // Extend existing diff command to support --all
 
+function normalizeBackupVersionOptions(opts: {
+  payloadVersionId?: string;
+  manifestVersionId?: string;
+}): { payloadVersionId?: string; manifestVersionId?: string } {
+  const payloadVersionId = opts.payloadVersionId?.trim();
+  const manifestVersionId = opts.manifestVersionId?.trim();
+  if (Boolean(payloadVersionId) !== Boolean(manifestVersionId)) {
+    throw new Error("S3 backup payload and manifest version ids must be provided together");
+  }
+  return payloadVersionId && manifestVersionId ? { payloadVersionId, manifestVersionId } : {};
+}
+
+// ── native S3 backup plane ───────────────────────────────────────────────────
+const storageCmd = program.command("storage").description("Inspect and use the optional native S3 backup plane");
+
+storageCmd.command("status")
+  .description("Show redacted S3 configuration status without opening SQLite or contacting S3")
+  .option("--json", "output JSON")
+  .action(async (opts) => {
+    const { loadInstructionsS3Config } = await import("../storage/s3-config.js");
+    const config = loadInstructionsS3Config(process.env);
+    const status = config
+      ? {
+          configured: true,
+          provider: "s3" as const,
+          region: config.region,
+          prefix: config.prefix,
+          endpointConfigured: Boolean(config.endpoint),
+          forcePathStyle: config.forcePathStyle,
+          credentialSource: config.credentials ? "static-explicit" : "runtime-default-chain",
+          includesCredentialValues: false as const,
+          databaseAuthority: false as const,
+        }
+      : {
+          configured: false,
+          provider: null,
+          region: null,
+          prefix: null,
+          endpointConfigured: false,
+          forcePathStyle: false,
+          credentialSource: null,
+          includesCredentialValues: false as const,
+          databaseAuthority: false as const,
+        };
+    if (opts.json) printJson(status);
+    else if (!config) console.log(chalk.dim("S3 backup storage is not configured."));
+    else console.log(chalk.green("✓") + ` S3 backup storage configured (${config.region}, prefix ${config.prefix}; database authority: no)`);
+  });
+
+const storageBackupCmd = storageCmd.command("backup").description("Push, pull, and verify immutable Instructions backup objects");
+
+storageBackupCmd.command("push <file>")
+  .description("Upload an immutable backup archive and integrity manifest")
+  .requiredOption("--id <backup-id>", "stable immutable backup identifier")
+  .option("--content-type <type>", "payload content type", "application/gzip")
+  .option("--dry-run", "plan keys and hashes without contacting S3")
+  .option("--json", "output JSON")
+  .action(async (file, opts) => {
+    const abs = resolve(file);
+    if (!existsSync(abs) || !lstatSync(abs).isFile()) throw new Error(`Backup file not found: ${abs}`);
+    const [{ loadInstructionsS3Config }, backup, objectStore] = await Promise.all([
+      import("../storage/s3-config.js"),
+      import("../storage/s3-backup.js"),
+      import("../storage/s3-object-store.js"),
+    ]);
+    const config = loadInstructionsS3Config(process.env);
+    if (!config) throw new Error("S3 backup storage is not configured (set HASNA_INSTRUCTIONS_S3_BUCKET)");
+    const bytes = await Bun.file(abs).bytes();
+    if (opts.dryRun) {
+      const plan = await backup.planInstructionsBackupPush({
+        store: { get: async () => undefined, head: async () => undefined },
+        prefix: config.prefix,
+        backupId: opts.id,
+        bytes,
+        contentType: opts.contentType,
+      });
+      if (opts.json) printJson(plan);
+      else console.log(chalk.dim(`Would upload ${plan.sizeBytes} bytes to ${plan.payloadKey} (sha256 ${plan.sha256})`));
+      return;
+    }
+    const result = await backup.pushInstructionsBackup({
+      store: objectStore.createInstructionsS3ObjectStore(config),
+      prefix: config.prefix,
+      backupId: opts.id,
+      bytes,
+      contentType: opts.contentType,
+    });
+    const safe = {
+      status: result.status,
+      backupId: result.manifest.backupId,
+      sha256: result.manifest.sha256,
+      sizeBytes: result.manifest.sizeBytes,
+      ...(result.versions ? result.versions : {}),
+    };
+    if (opts.json) printJson(safe);
+    else console.log(chalk.green("✓") + ` S3 backup ${result.status}: ${safe.backupId} (${safe.sizeBytes} bytes, sha256 ${safe.sha256})`);
+  });
+
+storageBackupCmd.command("verify <backup-id>")
+  .description("Verify the immutable S3 payload against its manifest")
+  .option("--payload-version-id <version-id>", "exact immutable S3 payload VersionId")
+  .option("--manifest-version-id <version-id>", "exact immutable S3 manifest VersionId")
+  .option("--json", "output JSON")
+  .action(async (backupId, opts) => {
+    const versions = normalizeBackupVersionOptions(opts);
+    const [{ loadInstructionsS3Config }, backup, objectStore] = await Promise.all([
+      import("../storage/s3-config.js"),
+      import("../storage/s3-backup.js"),
+      import("../storage/s3-object-store.js"),
+    ]);
+    const config = loadInstructionsS3Config(process.env);
+    if (!config) throw new Error("S3 backup storage is not configured (set HASNA_INSTRUCTIONS_S3_BUCKET)");
+    const verified = await backup.verifyInstructionsBackup({
+      store: objectStore.createInstructionsS3ObjectStore(config),
+      prefix: config.prefix,
+      backupId,
+      ...versions,
+    });
+    const safe = {
+      ...verified,
+      ...(verified.versions ? verified.versions : {}),
+      versions: undefined,
+    };
+    if (opts.json) printJson(safe);
+    else console.log(chalk.green("✓") + ` Verified ${verified.backupId}: ${verified.sizeBytes} bytes, sha256 ${verified.sha256}${verified.versionPinned ? " (exact S3 versions)" : ""}`);
+  });
+
+storageBackupCmd.command("pull <backup-id>")
+  .description("Download and verify an immutable S3 backup before writing it locally")
+  .requiredOption("-o, --output <path>", "destination archive path")
+  .option("--payload-version-id <version-id>", "exact immutable S3 payload VersionId")
+  .option("--manifest-version-id <version-id>", "exact immutable S3 manifest VersionId")
+  .option("--force", "replace an existing regular destination file")
+  .option("--json", "output JSON")
+  .action(async (backupId, opts) => {
+    const versions = normalizeBackupVersionOptions(opts);
+    const [{ loadInstructionsS3Config }, backup, objectStore] = await Promise.all([
+      import("../storage/s3-config.js"),
+      import("../storage/s3-backup.js"),
+      import("../storage/s3-object-store.js"),
+    ]);
+    const config = loadInstructionsS3Config(process.env);
+    if (!config) throw new Error("S3 backup storage is not configured (set HASNA_INSTRUCTIONS_S3_BUCKET)");
+    const pulled = await backup.pullInstructionsBackup({
+      store: objectStore.createInstructionsS3ObjectStore(config),
+      prefix: config.prefix,
+      backupId,
+      ...versions,
+    });
+    const output = resolve(opts.output);
+    if (existsSync(output)) {
+      if (!opts.force) throw new Error(`Refusing to overwrite existing backup file: ${output}`);
+      if (!lstatSync(output).isFile() || lstatSync(output).isSymbolicLink()) {
+        throw new Error(`Refusing to replace a non-regular backup destination: ${output}`);
+      }
+    }
+    mkdirSync(dirname(output), { recursive: true, mode: 0o700 });
+    const temp = join(dirname(output), `.${basename(output)}.tmp-${process.pid}-${Date.now()}`);
+    try {
+      writeFileSync(temp, pulled.bytes, { flag: "wx", mode: 0o600 });
+      renameSync(temp, output);
+    } catch (error) {
+      try { unlinkSync(temp); } catch { /* no temp to remove */ }
+      throw error;
+    }
+    const safe = {
+      backupId: pulled.manifest.backupId,
+      output,
+      sha256: pulled.manifest.sha256,
+      sizeBytes: pulled.manifest.sizeBytes,
+      versionPinned: pulled.versionPinned,
+      ...(pulled.versions ? pulled.versions : {}),
+    };
+    if (opts.json) printJson(safe);
+    else console.log(chalk.green("✓") + ` Restored ${safe.backupId} to ${safe.output} (${safe.sizeBytes} bytes)`);
+  });
+
 // ── backup / restore ──────────────────────────────────────────────────────────
 program
   .command("backup")
@@ -2614,14 +2854,12 @@ program
 
 program
   .command("restore <file>")
-  .description("Restore configs from a backup file")
-  .option("--overwrite", "overwrite existing configs (default: skip)")
+  .description("Restore a v2 domain backup into an empty destination, or restore legacy v1 configs")
+  .option("--overwrite", "overwrite existing configs in a legacy v1 archive (v2 rejects this option)")
   .action(async (file, opts) => {
     const result = await importConfigs(file, { conflict: opts.overwrite ? "overwrite" : "skip", store: resolveConfigStore() });
+    if (result.errors.length > 0) throw new Error(`Restore failed: ${result.errors.join("; ")}`);
     console.log(chalk.green("✓") + ` Restored: +${result.created} updated:${result.updated} skipped:${result.skipped}`);
-    if (result.errors.length > 0) {
-      for (const e of result.errors) console.log(chalk.red("  " + e));
-    }
   });
 
 // ── doctor ────────────────────────────────────────────────────────────────────

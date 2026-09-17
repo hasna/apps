@@ -55,7 +55,7 @@ await writeFile(join(root,'config/kilo/kilo.json'),JSON.stringify({permission:{b
 await writeFile(join(root,'kilo.json'),JSON.stringify({permission:{'*':'deny',read:{'*':'deny','proof.txt':'allow',[join(root,'proof.txt')]:'allow',[join(root,'proof.txt').slice(1)]:'allow'}},agent:{build:{prompt:'PROJECT_AGENT_RULE'}}}));
 const stamp=new Date().toISOString();await writeFile(join(root,'AGENTS.md'),`---\nid: "oc2-native-fixture"\ntitle: "Native instruction fixture"\ntype: "test-fixture"\nowner: "credential_runtime_review"\ncreated_at: "${stamp}"\nupdated_at: "${stamp}"\nstatus: "test"\nsource_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"\n---\nOC2_PROJECT_RULE\n`);
 
-const cli=fileURLToPath(new URL('../src/cli.ts',import.meta.url));const env={PATH:process.env.PATH!,HOME:join(root,'home'),XDG_CONFIG_HOME:join(root,'config'),XDG_DATA_HOME:join(root,'data'),XDG_STATE_HOME:join(root,'state'),XDG_CACHE_HOME:join(root,'cache'),HASNA_SWITCHER_HOME:join(root,'switcher'),SWITCHER_PROVIDER_FIXTURE:key};
+const cli=fileURLToPath(new URL('../src/cli.ts',import.meta.url));const env={PATH:process.env.PATH!,HOME:join(root,'home'),XDG_CONFIG_HOME:join(root,'config'),XDG_DATA_HOME:join(root,'data'),XDG_STATE_HOME:join(root,'state'),XDG_CACHE_HOME:join(root,'cache'),HASNA_SWITCHER_LOCAL:"1",HASNA_SWITCHER_HOME:join(root,'switcher'),SWITCHER_PROVIDER_FIXTURE:key};
 const children:ReturnType<typeof Bun.spawn>[]=[];const results:any[]=[];const scrub=(s:string)=>s.replaceAll(key,'[fixture key redacted]');
 async function invoke(args:string[],label:string){
  const child=Bun.spawn([process.execPath,cli,...args],{cwd:root,env,stdin:'ignore',stdout:'pipe',stderr:'pipe',detached:true});children.push(child);let deadline=false;

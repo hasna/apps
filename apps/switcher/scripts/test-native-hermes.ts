@@ -108,7 +108,7 @@ const command = async (args: string[]) => {
       PATH: process.env.PATH ?? "/Users/hasna/.bun/bin:/opt/homebrew/bin:/usr/bin:/bin",
       HOME: home,
       USER: process.env.USER ?? "fixture-user",
-      HASNA_SWITCHER_HOME: switcherHome,
+      HASNA_SWITCHER_LOCAL: "1", HASNA_SWITCHER_HOME: switcherHome,
       SWITCHER_PROVIDER_FIXTURE: syntheticCredential,
     },
     stdin: "ignore", stdout: "pipe", stderr: "pipe",

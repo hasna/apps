@@ -144,6 +144,12 @@ jobs:
       - name: Name-conformance gate (@hasna/* only, name == directory)
         run: bun tooling/ci/check-names.ts
 
+      - name: Private skill content gate self-test
+        run: bun tooling/ci/check-skill-content.ts --self-test
+
+      - name: Private skill content gate (software only)
+        run: bun tooling/ci/check-skill-content.ts
+
       # Dependency-direction gate: no member may DECLARE a dependency on the
       # private @hasna-internal/* scope (or any other private scope). The
       # pack-time publish-guard refuses a private-scope string inside a packed
@@ -554,3 +560,11 @@ jobs:
 
       - name: Publish-guard (npm pack --dry-run + block internal-infra strings)
         run: bun tooling/ci/check-publish-guard.ts
+
+      # Publish-guard runs Emails prepack (build, artifact scan and packed identity).
+      # These remaining prepublishOnly checks must also pass before release.
+      - name: Emails release contract gates
+        working-directory: apps/emails
+        run: |
+          bun run contracts:conformance
+          bun run contracts no-cloud-scan .

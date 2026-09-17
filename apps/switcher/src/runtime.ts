@@ -7,6 +7,10 @@ import { startServer } from "./server";
 import { Fault } from "./domain";
 import type { CatalogCredentialResolver } from "./catalog";
 import { resolveCredential as resolveClientCredential, clientTransportEnvKeys, appConfigDiskValue, keychainConfigValue } from "@hasna/contracts/client";
+import { announceSwitcherLocalMode, hasSwitcherEnvAuthorityIntent, isSwitcherLocalOptIn, remoteConfigMissingMessage } from "./lib/local-opt-in";
+
+/** The refusal code when no Switcher API credential is configured and the local opt-in is not set. */
+export const REMOTE_API_CONFIG_MISSING = "remote_api_config_missing";
 
 export function switcherHome(env: NodeJS.ProcessEnv = process.env) {
   const override = env.HASNA_HOME?.trim();
@@ -26,16 +30,23 @@ export async function privateDirectory(path: string) {
 /** Data access always uses HTTP, including the per-command owned local service. */
 export async function openCliRuntime(env: NodeJS.ProcessEnv = process.env, resolveCredential?: CatalogCredentialResolver) {
   const providerEnv = Object.fromEntries(Object.entries(env).filter(([name]) => name.startsWith("SWITCHER_PROVIDER_")));
-  // Only complete absence of remote configuration selects the owned local API.
-  // Let Contracts detect invalid sources; no resolver error becomes local data.
-  const keys = clientTransportEnvKeys("switcher");
-  const credential = resolveClientCredential("switcher",env);
-  const configured = credential || keys.apiUrlKeys.some(name=>env[name] !== undefined)
-    || keychainConfigValue("switcher",env) || appConfigDiskValue("switcher",env,keys.apiUrlKeys);
-  if (configured) {
-    return {client: clientFromEnv(env), mode: "remote" as const, providerEnv, close: async () => {}};
+  const remote = () => ({client: clientFromEnv(env), mode: "remote" as const, providerEnv, close: async () => {}});
+  // 1. A configured environment outranks the local opt-in. Contracts refuses a
+  //    half-configured or unsafe source loudly; no resolver error becomes local data.
+  if (hasSwitcherEnvAuthorityIntent(env)) return remote();
+  // 2. The deliberate opt-in is answered from the environment alone, before any
+  //    Keychain or disk read.
+  if (!isSwitcherLocalOptIn(env)) {
+    // 3. Ambient tiers: the Keychain item and the canonical credentials file. A
+    //    Keychain item that exists but cannot be read throws inside Contracts
+    //    (terminal); complete absence fails closed here. Never a local default.
+    const keys = clientTransportEnvKeys("switcher");
+    const configured = resolveClientCredential("switcher",env) || keychainConfigValue("switcher",env) || appConfigDiskValue("switcher",env,keys.apiUrlKeys);
+    if (configured) return remote();
+    throw new Fault(401, REMOTE_API_CONFIG_MISSING, remoteConfigMissingMessage(env));
   }
   const home = switcherHome(env);
+  announceSwitcherLocalMode(home);
   if (!env.HASNA_SWITCHER_DATABASE_URL && !env.HASNA_SWITCHER_SQLITE_PATH) await privateDirectory(home);
   const apiKey = randomBytes(32).toString("base64url");
   const service = await startServer({apiKey, databaseUrl: env.HASNA_SWITCHER_DATABASE_URL,

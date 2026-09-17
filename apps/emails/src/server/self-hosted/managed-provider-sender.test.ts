@@ -46,3 +46,9 @@ it("requires registered SES region and builds only scoped credential fields", as
   expect((await resolve("one", "p"))?.credentialSource).toBe("managed_envelope");
   expect(Object.keys(configs[0]!).sort()).toEqual(["EMAILS_AWS_REGION", "EMAILS_SEND_PROVIDER", "EMAILS_SES_ACCESS_KEY_ID", "EMAILS_SES_SECRET_ACCESS_KEY"]);
 });
+
+it("forwards only the explicit observed region map alongside managed SES credentials", async () => {
+ const map=JSON.stringify({"eu-west-1":{domain:"mail.example.com",evidence_sha256:"a".repeat(64),verified_at:"2026-09-14T00:00:00Z"}});let seen:NodeJS.ProcessEnv|undefined;
+ const resolve=buildManagedSenderResolver(()=>null,()=>({read:async()=>({credentials:{type:"ses",access_key:"synthetic-access",secret_key:"synthetic-secret"},revision:1,region:"eu-west-1"})}),config=>{seen=config;return external;},{EMAILS_SES_MESSAGE_ID_DOMAINS:map,UNRELATED_VALUE:"must-not-copy"});
+ await resolve("tenant","provider");expect(seen?.EMAILS_SES_MESSAGE_ID_DOMAINS).toBe(map);expect(seen?.UNRELATED_VALUE).toBeUndefined();
+});

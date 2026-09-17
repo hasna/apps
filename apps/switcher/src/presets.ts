@@ -11,13 +11,19 @@ const preset = (id: string, name: string, protocols: Route[], sources: string[],
 
 // These entries describe upstream contracts, not proof of successful live inference.
 export const providerPresets: readonly ProviderPreset[] = [
+  ...(["opencode", "opencode-go"] as const).map(id => preset(id, id === "opencode" ? "OpenCode Zen" : "OpenCode Go",
+    (["openai-chat", "openai-responses", "anthropic-messages"] as const).map(protocol => route(protocol,
+      id === "opencode" ? "https://opencode.ai/zen/v1" : "https://opencode.ai/zen/go/v1", {
+        authStyle: protocol === "anthropic-messages" ? "x-api-key" : "bearer", catalogAuthStyle: "none",
+        notes: ["Discovers the full live catalog. Claude requests are adapted to each model's documented native endpoint. Other harnesses require models compatible with their selected protocol. Go requires an active subscription and coding-agent session headers."],
+      })), ["https://opencode.ai/docs/zen/", "https://opencode.ai/docs/go/"], "OPENCODE_API_KEY")),
   preset("deepseek", "DeepSeek", [
     route("openai-chat", "https://api.deepseek.com", {catalogBaseUrl: "https://api.deepseek.com"}),
     route("openai-responses", "https://api.deepseek.com", {catalogBaseUrl: "https://api.deepseek.com"}),
     route("anthropic-messages", "https://api.deepseek.com/anthropic/v1", {catalogBaseUrl: "https://api.deepseek.com"}),
   ], ["https://api-docs.deepseek.com/guides/anthropic_api", "https://api-docs.deepseek.com/api/list-models", "https://api-docs.deepseek.com/updates/", "https://api-docs.deepseek.com/guides/responses_api/"], "DEEPSEEK_API_KEY"),
   preset("openrouter", "OpenRouter", ["openai-chat", "openai-responses", "anthropic-messages"].map(protocol =>
-    route(protocol as Protocol, "https://openrouter.ai/api/v1", {catalogAuthStyle: "none"})),
+    route(protocol as Protocol, "https://openrouter.ai/api/v1", {catalogAuthStyle: "none",credentialCheck:{method:"GET",path:"key"}})),
     ["https://openrouter.ai/docs/api/api-reference/models/list-all-models-and-their-properties", "https://openrouter.ai/docs/guides/overview"], "OPENROUTER_API_KEY"),
   preset("anthropic", "Anthropic", [route("anthropic-messages", "https://api.anthropic.com/v1", {authStyle: "x-api-key"})],
     ["https://platform.claude.com/docs/en/api/overview", "https://platform.claude.com/docs/en/api/models/list"], "ANTHROPIC_API_KEY"),
@@ -115,6 +121,7 @@ export function providerFromPreset(presetId: string, options: PresetOptions = {}
   return parse(providerInputSchema, {
     id: options.id ?? `${preset.id}-${suffix}`, name: preset.name, baseUrl, protocol: selected.protocol,
     credentialEnv: options.credentialEnv ?? preset.credentialEnv, authStyle: options.authStyle ?? selected.authStyle,
+    credentialCheck:selected.credentialCheck,
     catalogBaseUrl, catalogCredentialEnv: options.catalogCredentialEnv,
     catalogAuthStyle: options.catalogAuthStyle ?? selected.catalogAuthStyle,
     catalogFormat: options.catalogFormat ?? selected.catalogFormat, catalogAccountId: options.catalogAccountId,

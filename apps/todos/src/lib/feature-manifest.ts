@@ -212,7 +212,6 @@ export const ALL_MCP_TOOLS = [
   "export_todos_md",
   "export_verification_evidence",
   "extend_task",
-  "extract_todos",
   "fail_agent_run",
   "fail_task",
   "find_duplicate_tasks",

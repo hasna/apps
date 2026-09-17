@@ -8,6 +8,7 @@ import type {SwitcherClient} from "../src/sdk";
 import {SwitcherError} from "../src/sdk";
 import {providerFromPreset} from "../src/presets";
 import {resolveLaunchProvider} from "../src/direct-launch";
+import {providerCredentialFingerprint} from "../src/provider-credential-onboarding";
 test("Gemini auth mismatch is rejected before discovery or credential lookup",async()=>{
   let touched=false;
   const client={
@@ -157,6 +158,17 @@ test("a changed API launch plan is checked again before local credential lookup"
   expect(credentialRead).toBe(false);
 });
 
+test("a provider authority change after credential preflight is rejected before credential lookup",async()=>{
+  let credentialRead=false;
+  const authenticated={id:"fixture",name:"Fixture",baseUrl:"https://provider.example/v1",protocol:"openai-responses" as const,authStyle:"bearer" as const,credentialEnv:"SWITCHER_PROVIDER_TEST"};
+  const client={
+    getProfile:async()=>({harness:"codex",providerId:"fixture",model:"fixture-model"}),
+    launchPlan:async()=>({profile:{harness:"codex",model:"fixture-model"},provider:{...authenticated,baseUrl:"https://changed.example/v1"},catalog:{models:[{id:"fixture-model",name:"Fixture"}]},warnings:[]}),
+  } as unknown as SwitcherClient;
+  await expect(launch(client,"changed",{refresh:false,credentialPreflight:providerCredentialFingerprint(authenticated),resolveCredential:async()=>{credentialRead=true;return "fixture";}})).rejects.toMatchObject({code:"credential_preflight_changed"});
+  expect(credentialRead).toBe(false);
+});
+
 
 test.skipIf(process.platform === "win32")("launch timeout covers Prime readiness and finalizes a late run without starting the client",async()=>{
   const root=join(homedir(),"Workspace/scratch/switcher-tests");await mkdir(root,{recursive:true});const dir=await mkdtemp(join(root,"prime-timeout-"));const runtime=join(homedir(),"Workspace/scratch/u");await mkdir(runtime,{recursive:true});
@@ -201,11 +213,13 @@ await Bun.write(${JSON.stringify(started)},'started');process.exit(7);
   const client={
     getProfile:async()=>({providerId:'fixture',harness:'codex',model:'fixture-model'}),refreshModels:async()=>{},
     launchPlan:async()=>({planToken:'${"b".repeat(64)}',profile:{harness:'codex',model:'fixture-model'},provider:{baseUrl:'http://127.0.0.1:1/v1',protocol:'openai-responses'},catalog:{models:[{id:'fixture-model',name:'Fixture'}],refreshedAt:new Date().toISOString(),source:'manual'},warnings:[]}),
-    createRun:async()=>{await Bun.sleep(700);return {id:'late-run',version:3};},finishRun:async(_id:string,_version:number,body:any)=>{records.push(body);},
+    // Leave time for native configuration discovery on loaded workstations;
+    // cancellation must happen during createRun, not during preparation.
+    createRun:async()=>{await Bun.sleep(2500);return {id:'late-run',version:3};},finishRun:async(_id:string,_version:number,body:any)=>{records.push(body);},
   } as unknown as SwitcherClient;
   try {
     let error:any;
-    try { await launch(client,'fixture',{executable,cwd:dir,stateDir:join(dir,'state'),resolveCredential:async()=> 'fixture-key',timeoutMs:500,refresh:false}); }
+    try { await launch(client,'fixture',{executable,cwd:dir,stateDir:join(dir,'state'),resolveCredential:async()=> 'fixture-key',timeoutMs:2000,refresh:false}); }
     catch (caught) { error=caught; }
     expect(error).toMatchObject({code:'interrupted',exitCode:143});
     expect(records).toEqual([{status:'interrupted',exitCode:143,routingEvents:[],routingEventsDropped:0}]);
@@ -287,7 +301,7 @@ const fixture=${JSON.stringify(executable)};
 const client={getProfile:async()=>({providerId:'fixture',harness:'prime-agent',model:'fixture-model'}),refreshModels:async()=>({}),launchPlan:async()=>({planToken:'${"a".repeat(64)}',profile:{harness:'prime-agent',model:'fixture-model'},provider:{baseUrl:'http://127.0.0.1:1/v1',protocol:'openai-chat',authStyle:'bearer'},catalog:{models:[{id:'fixture-model',name:'Fixture',supportedParameters:['tools'],inputModalities:['text'],outputModalities:['text']}],refreshedAt:new Date().toISOString(),source:'manual'},warnings:[]}),createRun:async()=>({id:'fixture',version:1}),finishRun:async()=>{}};
 try{const code=await launch(client,'fixture',{executable:fixture,cwd:${JSON.stringify(dir)},stateDir:${JSON.stringify(join(dir,"state"))},refresh:false});process.exitCode=code}catch(error){console.error(error);process.exitCode=error?.exitCode??1}
 `);
-  const child=spawn(process.execPath,[runner],{cwd:dir,env:{...process.env,TMPDIR:runtime,HASNA_SWITCHER_HOME:join(dir,"home"),SWITCHER_PROVIDER_FIXTURE:"fixture-key"},stdio:["ignore","pipe","pipe"]});
+  const child=spawn(process.execPath,[runner],{cwd:dir,env:{...process.env,TMPDIR:runtime,HASNA_SWITCHER_LOCAL:"1",HASNA_SWITCHER_HOME:join(dir,"home"),SWITCHER_PROVIDER_FIXTURE:"fixture-key"},stdio:["ignore","pipe","pipe"]});
   let stderr="";child.stderr?.on("data",chunk=>{stderr+=chunk.toString()});
   try {
     const deadline=Date.now()+5000;while(Date.now()<deadline){try{await readFile(spawned);break}catch{await Bun.sleep(10)}}

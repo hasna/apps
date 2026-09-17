@@ -113,6 +113,7 @@ import {
   type WorkspaceFilter,
 } from "../db/workspaces.js";
 import {
+  createHasnaStorageClient,
   resolveStorageClient,
   type HasnaStorageClient,
 } from "@hasna/contracts/client/storage";
@@ -121,9 +122,9 @@ import {
   credentialDiskSources,
 } from "@hasna/contracts/client";
 import type { CredentialChainOptions } from "../types/client-types.js";
-import { selectsProjectsLocalStore } from "../lib/local-opt-in.js";
+import { PROJECTS_LOCAL_OPT_IN_ENV_KEYS, selectsProjectsLocalStore } from "../lib/local-opt-in.js";
 import type { HasnaHttpTransport, HasnaRequestOptions, QueryParams } from "@hasna/contracts/client";
-import { getDbPath } from "../db/database.js";
+import { allowLocalStore, getDbPath, refuseLocalStore } from "../db/database.js";
 import { basename } from "node:path";
 import {
   isProjectDirectory,
@@ -341,14 +342,25 @@ export interface AcquireLockInput {
 
 /**
  * Operations that only exist on-box. Agent assignments, extra disk locations
- * and mutation locks are now modeled by the hosted /v1 API; project budgets
- * and spend remain machine-local sub-resources with no hosted routes, so any
- * budget/spend access (reads included) in the hosted transport throws this rather than
- * silently writing local sqlite or returning an empty ledger (split-brain).
+ * and mutation locks are modeled by the hosted /v1 API; project budgets and
+ * spend, the per-project app store (data models/records, loop links, `store
+ * inspect`) and tmux profiles live in on-box SQLite files with no hosted
+ * routes. Under a hosted credential no code path may open SQLite (owner ruling
+ * 2026-09-07, hasna/apps#1720), so every such access in the hosted transport
+ * throws this — a `REMOTE_COMMAND_UNSUPPORTED` refusal naming the explicit
+ * local opt-in — rather than silently reading/writing a local file the hosted
+ * project does not own, or returning an empty ledger (split-brain).
  */
-class LocalOnlyOperationError extends Error {
+export class LocalOnlyOperationError extends Error {
+  readonly code = "REMOTE_COMMAND_UNSUPPORTED";
   constructor(operation: string) {
-    super(`${operation} is a local-only operation and is not available in the hosted backend.`);
+    super(
+      `REMOTE_COMMAND_UNSUPPORTED: ${operation} is a local-only operation and is not available in the hosted backend. ` +
+      "It reads or writes the on-box SQLite store, which this run refuses because a hosted Projects authority " +
+      "is configured, and hosted Projects models no /v1 route for it. To use the machine-local store deliberately, " +
+      `run with ${PROJECTS_LOCAL_OPT_IN_ENV_KEYS[0]}=1 (alias ${PROJECTS_LOCAL_OPT_IN_ENV_KEYS[1]}=1) and no Projects ` +
+      "credential in the environment.",
+    );
     this.name = "LocalOnlyOperationError";
   }
 }
@@ -424,18 +436,15 @@ export interface ProjectStore {
   listEvents(idOrSlug: string, limit?: number): Promise<WorkspaceEvent[]>;
   /** Record an explicit audit event. Local writes sqlite; api POSTs to /projects/:id/events. */
   recordEvent(idOrSlug: string, input: RecordEventInput): Promise<WorkspaceEvent>;
-  /**
-   * Per-project agent assignments. This is an on-box sub-resource; the api
-   * transport does not model it server-side and returns an empty list.
-   */
+  /** Per-project agent assignments. Readable from both registry transports. */
   getProjectAgents(id: string): Promise<WorkspaceAgentAssignment[]>;
-  /** Assign a registered agent to a project role. Local-only (throws in the hosted transport). */
+  /** Assign a registered agent to a project role (both registry transports; hosted: /v1/projects/:id/agents). */
   assignAgent(idOrSlug: string, input: AssignAgentInput): Promise<WorkspaceAgentAssignment>;
   /** Per-project registered locations. Readable from both registry transports. */
   getProjectLocations(id: string): Promise<WorkspaceLocation[]>;
   /** Registry of canonical machines (roles: mirror-hub | assignable | avoid). */
   listMachines(): Promise<Machine[]>;
-  /** Register another on-disk location for a project. Local-only (throws in the hosted transport). */
+  /** Register another on-disk location for a project (both registry transports; hosted: /v1/projects/:id/locations). */
   addLocation(idOrSlug: string, input: AddLocationInput): Promise<AddLocationResult>;
 
   // ---- Mutation locks (machine-local coordination) ----
@@ -557,26 +566,20 @@ function withLock<T>(workspaceId: string, ctx: MutationContext | undefined, reas
 }
 
 /**
- * tmux profiles are a machine-local runtime resource. tmux always runs on THIS
- * box, so its saved window-layout profiles resolve against local sqlite in
- * BOTH transports (local and HTTP) — they are not shared hosted state.
- * Both Store transports delegate here so the "route through the Store"
- * invariant holds (no command touches sqlite directly) without pretending
- * profiles live on the hosted backend.
- */
-/**
  * The per-project app store is a machine-local sqlite FILE at
- * $HASNA_PROJECTS_HOME/data/<project_id>/project.db. It is keyed by the SAME
- * project id in both transports, and the projects API server models none of it
- * — there is no /v1 loop, data-model or app-store route to call.
+ * $HASNA_PROJECTS_HOME/data/<project_id>/project.db, and tmux profiles are a
+ * machine-local runtime registry in projects.db. The projects API server
+ * models neither — there is no /v1 loop, data-model, app-store or tmux-profile
+ * route to call.
  *
- * So both transports resolve it against local sqlite, exactly as tmux profiles
- * do above. The HTTP transport previously answered these reads from a hardcoded
- * empty summary on the premise that the file "does not hold the hosted project's
- * data"; that premise was wrong (same id, same file), and it made every read
- * vacuous — `loops list` returned `loops: []` and `store inspect` reported
- * `exists: false` / `loop_links: 0` against stores holding real rows, at rc=0,
- * with no input that could ever produce a non-empty answer. See todos 4c17afb1.
+ * ONLY the local transport (the explicit HASNA_PROJECTS_LOCAL opt-in) delegates
+ * here. The hosted transport used to bind these same implementations, which
+ * opened on-box SQLite under a HOSTED credential — the split-brain the
+ * 2026-09-07 fail-closed ruling forbids (hasna/apps#1720) — so it now refuses
+ * them with LocalOnlyOperationError instead (see ApiProjectStore). The
+ * "route through the Store" invariant still holds: no command touches sqlite
+ * directly, and the local store keeps reading the real file (never a vacuous
+ * empty summary; see todos 4c17afb1).
  */
 const machineLocalAppStore = {
   listDataModels: async (project: Workspace): Promise<ProjectDataModel[]> => dbListProjectDataModels(project),
@@ -1705,21 +1708,56 @@ class ApiProjectStore implements ProjectStore {
     return [];
   }
 
-  // ---- App store (machine-local sqlite in BOTH transports; see shared impl) ----
-  // Budgets/spend are NOT part of this machine-local set: they are an on-box
-  // ledger (project_registry sqlite) that the hosted server does NOT model —
-  // route() dispatches projects/roots/agents/locks/recipes/machines and falls
-  // through to 404 for budgets — so every budget read/write in the hosted transport throws
-  // LocalOnlyOperationError rather than silently returning an empty ledger.
-  listDataModels = machineLocalAppStore.listDataModels;
-  createDataModel = machineLocalAppStore.createDataModel;
-  listDataRecords = machineLocalAppStore.listDataRecords;
-  createDataRecord = machineLocalAppStore.createDataRecord;
-  listLoopLinks = machineLocalAppStore.listLoopLinks;
-  linkLoop = machineLocalAppStore.linkLoop;
-  listLoopSummaries = machineLocalAppStore.listLoopSummaries;
-  inspectAppStore = machineLocalAppStore.inspectAppStore;
-  inspectAppStoreWithLoops = machineLocalAppStore.inspectAppStoreWithLoops;
+  // ---- App store, budgets/spend, tmux profiles: on-box SQLite, REFUSED here ----
+  // The per-project app store (data models/records, loop links, `store
+  // inspect`), the budget/spend ledger and the tmux profile registry live in
+  // on-box SQLite files (~/.hasna/projects/data/<id>/project.db and
+  // projects.db), and hosted Projects models none of them: route() dispatches
+  // projects/roots/agents/locks/recipes/machines and falls through to 404 for
+  // everything else. Under a hosted credential no code path may open SQLite
+  // (owner ruling 2026-09-07, hasna/apps#1720), so every access refuses with
+  // REMOTE_COMMAND_UNSUPPORTED naming the explicit local opt-in, instead of
+  // reading or creating a local file on a hosted station. Before this the
+  // hosted store bound the app store and tmux families to the machine-local
+  // implementations while budgets threw — five resource families fell through
+  // to SQLite under a HOSTED credential (fleet-alignment T1 §3.5). Porting them
+  // to /v1 is tracked as PORT-TO-API work; refusing honestly is the
+  // fail-closed shape until then.
+  async listDataModels(): Promise<ProjectDataModel[]> {
+    throw new LocalOnlyOperationError("list project data models");
+  }
+
+  async createDataModel(): Promise<ProjectDataModel> {
+    throw new LocalOnlyOperationError("create project data model");
+  }
+
+  async listDataRecords(): Promise<ProjectDataRecord[]> {
+    throw new LocalOnlyOperationError("list project data records");
+  }
+
+  async createDataRecord(): Promise<ProjectDataRecord> {
+    throw new LocalOnlyOperationError("create project data record");
+  }
+
+  async listLoopLinks(): Promise<ProjectLoopLink[]> {
+    throw new LocalOnlyOperationError("list project loop links");
+  }
+
+  async linkLoop(): Promise<ProjectLoopLink> {
+    throw new LocalOnlyOperationError("link a loop to a project");
+  }
+
+  async listLoopSummaries(): Promise<ProjectLoopSummary[]> {
+    throw new LocalOnlyOperationError("list project loop summaries");
+  }
+
+  async inspectAppStore(): Promise<ProjectStoreSummary> {
+    throw new LocalOnlyOperationError("inspect the project app store");
+  }
+
+  async inspectAppStoreWithLoops(): Promise<ProjectStoreSummary> {
+    throw new LocalOnlyOperationError("inspect the project app store");
+  }
 
   async createBudget(): Promise<ProjectBudget> {
     throw new LocalOnlyOperationError("create project budget");
@@ -1741,14 +1779,25 @@ class ApiProjectStore implements ProjectStore {
     throw new LocalOnlyOperationError("record project spend");
   }
 
-  // tmux profiles are a machine-local runtime resource (tmux runs on THIS box),
-  // so even in the hosted backend they resolve against local sqlite rather than a
-  // nonexistent hosted endpoint. See machineLocalTmuxProfiles.
-  listTmuxProfiles = machineLocalTmuxProfiles.listTmuxProfiles;
-  getTmuxProfile = machineLocalTmuxProfiles.getTmuxProfile;
-  createTmuxProfile = machineLocalTmuxProfiles.createTmuxProfile;
-  addTmuxProfileWindow = machineLocalTmuxProfiles.addTmuxProfileWindow;
-  listTmuxProfileWindows = machineLocalTmuxProfiles.listTmuxProfileWindows;
+  async listTmuxProfiles(): Promise<TmuxProfile[]> {
+    throw new LocalOnlyOperationError("list tmux profiles");
+  }
+
+  async getTmuxProfile(): Promise<TmuxProfile | null> {
+    throw new LocalOnlyOperationError("read a tmux profile");
+  }
+
+  async createTmuxProfile(): Promise<TmuxProfile> {
+    throw new LocalOnlyOperationError("create a tmux profile");
+  }
+
+  async addTmuxProfileWindow(): Promise<TmuxProfileWindow> {
+    throw new LocalOnlyOperationError("add a tmux profile window");
+  }
+
+  async listTmuxProfileWindows(): Promise<TmuxProfileWindow[]> {
+    throw new LocalOnlyOperationError("list tmux profile windows");
+  }
 
   // Channel derivation is pure and ensure writes no project record; the audit
   // event routes through this same HTTP transport (recordEvent) so it lands on
@@ -1904,15 +1953,51 @@ export function resolveProjectStore(
     fetchImpl,
     ...(options.credentials ? { credentials: options.credentials } : {}),
   });
-  const httpStore: ProjectStore = new ApiProjectStore({
-    ...resolved.client,
-    transport: enrichSeamTransport(resolved.client.transport),
-  });
+  // Build the storage client FROM the enriched transport. The seam's client
+  // closes over the transport it was constructed with inside its
+  // list/get/create/update/delete methods, so swapping only the `transport`
+  // PROPERTY left every `client.*` call (updateProject among them) on the raw
+  // transport and the server's reason never reached the operator: `update
+  // --canonical-machine station03` printed "PATCH /projects/<id> -> 400" with
+  // no detail while the body said "Machine not found: station03" (live report
+  // 2026-09-11). Now every path — client methods and direct transport calls —
+  // carries the bounded body detail.
+  const httpStore: ProjectStore = new ApiProjectStore(
+    createHasnaStorageClient(resolved.client.name, enrichSeamTransport(resolved.client.transport)),
+  );
+  if (env === process.env) {
+    // The AMBIENT environment resolved a hosted authority: from here on no
+    // call in this process may open the on-box SQLite registry or a
+    // per-project project.db — not a stray ensureCliAgent(), not `store
+    // ensure`, not a library helper defaulting to getDatabase(). One choke
+    // point (getDatabase and the project.db openers) makes "no local SQLite
+    // under a hosted credential" true by construction (pattern: todos #1942).
+    refuseLocalStore(hostedLocalStoreRefusal(env, resolved.client.baseUrl));
+  }
   if (cacheable) cached = httpStore;
   return httpStore;
 }
 
-/** Test/di seam: clear the process-env cached store. */
+/**
+ * The one line every refused on-box open carries under a hosted credential.
+ * Names the authority and the credential tiers that selected it, plus the
+ * opt-in — never a value.
+ */
+function hostedLocalStoreRefusal(env: Env, authority: string): string {
+  const keys = clientTransportEnvKeys(APP);
+  const diskPaths = credentialDiskSources(APP, env);
+  const disk = diskPaths.length > 0 ? diskPaths.join(" or ") : "the credentials file";
+  return (
+    `REMOTE_COMMAND_UNSUPPORTED: projects refuses to open the on-box SQLite store because this run resolved a ` +
+    `hosted Projects authority (${authority}) from ${keys.apiKeyKeys[0]}, the Keychain item ` +
+    `hasna.credentials.${APP}.api-key or ${disk}. This command (or part of it) is local-only and has no hosted ` +
+    `/v1 route. To use the machine-local store deliberately, run with ${PROJECTS_LOCAL_OPT_IN_ENV_KEYS[0]}=1 ` +
+    `(alias ${PROJECTS_LOCAL_OPT_IN_ENV_KEYS[1]}=1) and no Projects credential in the environment.`
+  );
+}
+
+/** Test/di seam: clear the process-env cached store and lift the hosted local-store refusal. */
 export function __resetProjectStore(): void {
   cached = null;
+  allowLocalStore();
 }

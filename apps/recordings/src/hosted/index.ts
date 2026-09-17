@@ -1,11 +1,15 @@
 import * as contract from "../contracts/hosted-v1.js";
+import * as audioContract from "../contracts/audio-v1.js";
 import { recordingIDParser } from "../contracts/stream-v1.js";
-import { input, output, Transport, type ClientOptions, type RequestOptions } from "./transport.js";
-export { RecordingsSDKError, type SDKErrorCode, type CredentialProvider, type ClientOptions, type RequestOptions } from "./transport.js";
-export { HostedLibrary, type HostedLibraryOptions, type HostedLibraryRecording, type HostedLibraryPage } from "./library.js";
+import { input, output, Transport, type ClientOptions, type HostedAudioDownloadOptions, type HostedAudioDownloadResponse, type HostedAudioUploadInput, type RequestOptions } from "./transport.js";
+export { RecordingsSDKError, type SDKErrorCode, type CredentialProvider, type ClientOptions, type RequestOptions, type AudioBody, type HostedAudioDownloadOptions, type HostedAudioDownloadResponse, type HostedAudioRange, type HostedAudioUploadInput, type AudioDownloadOptions, type AudioDownloadResponse, type AudioRange, type AudioUploadInput } from "./transport.js";
+export { HostedLibrary, type HostedLibraryOptions, type HostedLibraryRecording, type HostedLibraryPage, type HostedTranscriptExport } from "./library.js";
+export { HostedPasteHistory, type HostedPasteHistoryOptions, type HostedPasteHistoryReceipt, type HostedPasteHistoryPage } from "./paste-history.js";
+export { AUDIO_FORMAT, WAV_HEADER_BYTES, MAX_PCM_BYTES, MAX_AUDIO_BYTES } from "../contracts/audio-v1.js";
+export type { HostedAudioFormat, HostedAudioDescriptor, HostedAudioAvailable, HostedAudioUnavailable, HostedAudioMetadata } from "../contracts/audio-v1.js";
 export type { HostedRecordingInput as RecordingInput, HostedRecording as Recording, HostedPasteInput as PasteInput,
   HostedPasteReceipt as PasteReceipt, HostedAccount as Account, HostedAccountResponse as AccountResponse,
-  HostedPageOptions as PageOptions } from "../contracts/hosted-v1.js";
+  HostedPageOptions as PageOptions, HostedProvidersResponse, HostedTranscriptionProvider, HostedTranscriptionModel } from "../contracts/hosted-v1.js";
 export interface Cursor { before: string; beforeId: string }
 export type DeletionResult = { state: "removed" } | { state: "pending" };
 /** Explicit cursor for the last received row. No extra request or inferred total. */
@@ -19,6 +23,8 @@ export class HostedRecordingsClient {
   get apiBase(): string { return this.#transport.base; }
   async health(options?: RequestOptions) { return output(contract.healthResponseParser, (await this.#transport.request("GET", "/health", false, [200], undefined, options)).data); }
   async version(options?: RequestOptions) { return output(contract.versionResponseParser, (await this.#transport.request("GET", "/version", false, [200], undefined, options)).data); }
+  /** Read server-configured transcription choices. No provider calls or inferred defaults. */
+  async providers(options?: RequestOptions) { return output(contract.providersResponseParser, (await this.#transport.request("GET", "/providers", true, [200], undefined, options)).data); }
   async ready(options?: RequestOptions) { return output(contract.readyResponseParser, (await this.#transport.request("GET", "/ready", true, [200], undefined, options)).data); }
   async account(options?: RequestOptions) { return output(contract.accountResponseParser, (await this.#transport.request("GET", "/account", true, [200], undefined, options)).data); }
   /** Caller owns broker OAuth/PKCE. Profile authority comes from the opaque bearer session. */
@@ -31,6 +37,18 @@ export class HostedRecordingsClient {
   }
   async getRecording(id: string, options?: RequestOptions) {
     return output(contract.recordingResponseParser, (await this.#transport.request("GET", "/recordings/" + input(recordingIDParser, id), true, [200], undefined, options)).data);
+  }
+  async getAudioMetadata(id: string, options?: RequestOptions) {
+    return output(audioContract.audioMetadataParser, (await this.#transport.request("GET", "/recordings/" + input(recordingIDParser, id) + "/audio/metadata", true, [200], undefined, options)).data);
+  }
+  async uploadAudio(id: string, upload: HostedAudioUploadInput, options?: RequestOptions) {
+    return output(audioContract.audioMetadataParser, (await this.#transport.requestAudioUpload("/recordings/" + input(recordingIDParser, id) + "/audio", upload, options)).data);
+  }
+  async downloadAudio(id: string, rangeOrOptions?: string | HostedAudioDownloadOptions, options?: RequestOptions): Promise<HostedAudioDownloadResponse> {
+    const request: HostedAudioDownloadOptions = typeof rangeOrOptions === "string"
+      ? { ...options, range: rangeOrOptions }
+      : (rangeOrOptions ?? options ?? {});
+    return this.#transport.requestAudioDownload("/recordings/" + input(recordingIDParser, id) + "/audio", request);
   }
   async saveRecording(value: contract.HostedRecordingInput, options?: RequestOptions) {
     return output(contract.recordingResponseParser, (await this.#transport.request("POST", "/recordings", true, [201], input(contract.recordingInputParser, value), options)).data);

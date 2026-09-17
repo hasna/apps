@@ -33,8 +33,9 @@ describe("todos MCP HTTP transport", () => {
     dbPath = join(tmpDir, "test.db");
     process.env["TODOS_DB_PATH"] = dbPath;
     process.env["TODOS_AUTO_PROJECT"] = "false";
-    // Mirrors `todos-mcp --http`: loopback-pinned transport, anonymous local plane
-    // opted into explicitly (see src/mcp/index.ts).
+    // `todos-serve` is the only process that serves the MCP Streamable HTTP
+    // endpoint (`todos-mcp --http` is refused, exit 2): loopback-pinned, anonymous
+    // local plane opted into explicitly for this test.
     await startServer(port, { host: "127.0.0.1", allowAnonymous: true });
   }, SERVER_HOOK_TIMEOUT_MS);
 

@@ -1172,3 +1172,81 @@ describe.skipIf(!pgClient)("tenant-scoped key issuance (WI-2e)", () => {
     expect(revoke.status).toBe(200);
   });
 });
+
+
+describe.skipIf(!pgClient)("outbound-only tenant alongside an existing inbound domain", () => {
+  it("requires verified provisioning, binds provider authority, and preserves the default inbound route", async () => {
+    const { deps, sent } = makeDeps();
+    const tenant = await makeTenant("outbound-only-scope-proof");
+    const domainName = "scope-proof.example";
+    const defaultStore = deps.store.forTenant(DEFAULT_TENANT_ID);
+    const existingDomain = await defaultStore.createDomain({ domain: domainName, status: "inbound_ready", verified: true });
+    const existingAddress = await defaultStore.createAddress({ email: `inbox@${domainName}`, status: "active", verified: false });
+    const inboundBefore = await deps.store.resolveInboundRecipients([`inbox@${domainName}`]);
+    const provider = await call(deps, "POST", "/v1/providers", {
+      token: tenant.token, body: { name: "outbound-only-fixture", type: "ses", active: true },
+    });
+    expect(provider.status).toBe(201);
+    const providerId = provider.body.id;
+    expect(typeof providerId).toBe("string");
+    const verifyCalls: string[] = [];
+    deps.resolveSender = (tenantId, selectedProvider) => tenantId === tenant.tenantId && selectedProvider === providerId ? {
+      provider: "ses",
+      send: deps.sender!.send,
+      verifyDomain: async (domain) => {
+        verifyCalls.push(domain);
+        return { dkim: "verified", spf: "verified", dmarc: "pending", verifiedForSending: true };
+      },
+    } : null;
+    const pending = await call(deps, "POST", "/v1/domains", {
+      token: tenant.token, body: { domain: domainName, provider: providerId, status: "pending", verified: false },
+    });
+    expect(pending.status).toBe(201);
+    const domainId = pending.body.domain.id;
+    const verified = await call(deps, "POST", `/v1/domains/${domainId}/verify`, { token: tenant.token, body: { provider_id: providerId } });
+    expect(verified).toMatchObject({ status: 200, body: { domain: { status: "pending", verified: true, provisioning_status: "none" } } });
+    expect(verifyCalls).toEqual([domainName]);
+    const address = await call(deps, "POST", "/v1/addresses", {
+      token: tenant.token, body: { email: `noreply@${domainName}`, provider_id: providerId },
+    });
+    expect(address).toMatchObject({ status: 201, body: { address: { status: "active", verified: true, provisioning_status: "none" } } });
+    const principal = mintApiKey({ app: "emails", scopes: ["emails:read", "emails:write"], signingSecret: SIGNING_SECRET });
+    await pgClient!.execute("INSERT INTO api_key_tenants (kid, tenant_id) VALUES ($1, $2)", [principal.kid, tenant.tenantId]);
+    const me = await call(deps, "GET", "/v1/me", { token: principal.token });
+    expect(me).toMatchObject({ status: 200, body: { principal_type: "apikey", tenant: { id: tenant.tenantId } } });
+    const payload = { from: `noreply@${domainName}`, to: ["receiver@example.net"], subject: "owned outbound scope", text: "fixture only", provider_id: providerId, idempotency_key: crypto.randomUUID() };
+    const send = (body: unknown = payload) => call(deps, "POST", "/v1/messages/send", { token: principal.token, body });
+    expect(await send()).toMatchObject({ status: 403, body: { reason: "sender_not_ready" } });
+    expect(sent).toHaveLength(0);
+    const provisioned = await call(deps, "PATCH", `/v1/domains/${domainId}`, { token: tenant.token, body: { provisioning_status: "verified" } });
+    expect(provisioned).toMatchObject({ status: 200, body: { domain: { status: "pending", verified: true, provisioning_status: "verified" } } });
+    // A refused send remains terminal under its original idempotency key.
+    expect(await send()).toMatchObject({ status: 409, body: { reason: "sender_not_ready", retry_safe: false } });
+    expect(sent).toHaveLength(0);
+    payload.idempotency_key = crypto.randomUUID();
+    const accepted = await send();
+    expect(accepted).toMatchObject({ status: 202, body: { sent: true, provider: "ses", message: { provider_id: providerId, send_state: "sent" } } });
+    expect(sent).toHaveLength(1);
+    const replay = await send();
+    expect(replay).toMatchObject({ status: 200, body: { sent: true, idempotent_replay: true, provider: "ses" } });
+    expect(replay.body.message.id).toBe(accepted.body.message.id);
+    expect(sent).toHaveLength(1);
+    expect((await send({ ...payload, subject: "different payload" })).status).toBe(409);
+    expect(sent).toHaveLength(1);
+    const foreign = await makeTenant("outbound-only-foreign");
+    const foreignProvider = await call(deps, "POST", "/v1/providers", { token: foreign.token, body: { name: "foreign-fixture", type: "ses", active: true } });
+    expect(foreignProvider.status).toBe(201);
+    expect((await send({ ...payload, provider_id: foreignProvider.body.id, idempotency_key: crypto.randomUUID() })).status).toBe(404);
+    expect((await send({ ...payload, from: `inbox@${domainName}`, idempotency_key: crypto.randomUUID() })).status).toBe(403);
+    expect(sent).toHaveLength(1);
+    const conflict = await call(deps, "POST", `/v1/domains/${domainId}/enable-outbound`, { token: tenant.token, body: { provider_id: providerId } });
+    expect(conflict).toMatchObject({ status: 409, body: { reason: "inbound_route_conflict" } });
+    expect(JSON.parse(JSON.stringify(await deps.store.forTenant(tenant.tenantId).getDomain(domainId)))).toEqual(provisioned.body.domain);
+    expect(await defaultStore.getDomain(existingDomain.id)).toEqual(existingDomain);
+    expect(await defaultStore.getAddress(existingAddress.id)).toEqual(existingAddress);
+    expect(await deps.store.resolveInboundRecipients([`inbox@${domainName}`])).toEqual(inboundBefore);
+    const inbound = await ingestS3Object({ store: deps.store, fetchObject: async () => Buffer.from(`From: sender@example.net\r\nTo: inbox@${domainName}\r\nSubject: scope fixture\r\n\r\nfixture`), now: () => new Date().toISOString() }, "fixture-bucket", `fixture/${crypto.randomUUID()}`, { recipients: [`inbox@${domainName}`] });
+    expect(inbound).toMatchObject({ status: "ingested", tenant_ids: [DEFAULT_TENANT_ID] });
+    expect(sent).toHaveLength(1);
+  });
+});

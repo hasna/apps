@@ -28,9 +28,63 @@ function ensureDir(filePath: string): void {
 let _db: Database | null = null;
 let _dbPath: string | null = null;
 
+/**
+ * A process-wide refusal of the on-box SQLite store, installed by
+ * `resolveProjectStore()` the moment the AMBIENT environment resolves a HOSTED
+ * Projects authority (owner ruling 2026-09-07, hasna/apps#1720; pattern: todos
+ * #1942).
+ *
+ * Why a choke point rather than a guard in every caller: 80+ call sites reach
+ * `getDatabase()` from the CLI, the MCP server and the library helpers, and a
+ * hand-maintained list of "local-only" verbs is exactly what let a hosted
+ * station open `~/.hasna/projects/projects.db` for tmux profiles, a stray
+ * `ensureCliAgent()`, `sessions`, or `~/.hasna/projects/data/<id>/project.db`
+ * for data models, loop links and `store ensure`. Every registry open funnels
+ * through here (and every project.db open through `assertLocalStoreAllowed`),
+ * so refusing HERE makes "no local SQLite under a hosted credential" true by
+ * construction. The refusal names only sources and the opt-in, never a value.
+ */
+let localStoreRefusal: string | null = null;
+
+/** Refuse every on-box SQLite open for the rest of this process. */
+export function refuseLocalStore(message: string): void {
+  localStoreRefusal = message;
+}
+
+/** Lift a refusal installed by {@link refuseLocalStore}. Test seam (`__resetProjectStore`). */
+export function allowLocalStore(): void {
+  localStoreRefusal = null;
+}
+
+/** True while {@link refuseLocalStore} is in force for this process. */
+export function isLocalStoreRefused(): boolean {
+  return localStoreRefusal !== null;
+}
+
+/** The typed refusal: `REMOTE_COMMAND_UNSUPPORTED`, same code the hosted store uses for local-only verbs. */
+export class LocalStoreRefusedError extends Error {
+  readonly code = "REMOTE_COMMAND_UNSUPPORTED";
+  constructor(message: string) {
+    super(message);
+    this.name = "LocalStoreRefusedError";
+  }
+}
+
+/** Throw the installed refusal, if any. Called by every on-box SQLite opener. */
+export function assertLocalStoreAllowed(): void {
+  if (localStoreRefusal !== null) throw new LocalStoreRefusedError(localStoreRefusal);
+}
+
 export function getDb(): Database { return getDatabase(); }
 
 export function getDatabase(path?: string): Database {
+  // A hosted authority is being served by this process: nothing may open the
+  // on-box registry, not even with an explicit path (HASNA_PROJECTS_DB_PATH is
+  // still a local SQLite file). See refuseLocalStore. The one exception is an
+  // in-memory scratch database (`:memory:`): nothing on disk, nothing served,
+  // so it is not a local STORE — the hosted `create --dry-run` planner previews
+  // against one instead of opening projects.db.
+  if (path !== ":memory:") assertLocalStoreAllowed();
   if (path) {
     ensureDir(path);
     const db = new Database(path);

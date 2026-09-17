@@ -7,7 +7,9 @@ import {
   SLOW_TEST_TIMEOUT,
   runCli,
   runCliInCwd,
+  stderrWithoutLocalNotice,
 } from "./cli.test-utils";
+import { writeTestCatalog, TEST_CATALOG } from "../lib/private-corpus-test-utils.js";
 import { packSkillBundle } from "../lib/skill-bundle.js";
 
 import { useDefaultTestTimeout } from "../test-preload.js";
@@ -16,12 +18,12 @@ useDefaultTestTimeout();
 
 describe("CLI pin and search controls", () => {
   describe("pin", () => {
-    test("pins a legacy alias to the canonical skill name", async () => {
+    test("pins an owner-chosen slug without consulting retired aliases", async () => {
       const { existsSync, mkdtempSync, readFileSync, rmSync } = require("fs");
       const { tmpdir } = require("os");
       const tmpDir = mkdtempSync(require("path").join(tmpdir(), "cli-alias-install-"));
       try {
-        const { stdout, exitCode } = await runCliInCwd(["pin", "create-blog-article", "--json"], tmpDir, { HOME: tmpDir });
+        const { stdout, exitCode } = await runCliInCwd(["pin", "blog-article", "--json"], tmpDir);
         const data = JSON.parse(stdout);
         expect(exitCode).toBe(0);
         expect(data[0].skill).toBe("blog-article");
@@ -56,7 +58,7 @@ describe("CLI pin and search controls", () => {
     test("dry-run install emits JSON actions", async () => {
       const { stdout, stderr, exitCode } = await runCli(["pin", "brand-kit", "--dry-run", "--json"]);
       const data = JSON.parse(stdout);
-      expect(stderr).toBe("");
+      expect(stderrWithoutLocalNotice(stderr)).toBe("");
       expect(exitCode).toBe(0);
       expect(data.dryRun).toBe(true);
       expect(data.actions).toEqual([{ skill: "brand-kit", target: ".skills/project.json", action: "pin" }]);
@@ -130,6 +132,12 @@ describe("CLI pin and search controls", () => {
         fetch: (req) => {
           const path = new URL(req.url).pathname;
           expect(req.headers.get("authorization")).toBe("Bearer fixture-version-pin");
+          if (path === "/api/v1/profiles/default/resolve") {
+            const authority = `${new URL(req.url).origin}/api/v1`;
+            return Response.json({ profileId: "default", authority, workspaceId: "workspace-one", profileRevision: "revision-one", selections: [
+              { slug: "release-notes", version: "2.1.0", bundleDigest: `sha256:${packed.sha256}`, authority, workspaceId: "workspace-one", profileRevision: "revision-one" },
+            ] });
+          }
           if (path === "/api/v1/skills/release-notes") {
             return Response.json({ slug: "release-notes", displayName: "Release Notes", description: "Draft release notes", kind: "executable", version: "2.1.0", publishedSource: "custom", category: "Development Tools", tags: [] });
           }
@@ -164,6 +172,15 @@ describe("CLI pin and search controls", () => {
         const projectConfig = JSON.parse(readFileSync(join(tmpDir, ".skills", "project.json"), "utf-8"));
         expect(projectConfig.pinnedSkills).toEqual(["release-notes"]);
         expect(projectConfig.pins["release-notes"]).toMatchObject({ version: "2.1.0", source: "remote" });
+        const lock = JSON.parse(readFileSync(join(tmpDir, ".skills", "selection.lock.json"), "utf-8"));
+        expect(lock.profile.selections[0]).toMatchObject({ slug: "release-notes", version: "2.1.0", bundleDigest: `sha256:${packed.sha256}`, workspaceId: "workspace-one" });
+        const installed = await runCliInCwd(["install", "release-notes@2.1.0", "--project", "--json"], tmpDir, {
+          HOME: tmpDir, SKILLS_API_URL: `http://localhost:${server.port}/api/v1`, SKILLS_API_KEY: "fixture-version-pin",
+        });
+        expect(installed.exitCode).toBe(0);
+        expect(JSON.parse(installed.stdout).results[0]).toMatchObject({ success: true, selection: { slug: "release-notes", version: "2.1.0", bundleDigest: `sha256:${packed.sha256}` } });
+        expect(require("fs").existsSync(join(tmpDir, ".claude", "skills"))).toBe(false);
+        expect(require("fs").existsSync(join(tmpDir, ".codex", "skills"))).toBe(false);
       } finally {
         server.stop(true);
         rmSync(tmpDir, { recursive: true, force: true });
@@ -195,17 +212,16 @@ describe("CLI pin and search controls", () => {
     });
   });
 
-  describe("deprecated install/remove", () => {
-    test("install points skill pinning to the pin command", async () => {
-      const { stderr, exitCode } = await runCli(["install", "brand-kit"]);
-      expect(stderr).toContain("skills pin <name>");
+  describe("selected install and deprecated remove", () => {
+    test("install refuses local authoring content without an API profile", async () => {
+      const { stdout, exitCode } = await runCli(["install", "brand-kit", "--json"]);
+      expect(JSON.parse(stdout).error.code).toBe("SKILLS_CONTEXT_FAILED");
       expect(exitCode).not.toBe(0);
     });
 
-    test("install without args points to skills render", async () => {
-      const { stderr, exitCode } = await runCli(["install"]);
-      expect(stderr).toContain("skills render");
-      expect(stderr).not.toContain("skills mcp --register");
+    test("install without args requires an authoritative profile", async () => {
+      const { stdout, exitCode } = await runCli(["install", "--json"]);
+      expect(JSON.parse(stdout).error.code).toBe("SKILLS_CONTEXT_FAILED");
       expect(exitCode).not.toBe(0);
     });
 
@@ -217,7 +233,8 @@ describe("CLI pin and search controls", () => {
 
     test("shows install integration help", async () => {
       const { stdout } = await runCli(["install", "--help"]);
-      expect(stdout).toContain("skills render");
+      expect(stdout).toContain("verified API-selected bundles");
+      expect(stdout).toContain("--selection-profile");
       expect(stdout).not.toContain("skills setup agents");
     });
   });
@@ -244,16 +261,8 @@ describe("CLI pin and search controls", () => {
     const { tmpdir } = require("os");
 
     async function runCliInDir(args: string[], cwd: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-      const proc = Bun.spawn(["bun", "run", CLI_PATH, "--", ...args], {
-        stdout: "pipe",
-        stderr: "pipe",
-        cwd,
-        env: { ...process.env, NO_COLOR: "1" },
-      });
-      const stdout = await new Response(proc.stdout).text();
-      const stderr = await new Response(proc.stderr).text();
-      const exitCode = await proc.exited;
-      return { stdout, stderr, exitCode };
+      writeTestCatalog(require("path").join(cwd, ".hasna", "skills", "installed"));
+      return runCliInCwd(args, cwd, { HOME: cwd });
     }
 
     test("installs all skills in a category with --json", async () => {
@@ -266,7 +275,7 @@ describe("CLI pin and search controls", () => {
         expect(exitCode).toBe(0);
         const data = JSON.parse(stdout);
         expect(Array.isArray(data)).toBe(true);
-        expect(data.length).toBe(2);
+        expect(data.length).toBe(TEST_CATALOG.filter(row => row[1] === "Research & Writing").length);
         for (const r of data) {
           expect(r).toHaveProperty("success");
           expect(r).toHaveProperty("skill");
@@ -286,7 +295,7 @@ describe("CLI pin and search controls", () => {
         expect(exitCode).toBe(0);
         const data = JSON.parse(stdout);
         expect(Array.isArray(data)).toBe(true);
-        expect(data.length).toBe(2);
+        expect(data.length).toBe(TEST_CATALOG.filter(row => row[1] === "Research & Writing").length);
       } finally {
         rmSync(tmpDir, { recursive: true, force: true });
       }
@@ -389,7 +398,7 @@ describe("CLI pin and search controls", () => {
 
       // No pins: fresh HOME + cwd with nothing pinned.
       const emptyDir = mkdtempSync(join(tmpdir(), "cli-doctor-empty-"));
-      // Pinned: a cwd that pins a real skill via .skills/project.json.
+      // Pinned: a cwd that pins an owned fixture via .skills/project.json.
       const pinnedDir = mkdtempSync(join(tmpdir(), "cli-doctor-pinned-"));
       try {
         const emptyRes = await runCliInCwd(["doctor", "--json"], emptyDir, { HOME: emptyDir });
@@ -398,6 +407,7 @@ describe("CLI pin and search controls", () => {
         expect(emptyData).toEqual([]);
         expect(emptyRes.exitCode).toBe(0);
 
+        writeTestCatalog(join(pinnedDir, ".hasna", "skills", "installed"));
         const pinRes = await runCliInCwd(["pin", "market-research-report", "--json"], pinnedDir, { HOME: pinnedDir });
         expect(pinRes.exitCode).toBe(0);
         const doctorRes = await runCliInCwd(["doctor", "--json"], pinnedDir, { HOME: pinnedDir });

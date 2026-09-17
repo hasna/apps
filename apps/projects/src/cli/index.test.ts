@@ -2405,6 +2405,111 @@ describe("project-first CLI surface", () => {
     });
   }
 
+  cliProcessTest("guarded-update status previews, archives, rejects drift and rolls back without removing content", () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-cli-guarded-status-"));
+    const env = { HASNA_PROJECTS_DB_PATH: join(root, "projects.db") };
+    const projectPath = join(root, "working");
+    try {
+      const create = runProjects(["create", "--name", "Guarded Status", "--path", projectPath, "--json"], env);
+      expect(create.exitCode).toBe(0);
+      const created = JSON.parse(text(create.stdout)) as {
+        project: { id: string; status: string; updated_at: string };
+      };
+      mkdirSync(projectPath, { recursive: true });
+      const content = join(projectPath, "preserved.txt");
+      writeFileSync(content, "project content remains owned by the project\n");
+      const archiveArgs = [
+        "guarded-update", created.project.id,
+        "--status", "archived",
+        "--expected-revision", created.project.updated_at,
+        "--operation-id", "guarded-status-forward",
+        "--step-id", "archive",
+        "--response-byte-limit", "40000",
+        "--time-budget-ms", "5000",
+        "--json",
+      ];
+      const preview = runProjects([...archiveArgs, "--dry-run"], env);
+      expect(preview.exitCode).toBe(0);
+      expect(JSON.parse(text(preview.stdout))).toMatchObject({ dry_run: true, after: { status: "archived" } });
+      const before = runProjects(["show", created.project.id, "--json"], env);
+      expect(before.exitCode).toBe(0);
+      expect(JSON.parse(text(before.stdout))).toMatchObject({ project: { status: "active", updated_at: created.project.updated_at } });
+
+      const forward = runProjects(archiveArgs, env);
+      expect(forward.exitCode).toBe(0);
+      const accepted = JSON.parse(text(forward.stdout)) as {
+        outcome: string;
+        after: { status: string; updated_at: string };
+        receipt: { receipt_id: string; post_revision: string };
+      };
+      expect(accepted.outcome).toBe("accepted");
+      expect(accepted.after.status).toBe("archived");
+      expect(accepted.receipt.post_revision).toBe(accepted.after.updated_at);
+      expect(readFileSync(content, "utf8")).toBe("project content remains owned by the project\n");
+
+      const duplicate = runProjects(archiveArgs, env);
+      expect(duplicate.exitCode).toBe(0);
+      expect(JSON.parse(text(duplicate.stdout))).toMatchObject({ outcome: "duplicate_of_accepted", after: { status: "archived" } });
+      const stale = runProjects([
+        "guarded-update", created.project.id,
+        "--status", "active",
+        "--expected-revision", created.project.updated_at,
+        "--operation-id", "guarded-status-stale",
+        "--step-id", "unarchive",
+        "--response-byte-limit", "40000",
+        "--time-budget-ms", "5000",
+        "--json",
+      ], env);
+      expect(JSON.parse(text(stale.stdout))).toMatchObject({ ok: false, outcome: "terminal_nonacceptance", after: null });
+
+      const rollback = runProjects([
+        "guarded-rollback", created.project.id,
+        "--accepted-receipt-id", accepted.receipt.receipt_id,
+        "--expected-current-revision", accepted.receipt.post_revision,
+        "--operation-id", "guarded-status-rollback",
+        "--step-id", "restore",
+        "--response-byte-limit", "40000",
+        "--time-budget-ms", "5000",
+        "--json",
+      ], env);
+      expect(rollback.exitCode).toBe(0);
+      expect(JSON.parse(text(rollback.stdout))).toMatchObject({ outcome: "accepted", after: { status: "active" } });
+      const restored = runProjects(["show", created.project.id, "--json"], env);
+      expect(restored.exitCode).toBe(0);
+      expect(JSON.parse(text(restored.stdout))).toMatchObject({ project: { id: created.project.id, status: "active", primary_path: projectPath } });
+      expect(readFileSync(content, "utf8")).toBe("project content remains owned by the project\n");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("guarded-update status rejects invalid values without changing the project", () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-cli-guarded-status-invalid-"));
+    const env = { HASNA_PROJECTS_DB_PATH: join(root, "projects.db") };
+    try {
+      const create = runProjects(["create", "--name", "Guarded Invalid Status", "--path", join(root, "working"), "--json"], env);
+      expect(create.exitCode).toBe(0);
+      const created = JSON.parse(text(create.stdout)) as { project: { id: string; updated_at: string } };
+      const result = runProjects([
+        "guarded-update", created.project.id,
+        "--status", "not-a-status",
+        "--expected-revision", created.project.updated_at,
+        "--operation-id", "guarded-status-invalid",
+        "--step-id", "invalid",
+        "--response-byte-limit", "40000",
+        "--time-budget-ms", "5000",
+        "--json",
+      ], env);
+      expect(result.exitCode).toBe(1);
+      expect(text(result.stderr)).toContain("Invalid workspace status");
+      const unchanged = runProjects(["show", created.project.id, "--json"], env);
+      expect(unchanged.exitCode).toBe(0);
+      expect(JSON.parse(text(unchanged.stdout))).toMatchObject({ project: { status: "active", updated_at: created.project.updated_at } });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   for (const { firstFlag, secondFlag } of [
     { firstFlag: "--path", secondFlag: "--primary-path" },
     { firstFlag: "--primary-path", secondFlag: "--path" },
@@ -3983,7 +4088,7 @@ describe("project-first CLI surface", () => {
     }
   }, 30000);
 
-  test("store ensure provisions an exact API-backed project locally, stays idempotent, and fails closed on invalid targets", async () => {
+  test("store ensure on a hosted project provisions the folder layout only — no project.db, lock via /v1/locks — stays idempotent, and fails closed on invalid targets", async () => {
     const root = mkdtempSync(join(tmpdir(), "projects-api-store-ensure-"));
     const projectsHome = join(root, "home");
     const projectId = "wks_apistoreensure0001";
@@ -4011,12 +4116,25 @@ describe("project-first CLI surface", () => {
     };
     const requests: Array<{ method: string; path: string }> = [];
     const port = reserveFreePort();
+    // The mutation lock is a hosted /v1 resource: it must never come from the
+    // on-box workspace_locks table on a hosted run.
+    const lockRoutes = (req: Request, url: URL): Response | null => {
+      if (req.method === "POST" && url.pathname === "/v1/locks") {
+        return Response.json({ lock: { id: "lock_store_ensure", lock_key: `workspace:${projectId}`, workspace_id: projectId } }, { status: 201 });
+      }
+      if (req.method === "DELETE" && url.pathname.startsWith("/v1/locks/")) {
+        return Response.json({ released: url.searchParams.get("lock_id") === "lock_store_ensure" });
+      }
+      return null;
+    };
     const server = Bun.serve({
       hostname: "127.0.0.1",
       port,
       fetch(req) {
         const url = new URL(req.url);
         requests.push({ method: req.method, path: url.pathname });
+        const lock = lockRoutes(req, url);
+        if (lock) return lock;
         if (req.method === "GET" && url.pathname === `/v1/projects/${projectId}/guarded-metadata`) {
           return Response.json({
             ok: true,
@@ -4068,17 +4186,29 @@ describe("project-first CLI surface", () => {
       const applied = await runEnsure(projectId);
       expect(applied.exitCode).toBe(0);
       expect(applied.stderr).toBe("");
-      const created = JSON.parse(applied.stdout) as { dry_run: boolean; project: { id: string }; created: string[]; app_store: { exists: boolean; project_id: string } };
+      const created = JSON.parse(applied.stdout) as { dry_run: boolean; project: { id: string }; created: string[]; app_store: unknown };
       expect(created.dry_run).toBe(false);
       expect(created.project.id).toBe(projectId);
-      expect(created.app_store).toMatchObject({ exists: true, project_id: projectId });
-      expect(existsSync(join(projectsHome, "data", projectId, "project.db"))).toBe(true);
+      // Hosted: the folder layout is provisioned, the on-box app store is NOT
+      // (owner ruling 2026-09-07: no SQLite under a hosted credential). Live
+      // report: `store ensure` left a project.db under ~/.hasna/projects/data.
+      expect(created.created).toContain(join(projectsHome, "data", projectId));
+      expect(created.created).not.toContain(join(projectsHome, "data", projectId, "project.db"));
+      expect(created.app_store).toBeNull();
+      expect(existsSync(join(projectsHome, "data", projectId))).toBe(true);
+      expect(existsSync(join(projectsHome, "data", projectId, "project.db"))).toBe(false);
+      const sqliteFiles = (readdirSync(projectsHome, { recursive: true }) as string[]).filter((name) => /\.db(-wal|-shm|-journal)?$/.test(name));
+      expect(sqliteFiles).toEqual([]);
+      // The lock went through the Store, holder-scoped release included.
+      expect(requests).toContainEqual({ method: "POST", path: "/v1/locks" });
+      expect(requests).toContainEqual({ method: "DELETE", path: `/v1/locks/${encodeURIComponent(`workspace:${projectId}`)}` });
 
       const repeated = await runEnsure(projectId);
       expect(repeated.exitCode).toBe(0);
-      const noOp = JSON.parse(repeated.stdout) as { created: string[]; app_store: { exists: boolean } };
+      const noOp = JSON.parse(repeated.stdout) as { created: string[]; app_store: unknown };
       expect(noOp.created).toEqual([]);
-      expect(noOp.app_store.exists).toBe(true);
+      expect(noOp.app_store).toBeNull();
+      expect(existsSync(join(projectsHome, "data", projectId, "project.db"))).toBe(false);
 
       const requestCount = requests.length;
       const slugRefused = await runEnsure(project.slug, ["--dry-run"]);
@@ -4100,6 +4230,8 @@ describe("project-first CLI surface", () => {
         fetch(req) {
           const url = new URL(req.url);
           requests.push({ method: req.method, path: url.pathname });
+          const lock = lockRoutes(req, url);
+          if (lock) return lock;
           if (req.method === "GET" && url.pathname === `/v1/projects/${collisionId}/guarded-metadata`) {
             return Response.json({
               ok: true,
@@ -4116,6 +4248,67 @@ describe("project-first CLI surface", () => {
       expect(collision.exitCode).toBe(1);
       expect(collision.stderr).toContain("belongs to project wks_someotherproject0001");
       expect(existsSync(join(projectsHome, "data", collisionId, "project.db"))).toBe(false);
+    } finally {
+      server.stop(true);
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  test("update --canonical-machine refuses an unregistered machine before the PATCH and names the registered slugs; a server 400 carries its reason (live report 2026-09-11)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-canonical-machine-"));
+    const projectId = "wks_canonicalmachine01";
+    const project = {
+      id: projectId, slug: "canonical-machine", name: "Canonical Machine", description: null, kind: "generic", status: "active",
+      root_id: null, recipe_id: null, canonical_machine: null, primary_path: null, git_remote: null, s3_bucket: null, s3_prefix: null,
+      tags: [], integrations: {}, metadata: {}, last_opened_at: null, created_at: "2026-09-11 00:00:00", updated_at: "2026-09-11 00:00:01", synced_at: null,
+    };
+    const requests: string[] = [];
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(req) {
+        const url = new URL(req.url);
+        requests.push(`${req.method} ${url.pathname}`);
+        if (req.method === "GET" && url.pathname === `/v1/projects/${projectId}`) return Response.json(project);
+        if (req.method === "GET" && url.pathname === "/v1/machines") {
+          return Response.json({ machines: [{ slug: "spark01", role: "assignable" }, { slug: "apple03", role: "assignable" }], count: 2 });
+        }
+        if (req.method === "PATCH" && url.pathname === `/v1/projects/${projectId}`) {
+          // The server's own validation: pg-store rejects an unknown slug.
+          return Response.json({ error: "Machine not found: spark01" }, { status: 400 });
+        }
+        return Response.json({ error: "Not found" }, { status: 404 });
+      },
+    });
+    const env = {
+      HASNA_PROJECTS_HOME: join(root, "home"),
+      HASNA_PROJECTS_API_URL: `http://127.0.0.1:${server.port}`,
+      HASNA_PROJECTS_API_KEY: "test-key",
+    };
+    try {
+      // Unregistered slug: refused client-side, no PATCH is sent, the message
+      // names the registered slugs so the operator can act on it.
+      const refused = await runProjectsAsync(["update", projectId, "--canonical-machine", "station03", "--json"], env);
+      expect(refused.exitCode).toBe(1);
+      expect(text(refused.stderr)).toContain("Unknown machine: station03");
+      expect(text(refused.stderr)).toContain("registered: spark01, apple03");
+      expect(requests.filter((line) => line.startsWith("PATCH"))).toEqual([]);
+
+      // Registered slug, server still says no: the CLI now carries the server's
+      // reason instead of a bare "-> 400" (the storage client is built from the
+      // enriched transport; before, client.update() bypassed the enrichment).
+      const rejected = await runProjectsAsync(["update", projectId, "--canonical-machine", "spark01", "--json"], env);
+      expect(rejected.exitCode).toBe(1);
+      expect(text(rejected.stderr)).toContain("400");
+      expect(text(rejected.stderr)).toContain("Machine not found: spark01");
+      expect(requests).toContain(`PATCH /v1/projects/${projectId}`);
+
+      // No on-box SQLite was opened or created by either hosted run.
+      const home = join(root, "home");
+      const sqliteFiles = existsSync(home)
+        ? (readdirSync(home, { recursive: true }) as string[]).filter((name) => /\.db(-wal|-shm|-journal)?$/.test(name))
+        : [];
+      expect(sqliteFiles).toEqual([]);
     } finally {
       server.stop(true);
       rmSync(root, { recursive: true, force: true });

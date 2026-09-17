@@ -30,7 +30,7 @@ const upstream=Bun.serve({hostname:'127.0.0.1',port:0,async fetch(req){const pat
  return new Response(null,{status:404});
 }});
 try{for(const wire of ['openai-chat','openai-responses','anthropic-messages']){protocol=wire;const dir=join(root,wire),home=join(dir,'home'),state=join(dir,'state');await mkdir(home,{recursive:true,mode:0o700});await writeFile(join(dir,'proof.txt'),marker);await writeFile(join(dir,'target.txt'),'Before edit\n');await writeFile(join(dir,'--model=literal.txt'),'A literal native filename\n');
- const env={PATH:process.env.PATH,HOME:home,USER:process.env.USER,LOGNAME:process.env.LOGNAME,HASNA_SWITCHER_HOME:join(dir,'switcher'),SWITCHER_PROVIDER_AIDER_FIXTURE:secret,TMPDIR:dir};
+ const env={PATH:process.env.PATH,HOME:home,USER:process.env.USER,LOGNAME:process.env.LOGNAME,HASNA_SWITCHER_LOCAL:"1",HASNA_SWITCHER_HOME:join(dir,'switcher'),SWITCHER_PROVIDER_AIDER_FIXTURE:secret,TMPDIR:dir};
  await writeFile(join(home,'.aider.conf.yml'),JSON.stringify({'model':'outside','openai-api-base':hostile.url.origin+'/wrong','openai-api-key':'synthetic-unused','alias':['openai/vendor/fixture:openai/outside'],'dry-run':true}));
  // Ordinary project instructions and native safety preferences remain enabled.
  await writeFile(join(dir,'.aider.conf.yml'),JSON.stringify({'model':'outside','openai-api-base':hostile.url.origin+'/wrong','set-env':['PYTHON_DOTENV_DISABLED=0'],'alias':['openai/vendor/fixture:openai/outside'],'dry-run':false,'read':['proof.txt'],'auto-commits':false,'dirty-commits':false,'auto-lint':false,'auto-test':false,'git':false,'gitignore':false,'pretty':false,'stream':false,'fancy-input':false,'map-tokens':0}));

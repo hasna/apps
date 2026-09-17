@@ -41,7 +41,9 @@ import {
   resolveSkillsApiOrigin,
   type SkillsFleetOptions,
 } from "./fleet-credentials.js";
-import { resolveCredential } from "@hasna/contracts/client";
+import { credentialPointerEnvKey, resolveCredential } from "@hasna/contracts/client";
+
+const SKILLS_API_KEY_REF = credentialPointerEnvKey("skills");
 
 export { normalizeSkillsApiOrigin } from "./fleet-credentials.js";
 
@@ -222,7 +224,7 @@ export function saveAuthConfig(config: StoredAuthConfig, env: Env = process.env,
     throw new Error("Refusing to store a Skills API key containing control characters or non-ASCII bytes.");
   }
   const apiUrl = authenticatedOrigin ? normalizeSkillsApiOrigin(authenticatedOrigin) : resolveSkillsApiOrigin(env)?.origin ?? defaultFleetGatewayBaseUrl("skills");
-  const file = writeCredentialValues({ SKILLS_API_KEY: null, SKILLS_API_URL: null, [SKILLS_API_KEY_ENV]: apiKey, [SKILLS_BOUND_API_URL]: apiUrl, [SKILLS_API_URL_ENV]: apiUrl }, env);
+  const file = writeCredentialValues({ SKILLS_API_KEY: null, SKILLS_API_URL: null, [SKILLS_API_KEY_REF]: null, [SKILLS_API_KEY_ENV]: apiKey, [SKILLS_BOUND_API_URL]: apiUrl, [SKILLS_API_URL_ENV]: apiUrl }, env);
 
   const identity: AuthIdentity = {};
   for (const field of ["email", "orgId", "orgSlug", "userId"] as const) {
@@ -246,7 +248,7 @@ export function saveApiUrl(apiUrl: string | null, env: Env = process.env): strin
   // Preserve the PREVIOUS file authority before editing a legacy unbound key.
   // A new URL must never retroactively bind an old credential to another server.
   if (!readCredentialValue(SKILLS_BOUND_API_URL, env) &&
-      (readCredentialValue(SKILLS_API_KEY_ENV, env) || readCredentialValue("SKILLS_API_KEY", env))) {
+      (readCredentialValue(SKILLS_API_KEY_ENV, env) || readCredentialValue("SKILLS_API_KEY", env) || readCredentialValue(SKILLS_API_KEY_REF, env))) {
     values[SKILLS_BOUND_API_URL] = normalizeSkillsApiOrigin(readStoredApiUrl(env) ?? defaultFleetGatewayBaseUrl("skills"));
   }
   return writeCredentialValues(values, env);
@@ -266,7 +268,7 @@ export function readStoredApiUrl(env: Env = process.env): string | null {
  */
 export function clearAuthConfig(env: Env = process.env): { stillResolves: boolean } {
   try {
-    writeCredentialValues({ [SKILLS_API_KEY_ENV]: null, SKILLS_API_KEY: null, [SKILLS_BOUND_API_URL]: null }, env);
+    writeCredentialValues({ [SKILLS_API_KEY_ENV]: null, SKILLS_API_KEY: null, [SKILLS_API_KEY_REF]: null, [SKILLS_BOUND_API_URL]: null }, env);
   } catch {
     // No home, or nothing to clear.
   }
@@ -281,7 +283,7 @@ export function clearAuthConfig(env: Env = process.env): { stillResolves: boolea
     stillResolves = resolveCredential("skills", env) !== null;
   } catch {
     const emptyProfile = selectedSkillsProfile(env) && !env.HASNA_SKILLS_API_KEY_OVERRIDE && !env.HASNA_SKILLS_API_KEY_REF &&
-      !readCredentialValue(SKILLS_API_KEY_ENV, env) && !readCredentialValue("SKILLS_API_KEY", env);
+      !readCredentialValue(SKILLS_API_KEY_ENV, env) && !readCredentialValue("SKILLS_API_KEY", env) && !readCredentialValue(SKILLS_API_KEY_REF, env);
     stillResolves = !emptyProfile;
   }
   return { stillResolves };

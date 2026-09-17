@@ -57,6 +57,7 @@ import { hookRegisteredInSettings, findRewriteOverlaps } from "../lib/registrati
 import { sha256Of, checkScriptHash } from "../lib/store.js";
 import { projectEventRowForRead } from "../lib/redact.js";
 import { secureEqual } from "../lib/secure-compare.js";
+import { decideHooksMcpAuthority } from "./authority.js";
 import {
   getStorageStatus,
   storagePull,
@@ -1261,6 +1262,11 @@ export async function startSSEServer(options: SSEServerOptions = {}): Promise<vo
     );
   }
 
+  // Authority FIRST, transport LAST (hasna/apps#1720): nothing configured
+  // throws here, before any socket is bound; the hosted route refuses the
+  // on-box store process-wide; the local opt-in has said so on stderr.
+  decideHooksMcpAuthority();
+
   const server = createHooksServer();
   const transports = new Map<string, SSEServerTransport>();
 
@@ -1316,6 +1322,19 @@ export async function startSSEServer(options: SSEServerOptions = {}): Promise<vo
  * Start the MCP server with stdio transport
  */
 export async function startStdioServer(): Promise<void> {
+  // Authority FIRST, transport LAST (hasna/apps#1720 fail-closed ruling):
+  // with nothing resolved the process exits 1 HERE, before the stdio
+  // transport exists, so `initialize` is never answered and no local file is
+  // created. The first stderr line is the REMOTE_API_* diagnostic naming the
+  // credential tiers and the local opt-in. On the hosted route the on-box
+  // store is refused for every tool; under the opt-in the seam has already
+  // printed "hooks: LOCAL mode — …" once.
+  try {
+    decideHooksMcpAuthority();
+  } catch (err) {
+    process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
+    process.exit(1);
+  }
   try {
     const server = createHooksServer();
     const transport = new StdioServerTransport();

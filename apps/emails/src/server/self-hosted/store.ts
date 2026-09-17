@@ -1,3 +1,4 @@
+import { runMessageListQuery, type MessageSearchAdmission } from "./search-admission.js";
 import { WorkerSupervisorStore, WORKER_CLAIM_CTE, type WorkerFence } from "./worker-supervisor.js";
 import type { RuntimeLogEntry, RuntimeComponent } from "./runtime-log.js";
 import { ProvisionUpJobs } from "./provision-up-store.js";
@@ -758,6 +759,12 @@ function sendIntentRequiresReconciliation(sendState: string): boolean {
   // so nothing was sent and there is nothing to reconcile — the intent is safe
   // to re-attempt (see rearmFailedSendIntent).
   return !["cancelled", "blocked", "pending", "failed"].includes(sendState);
+}
+
+function sendIntentLookupRequiresReconciliation(sendState: string): boolean {
+  // A completed send has a known outcome. Cancellation still requires operator
+  // reconciliation because it cannot retroactively stop that sent message.
+  return sendState !== "sent" && sendIntentRequiresReconciliation(sendState);
 }
 
 export interface ListOptions {
@@ -1755,6 +1762,7 @@ export class EmailsSelfHostedStore {
     private readonly options: {
       allowUnsafeTestTransactions?: boolean;
       attachmentRepairPolicy?: Partial<AttachmentRepairPolicy>;
+      searchAdmission?: MessageSearchAdmission;
     } = {},
   ) {}
 
@@ -1774,6 +1782,8 @@ export class EmailsSelfHostedStore {
       isTransactional(this.client) ? this.client : undefined,
       this.options.allowUnsafeTestTransactions === true,
       attachmentRepairPolicy(this.options.attachmentRepairPolicy),
+      undefined,
+      this.options.searchAdmission,
     );
   }
 
@@ -2336,6 +2346,7 @@ export class TenantScopedStore {
     private readonly allowUnsafeTestTransactions = false,
     private readonly repairPolicy: AttachmentRepairPolicy = attachmentRepairPolicy(undefined),
     private readonly workerFence?: WorkerFence,
+    private readonly searchAdmission?: MessageSearchAdmission,
   ) {}
 
   workerSupervisor(): WorkerSupervisorStore {
@@ -2343,7 +2354,7 @@ export class TenantScopedStore {
     return new WorkerSupervisorStore(this.atomicClient, this.tenantId);
   }
   withWorkerFence(fence: WorkerFence): TenantScopedStore {
-    return new TenantScopedStore(this.client, this.tenantId, this.atomicClient, this.allowUnsafeTestTransactions, this.repairPolicy, fence);
+    return new TenantScopedStore(this.client, this.tenantId, this.atomicClient, this.allowUnsafeTestTransactions, this.repairPolicy, fence, this.searchAdmission);
   }
 
   async appendRuntimeLog(entry: Omit<RuntimeLogEntry, "id" | "created_at">): Promise<void> {
@@ -2410,7 +2421,7 @@ export class TenantScopedStore {
       ]);
       return domainConnectStore.completeDomainConnect(
         tx,
-        new TenantScopedStore(tx, this.tenantId),
+        new TenantScopedStore(tx, this.tenantId, undefined, false, undefined, undefined, this.searchAdmission),
         this.tenantId,
         claim,
         result,
@@ -2475,7 +2486,7 @@ export class TenantScopedStore {
       ]);
       return addressProvisioningStore.completeAddressProvisioning(
         tx,
-        new TenantScopedStore(tx, this.tenantId),
+        new TenantScopedStore(tx, this.tenantId, undefined, false, undefined, undefined, this.searchAdmission),
         this.tenantId,
         job,
         refs,
@@ -2582,7 +2593,7 @@ export class TenantScopedStore {
         return this.atomicClient.transaction(async tx => {
           await tx.execute(`SELECT set_config('app.current_tenant',$1,true)`, [this.tenantId]);
           await this.lockInboundPersistenceFence(tx, fence);
-          return new TenantScopedStore(tx, this.tenantId).recordInboundSourceProvenance(input);
+          return new TenantScopedStore(tx, this.tenantId, undefined, false, undefined, undefined, this.searchAdmission).recordInboundSourceProvenance(input);
         });
       },
     };
@@ -2592,7 +2603,7 @@ export class TenantScopedStore {
     await this.atomicClient.transaction(async tx => {
       await tx.execute(`SELECT set_config('app.current_tenant',$1,true)`, [this.tenantId]);
       await this.lockInboundPersistenceFence(tx, fence);
-      await new TenantScopedStore(tx, this.tenantId).recordRelayReceipt(provider, eventId, resourceId);
+      await new TenantScopedStore(tx, this.tenantId, undefined, false, undefined, undefined, this.searchAdmission).recordRelayReceipt(provider, eventId, resourceId);
     });
   }
   async findRelayReceipt(provider: string, eventId: string): Promise<{ resourceId: string | null } | null> {
@@ -3255,7 +3266,13 @@ export class TenantScopedStore {
     const offsetIndex = params.length;
     // Inner query pages ids in index order; the outer select projects (snippet
     // regex, attachment count) only the surviving rows.
-    const rows = await this.client.many<Record<string, unknown>>(
+    const rows = await runMessageListQuery({
+      search: opts.search,
+      tenantId: this.tenantId,
+      scopedClient: this.client,
+      atomicClient: this.atomicClient,
+      admission: this.searchAdmission,
+      query: (client) => client.many<Record<string, unknown>>(
       `SELECT ${MESSAGE_LIST_COLUMNS}
        FROM (
          SELECT id FROM messages ${whereSql}
@@ -3264,7 +3281,8 @@ export class TenantScopedStore {
        JOIN messages m ON m.tenant_id = $1 AND m.id = page.id
        ORDER BY m.sort_ts DESC, m.id DESC`,
       params,
-    );
+      ),
+    });
     const last = rows.length === limit ? rows[rows.length - 1] : undefined;
     const nextCursor =
       last && typeof last["cursor_ts"] === "string" && typeof last["id"] === "string"
@@ -4745,6 +4763,17 @@ export class TenantScopedStore {
     return { id: rows[0]!.id };
   }
 
+  /** Preserve concurrent identity changes; attach only a provider-bound observation. */
+  async recordProviderMessageIdentity(id: string, providerMessageId: string, senderProviderId: string, identity: import("./provider-message-identity.js").ProviderMessageIdentity): Promise<MessageRecord | null> {
+    const row = await this.client.get<Record<string, unknown>>(
+      `UPDATE messages SET message_id=$5, headers=headers || jsonb_build_object('message-id',$5::text,'provider_message_identity',$6::jsonb), updated_at=now()
+       WHERE id=$1 AND tenant_id=$2 AND provider_message_id=$3 AND provider_id=$4 AND direction='outbound' AND send_state='sent'
+         AND message_id IS NULL AND NOT EXISTS (SELECT 1 FROM jsonb_object_keys(headers) AS h(key) WHERE lower(key)='message-id') RETURNING ${MESSAGE_COLUMNS}`,
+      [id, this.tenantId, providerMessageId, senderProviderId, identity.messageId, JSON.stringify(identity.provenance)],
+    );
+    return row ? mapMessageRow(row) : this.getMessage(id);
+  }
+
   async getMessage(id: string): Promise<MessageRecord | null> {
     const row = await this.client.get<Record<string, unknown>>(
       `SELECT ${MESSAGE_COLUMNS} FROM messages WHERE id = $1 AND tenant_id = $2`,
@@ -5185,7 +5214,7 @@ export class TenantScopedStore {
       return {
         found: record !== null,
         tombstoned: tombstone !== null || record?.send_state === "cancelled",
-        reconciliation_required: record !== null && sendIntentRequiresReconciliation(record.send_state),
+        reconciliation_required: record !== null && sendIntentLookupRequiresReconciliation(record.send_state),
         message: record,
       };
     });
@@ -6017,7 +6046,7 @@ export class TenantScopedStore {
     const params = [randomUUID(), this.tenantId, input.key, input.hash, input.scheduledAt,
       p.provider_id ?? null, p.from, JSON.stringify(p.to), JSON.stringify(p.cc ?? []), JSON.stringify(p.bcc ?? []),
       p.reply_to ?? null, p.subject, p.text ?? null, p.html ?? null, JSON.stringify(p.attachments ?? []),
-      JSON.stringify({ headers: p.headers, tags: p.tags, track_opens: p.track_opens, track_clicks: p.track_clicks, tracking_url: p.tracking_url, unsubscribe_url: p.unsubscribe_url, allow_suppressed_recipients: p.allow_suppressed_recipients === true })];
+      JSON.stringify({ reply_to_message_id: p.reply_to_message_id, headers: p.headers, tags: p.tags, track_opens: p.track_opens, track_clicks: p.track_clicks, tracking_url: p.tracking_url, unsubscribe_url: p.unsubscribe_url, allow_suppressed_recipients: p.allow_suppressed_recipients === true })];
     const row = await this.client.get<Record<string, unknown>>(
       `INSERT INTO scheduled_emails(id,tenant_id,enqueue_key,enqueue_hash,scheduled_at,provider_id,from_address,to_addresses,cc_addresses,bcc_addresses,reply_to,subject,text_body,html,attachments_json,send_options,status)
        SELECT $1,$2,$3,$4,$5::timestamptz,$6,$7,$8::jsonb,$9::jsonb,$10::jsonb,$11,$12,$13,$14,$15::jsonb,$16::jsonb,'pending' WHERE $5::timestamptz > now()

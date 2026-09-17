@@ -366,7 +366,7 @@ export function noticeLocalSkillsMode(write: (line: string) => void = (line) => 
   if (localNoticePrinted) return;
   localNoticePrinted = true;
   write(
-    `skills: local mode (${SKILLS_LOCAL_OPT_IN_ENV_KEYS[0]}=1) — running on this machine against the bundled corpus.`,
+    `skills: local mode (${SKILLS_LOCAL_OPT_IN_ENV_KEYS[0]}=1) — running on this machine against the Skills-owned local cache.`,
   );
 }
 
@@ -502,7 +502,8 @@ function credentialLocations(env: Env): string {
 
 function assertCredentialInstance(credential: ResolvedCredential, apiOrigin: string, env: Env, options: SkillsFleetOptions): void {
   let bound: string | undefined;
-  if (credential.tier === "disk" || credential.tier === "profile") {
+  if (credential.tier === "disk" || credential.tier === "profile" ||
+      (credential.tier === "pointer" && credential.diskCandidates.includes(credential.source))) {
     const metadata = readSkillsInstanceMetadata(credential.source);
     bound = metadata.binding ?? metadata.apiUrl ?? defaultFleetGatewayBaseUrl(SKILLS_APP);
   } else if (credential.tier === "keychain") {
@@ -539,6 +540,9 @@ export async function resolveSkillsConnection(
   options: SkillsFleetOptions = {},
 ): Promise<(HostedSkillsFleet & { apiKey: string }) | null> {
   const snapshotEnv = snapshotSkillsEnvironment(env);
+  // Preserve the env-only local opt-in: it must not inspect credential files.
+  const assertFilesUnchanged = selectsSkillsLocalMode(snapshotEnv) ? () => {}
+    : captureSkillsCredentialFiles(skillsProfileCredentialFiles(snapshotEnv, options.credentials?.profile));
   const fleet = resolveSkillsFleet(snapshotEnv, snapshotSkillsOptions(env, options));
   if (fleet.mode === "local" && env === process.env) noticeLocalSkillsMode();
   if (fleet.mode !== "hosted") return null;
@@ -555,7 +559,9 @@ export async function resolveSkillsConnection(
 
   let completed: ResolvedCredential;
   try {
-    completed = await completePointerCredential(SKILLS_APP, pointer, snapshotEnv);
+    // The shared resolver snapshots the Secrets bootstrap separately. Pass its
+    // original ambient context so the normal Keychain tier remains enabled.
+    completed = await completePointerCredential(SKILLS_APP, pointer, env);
   } catch (error) {
     const translated = asSkillsFleetCredentialError(error);
     if (translated) throw translated;
@@ -567,6 +573,7 @@ export async function resolveSkillsConnection(
         `refusing to send an unauthenticated request.`,
     );
   }
+  assertFilesUnchanged();
   return { ...fleet, apiKey: completed.apiKey, apiKeyPointer: null };
 }
 

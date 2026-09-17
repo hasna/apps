@@ -180,7 +180,7 @@ export function registerAuthTools(server: McpServer, stripped: (text: string) =>
         // Check if server is already running
         let serverRunning = false;
         try {
-          await fetch(`http://localhost:${serverPort}/api/connectors`);
+          await fetch(`http://localhost:${serverPort}/health`);
           serverRunning = true;
         } catch {}
 

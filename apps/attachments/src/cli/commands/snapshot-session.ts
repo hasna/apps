@@ -58,7 +58,7 @@ ${body}
 async function fetchSessionMessages(sessionId: string, sessionsUrl: string): Promise<SessionMessage[]> {
   // Try /api/sessions/:id/messages first, fall back to /api/sessions/:id
   const messagesUrl = `${sessionsUrl}/api/sessions/${encodeURIComponent(sessionId)}/messages`;
-  const res = await fetch(messagesUrl, withServiceAuth("SESSIONS", messagesUrl));
+  const res = await fetch(messagesUrl, await withServiceAuth("SESSIONS", messagesUrl));
 
   if (res.ok) {
     const data = await res.json() as unknown;
@@ -73,7 +73,7 @@ async function fetchSessionMessages(sessionId: string, sessionsUrl: string): Pro
   if (res.status !== 404) throw new Error(`Sessions request failed: HTTP ${res.status}`);
   // Compatibility read only when the messages route is absent.
   const sessionUrl = `${sessionsUrl}/api/sessions/${encodeURIComponent(sessionId)}`;
-  const res2 = await fetch(sessionUrl, withServiceAuth("SESSIONS", sessionUrl));
+  const res2 = await fetch(sessionUrl, await withServiceAuth("SESSIONS", sessionUrl));
   if (!res2.ok) {
     throw new Error(`Failed to fetch session ${sessionId}: HTTP ${res2.status}`);
   }
@@ -105,7 +105,7 @@ export function registerSnapshotSession(program: Command): void {
 
         let messages: SessionMessage[];
         try {
-          messages = await fetchSessionMessages(sessionId, options.sessionsUrl ?? serviceConfig("SESSIONS").url);
+          messages = await fetchSessionMessages(sessionId, options.sessionsUrl ?? (await serviceConfig("SESSIONS")).url);
         } catch (err: unknown) {
           exitError(err instanceof Error ? err.message : String(err));
           return;

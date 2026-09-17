@@ -1,6 +1,9 @@
 # Sandboxed Execution And Credential Delivery — Decision Record
 
-Status: DECIDED. Recorded 2026-08-23. The decision converged across the owner,
+Status: substrate decision retained; delivery details updated 2026-09-15 by
+[versioned cloud execution](./cloud-execution-runtime.md) and
+[private corpus ownership](./corpus-policy.md). Unversioned built-in execution
+is retired. The original decision was recorded 2026-08-23 and converged across the owner,
 an SOL consult, the adversarial review, and research: the four lanes below are
 the committed order of substrate, and the credential-delivery redesign in the
 second half of this record is paired with it — the two were reviewed together
@@ -61,11 +64,9 @@ named work items make it production-shaped:
   time; the supervisor fetches the skill bundle by digest and runs it inside
   the pinned image. This preserves the image-profile invariant ("a launch never
   carries a guess") at the artifact level.
-- **Route non-deterministic runs through the `createSubmitRunService` bridge.**
-  Runs that cannot be executed deterministically on the host go through the
-  admission bridge, which is the seam that mints the run record and feeds the
-  dispatcher. The bridge stays mandatory — passing a server record anywhere
-  else is a type error.
+- **Route hosted runs through versioned admission.** The managed runtime binds
+  the private published bundle, exact version and digest before dispatch. There
+  is no unversioned host execution path, including for deterministic workloads.
 
 Why first: it is the smallest delta to a fully-reviewed, already-shipped
 dispatcher; it reuses the existing CAS/reconciliation guarantees; and it carries
@@ -121,16 +122,13 @@ it.
   admitted to any lane until the sandboxed lane exists and is the intake
   route. Intake gating is part of this decision, not a follow-up.
 
-## Prerequisite: corpus policy and the 27-slug dual-runtime set
+## Prerequisite: private corpus ownership
 
 This record builds on the corpus-policy decision recorded in
-[docs/architecture/corpus-policy.md](./corpus-policy.md). That record fixes the
-27-slug dual-runtime set: the same slug resolves to free local execution or
-hosted premium execution depending on the runtime route. The routing
-reactivation (the sibling routing-resolver lane) makes that same-slug ambiguity
-operational, which is why this sandbox decision cites it as a prerequisite
-rather than restating it. A routed run must land on the substrate its runtime
-declares, and the sandboxed lane is the substrate for the hosted half.
+[docs/architecture/corpus-policy.md](./corpus-policy.md). Skills are private
+account data, outside the public software repository. A profile selects an
+immutable published version; execution uses its verified bundle and declared
+policy. The former built-in dual-runtime set is retired.
 
 ## Consequences
 
@@ -141,8 +139,7 @@ declares, and the sandboxed lane is the substrate for the hosted half.
 - The per-run allowlist and host-side brokering are enforced at admission; any
   run whose environment asks for a prohibited variable is refused, never
   sanitised at launch.
-- The empty hosted set today (see `hosted-skill-set.ts`: zero hosted slugs,
-  guarded by `catalog-runnable.test.ts`) changes with the corpus-policy
-  decision; the routing lane and this one move together.
+- The runtime admits only explicitly reviewed published bundles. There is no
+  built-in corpus or slug-based handler fallback.
 - Custom-skill execution stays unavailable until the sandboxed lane is the
   intake route.

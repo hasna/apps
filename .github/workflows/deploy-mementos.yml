@@ -41,7 +41,7 @@ on:
   workflow_dispatch: {}
 
 concurrency:
-  group: deploy-production
+  group: deploy-mementos-production
   cancel-in-progress: false
 
 permissions:

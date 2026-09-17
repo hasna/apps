@@ -982,7 +982,7 @@ describe("ingest worker queue-age alarm hook and queue-aware liveness", () => {
           if (failNext) throw new Error("connection reset");
           return {
             ApproximateAgeOfOldestMessage: "340",
-            ApproximateNumberOfMessagesVisible: "17",
+            ApproximateNumberOfMessages: "17",
           };
         },
       },
@@ -991,18 +991,18 @@ describe("ingest worker queue-age alarm hook and queue-aware liveness", () => {
       (line) => emitted.push(line),
       T0 + 1_000,
     );
-    expect(status.oldestMessageAgeSeconds).toBe(340);
+    expect(status.oldestMessageAgeSeconds).toBeNull();
     expect(status.queueVisible).toBe(17);
     expect(status.lastQueueSampleMs).toBe(T0 + 1_000);
     expect(status.queueSampleFailures).toBe(0);
     expect(emitted).toEqual([]);
 
-    // Crossing the 15-minute threshold emits exactly one alarm event.
+    // A fabricated age attribute cannot establish a CloudWatch measurement.
     await sampleQueueAgeOnce(
       {
         fetchAttributes: async () => ({
           ApproximateAgeOfOldestMessage: "2000",
-          ApproximateNumberOfMessagesVisible: "5",
+          ApproximateNumberOfMessages: "5",
         }),
       },
       status,
@@ -1010,10 +1010,10 @@ describe("ingest worker queue-age alarm hook and queue-aware liveness", () => {
       (line) => emitted.push(line),
       T0 + 2_000,
     );
-    expect(emitted).toHaveLength(1);
-    expect(emitted[0]).toContain("age_seconds=2000");
+    expect(emitted).toEqual([]);
+    expect(status.oldestMessageAgeSeconds).toBeNull();
 
-    // A failed fetch is recorded, never thrown, and the last good state stays.
+    // A failed fetch invalidates previous visibility and never emits raw errors.
     failNext = true;
     await expect(
       sampleQueueAgeOnce(
@@ -1025,8 +1025,9 @@ describe("ingest worker queue-age alarm hook and queue-aware liveness", () => {
       ),
     ).resolves.toBeUndefined();
     expect(status.queueSampleFailures).toBe(1);
-    expect(status.oldestMessageAgeSeconds).toBe(2000);
-    expect(status.queueVisible).toBe(5);
+    expect(status.oldestMessageAgeSeconds).toBeNull();
+    expect(status.queueVisible).toBeNull();
+    expect(emitted).toEqual(["[ingest] queue visibility poll failed"]);
   });
 
   it("applies sane defaults and falls back to them on garbage queue-age settings", () => {

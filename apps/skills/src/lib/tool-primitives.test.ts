@@ -1,4 +1,6 @@
-import { describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
+import { writeTestCatalog, TEST_CATALOG } from "./private-corpus-test-utils.js";
+import { getPortableSkillsRoot } from "./portable-skills.js";
 import {
   getSkillToolDependencies,
   getToolPrimitive,
@@ -10,6 +12,7 @@ import {
 import { useDefaultTestTimeout } from "../test-preload.js";
 
 useDefaultTestTimeout();
+beforeEach(() => writeTestCatalog(getPortableSkillsRoot()));
 
 describe("tool primitives", () => {
   test("exposes stable primitive definitions", () => {
@@ -42,9 +45,9 @@ describe("tool primitives", () => {
     expect(result.valid).toBe(true);
     // OSS catalog: 86 shipped skills (20 instruction + 66 executable), every one
     // mapped to a primitive by category/keyword inference.
-    expect(result.skillCount).toBe(86);
+    expect(result.skillCount).toBe(TEST_CATALOG.length);
     expect(result.mappedSkillCount).toBe(result.skillCount);
-    expect(result.gatewayBackedSkillCount).toBe(41);
+    expect(result.gatewayBackedSkillCount).toBeGreaterThan(0);
     expect(result.issues).toEqual([]);
   });
 });

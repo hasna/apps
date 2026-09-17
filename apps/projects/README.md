@@ -255,14 +255,19 @@ folder name.
 
 `projects store inspect` reports the canonical workspace/data paths and whether
 the current primary path is canonical. `projects store ensure` creates missing
-workspace/data directories, initializes the machine-local `project.db`, and
-only sets the canonical path as primary when the project had no primary path.
-On the hosted backend, ensure requires the complete stable `wks_...` id, reads the full
-project through the producer-bounded guarded endpoint, and uses the guarded
-conditional update/receipt path for a missing primary path. Slugs and partial
-ids are refused before transport; the station-local store is never created from
-an unbounded or mismatched registry response. `projects store migrate` remains
-local-only and is dry-run by default; it
+workspace/data directories, initializes the machine-local `project.db` (local
+mode only), and only sets the canonical path as primary when the project had no
+primary path. On the hosted backend, ensure requires the complete stable
+`wks_...` id, reads the full project through the producer-bounded guarded
+endpoint, takes its mutation lock through `/v1/locks`, and uses the guarded
+conditional update/receipt path for a missing primary path. It provisions the
+FOLDER layout only: the per-project `project.db` is on-box SQLite, which a
+hosted run never opens or creates (owner ruling 2026-09-07, hasna/apps#1720),
+so the result carries `app_store: null`; `store inspect` likewise reports
+`app_store: null` plus `app_store_unavailable` naming the opt-in. Slugs and
+partial ids are refused before transport; the station-local store is never
+created from an unbounded or mismatched registry response. `projects store
+migrate` remains local-only and is dry-run by default; it
 requires `--apply` or `--yes` to move an existing primary folder into
 `workspaces/<id>`, writes a migration plan under `data/<id>`, preserves git
 history by moving the directory, records the old path as a non-primary location,
@@ -474,6 +479,20 @@ local fallback.
   it never touches the Keychain or a credentials file; any env-declared
   authority or credential outranks it, and a half-configured opt-in run (URL
   set, no key) still fails loud.
+- **Under a hosted credential, no on-box SQLite is opened — ever.** The moment
+  the ambient environment resolves a hosted authority, the process refuses
+  every open of `projects.db` and of a per-project `project.db`. Commands whose
+  data lives only in those files — `budgets *`, `tmux-profiles *`, `loops *`,
+  project data models/records, the app-store half of `store inspect`,
+  `sessions` (no target), `cleanup-evals`, `agent-eval`, the `register-full`
+  manifest ledger — fail with `REMOTE_COMMAND_UNSUPPORTED` naming
+  `HASNA_PROJECTS_LOCAL=1` instead of reading or creating
+  `~/.hasna/projects/*.db` (there is no hosted `/v1` route for them yet).
+  `store ensure` provisions the folder layout only, and a hosted
+  `create --dry-run` previews against an in-memory scratch registry.
+  `update --canonical-machine` is checked against the machines registry first
+  and names the registered slugs; a server refusal now carries the server's
+  reason (`… -> 400: Machine not found: <slug>`) instead of a bare status.
 
 The hosted connection moves the global project registry only. Machine-local side
 effects (tmux sessions, git operations, directory creation, rendering) and

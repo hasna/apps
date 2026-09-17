@@ -1,6 +1,6 @@
 import type { Config } from "../types/index.js";
 import { normalizeTargetPath } from "./apply.js";
-import { slugify } from "../db/database.js";
+import { slugify } from "./ids.js";
 
 /**
  * Every config row that already writes to `targetPath`.

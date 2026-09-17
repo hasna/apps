@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { runCli } from "./cli.test-utils";
+import { runCliInCwd } from "./cli.test-utils";
 import { SYNC_MARKER_FILE } from "../lib/agent-sync.js";
 import { INSTALLED_SKILLS_DIRNAME } from "../lib/config.js";
 import { LAYOUT_MIGRATION_RECORD, SKILLS_CACHE_DIRNAME } from "../lib/home-migration.js";
@@ -11,6 +11,10 @@ import { LAYOUT_MIGRATION_RECORD, SKILLS_CACHE_DIRNAME } from "../lib/home-migra
 import { useDefaultTestTimeout } from "../test-preload.js";
 
 useDefaultTestTimeout();
+
+// These cases exercise empty project state as well as an isolated app home.
+// Existing pins in a contributor's checkout must not change the result.
+const runCli = (args: string[], env: { HOME: string }) => runCliInCwd(args, env.HOME, env);
 
 /**
  * CLI surface for the owner layout migration, unmarked-home adoption, and the

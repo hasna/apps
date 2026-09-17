@@ -41,7 +41,7 @@ import {
   type CredentialChainOptions,
   type KeychainTierOptions,
 } from "@hasna/contracts/client";
-import { InstructionsV1Client, type InstructionsV1ClientOptions } from "./v1.generated.js";
+import { InstructionsV1Client, type InstructionsV1ClientOptions } from "./v1-client.js";
 
 /** The app slug the shared resolver resolves credentials and authority for. */
 export const INSTRUCTIONS_SDK_APP = "instructions";

@@ -1,3 +1,4 @@
+import { hasDependencyPreparationMarker, prepareSkillDependencies } from "./dependency-preparation";
 /**
  * Skill info - reads docs, requirements, and metadata from skill source
  */
@@ -91,8 +92,15 @@ export function getSkillRequirements(name: string): SkillRequirements | null {
     const content = readIfExists(join(skillPath, file));
     if (content) texts.push(content);
   }
-  const allText = texts.join("\n");
   const meta = getSkill(name);
+  let dependencies: Record<string, string> = {};
+  try { dependencies = JSON.parse(readFileSync(join(skillPath, "package.json"), "utf8")).dependencies || {}; } catch {}
+  return getSkillRequirementsFromContent(name, texts, dependencies, meta);
+}
+
+/** Shared parser for verified bundle content and explicit local authoring files. */
+export function getSkillRequirementsFromContent(name: string, texts: string[], dependencies: Record<string, string> = {}, meta?: SkillMeta): SkillRequirements {
+  const allText = texts.join("\n");
   const canonicalName = meta?.name ?? normalizeSkillName(name);
 
   // Extract env vars
@@ -135,15 +143,6 @@ export function getSkillRequirements(name: string): SkillRequirements | null {
   // are implementation details for runSkill() resolution.
   const skillName = normalizeSkillName(name);
   let cliCommand: string | null = `skills run ${skillName}`;
-  let dependencies: Record<string, string> = {};
-  const pkgPath = join(skillPath, "package.json");
-  if (existsSync(pkgPath)) {
-    try {
-      const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
-      dependencies = pkg.dependencies || {};
-    } catch {}
-  }
-
   return {
     envVars: Array.from(envVars).sort(),
     systemDeps: Array.from(systemDeps).sort(),
@@ -205,7 +204,7 @@ export function getSkillDependencyStatus(name: string): SkillDependencyStatus[] 
 export async function runSkill(
   name: string,
   args: string[],
-  options: { installed?: boolean; stdio?: "inherit" | "pipe" | "stderr"; env?: Record<string, string> } = {}
+  options: { installed?: boolean; stdio?: "inherit" | "pipe" | "stderr"; env?: Record<string, string>; preparationTimeoutMs?: number } = {}
 ): Promise<{ exitCode: number; error?: string; stdout?: string; stderr?: string }> {
   // Skills execute from the bundled package source. Project `.skills/` is only
   // for pins, run metadata, logs, and exports; it is never a source directory.
@@ -254,15 +253,12 @@ export async function runSkill(
     return { exitCode: 1, error: `Entry point '${entryPoint}' not found in skill '${name}'` };
   }
 
-  // Install deps if node_modules missing
-  const nodeModules = join(skillPath, "node_modules");
-  if (!existsSync(nodeModules)) {
-    const install = Bun.spawn(["bun", "install", "--no-save"], {
-      cwd: skillPath,
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    await install.exited;
+  const env = { ...process.env, ...options.env };
+  // Preparation and execution must use the same selected HOME, cache and PATH.
+  // Failed preparation is terminal: never run an entry with incomplete deps.
+  if (!existsSync(join(skillPath, "node_modules")) || hasDependencyPreparationMarker(skillPath)) {
+    const failure = await prepareSkillDependencies(skillPath, env, options.preparationTimeoutMs);
+    if (failure) return failure;
   }
 
   // Run the skill
@@ -273,7 +269,7 @@ export async function runSkill(
     stdout: options.stdio === "pipe" ? "pipe" : options.stdio === "stderr" ? 2 : "inherit",
     stderr: options.stdio === "pipe" ? "pipe" : "inherit",
     stdin: "inherit",
-    env: { ...process.env, ...options.env },
+    env,
   });
 
   if (options.stdio === "pipe") {
@@ -300,118 +296,29 @@ export interface DetectedProjectSkills {
  * Detect project type from package.json and recommend relevant skills
  */
 export function detectProjectSkills(cwd: string = process.cwd()): DetectedProjectSkills {
-  const pkgPath = join(cwd, "package.json");
-  if (!existsSync(pkgPath)) {
-    // No package.json — return always-recommended skills only
-    const alwaysRecommend = ["market-research-report", "repo-onboarding-report", "blog-article"];
-    const recommended = alwaysRecommend
-      .map((name) => loadRegistry().find((s) => s.name === name))
-      .filter((s): s is SkillMeta => s !== undefined);
-    return { detected: [], recommended };
-  }
-
-  let pkg: { dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
-  try {
-    pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
-  } catch {
-    const alwaysRecommend = ["market-research-report", "repo-onboarding-report", "blog-article"];
-    const recommended = alwaysRecommend
-      .map((name) => loadRegistry().find((s) => s.name === name))
-      .filter((s): s is SkillMeta => s !== undefined);
-    return { detected: [], recommended };
-  }
-
-  const allDeps = {
-    ...pkg.dependencies,
-    ...pkg.devDependencies,
+  let pkg: unknown;
+  try { pkg = JSON.parse(readFileSync(join(cwd, "package.json"), "utf8")); }
+  catch { return { detected: [], recommended: [] }; }
+  if (!pkg || typeof pkg !== "object" || Array.isArray(pkg)) return { detected: [], recommended: [] };
+  const fields = pkg as Record<string, unknown>;
+  const dependencies = [fields.dependencies, fields.devDependencies].flatMap(value =>
+    value && typeof value === "object" && !Array.isArray(value) ? Object.keys(value) : []);
+  const detected = [...new Set(dependencies)].sort();
+  const tags = new Set(detected.map(name => name.toLowerCase()));
+  const families: Record<string, readonly string[]> = {
+    frontend: ["next", "react", "vue", "svelte", "nuxt", "@nuxtjs/nuxt"],
+    backend: ["express", "fastify", "hono", "koa", "@hono/hono"],
+    ai: ["@anthropic-ai/sdk", "openai", "@openai/openai", "anthropic"],
+    payments: ["stripe"], email: ["nodemailer", "@sendgrid/mail", "@sendgrid/client"],
+    testing: ["vitest", "jest", "mocha", "@jest/core"],
   };
-
-  const depNames = Object.keys(allDeps);
-
-  const detected: string[] = [];
-  const recommendedNames = new Set<string>();
-
-  // Always recommend these
-  for (const name of ["market-research-report", "repo-onboarding-report", "blog-article"]) {
-    recommendedNames.add(name);
+  for (const [family, names] of Object.entries(families)) {
+    if (names.some(name => detected.some(dep => dep === name || dep.startsWith(`${name}/`)))) tags.add(family);
   }
-
-  // Frontend frameworks
-  const frontendDeps = ["next", "react", "vue", "svelte", "nuxt", "@nuxtjs/nuxt"];
-  for (const dep of frontendDeps) {
-    if (depNames.some((d) => d === dep || d.startsWith(`${dep}/`))) {
-      detected.push(dep);
-      for (const name of ["landing-page-pack", "seo-content-pack", "brand-kit"]) {
-        recommendedNames.add(name);
-      }
-      break;
-    }
-  }
-
-  // Backend frameworks
-  const backendDeps = ["express", "fastify", "hono", "koa", "@hono/hono"];
-  for (const dep of backendDeps) {
-    if (depNames.some((d) => d === dep || d.startsWith(`${dep}/`))) {
-      detected.push(dep);
-      for (const name of ["test-suite-generator", "security-audit-report"]) {
-        recommendedNames.add(name);
-      }
-      break;
-    }
-  }
-
-  // AI SDKs
-  const aiDeps = ["@anthropic-ai/sdk", "openai", "@openai/openai", "anthropic"];
-  for (const dep of aiDeps) {
-    if (depNames.includes(dep)) {
-      detected.push(dep);
-      for (const name of ["market-research-report", "seo-content-pack"]) {
-        recommendedNames.add(name);
-      }
-      break;
-    }
-  }
-
-  // Stripe
-  if (depNames.includes("stripe")) {
-    detected.push("stripe");
-    recommendedNames.add("proposal-pack");
-  }
-
-  // Email
-  const emailDeps = ["nodemailer", "@sendgrid/mail", "@sendgrid/client"];
-  for (const dep of emailDeps) {
-    if (depNames.includes(dep)) {
-      detected.push(dep);
-      recommendedNames.add("email-sequence");
-      break;
-    }
-  }
-
-  // Test frameworks
-  const testDeps = ["vitest", "jest", "mocha", "@jest/core"];
-  for (const dep of testDeps) {
-    if (depNames.includes(dep)) {
-      detected.push(dep);
-      recommendedNames.add("test-suite-generator");
-      break;
-    }
-  }
-
-  // TypeScript
-  if (depNames.includes("typescript")) {
-    detected.push("typescript");
-    recommendedNames.add("repo-onboarding-report");
-  }
-
-  // Deduplicate detected list
-  const uniqueDetected = Array.from(new Set(detected));
-
-  const recommended = Array.from(recommendedNames)
-    .map((name) => loadRegistry().find((s) => s.name === name))
-    .filter((s): s is SkillMeta => s !== undefined);
-
-  return { detected: uniqueDetected, recommended };
+  // Recommendations follow the owner's metadata; no package-owned skill names
+  // or implicit default selection can inject an unrelated catalog entry.
+  const recommended = loadRegistry().filter(skill => skill.tags.some(tag => tags.has(tag.toLowerCase())));
+  return { detected, recommended };
 }
 
 /**

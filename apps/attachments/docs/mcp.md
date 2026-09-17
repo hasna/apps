@@ -2,7 +2,7 @@
 
 attachments-mcp bridges MCP tools to the authenticated HTTPS attachment service.
 Its credential and authority resolve through the shared @hasna/contracts chain
-(1.0.2) fresh on EVERY tool call — the same ladder the CLI uses:
+(1.1.0) fresh on EVERY tool call — the same ladder the CLI uses:
 `HASNA_ATTACHMENTS_API_KEY_OVERRIDE` / `HASNA_PROFILE` /
 `HASNA_ATTACHMENTS_API_KEY_REF`, the macOS Keychain item
 `hasna.credentials.attachments.api-key`, `~/.hasna/attachments/config/credentials`,
@@ -18,6 +18,12 @@ The existing MCP host transport supports --stdio (or MCP_STDIO=1), and Streamabl
 HTTP on loopback port 8850 by default (--port or MCP_HTTP_PORT overrides the port).
 This local host transport is distinct from the upstream HTTPS attachment API.
 Use --help for transport options and attachments mcp for client installation.
+
+`attachments mcp --claude`, `--codex`, `--gemini` or `--all` registers
+`attachments-mcp --stdio`. Claude Code and Codex registration/removal use
+their native CLIs, which must be installed and available on PATH. Codex owns
+its TOML edits, including its configured home directory and unrelated server
+entries. Gemini registration updates its JSON settings.
 
 Tool profiles use ATTACHMENTS_PROFILE. Tool discovery exposes the schemas for
 upload/download/list/delete, links, presigned uploads, reports and supported

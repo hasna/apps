@@ -1,5 +1,144 @@
 # Changelog
 
+## 0.8.5
+
+### Patch Changes
+
+- Prioritize complete selected skill names and aliases over broader prompt keyword matches so the intended document receives the context budget first. Preserve explicit, required, path, and session priorities even when many general keywords match.
+
+## 0.8.4
+
+### Patch Changes
+
+- Allow native Hermes prompt hooks when TERMINAL_CWD exactly matches the process working directory. Reject alternate, relative and aliased paths, and always check the effective directory for native skill copies even when an SDK caller supplies another project.
+
+## 0.8.3
+
+### Patch Changes
+
+- c285d27: Add private, versioned execution-grant policies with conditional updates, history,
+  revocation and separate administration scopes across SQLite and PostgreSQL.
+  Selected local CLI, MCP and SDK executions resolve fresh authorization for exact
+  bundles and named consumers before reading independently configured Secrets.
+  Unrelated profile edits preserve reviewed grants; API failures, changed bundles
+  and revoked access fail closed. Explicit caller-managed bindings remain available.
+
+## 0.8.2
+
+### Patch Changes
+
+- 3c5f098: Resolve declared executable secrets through explicit bindings to the selected bundle, profile and local consumer. Add a CLI binding template, configured Secrets SDK resolution, bounded value injection and output redaction. Missing or mismatched grants fail without ambient fallback.
+
+## 0.8.1
+
+### Patch Changes
+
+- 7977a43: Add recurring consent SDK, CLI and MCP operations with bounded wire validation, captured account/server targeting, fresh human approval of immutable terms, budget/history visibility, revocation and durable recovery using the original approval and request key. Server policy and live enablement remain separate.
+
+## 0.8.0
+
+### Minor Changes
+
+- 5537fc2: Retire unversioned server submissions and embedded skill implementations. The
+  legacy worker terminates queued records without executing them; historical run
+  reads, outputs, and cancellation remain available. Managed executions continue
+  to require an immutable published bundle. Pin the published Contracts 1.1.0
+  credential resolver for reproducible CLI builds.
+
+### Patch Changes
+
+- Verify peer dependencies in their actual installation scope when Bun hoists shared packages, retaining locked-version checks and refusal of substituted dependencies.
+
+- 1472c04: Allow a hosted Secrets vault reference in an owner-only canonical or profile credential file without storing a raw application key. Preserve existing provider precedence and terminal bootstrap/vault failures. Skills retains the normal Secrets bootstrap context, file-instance binding, and configuration checks across asynchronous vault reads; login, logout, and URL changes handle stored references explicitly.
+
+  Resolve the installed SDK's ESM export without registry downloads or global/CWD package searches, while preserving caller stdin and strict compiled consumers. A missing or broken SDK and a recursive Secrets bootstrap remain terminal.
+
+- e64c60c: Serve only the authenticated organization's published skills. Remove machine-local catalog fallback, automatic bundled-corpus imports on startup, and skill files from the server image. Preserve the old unscoped SDK registry exports as empty compatibility helpers; use an authenticated client to read private catalogs.
+- 6728edc: Remove operational skill content from the public repository and package assets. Keep Skills catalogs and payloads in operator-owned storage, retire static selections and implicit legacy source imports, and reject tracked skill payloads in CI. Instructions no longer reloads a bundled or working-directory inbox contract by default. Project recommendations use the owner's skill tags rather than a shipped list of skill names.
+
+## 0.7.3
+
+### Patch Changes
+
+- 12f8663: Honor explicit `port --all --allow-shadow` permission for each imported skill, including the `add` alias. Preserve default official-name refusal, separate overwrite consent and partial-failure reporting.
+- Verify actual producer dependency resolution against the selected standalone frozen lock before publication and in the explicit release packing procedure.
+- 8a3026a: Bind explicitly reviewed launcher and interpreter symlink paths, ancestor identities, and resolved bytes during native hook checks. Preserve strict byte and directory modes; refuse retargeting, special files, oversized traversal, concurrent changes and planned writes that replace a bound path or create its missing ancestor.
+
+## 0.7.2
+
+### Patch Changes
+
+- bec1b1c: Add explicit bounded byte-hash discovery witnesses for reviewed native source and executable files, preserving existing UTF-8 witness semantics.
+- 4efb3a2: Bind reviewed native discovery directories so newly added plugins or entrypoints cannot evade unchanged source-file hashes. Require fresh Hermes membership coverage and allow normal hook installation to upgrade older automatic policies.
+- 3260f49: Refuse Hermes bundled plugin and skill environment overrides during native discovery and hook checks so unreviewed bundle locations cannot bypass the configured source guards.
+- Reject native hook invocations whose selected profile differs from their installed adapter binding before refreshing or loading context. Preserve explicit CLI access to other profiles and adapter-specific profile settings.
+- aa30103: Keep native discovery working after vendor skill documents are archived while retaining nested shared assets. Bound discovery entry allocation and path metadata, preserve finite traversal depth, and refuse unsupported special files.
+- da303cf: Exclude the exact Skills session policy prepended by Gemini from prompt skill selection, preserving other hook context and the user's request.
+
+## 0.7.1
+
+### Patch Changes
+
+- eabb7cc: Use shared bounded agent-policy validation so plugin-rich bridge installations remain readable. Reject oversized policies and excessive discovery collections before activation or backup writes, and keep installation planning free of legacy data migration.
+- a9f73e8: Persist native archive recovery intent before moving payloads, preserve concurrent source edits and changed archives during compensation, and bound ownership reads against replaced files and FIFO races.
+
+## 0.7.0
+
+### Minor Changes
+
+- 4d9f485: Install one owned native CLI bridge with supported coding-agent prompt adapters. Refuse native skill/configuration drift and incomplete plugin discovery, preserve retired copies with recovery receipts, and keep managed loading separate from local draft authoring.
+- 378d502: Resolve reviewed profile aliases to the selected canonical skill version and digest. Reject ambiguous aliases and require server capability support before saving them.
+
+### Patch Changes
+
+- 26df947: Stop local skill execution when dependency preparation fails or times out. Drain installer output without exposing registry diagnostics, and use the selected execution environment for preparation. Programmatic callers can bound preparation with `preparationTimeoutMs`; the default is 60 seconds. Remember incomplete preparation so partially created dependencies cannot bypass a failed attempt on retry; document recovery for interrupted attempts. Forwarded skill arguments and explicit local routing are unchanged.
+
+  Exclude local dependency preparation state from bundles, portable copies, and authoring snapshots while preserving nested source with the same name.
+
+- 3f82998: Add an explicit prepare command for reviewed draft versions and content hashes, preserve the selected kind in new skill scaffolds, and explain how to prepare stale drafts before publication.
+- b704eb0: Support 4,096 exact selections with advertised bounded API, client and cache capacity. Reserve room for project/session/station receipts before saving a profile, preserve operator request limits, and refuse unsupported large writes without truncation.
+- 18ba31e: Add a Hermes Skills CLI bridge with native YAML hooks, explicit normal trust checks, bundled skill reseeding opt-out, and guarded native skill tools. Keep Hermes prompt-hook failure semantics and discovery limits explicit.
+- 9e2f178: Preserve mixed-case dependency-like source directories and regular files named node_modules when preparing skill manifests, so the written content hash matches the unchanged authoring files.
+
+## 0.6.3
+
+### Patch Changes
+
+- Honor explicit hosted `run --remote` and MCP `run_skill` with `remote: true` on managed stations, retaining the selected instance's quote and approval flow independently of selected-bundle loading defaults. Refuse conflicting explicit execution modes before making requests.
+- Persist the admitted remote run ID and status before polling or retrieving logs so interrupted CLI processes can resume status lookup using their local run ID.
+
+## 0.6.2
+
+### Patch Changes
+
+- Allow vendor skill discovery to ignore symlinks to regular plugin metadata files and direct sibling cache aliases whose real targets were fully scanned and contain no discoverable skills. Hook planning can then disable neighboring cached skills while symlinked skill directories, skill contents, unsafe or incomplete aliases, dangling links, and special files remain refused.
+
+## 0.6.1
+
+### Patch Changes
+
+- Flush large managed CLI documents and JSON receipts before exiting so piped sync, profile, hook, and execution output stays complete. Keep isolated runtime image publication enabled when GitHub masks infrastructure identifiers in cross-job outputs.
+
+## 0.6.0
+
+### Minor Changes
+
+- Unify skill consumption through exact API profiles, verified immutable station caches, project and session locks, and Skills CLI context hooks for Claude and Codex. Shared profile writes use revision preconditions; station receipts report applied selections. Managed stations load selected bundles through the CLI and refuse native exports, with recoverable migration of existing skill directories.
+
+  Hosted documentation and sync now use shared versioned selections. Executable bundles retain the established SKILL.md, README.md, then CLAUDE.md documentation priority. Add a separate reviewed cloud execution API with durable idempotent admission, isolated execution, verified artifacts, and explicit deployment readiness. Loading context never authorizes execution.
+
+### Patch Changes
+
+- Declare HTTP 400 for invalid identifier inputs in administrative organization, user, entitlement, run, billing and audit operation contracts.
+- Reject malformed, nonpositive and overflowing remote run polling values before quoting or creating a run, instead of silently truncating them or using defaults. Bound polling milliseconds to 2147483647 so native timers cannot overflow into rapid requests.
+- Fix isolated cloud runner startup by loading the shared execution protocol constant without application schema dependencies, and verify supervisor imports in the final runtime image.
+
+## 0.5.11
+
+### Patch Changes
+
+- Reject overlapping source and destination directories before portable skill import overwrites or copies files, including symlink aliases and destinations inside the source. Disjoint overwrites continue to replace only the selected skill.
+
 ## 0.5.10
 
 ### Patch Changes

@@ -42,6 +42,7 @@ import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { stripVTControlCharacters } from "node:util";
 
 const INTERNAL_PATTERNS: Array<{ name: string; re: RegExp; contentRe?: RegExp }> = [
   // The content form of the domain detector fires on EVERY spelling of the
@@ -302,6 +303,54 @@ function parsePackJson(raw: string): { entryCount: number; files: Array<{ path?:
   return { entryCount, files };
 }
 
+// Serial prepack test runners may finish many successful files after a failed
+// check. Keep a small excerpt around early failure markers as well as the
+// existing tails, including the nearest Bun test-file heading when it is far
+// from the failed assertion. Do not dump the full captured child output.
+function failureContext(raw: string, tailLines: number): string {
+  const lines = stripVTControlCharacters(raw).trim().split("\n");
+  const end = Math.max(0, lines.length - tailLines);
+  const selected = new Set<number>();
+  const testFailures: Array<{ line: number; heading: number }> = [];
+  const otherErrors: typeof testFailures = [];
+  let heading = -1;
+  let matches = 0;
+  for (let i = 0; i < end; i++) {
+    if (/^(?:(?:::group::|##\[group\])\s*)?.+\.(?:test|spec)\.[cm]?[jt]sx?:\s*$/.test(lines[i])) heading = i;
+    const failedTest = /^\s*(?:\(fail\)|FAIL(?:\s|$))/.test(lines[i]);
+    if (!failedTest && !/(?:^\s*(?:(?:[A-Za-z]*Error|error|fatal|panic):|[1-9]\d* fail\b)|\berror TS\d+:|\b(?:Segmentation fault|Aborted \(core dumped\))\b)/.test(lines[i])) continue;
+    matches++;
+    const candidates = failedTest ? testFailures : otherErrors;
+    if (candidates.length < 8) candidates.push({ line: i, heading });
+  }
+  // Passing negative tests can emit "error:" many times. Reserve the bounded
+  // report for explicit failed-test labels first, then use any remaining room
+  // for compiler, crash or generic error diagnostics. Preserve this priority
+  // during emission too, so earlier benign errors cannot exhaust the output limit.
+  const candidates = [...testFailures, ...otherErrors].slice(0, 8);
+  let omitted = matches > candidates.length;
+  for (const candidate of candidates) {
+    if (candidate.heading >= 0) selected.add(candidate.heading);
+    for (let j = Math.max(0, candidate.line - 8); j <= Math.min(end - 1, candidate.line + 4); j++) selected.add(j);
+  }
+  const excerpt: string[] = [];
+  let length = 0;
+  let previous = -1;
+  for (const i of selected) {
+    const line = `[${i + 1}] ${lines[i].length > 400 ? lines[i].slice(0, 400) + " [line truncated]" : lines[i]}`;
+    if (excerpt.length >= 64 || length + line.length + 5 > 7_900) {
+      omitted = true;
+      break;
+    }
+    if (previous >= 0 && i !== previous + 1) excerpt.push("...");
+    excerpt.push(line);
+    length += line.length + 5;
+    previous = i;
+  }
+  if (omitted) excerpt.push("[additional failure context omitted]");
+  return excerpt.join("\n");
+}
+
 function packFileNames(pkgDir: string): string[] {
   let out: string;
   try {
@@ -325,19 +374,25 @@ function packFileNames(pkgDir: string): string[] {
     // the actual prepack failure, so every prepack failure reads as
     // "command failed" with no cause. Capture a generous stderr tail so the
     // failing step is visible; both streams stay bounded by maxBuffer.
-    const stdoutTail = String(e?.stdout ?? "")
+    const stdout = String(e?.stdout ?? "");
+    const stderr = String(e?.stderr ?? "");
+    const stdoutContext = failureContext(stdout, 40);
+    const stderrContext = failureContext(stderr, 200);
+    const stdoutTail = stdout
       .trim()
       .split("\n")
       .slice(-40)
       .join("\n");
-    const stderrTail = String(e?.stderr ?? "")
+    const stderrTail = stderr
       .trim()
       .split("\n")
       .slice(-200)
       .join("\n");
     throw new Error(
       `npm pack --dry-run --json failed in ${pkgDir}` +
+        (stdoutContext ? `\n  prepack failure context (earlier output):\n    ${stdoutContext}` : "") +
         (stdoutTail ? `\n  prepack output tail:\n    ${stdoutTail}` : "") +
+        (stderrContext ? `\n  npm stderr failure context (earlier output):\n    ${stderrContext}` : "") +
         (stderrTail ? `\n  npm stderr tail:\n    ${stderrTail}` : ""),
     );
   }
@@ -597,6 +652,65 @@ function selfTest(): number {
     check(
       "broken pack surfaces the prepack's stderr (the shape machines verify:pack failures take)",
       broken.rc === 1 && brokenOut.includes("npm stderr tail") && brokenOut.includes("broken-prepack-stderr"),
+    );
+
+    // A serial test runner can continue after a failure and put hundreds of
+    // successful checks after it. Exercise real npm forwarding so a tail-only
+    // diagnostic cannot silently lose the failed test and its source file.
+    const noisyRoot = path.join(root, "noisy-broken-root");
+    fixturePackage(path.join(noisyRoot, "apps"), "noisy-broken", ["ok.txt"], false, undefined, {
+      scripts: { prepack: "node prepack.cjs" },
+    });
+    const noisyStdout = [
+      "src/lib/expected-options.test.ts:",
+      ...Array.from({ length: 12 }, (_, i) => `error: unknown option '--expected-invalid-${i}'`),
+      "(pass) expected command-line rejections",
+      "\u001b[31msrc/lib/early.test.ts:\u001b[0m",
+      ...Array.from({ length: 40 }, (_, i) => `(pass) earlier check ${i}`),
+      "41 | expect(actual).toBe(expected);",
+      "\u001b[31merror: expect(received).toBe(expected)\u001b[0m",
+      "Expected: early-expected-marker",
+      "Received: early-received-marker",
+      `  diagnostic value: ${"x".repeat(12_000)}`,
+      "  at src/lib/early.test.ts:41:17",
+      "\u001b[31m(fail) early failure remains visible [0.10ms]\u001b[0m",
+      " 1 fail",
+      ...Array.from({ length: 30 }, (_, i) => `(fail) additional-fixture-failure-${i}`),
+      "src/lib/later.test.ts:",
+      ...Array.from({ length: 120 }, (_, i) => `(pass) later successful check ${i}`),
+      "late-prepack-tail-marker",
+    ].join("\n") + "\n";
+    const noisyStderr = [
+      "error: early-stderr-failure-marker",
+      ...Array.from({ length: 240 }, (_, i) => `later stderr output ${i}`),
+      "late-stderr-tail-marker",
+    ].join("\n") + "\n";
+    fs.writeFileSync(
+      path.join(noisyRoot, "apps", "noisy-broken", "prepack.cjs"),
+      `const fs = require("node:fs");\nfs.writeFileSync(1, ${JSON.stringify(noisyStdout)});\n` +
+        `fs.writeFileSync(2, ${JSON.stringify(noisyStderr)});\nprocess.exitCode = 1;\n`,
+    );
+    const noisy = capture(() => run(noisyRoot));
+    const noisyOut = noisy.lines.join("\n");
+    check(
+      "explicit failed-test identifiers outrank more than eight earlier expected error messages",
+      noisy.rc === 1 && noisyOut.includes("early failure remains visible"),
+    );
+    check(
+      "failed pack retains the early Bun failure, source file and assertion context after a long success tail",
+      noisy.rc === 1 && noisyOut.includes("early failure remains visible") &&
+        noisyOut.includes("src/lib/early.test.ts:") && noisyOut.includes("41 | expect(actual)") &&
+        noisyOut.includes("early-expected-marker") && noisyOut.includes("early-received-marker"),
+    );
+    check(
+      "failed pack retains an early stderr failure and both existing stream tails",
+      noisy.rc === 1 && noisyOut.includes("early-stderr-failure-marker") &&
+        noisyOut.includes("prepack output tail") && noisyOut.includes("late-prepack-tail-marker") &&
+        noisyOut.includes("npm stderr tail") && noisyOut.includes("late-stderr-tail-marker"),
+    );
+    check(
+      "failure excerpts stay bounded for large values and many failures",
+      noisy.rc === 1 && noisyOut.length < 16_000 && !noisyOut.includes("additional-fixture-failure-29"),
     );
 
     const blockedRoot = path.join(root, "blocked-root");

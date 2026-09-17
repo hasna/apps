@@ -644,6 +644,13 @@ describe("writeManagedSkillDir", () => {
 });
 
 describe("resolveSyncCorpus (zero-corpus source resolution)", () => {
+  function explicitSource(): string {
+    const root = join(process.env.HASNA_SKILLS_DIR!, "private-package");
+    const dir = join(root, "skills", "source-fixture");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "SKILL.md"), "---\nname: source-fixture\ndescription: Synthetic source fixture\nkind: instruction\n---\n# Fixture\n");
+    return root;
+  }
   test("no explicit source resolves to the installed corpus cache", () => {
     const { roots, source } = resolveSyncCorpus({ rootDir: "/tmp/nonexistent-corpus-x" });
     expect(source).toBe("corpus");
@@ -652,18 +659,18 @@ describe("resolveSyncCorpus (zero-corpus source resolution)", () => {
   });
 
   test("an explicit sourceDir pointing at a package root resolves skills/", () => {
-    const { roots, source } = resolveSyncCorpus({ sourceDir: REPO_ROOT });
+    const { roots, source } = resolveSyncCorpus({ sourceDir: explicitSource() });
     expect(source).toBe("source");
     // `agent-skills/` is no longer a corpus root: the fleet workflow skills moved to
     // the private per-station store and reach sync through the installed cache.
     expect(roots.map((root) => root.replace(/\\/g, "/").split("/").slice(-2).join("/"))).toEqual([
-      "skills/skills",
+      "private-package/skills",
     ]);
   });
 
   test("$SKILLS_SOURCE is honoured as the ambient source", () => {
     const saved = process.env.SKILLS_SOURCE;
-    process.env.SKILLS_SOURCE = REPO_ROOT;
+    process.env.SKILLS_SOURCE = explicitSource();
     try {
       const { roots, source } = resolveSyncCorpus();
       expect(source).toBe("source");
@@ -688,7 +695,7 @@ describe("resolveSyncCorpus (zero-corpus source resolution)", () => {
     const other = tempDir("sync-source-other-");
     try {
       process.env.SKILLS_SOURCE = other;
-      const { source } = resolveSyncCorpus({ sourceDir: REPO_ROOT });
+      const { source } = resolveSyncCorpus({ sourceDir: explicitSource() });
       expect(source).toBe("source");
     } finally {
       if (saved === undefined) delete process.env.SKILLS_SOURCE;

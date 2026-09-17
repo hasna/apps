@@ -87,7 +87,8 @@ const SERVICE_STATUS_MATRIX: ReadonlyArray<readonly [string, string, readonly nu
   ["/v1/addresses/{id}", "patch", [200, 400, 401, 403, 404, 413, 500]],
   ["/v1/addresses/{id}", "put", [200, 400, 401, 403, 404, 413, 500]],
   ["/v1/addresses/{id}", "delete", [200, 401, 403, 404, 500]],
-  ["/v1/messages", "get", [200, 400, 401, 403, 500]],
+  ["/v1/messages", "get", [200, 400, 401, 403, 429, 500, 504]],
+  ["/v1/mailbox-filters/{id}/apply", "post", [200, 400, 401, 403, 404, 413, 429, 500, 504]],
   ["/v1/messages", "post", [200, 201, 400, 401, 403, 409, 413, 500]],
   // The record route carries NO 409: it accepts either direction, so the outbound
   // rejection that /v1/messages answers with has nothing to fire on here. That absence
@@ -96,7 +97,7 @@ const SERVICE_STATUS_MATRIX: ReadonlyArray<readonly [string, string, readonly nu
   ["/v1/messages/counts", "get", [200, 401, 403, 500]],
   ["/v1/messages/groups", "get", [200, 401, 403, 500]],
   ["/v1/messages/threads", "get", [200, 401, 403, 500]],
-  ["/v1/messages/send", "post", [200, 202, 400, 401, 403, 409, 413, 422, 429, 500, 502, 503]],
+  ["/v1/messages/send", "post", [200, 202, 400, 401, 403, 404, 409, 413, 422, 429, 500, 502, 503]],
   ["/v1/messages/send-intents/lookup", "post", [200, 400, 401, 403, 413, 500]],
   ["/v1/messages/send-intents/uncertain", "get", [200, 401, 403, 500]],
   ["/v1/messages/send-intents/reconcile", "post", [200, 400, 401, 403, 404, 409, 413, 500]],

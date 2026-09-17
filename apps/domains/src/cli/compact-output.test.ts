@@ -1,7 +1,14 @@
 import { startPortfolioFixture } from "../test/portfolio-client-fixture.test-support.js";
 import { LocalStore } from "../db/store.js";
 const fixtures = new Map<string, Awaited<ReturnType<typeof startPortfolioFixture>>>();
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
+
+// Every test here spawns the CLI (`bun run src/cli/index.ts`, a fresh transpile each time) once per
+// seeded record, 20-25 spawns per test. Measured on the 4-core CI runner 2026-09-11: 5.0-8.0 s
+// ("reports truncation via total/has_more" 5076 ms, "honours a limit above MAX_LIST_LIMIT" 7994 ms),
+// against bun's 5000 ms default -> a red shard on main and on PRs that never touch domains. This is
+// the budget the tests actually need; no assertion changes.
+setDefaultTimeout(60_000);
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

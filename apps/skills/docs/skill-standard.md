@@ -3,7 +3,7 @@
 Portable skills live in one folder each:
 
 ```text
-~/.hasna/skills/<skill-name>/
+~/.hasna/skills/installed/<skill-name>/
 ├── SKILL.md
 ├── skill.json
 ├── AGENTS.md
@@ -13,9 +13,50 @@ Portable skills live in one folder each:
     └── index.ts
 ```
 
-`skills new <name>` creates this layout. `skills scaffold <name>` is an alias.
+`skills new <name>` creates this layout. `skills scaffold <name>` is an alias,
+and `skills create <name>` uses the same authoring corpus. Both creation commands
+accept `--kind instruction` for a prose skill; the default is `executable`.
+An owner layout migrated by Skills uses `~/.hasna/skills/skills/<skill-name>/`.
 `skills port <path>` and `skills add <path>` copy an existing skill folder into
 this layout and add missing standard files.
+
+## Edit, prepare and publish
+
+Edit the local draft's instructions, resources, code and metadata, then choose a
+new semantic version and review preparation before publication:
+
+```bash
+skills create release-guide --kind instruction
+# Edit the SKILL.md in the path reported by create.
+skills prepare release-guide --version 0.2.0 --dry-run --json
+skills prepare release-guide --version 0.2.0 --json
+skills validate release-guide
+skills push release-guide --dry-run
+skills push release-guide
+# On another station using the same configured instance:
+skills pull release-guide@0.2.0
+```
+
+`prepare` validates a private candidate before updating only `skill.json`'s
+authoritative version, declared kind and canonical content hash. It preserves
+other manifest fields and does not rewrite `SKILL.md`, `package.json`, code or
+resources, execute helpers, install dependencies, or call an API. Review any
+separate package version yourself when the skill also publishes a package.
+Changed canonical content requires a higher semantic version; build metadata
+alone is not a version bump. Preparing an already valid, unchanged version is
+idempotent. Dry-run leaves the authoring corpus and configuration unchanged.
+
+An existing manifest without `kind` requires an explicit `--kind instruction`
+or `--kind executable` during preparation. Instruction skills may contain
+helpers, so their presence does not decide the kind. Invalid candidates and
+conflicting kind declarations are refused: when deliberately changing kind,
+align any explicit `SKILL.md` kind with the candidate `skill.json` kind and
+provide the required executable files before preparing. Preparation never
+rewrites that frontmatter. Source
+symlinks at the selected skill root or its included descendants are refused
+without changing the draft; existing HOME/corpus ancestor aliases remain
+supported. `push` validates and
+uploads the reviewed bytes; it never silently repairs a stale manifest hash.
 
 ## The manifest split
 
@@ -46,7 +87,7 @@ A skill declares its artifact class with the `kind` field in `skill.json`
 (`kind` may also appear in `SKILL.md` frontmatter for compatibility with
 existing Codewith conventions):
 
-- `kind: executable` (default when omitted) — a runnable skill folder with
+- `kind: executable` — a runnable skill folder with
   `package.json`, a non-empty `bin`, and `src/index.ts`. `skills run` executes it.
 - `kind: instruction` — a `SKILL.md`-primary prose skill for coding agents.
   `package.json`, `bin`, and `src/` are all optional. Instruction skills may still
@@ -55,8 +96,10 @@ existing Codewith conventions):
   instruction skill returns a clear "not runnable — instruction skill" error
   instead of executing a stub.
 
-Missing `kind` defaults to `executable` so the bundled corpus is unaffected.
-Migrated operational (prose) skills should set `kind: instruction` explicitly.
+New scaffolds always record their selected kind. Legacy local readers retain
+their executable fallback, while the legacy publication API retains its
+instruction fallback for omitted kinds. `prepare` removes that ambiguity
+through the author's explicit selection without changing old API behavior.
 
 ## Naming
 
@@ -125,6 +168,7 @@ incomplete, invalid, or whose `content_hash` does not match the bundle.
   "name": "my-skill",
   "description": "What this skill does and when to use it.",
   "version": "0.1.0",
+  "kind": "executable",
   "displayName": "My Skill",
   "category": "Development Tools",
   "tags": ["custom"],
@@ -354,3 +398,32 @@ Invalid selections fail before any apply write. Prune requires the marker
 deletion authority. Adoption also leaves every already-marked directory alone.
 Rollback records contain identities, hashes and markers, not backups of removed
 file content.
+
+## Recovering interrupted dependency preparation
+
+Local executable skills prepare missing dependencies before running their entry,
+including when `--help` is forwarded to that entry. Preparation has a 60-second
+default deadline; callers of the public root `runSkill` export can set
+`preparationTimeoutMs`. Installer diagnostics are drained without exposing
+registry URLs or lifecycle output. A failed preparation returns a nonzero result
+and the CLI records a failed run.
+
+The selected skill directory temporarily contains `.skills-dependency-preparation`.
+Successful preparation removes this marker. A confirmed failure keeps a retryable
+failed state, so a later invocation prepares again even if `node_modules` was
+partially created. Existing dependencies are preserved.
+
+An interrupted, active, malformed, or symlinked marker refuses execution. To recover:
+
+1. Identify the selected skill directory and confirm that no dependency installer
+   or lifecycle child is still running for it. Do not terminate a process based on
+   a PID found in a skill directory.
+2. Review the skill's package and lifecycle scripts, then run `bun install --no-save`
+   in that exact directory with the intended environment. Require a successful exit.
+3. Remove only that directory's `.skills-dependency-preparation` marker, then retry
+   the original Skills command. Preserve `node_modules` and all other skill files.
+
+Do not remove an incomplete marker merely to bypass preparation. If the directory
+is read-only, prepare it through its owner before running it.
+
+The root `.skills-dependency-preparation` directory is local runtime state. Bundles, portable copies, and authoring snapshots exclude it; a nested directory with that name remains authored content. Moving an existing local corpus preserves its dependency tree and preparation state together.

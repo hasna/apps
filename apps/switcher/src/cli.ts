@@ -7,8 +7,9 @@ import { detectHarness, validateHarnessConfiguration } from "./harnesses";
 import { launch, validateOriForPlan, type LaunchBackend } from "./launcher";
 import { openCliRuntime } from "./runtime";
 import { providerFromPreset, type PresetOptions } from "./presets";
-import { resolveLaunchProvider, selectModel, ensureLaunchProfile } from "./direct-launch";
+import { resolveLaunchProvider, selectModel, ensureLaunchProfile, launchCatalog } from "./direct-launch";
 import { CredentialResolver, bindingTarget, credentialReference, credentialBindingSchema, deliverVaultCredential, repairVaultExecutablePermissions } from "./credentials";
+import { ensureProviderCredential } from "./provider-credential-onboarding";
 import { detectChatGPTApp, detectClaudeDesktopApp } from "./desktop-apps";
 import { reasoningEffortSchema, codexReasoning } from "./reasoning";
 const HELP = `switcher — launch coding harnesses and desktop apps with your provider and model
@@ -57,17 +58,30 @@ Keep Switcher running while using the app; quit that app instance to end the lau
 --reasoning: none, minimal, low, medium, high, xhigh, max, ultra (provider support required).
 --dangerously-bypass-approvals-and-sandbox: full access without prompts or command sandboxing.
 PROTOCOL: anthropic-messages, openai-responses, openai-chat, gemini-generate-content
-Without remote API configuration, the CLI owns a local authenticated API and
-stores data in ~/.hasna/switcher (override HASNA_SWITCHER_HOME).
-Remote API URL/key resolve through @hasna/contracts: overrides, Keychain,
-~/.hasna/switcher/config/credentials, then environment. A key alone uses the gateway.
-A configured remote API never falls back to local data.
+Data access is HTTP against the configured Switcher API. Its URL/key resolve
+through @hasna/contracts: overrides, Keychain (hasna.credentials.switcher.api-key),
+~/.hasna/switcher/config/credentials, then environment (HASNA_SWITCHER_API_KEY).
+A key alone uses the gateway. With nothing configured the command exits 1 and
+names those sources; it never falls back to local data.
+HASNA_SWITCHER_LOCAL=1 (alias SWITCHER_LOCAL=1) deliberately selects the on-box
+store in ~/.hasna/switcher (override HASNA_SWITCHER_HOME) behind an owned
+per-command loopback API; a configured remote API outranks the flag.
 Provider credential references must start SWITCHER_PROVIDER_.
 --models-file accepts a JSON array of model metadata; --model adds one starter.
 Use --catalog-format none for a manual catalog; otherwise discovery stays active.
 models update replaces saved metadata; omit expiry in its JSON to clear it.
 models remove removes saved metadata, not entries in an upstream catalog.
 Credential bindings contain references only. Custom destinations require --origin URL.
+Before a real launch, Switcher resolves the provider credential and runs its
+declared safe authentication check before catalog refresh or a model picker. When no source exists in
+an interactive terminal, it searches Hasna Secrets metadata, displays the selected
+Secrets account/source and matching key references, and requires a selection.
+Auto-onboarded bindings refuse providers without a safe check; older explicit
+bindings remain compatible and are never validated by inferring catalog behavior.
+Noninteractive launches return credential_setup_required with exact binding syntax.
+Dry-runs do not bind, resolve, or authenticate provider credentials. Public and
+credentialless catalogs may refresh; authenticated catalogs use a saved snapshot
+and name the explicit refresh command when no snapshot exists.
 Vault bindings use the installed secrets CLI and its canonical Contracts URL/key
 by default. --vault-account pins a Keychain account; --vault-operator env requires
 per-process HASNA_SECRETS_API_KEY. Explicit operators also require --vault-url.
@@ -220,8 +234,16 @@ export async function main(args = process.argv.slice(2)) {
     const harness=parse(harnessSchema,chatgpt ? "codex" : claudeDesktop ? "claude" : action);assertHarnessArguments(harness,nativeArgs);
     await validateHarnessConfiguration(harness,values.cwd??process.cwd(),nativeArgs);
   }
-  const runtime = await openCliRuntime(process.env,provider=>credentials.resolve(provider));
+  const dryLaunch = command==="launch"&&Boolean(values["dry-run"]);
+  const runtimeEnvironment = dryLaunch ? Object.fromEntries(Object.entries(process.env).filter(([name])=>!name.startsWith("SWITCHER_PROVIDER_"))) : process.env;
+  const runtime = await openCliRuntime(runtimeEnvironment,dryLaunch?undefined:provider=>credentials.resolve(provider));
   const client = runtime.client;
+  const refreshCatalog = async (provider: Awaited<ReturnType<typeof client.getProvider>>, prepared?: Awaited<ReturnType<typeof ensureProviderCredential>>) => {
+    if(runtime.mode!=="remote")return client.refreshModels(provider.id);
+    const checked=prepared??await ensureProviderCredential(provider,{resolver:credentials});
+    const credential=await checked.resolveCredential(provider);
+    return launchCatalog(client,provider,false,{clientSide:true,credential,resolveCredential:candidate=>credentials.resolve(candidate)});
+  };
   try {
   const presetOptions = (): PresetOptions => ({
     protocol: values.protocol ? parse(protocolSchema, values.protocol) : undefined,
@@ -244,12 +266,16 @@ export async function main(args = process.argv.slice(2)) {
     const timeoutMs = values.timeout ? Number(values.timeout) * 1000 : undefined;
     if (timeoutMs !== undefined && (!Number.isFinite(timeoutMs) || timeoutMs <= 0)) throw new Error("--timeout must be positive seconds.");
     let profileId = action;
+    let credentialPreflight: string | undefined;
+    let resolvePreparedCredential: ((provider: Parameters<CredentialResolver["resolve"]>[0])=>Promise<string|undefined>) | undefined;
     if (values.provider) {
       const harness = parse(harnessSchema, chatgpt ? "codex" : claudeDesktop ? "claude" : action);
       const modelPolicy = await readModelPolicy(values["model-policy-file"], values["role-model"]);
       const provider = await resolveLaunchProvider(client, values.provider, {...presetOptions(), harness});
       validateHarnessProvider(harness, provider);
-      const catalog = await client.refreshModels(provider.id);
+      let prepared:Awaited<ReturnType<typeof ensureProviderCredential>>|undefined;
+      if (!values["dry-run"]) { prepared=await ensureProviderCredential(provider,{resolver:credentials});credentialPreflight=prepared.providerFingerprint;resolvePreparedCredential=prepared.resolveCredential; }
+      const catalog = values["dry-run"]?await launchCatalog(client,provider,true):await refreshCatalog(provider,prepared);
       const model = values.model ?? await selectModel(catalog.models, values.search,harness);
       const selected = catalog.models.find(m => m.id === model);
       if (!selected) throw new Fault(422, "model_missing", "Selected model is not in the provider catalog.");
@@ -261,10 +287,13 @@ export async function main(args = process.argv.slice(2)) {
       if (values.model || values.protocol || values.url || values["credential-env"] || values["model-policy-file"] || values["role-model"])
         throw new Error("Use --provider PROVIDER for a direct launch, or update the saved profile explicitly.");
       const profile = await client.getProfile(profileId);
-      if (profile.harness === "gemini") validateHarnessProvider(profile.harness, await client.getProvider(profile.providerId));
       assertHarnessArguments(profile.harness,nativeArgs);
       await validateHarnessConfiguration(profile.harness,values.cwd??process.cwd(),nativeArgs);
-      await client.refreshModels(profile.providerId);
+      const provider = await client.getProvider(profile.providerId);
+      if (profile.harness === "gemini") validateHarnessProvider(profile.harness, provider);
+      let prepared:Awaited<ReturnType<typeof ensureProviderCredential>>|undefined;
+      if (!values["dry-run"]) { prepared=await ensureProviderCredential(provider,{resolver:credentials});credentialPreflight=prepared.providerFingerprint;resolvePreparedCredential=prepared.resolveCredential; }
+      if(values["dry-run"])await launchCatalog(client,provider,true);else await refreshCatalog(provider,prepared);
     }
     if (values["dry-run"]) {
       const plan = await client.launchPlan(profileId);
@@ -277,7 +306,7 @@ export async function main(args = process.argv.slice(2)) {
       } else output({...plan,...(desktop?{desktop:{...desktop,mode:"isolated-provider",sessionProfile:profileId}}:{}),...(claudeApp?{desktop:{...claudeApp,mode:"claude-3p-gateway",sessionProfile:profileId}}:{}),...(reasoning?{reasoning}:{}),...(dangerouslyBypassApprovalsAndSandbox?{permissions:{approvalPolicy:"never",sandboxMode:"danger-full-access"}}:{})});
       return;
     }
-    process.exitCode = await launch(client, profileId, {desktop, claudeDesktop:claudeApp, reasoning,dangerouslyBypassApprovalsAndSandbox,backend: backend as LaunchBackend, oriExecutable: values["ori-executable"], cwd: values.cwd, executable: values.executable, stateDir: values["state-dir"], args: nativeArgs, timeoutMs, refresh: false, resolveCredential: provider=>credentials.resolve(provider)});
+    process.exitCode = await launch(client, profileId, {desktop, claudeDesktop:claudeApp, reasoning,dangerouslyBypassApprovalsAndSandbox,backend: backend as LaunchBackend, oriExecutable: values["ori-executable"], cwd: values.cwd, executable: values.executable, stateDir: values["state-dir"], args: nativeArgs, timeoutMs, refresh: false, credentialPreflight, resolveCredential: resolvePreparedCredential??(provider=>credentials.resolve(provider))});
     return;
   }
   if (editingModel) {
@@ -292,11 +321,11 @@ export async function main(args = process.argv.slice(2)) {
   }
   if (command === "models" && action) {
     const provider = await resolveLaunchProvider(client, listingModels ? id : action, presetOptions());
-    if (values.refresh) await client.refreshModels(provider.id);
+    if (values.refresh) await refreshCatalog(provider);
     try { output(await client.listModels(provider.id, page)); }
     catch (error) {
       if (!(error instanceof SwitcherError && error.status === 404)) throw error;
-      await client.refreshModels(provider.id); output(await client.listModels(provider.id, page));
+      await refreshCatalog(provider); output(await client.listModels(provider.id, page));
     }
     return;
   }
@@ -305,7 +334,7 @@ export async function main(args = process.argv.slice(2)) {
     if(action==="presets") {output(id ? await client.getProviderPreset(id) : await client.listProviderPresets());return;}
     if(action==="list") {output(await client.listProviders(page));return;}
     if(action==="get"&&id) {output(await client.getProvider(id));return;}
-    if(action==="refresh"&&id) {output(await client.refreshModels(id));return;}
+    if(action==="refresh"&&id) {const provider=await client.getProvider(id);output(await refreshCatalog(provider));return;}
     if(action==="delete"&&id) {output(await client.deleteProvider(id,currentVersion()));return;}
     if(["add","update"].includes(action)&&id) {
       let input = parse(providerInputSchema, values.file ? await readInput(values.file) : values.preset ?

@@ -1,7 +1,7 @@
 # Vendored Hasna storage kit
 
 **Generated — do not edit.** This directory is stamped into the repo by
-[`@hasna/contracts`](https://github.com/hasna/apps/tree/main/apps/contracts) and verified in CI.
+[`@hasna/contracts`](https://github.com/hasna/contracts) and verified in CI.
 
 - Regenerate: `bunx @hasna/contracts vendor-kit`
 - Verify (CI): `bunx @hasna/contracts vendor-kit --check` — fails on stale or hand-edited files.

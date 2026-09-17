@@ -1,3 +1,5 @@
+import { canonicalSender } from "../../lib/email-address.js";
+import { replyMailboxes } from "../../lib/reply-headers.js";
 import type { Command } from "commander";
 import chalk from "../../lib/chalk-lite.js";
 import { suppressedRecipientsAmong } from "../../db/contacts.js";
@@ -72,9 +74,8 @@ export function registerReplyCommand(program: Command, output: (data: unknown, f
     .action(async (id: string, opts: { body: string; html?: boolean; provider?: string; all?: boolean; from?: string }) => {
       try {
         // Read the parent through the seam and reply via the server send API.
-        // NOTE: the server /messages/send endpoint carries no in-reply-to/references, so
-        // the reply is delivered as a new message and is not thread-linked server-side.
-        // We report the parent's real thread id (when present) rather than fabricating one.
+        // The server derives transport headers from the authorized parent;
+        // the local subject-based conversation key is not a recipient mailbox thread ID.
         const ds = resolveMailDataSource();
         const msg = await ds.getMessage(id);
         if (!msg) return handleError(new Error(`Email not found: ${id}`));
@@ -84,14 +85,14 @@ export function registerReplyCommand(program: Command, output: (data: unknown, f
         if (!from) return handleError(new Error("Could not determine From address; pass --from"));
         // Base recipients from the reply target; --all folds in the other recipients,
         // excluding ourselves and de-duping (addresses, not the joined string).
-        const candidates = opts.all ? [defaults.to, ...msg.to.split(",")] : [defaults.to];
+        const candidates = opts.all ? [defaults.to, msg.to, msg.cc ?? ""] : [defaults.to];
         const seen = new Set<string>();
         const toArr: string[] = [];
-        for (const raw of candidates.flatMap((value) => value.split(","))) {
+        for (const raw of candidates.filter(Boolean).flatMap((value) => { const parsed = replyMailboxes(value); if (!parsed) throw new Error("Invalid reply recipient mailbox list"); return parsed; })) {
           const addr = raw.trim();
           if (!addr) continue;
           const key = addr.toLowerCase();
-          if (key === from.toLowerCase() || seen.has(key)) continue;
+          if (key === canonicalSender(from) || seen.has(key)) continue;
           seen.add(key);
           toArr.push(addr);
         }
@@ -103,7 +104,8 @@ export function registerReplyCommand(program: Command, output: (data: unknown, f
           body: opts.html ? "" : opts.body,
           html: opts.html ? opts.body : undefined,
           markdown: false,
-          replyToId: id,
+          replyToId: msg.id,
+          providerId: opts.provider,
         });
         const threadId = msg.thread_id ?? null;
         // Not a fixed 8-char slice: in self_hosted mode the thread id is the

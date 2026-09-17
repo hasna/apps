@@ -29,6 +29,12 @@ function validateManifests(graph: Task[]): void {
 }
 function writeJson(path: string, value: unknown): void { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, JSON.stringify(value, null, 2) + "\n"); }
 function envFor(plan: Pick<Plan, "context">) { return { TURBO_SCM_BASE: plan.context.base, TURBO_SCM_HEAD: plan.context.head, TURBO_TELEMETRY_DISABLED: "1" }; }
+// `--affected` is derived ONCE, in the plan job. Turbo 2.5.4 attributes a changed file under the nested
+// workspace apps/notes/server to the parent or the child at random (HashMap order: 7 of 10 identical
+// dry-runs on one tree included notes-server, 3 did not), so a shard that re-derives `--affected`
+// disagrees with its own plan about a third of the time and refuses with "graph differs". Selecting the
+// plan's packages by name is deterministic (5/5 identical) and is still verified against the frozen graph.
+function packageFilters(graph: Task[]): string[] { return [...new Set(graph.map(t => t.package))].sort().map(name => `--filter=${name}`); }
 async function dry(targets: string[], plan: Pick<Plan, "context">, path: string): Promise<Task[]> {
   const out = await command([join(root, "node_modules/.bin/turbo"), "run", ...targets, "--dry=json", "--concurrency=1", "--env-mode=strict"], envFor(plan));
   writeFileSync(path, out.stdout); insist(out.code === 0, "Turbo dry-run failed");
@@ -73,11 +79,14 @@ async function shard(path: string, expectedSha: string, shardId: string, out: st
   const receipt: Receipt = { schemaVersion: 1, context: frozen.context, planSha256: expectedSha, shard: id, status: "failed", assignedTests: frozen.shards[id]!.tests };
   try {
     const actual = { ...await actualIdentity(frozen.context.base), toolchain: await pinnedToolchain() }; insist(canonical(actual) === canonical(frozen.context), "Foreign shard checkout, base, run, or lockfile");
-    sameGraph(await dry(["build", "--affected"], frozen, join(out, "build-dry.json")), frozen.buildGraph);
+    // An empty plan has no packages to name; re-deriving `--affected` is deterministic there (a nested-
+    // workspace change always makes its parent affected too, so the ambiguity never yields an empty set).
+    const buildTargets = frozen.buildGraph.length ? ["build", ...packageFilters(frozen.buildGraph)] : ["build", "--affected"];
+    sameGraph(await dry(buildTargets, frozen, join(out, "build-dry.json")), frozen.buildGraph);
     // Never restore a cross-run cache. Only full builds from this owned directory
     // may satisfy later test dependencies; executable test cache hits are refused.
     const cache = mkdtempSync(join(out, "task-cache-"));
-    receipt.build = await executePhase("build", ["build", "--affected"], frozen.buildGraph, frozen, out, cache, new Set());
+    receipt.build = await executePhase("build", buildTargets, frozen.buildGraph, frozen, out, cache, new Set());
     const selected = dependencyClosure(frozen.testGraph, receipt.assignedTests);
     if (receipt.assignedTests.length) sameGraph(await dry(receipt.assignedTests, frozen, join(out, "test-dry.json")), selected);
     else writeJson(join(out, "test-dry.json"), { noExecutableTestTasksAssigned: true, graph: selected });

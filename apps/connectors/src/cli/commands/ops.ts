@@ -257,7 +257,7 @@ export function registerCommands(program: Command): void {
               await new Promise<void>((resolve) => setTimeout(resolve, 2000));
 
               try {
-                await fetch(`http://localhost:${port}/api/connectors`);
+                await fetch(`http://localhost:${port}/health`);
               } catch {
                 console.log(`  ${chalk.red("✗")} OAuth server failed to start on port ${port}.`);
                 process.exit(1);

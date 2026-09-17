@@ -101,7 +101,7 @@ const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) 
 const switcherCli = join(import.meta.dir, "../src/cli.ts");
 const fixtureKey = "fixture-cline-key";
 function testEnv(home: string): Record<string, string> {
-  const env: Record<string, string> = {...process.env as Record<string, string>, PATH: "/Users/hasna/.bun/bin:/opt/homebrew/bin:/usr/bin:/bin", HOME: home, HASNA_SWITCHER_HOME: join(home, "switcher"), SWITCHER_PROVIDER_FIXTURE: fixtureKey};
+  const env: Record<string, string> = {...process.env as Record<string, string>, PATH: "/Users/hasna/.bun/bin:/opt/homebrew/bin:/usr/bin:/bin", HOME: home, HASNA_SWITCHER_LOCAL: "1", HASNA_SWITCHER_HOME: join(home, "switcher"), SWITCHER_PROVIDER_FIXTURE: fixtureKey};
   for (const key of ["CLINE_API_KEY", "CLINE_PROVIDER", "CLINE_MODEL", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY"]) delete env[key];
   return env;
 }

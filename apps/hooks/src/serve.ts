@@ -256,7 +256,7 @@ export function startServeServer(options: {
     },
   });
 
-  console.error(`hooks registry listening on http://${host}:${port} (publish requires an API key)`);
+  console.error(`hooks registry listening on http://${host}:${server.port} (publish requires an API key)`);
   return server;
 }
 

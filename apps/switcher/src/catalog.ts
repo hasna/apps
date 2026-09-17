@@ -1,4 +1,4 @@
-import { type Catalog, type Model, type Provider, type ProviderInput, Fault, modelSchema } from "./domain";
+import { type Catalog, type Model, type Provider, type ProviderInput, Fault, modelSchema, VERSION } from "./domain";
 import { boundedJson } from "./http";
 import { authHeader } from "./auth";
 const positive = (v: unknown) => typeof v === "number" && Number.isInteger(v) && v > 0 ? v : undefined;
@@ -77,7 +77,7 @@ async function discoverBase(provider: Provider, env: Record<string, string | und
   if (provider.manualModels.length) return {models: provider.manualModels, source: "manual", refreshedAt};
   if (provider.catalogFormat === "none")
     throw new Fault(422, "catalog_unsupported", "This provider has no documented model-list contract; configure manual models or an explicit catalog URL and parser.");
-  const headers: Record<string, string> = {"accept": "application/json"};
+  const headers: Record<string, string> = {"accept": "application/json", "user-agent": `hasna-switcher/${VERSION}`};
   if (provider.catalogFormat === "fireworks" && !provider.catalogBaseUrl && !provider.catalogAccountId)
     throw new Fault(422, "catalog_account_required", "Fireworks model discovery requires a catalog account ID or an explicit catalog URL.");
   if (provider.catalogFormat === "fireworks" && !provider.catalogBaseUrl && new URL(provider.baseUrl).origin !== "https://api.fireworks.ai")
@@ -134,6 +134,7 @@ async function discoverBase(provider: Provider, env: Record<string, string | und
         inputModalities: strings(row.architecture?.input_modalities ?? row.input_modalities) ?? modalities(row.inference_metadata?.request_modality),
         outputModalities: strings(row.architecture?.output_modalities ?? row.output_modalities) ?? modalities(row.inference_metadata?.response_modality),
         supportedParameters: strings(row.supported_parameters),
+        reasoningEfforts: row.reasoning?.supported_efforts,
         ...(provider.catalogFormat === "gemini" && row.supportedGenerationMethods !== undefined
           ? {supportedGenerationMethods: row.supportedGenerationMethods} : {}),
       };

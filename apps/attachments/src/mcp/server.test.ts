@@ -1061,10 +1061,9 @@ describe("MCP Server — link_to_task", () => {
   });
 
   it("links attachment to task and returns success message", async () => {
-    globalThis.fetch = mock(async () => ({
-      ok: true,
-      status: 200,
-      text: async () => "",
+    globalThis.fetch = mock(async (_url: unknown, init?: RequestInit) => ({
+      ok: true, status: 200,
+      json: async () => ({ task: { id: "TASK-001", version: init?.method === "PATCH" ? 2 : 1, metadata: init?.method === "PATCH" ? JSON.parse(String(init.body)).metadata : {} } }),
     })) as unknown as typeof fetch;
 
     const server = createServer();
@@ -1083,7 +1082,7 @@ describe("MCP Server — link_to_task", () => {
     globalThis.fetch = mock(async (url: unknown, opts: unknown) => {
       capturedUrl = String(url);
       capturedBody = (opts as RequestInit).body as string;
-      return { ok: true, status: 200, text: async () => "" } as Response;
+      return { ok: true, status: 200, json: async () => ({ task: { id: "TASK-001", version: (opts as RequestInit)?.method === "PATCH" ? 2 : 1, metadata: (opts as RequestInit)?.method === "PATCH" ? JSON.parse(String((opts as RequestInit).body)).metadata : {} } }) } as Response;
     }) as unknown as typeof fetch;
 
     const server = createServer();
@@ -1093,7 +1092,7 @@ describe("MCP Server — link_to_task", () => {
       todos_url: "https://custom.example.test",
     });
 
-    expect(capturedUrl).toBe("https://custom.example.test/api/tasks/TASK-001");
+    expect(capturedUrl).toBe("https://custom.example.test/v1/tasks/TASK-001");
     const body = JSON.parse(capturedBody);
     expect(body.metadata._attachments[0].id).toBe("att_test001");
     expect(body.metadata._attachments[0].filename).toBe("test.txt");
@@ -1131,9 +1130,9 @@ describe("MCP Server — link_to_task", () => {
 
   it("defaults todos_url to https://todos.example.test", async () => {
     let capturedUrl = "";
-    globalThis.fetch = mock(async (url: unknown) => {
+    globalThis.fetch = mock(async (url: unknown, opts?: unknown) => {
       capturedUrl = String(url);
-      return { ok: true, status: 200, text: async () => "" } as Response;
+      return { ok: true, status: 200, json: async () => ({ task: { id: "TASK-001", version: (opts as RequestInit)?.method === "PATCH" ? 2 : 1, metadata: (opts as RequestInit)?.method === "PATCH" ? JSON.parse(String((opts as RequestInit).body)).metadata : {} } }) } as Response;
     }) as unknown as typeof fetch;
 
     const server = createServer();
@@ -1189,12 +1188,12 @@ describe("MCP Server — complete_task_with_files", () => {
       const method = ((opts as RequestInit | undefined)?.method ?? "GET").toUpperCase();
       urls.push(String(url));
       if (method === "GET") {
-        return { ok: true, status: 200, json: async () => ({ id: "TASK-001", version: 1, metadata: {} }), text: async () => "" } as Response;
+        return { ok: true, status: 200, json: async () => ({ task: { id: "TASK-001", version: 1, metadata: {} } }), text: async () => "" } as Response;
       }
       if (method === "PATCH") {
         patchBody = (opts as RequestInit).body as string;
       }
-      return { ok: true, status: 200, text: async () => "" } as Response;
+      return { ok: true, status: 200, json: async () => ({ task: { id: "TASK-001", version: method === "PATCH" ? 2 : 3, status: method === "POST" ? "completed" : "pending", metadata: JSON.parse(patchBody).metadata } }) } as Response;
     }) as unknown as typeof fetch;
 
     const server = createServer();
@@ -1207,9 +1206,9 @@ describe("MCP Server — complete_task_with_files", () => {
     expect(mockUploadFile).toHaveBeenCalledTimes(2);
     // GET + PATCH the task, then POST /complete
     expect(urls).toEqual([
-      "https://todos.example.test/api/tasks/TASK-001",
-      "https://todos.example.test/api/tasks/TASK-001",
-      "https://todos.example.test/api/tasks/TASK-001/complete",
+      "https://todos.example.test/v1/tasks/TASK-001",
+      "https://todos.example.test/v1/tasks/TASK-001",
+      "https://todos.example.test/v1/tasks/TASK-001/complete",
     ]);
 
     // Evidence persisted into the task metadata (retrievable by resolve-evidence).
@@ -1240,12 +1239,12 @@ describe("MCP Server — complete_task_with_files", () => {
     globalThis.fetch = mock(async (_url: unknown, opts: unknown) => {
       const method = ((opts as RequestInit | undefined)?.method ?? "GET").toUpperCase();
       if (method === "GET") {
-        return { ok: true, status: 200, json: async () => ({ id: "TASK-002", version: 1, metadata: {} }), text: async () => "" } as Response;
+        return { ok: true, status: 200, json: async () => ({ task: { id: "TASK-002", version: 1, metadata: {} } }), text: async () => "" } as Response;
       }
       if (method === "PATCH") {
         patchBody = (opts as RequestInit).body as string;
       }
-      return { ok: true, status: 200, text: async () => "" } as Response;
+      return { ok: true, status: 200, json: async () => ({ task: { id: "TASK-002", version: method === "PATCH" ? 2 : 3, status: method === "POST" ? "completed" : "pending", metadata: JSON.parse(patchBody).metadata } }) } as Response;
     }) as unknown as typeof fetch;
 
     const server = createServer();
@@ -1314,17 +1313,20 @@ describe("MCP Server — complete_task_with_files", () => {
     }));
 
     let capturedUrl = "";
-    globalThis.fetch = mock(async (url: unknown) => {
+    let metadata = {};
+    globalThis.fetch = mock(async (url: unknown, init?: RequestInit) => {
       capturedUrl = String(url);
-      return { ok: true, status: 200, text: async () => "" } as Response;
+      if (init?.method === "PATCH") metadata = JSON.parse(String(init.body)).metadata;
+      return { ok: true, status: 200, json: async () => ({ task: { id: "TASK-001", version: init?.method === "POST" ? 3 : init?.method === "PATCH" ? 2 : 1, status: init?.method === "POST" ? "completed" : "pending", metadata } }) } as Response;
     }) as unknown as typeof fetch;
 
     const server = createServer();
-    await callTool(server, "complete_task_with_files", {
+    const result = await callTool(server, "complete_task_with_files", {
       task_id: "TASK-001",
       paths: ["/tmp/file.txt"],
     });
 
+    expect((result as { isError?: boolean }).isError).not.toBe(true);
     expect(capturedUrl).toContain("https://todos.example.test");
   });
 });

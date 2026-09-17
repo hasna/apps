@@ -4,6 +4,6 @@
     "emitDeclarationOnly": true,
     "noEmit": false
   },
-  "include": ["src/index.ts", "src/storage.ts"],
+  "include": ["src/index.ts", "src/storage.ts", "src/sdk/index.ts"],
   "exclude": ["node_modules", "dist", "bin", "hooks", "temp", "src/**/*.test.ts", "src/**/*.test.tsx"]
 }

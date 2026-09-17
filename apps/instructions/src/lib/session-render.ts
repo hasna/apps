@@ -253,6 +253,8 @@ export interface SessionRenderInput {
   profile: string;
   sources: SessionInstructionSource[];
   projectRoot?: string;
+  /** Native instruction home. For Grok/Devin, explicitly selects global
+   * AGENTS.md when projectRoot is absent; no operator home is inferred. */
   targetHome?: string;
   sessionId?: string;
   /**
@@ -1905,6 +1907,10 @@ function buildAssetFiles(input: SessionRenderInput, targetHome: string, blocked:
   });
 }
 
+export function isNativeProfileSessionTarget(input: Pick<SessionRenderInput, "tool" | "targetHome" | "projectRoot">): boolean {
+  return (input.tool === "grok" || input.tool === "devin") && Boolean(input.targetHome?.trim()) && !input.projectRoot;
+}
+
 function adapterFor(input: SessionRenderInput): SessionToolAdapter {
   if (input.tool === "opencode" && input.providerSurface) {
     if (input.providerSurface !== "opencode-config-instructions" && input.providerSurface !== "opencode-agents-md") {
@@ -1934,6 +1940,19 @@ function adapterFor(input: SessionRenderInput): SessionToolAdapter {
   }
   if (input.providerSurface && input.tool !== "opencode" && input.tool !== "copilot") {
     throw new Error(`Provider surface ${input.providerSurface} is not valid for ${input.tool}.`);
+  }
+  if (isNativeProfileSessionTarget(input)) {
+    return Object.freeze({
+      ...SESSION_TOOL_ADAPTERS[input.tool],
+      mode: "flattened-markdown",
+      indexFile: "AGENTS.md",
+      managedDir: SESSION_RENDER_INSTRUCTIONS_MANAGED_DIR,
+      projectScoped: false,
+      // Devin's target is the resolved user config directory, not the parent
+      // XDG_CONFIG_HOME. Do not emit an environment assignment for that parent.
+      envVar: input.tool === "grok" ? "GROK_HOME" : undefined,
+      description: `${input.tool === "grok" ? "Grok Build" : "Devin CLI"} global AGENTS.md in the explicit native instruction home.`,
+    });
   }
   if (input.tool !== "codewith") return SESSION_TOOL_ADAPTERS[input.tool];
   const gatedNativeImports =
@@ -1990,12 +2009,11 @@ function assertSafeTargetRoot(targetHome: string): string {
   return normalized;
 }
 
-function resolveRenderTarget(input: SessionRenderInput): {
+function resolveRenderTarget(input: SessionRenderInput, adapter: SessionToolAdapter): {
   targetHome: string;
   targetKind: SessionRenderTargetKind;
   blockers: string[];
 } {
-  const adapter = SESSION_TOOL_ADAPTERS[input.tool];
   if (adapter.projectScoped) {
     if (!input.projectRoot) {
       const label = input.tool === "cursor"
@@ -2099,7 +2117,7 @@ export function planSessionRender(input: SessionRenderInput): SessionRenderPlan 
     targetHome,
     targetKind,
     blockers: targetBlockers,
-  } = resolveRenderTarget(input);
+  } = resolveRenderTarget(input, adapter);
   const authorityObservations = input.tool === "cursor" && targetKind !== "blocked"
     ? [observeCursorGlobalAuthority({ home: input.cursorAuthorityHome })]
     : [];

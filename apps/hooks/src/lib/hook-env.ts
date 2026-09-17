@@ -212,6 +212,11 @@ export function sanitizeHookPath(pathValue: string, home: string | undefined): s
  * deliberately NOT projected: a URL can embed credentials.
  */
 const CONFIG_PROJECTIONS: Array<[string, string]> = [
+  // The explicit local opt-in is a non-secret flag; without it the child's
+  // event write fails closed (db-writer gate), so a LOCAL-mode parent hands
+  // its decision down. A hosted parent has no such variable and the child
+  // refuses the write, which is the intended hosted-route behaviour.
+  ["HASNA_HOOKS_LOCAL", "HOOKS_LOCAL"],
   ["HASNA_HOOKS_DATA_DIR", "HOOKS_DATA_DIR"],
   ["HASNA_HOOKS_DB_PATH", "HOOKS_DB_PATH"],
   ["HASNA_HOOKS_LOCK_PATH", "HOOKS_LOCK_PATH"],

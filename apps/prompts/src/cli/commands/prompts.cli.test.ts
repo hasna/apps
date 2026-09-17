@@ -1,4 +1,11 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, setDefaultTimeout, test } from "bun:test"
+
+// Every test here spawns the CLI (`bun run src/cli/index.tsx`, a fresh transpile each time) once per
+// seeded prompt, up to 22 spawns per test. Measured on the 4-core CI runner 2026-09-11: "lint exits
+// nonzero when errors are beyond the displayed page" 5070 ms and "recent supports offset pagination"
+// 5035 ms against bun's 5000 ms default -> a red shard on main. This is the budget the tests actually
+// need; no assertion changes.
+setDefaultTimeout(60_000)
 import { mkdtempSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"

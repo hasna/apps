@@ -3832,10 +3832,11 @@ export const emailsSelfHostedOpenApi: EmailsOpenApiDocument = {
                   to: { type: "array", items: { type: "string" } },
                   cc: { type: "array", items: { type: "string" } },
                   bcc: { type: "array", items: { type: "string" } },
-                  reply_to: { type: "string" },
+                  reply_to: { type: "string", description: "Reply-To mailbox list, including quoted display names." },
+                  reply_to_message_id: { type: "string", minLength: 1, maxLength: 256, description: "Parent message record ID in this tenant. The server authorizes the sender as a parent participant and derives In-Reply-To and References from actual RFC Message-ID evidence. Retain the parent subject; unavailable evidence refuses before sending." },
                   subject: { type: "string" },
-                  text: { type: "string" },
-                  html: { type: "string" },
+                  text: { type: "string", description: "Body bytes are preserved. Raw backslash followed by n or r inside an HTTP(S) token is rejected with invalid_body_url_boundary before send intent reservation; use actual line breaks." },
+                  html: { type: "string", description: "HTML body, subject to the same HTTP(S) token boundary check as text, including attribute values." },
                   attachments: {
                     type: "array",
                     maxItems: 5,
@@ -3882,9 +3883,10 @@ export const emailsSelfHostedOpenApi: EmailsOpenApiDocument = {
             description: "Newly accepted send or an existing send still in progress",
             content: { "application/json": { schema: sendMessageAcceptedResponseSchema } },
           },
-          "400": errorResponse("Invalid send request"),
+          "400": errorResponse("Invalid send request, including invalid_body_url_boundary; no send intent or provider call"),
           "401": errorResponse("Authentication required"),
           "403": errorResponse("Sender or tenant scope is not authorized"),
+          "404": errorResponse("Reply parent not found in this tenant; nothing was sent"),
           "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/SendMessageError" } } } },
           "422": {
             description: "The provider definitively rejected the message (nothing was sent); the body carries the real provider error and sent:false",
@@ -4775,8 +4777,8 @@ emailsSelfHostedOpenApi.paths!["/v1/scheduled/enqueue"] = { post: {
   responses: {
     "200": { description: "Existing enqueue identity", content: { "application/json": { schema: enqueueReceipt } } },
     "201": { description: "New scheduled send; no mail sent", content: { "application/json": { schema: enqueueReceipt } } },
-    "400": errorResponse("Invalid payload or nonfuture new schedule"), "401": errorResponse("Authentication required"),
-    "403": errorResponse("Tenant operator required"), "409": errorResponse("Idempotency key conflict"), "413": errorResponse("Payload too large"),
+    "400": errorResponse("Invalid payload (including invalid_body_url_boundary) or nonfuture new schedule; no job enqueued"), "401": errorResponse("Authentication required"),
+    "403": errorResponse("Tenant operator required"), "404": errorResponse("Reply parent not found in this tenant; no job enqueued"), "409": errorResponse("Idempotency or reply parent conflict"), "413": errorResponse("Payload too large"),
   },
 } };
 
@@ -5864,3 +5866,28 @@ emailsSelfHostedOpenApi.paths!["/v1/inbox/setup-ses-inbound"] = { post: {
   requestBody: { required:true,content:{"application/json":{schema:{type:"object",additionalProperties:false,required:["domain","bucket"],properties:{domain:{type:"string"},bucket:{type:"string"},region:{type:"string"},prefix:{type:"string"},catch_all:{type:"boolean"}}}}}},
   responses: { "200":{description:"Completed setup attempt with explicit verified or partial result",content:{"application/json":{schema:sesInboundSetupReceipt}}}, ...Object.fromEntries(["400","401","403","404","405","409","422","429","500","502","503"].map(code=>[code,errorResponse("SES inbound setup failed")])) }
 } };
+
+// Both operations enter the shared search permit through listMessages.
+for (const [path, method] of [
+  ["/v1/messages", "get"],
+  ["/v1/mailbox-filters/{id}/apply", "post"],
+] as const) {
+  for (const [status, code, message] of [
+    [429, "search_busy", "Message search is busy; retry later."],
+    [504, "search_timeout", "Message search exceeded its time limit."],
+  ] as const) {
+    addRoutineError(emailsSelfHostedOpenApi, path, method, status, message, {
+      type: "object", additionalProperties: false, required: ["error", "code"],
+      properties: {
+        error: { type: "string", enum: [message] },
+        code: { type: "string", enum: [code] },
+        // Optional for services deployed before the JSON retry hint was added.
+        retry_after: { type: "integer", enum: [5] },
+      },
+    }, "replace");
+    const operation = emailsSelfHostedOpenApi.paths![path]![method]! as { responses: Record<string, { headers?: unknown }> };
+    operation.responses![String(status)]!.headers = {
+      "Retry-After": { description: "Seconds before retrying the search", schema: { type: "string", enum: ["5"] } },
+    };
+  }
+}

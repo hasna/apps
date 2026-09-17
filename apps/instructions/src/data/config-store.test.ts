@@ -332,7 +332,7 @@ describe("CloudConfigStore CRUD mapping (over the contracts transport)", () => {
     const store = new CloudConfigStore(m.client);
     const configs = await store.listConfigs({ category: "rules" as never });
     expect(configs).toHaveLength(1);
-    expect(m.calls[0]).toMatchObject({ method: "GET", path: "/configs?category=rules" });
+    expect(m.calls[0]).toMatchObject({ method: "GET", path: "/configs?category=rules&limit=100&cursor=0" });
     // The credential + auth headers are the transport's job; the store never
     // touches them (no hand-rolled Authorization header remains).
     expect(JSON.stringify(m.calls[0])).not.toContain("Bearer");
@@ -435,8 +435,8 @@ describe("CloudConfigStore CRUD mapping (over the contracts transport)", () => {
       if (call.path.endsWith("/profiles/my-setup")) return { status: 404, json: { error: "Profile not found: my-setup" } };
       if (call.path.includes("/profiles?")) return { json: page([profile]) };
       if (call.path.includes(`/profiles/${canonicalId}?`)) return { json: { profile, configs: page([SAMPLE]) } };
-      if (call.path.endsWith(`/profiles/${canonicalId}/assets`)) return { json: { assets: [] } };
-      if (call.path.endsWith(`/profiles/${canonicalId}/bindings`)) return { json: { bindings: [] } };
+      if (call.path.startsWith(`/profiles/${canonicalId}/assets`)) return { json: { assets: [] } };
+      if (call.path.startsWith(`/profiles/${canonicalId}/bindings`)) return { json: { bindings: [] } };
       return { status: 404, json: { error: "unexpected slug follow-up" } };
     });
     const store = new CloudConfigStore(m.client);
@@ -450,8 +450,8 @@ describe("CloudConfigStore CRUD mapping (over the contracts transport)", () => {
       "/profiles/my-setup",
       "/profiles?limit=100&cursor=0",
       `/profiles/${canonicalId}?limit=20&cursor=0`,
-      `/profiles/${canonicalId}/assets`,
-      `/profiles/${canonicalId}/bindings`,
+      `/profiles/${canonicalId}/assets?limit=100&cursor=0`,
+      `/profiles/${canonicalId}/bindings?limit=100&cursor=0`,
     ]);
   });
 
@@ -460,11 +460,11 @@ describe("CloudConfigStore CRUD mapping (over the contracts transport)", () => {
     const profile = { ...SAMPLE_PROFILE, id: canonicalId, slug: "my-setup" };
     const m = fakeStorageClient((call) => {
       if (call.path.endsWith(`/profiles/${canonicalId}?limit=20&cursor=0`)) return { status: 404, json: { error: "Profile not found: ae1030" } };
-      if (call.path.endsWith(`/profiles/${canonicalId}/assets`)) return { status: 404, json: { error: "Profile not found: ae1030" } };
-      if (call.path.endsWith(`/profiles/${canonicalId}/bindings`)) return { status: 404, json: { error: "Profile not found: ae1030" } };
+      if (call.path.startsWith(`/profiles/${canonicalId}/assets`)) return { status: 404, json: { error: "Profile not found: ae1030" } };
+      if (call.path.startsWith(`/profiles/${canonicalId}/bindings`)) return { status: 404, json: { error: "Profile not found: ae1030" } };
       if (call.path.endsWith(`/profiles/my-setup?limit=20&cursor=0`)) return { json: { profile, configs: page([SAMPLE]) } };
-      if (call.path.endsWith(`/profiles/my-setup/assets`)) return { json: { assets: [] } };
-      if (call.path.endsWith(`/profiles/my-setup/bindings`)) return { json: { bindings: [] } };
+      if (call.path.startsWith(`/profiles/my-setup/assets`)) return { json: { assets: [] } };
+      if (call.path.startsWith(`/profiles/my-setup/bindings`)) return { json: { bindings: [] } };
       if (call.path.includes("/profiles?")) return { json: page([profile]) };
       return { status: 404, json: { error: "unexpected request" } };
     });
@@ -478,12 +478,12 @@ describe("CloudConfigStore CRUD mapping (over the contracts transport)", () => {
       `/profiles/${canonicalId}?limit=20&cursor=0`,
       "/profiles?limit=100&cursor=0",
       "/profiles/my-setup?limit=20&cursor=0",
-      `/profiles/${canonicalId}/assets`,
+      `/profiles/${canonicalId}/assets?limit=100&cursor=0`,
       "/profiles?limit=100&cursor=0",
-      "/profiles/my-setup/assets",
-      `/profiles/${canonicalId}/bindings`,
+      "/profiles/my-setup/assets?limit=100&cursor=0",
+      `/profiles/${canonicalId}/bindings?limit=100&cursor=0`,
       "/profiles?limit=100&cursor=0",
-      "/profiles/my-setup/bindings",
+      "/profiles/my-setup/bindings?limit=100&cursor=0",
     ]);
   });
 
@@ -494,7 +494,7 @@ describe("CloudConfigStore CRUD mapping (over the contracts transport)", () => {
       if (call.path.endsWith(`/profiles/${canonicalId}`) || call.path.endsWith(`/profiles/${canonicalId}?limit=100&cursor=0`)) {
         return { json: { profile } };
       }
-      if (call.path.endsWith(`/profiles/${canonicalId}/bindings`) || call.path.endsWith(`/profiles/${canonicalId}/assets`)) {
+      if (call.path.startsWith(`/profiles/${canonicalId}/bindings`) || call.path.startsWith(`/profiles/${canonicalId}/assets`)) {
         return { status: 404, json: { error: "unknown profile action" } };
       }
       if (call.path.includes("/profiles?")) return { json: page([profile]) };
@@ -510,7 +510,7 @@ describe("CloudConfigStore CRUD mapping (over the contracts transport)", () => {
 
   test("legacy follow-up fallback rejects unknown identities for bindings and assets", async () => {
     const m = fakeStorageClient((call) => {
-      if (call.path.endsWith("/profiles/missing/bindings") || call.path.endsWith("/profiles/missing/assets")) {
+      if (call.path.startsWith("/profiles/missing/bindings") || call.path.startsWith("/profiles/missing/assets")) {
         return { status: 404, json: { error: "unknown profile action" } };
       }
       if (call.path.includes("/profiles?")) return { json: page([{ ...SAMPLE_PROFILE, id: "p1", slug: "present" }]) };
@@ -544,7 +544,7 @@ describe("CloudConfigStore CRUD mapping (over the contracts transport)", () => {
     await store.removeAssetFromProfile("p1", "review-skill");
 
     expect(m.calls.map((call) => [call.method, call.path])).toEqual([
-      ["GET", "/profiles/p1/assets"],
+      ["GET", "/profiles/p1/assets?limit=100&cursor=0"],
       ["POST", "/profiles/p1/assets"],
       ["PUT", "/profiles/p1/assets/review-skill"],
       ["DELETE", "/profiles/p1/assets/review-skill"],
@@ -752,5 +752,158 @@ describe("isApiTransport", () => {
   test("false for a caller-built env that resolves nothing", () => {
     // A caller-built env is the hermetic seam: no Keychain, no disk, no gate.
     expect(() => isApiTransport({ HOME: tempHome("api3") })).toThrow(/REMOTE_API_CONFIG_MISSING/);
+  });
+});
+describe("CloudConfigStore bounded collection aggregation", () => {
+  test("walks every config, snapshot, and machine page from a current server", async () => {
+    const m = fakeStorageClient((call) => {
+      const url = new URL(`https://example.test${call.path}`);
+      const cursor = Number(url.searchParams.get("cursor") ?? 0);
+      if (url.pathname === "/configs") {
+        const item = { ...SAMPLE, id: `cfg-${cursor}`, slug: `cfg-${cursor}` };
+        return { json: page([item], 2, 100, cursor) };
+      }
+      if (url.pathname.endsWith("/snapshots")) {
+        const item = { id: `snapshot-${cursor}`, config_id: "cfg-1", content: "x", version: cursor + 1, created_at: "" };
+        return { json: page([item], 2, 100, cursor) };
+      }
+      if (url.pathname === "/machines") {
+        const item = { id: `machine-${cursor}`, hostname: `station-${cursor}`, os: "linux", arch: "x64", last_applied_at: null, created_at: "" };
+        return { json: page([item], 2, 100, cursor) };
+      }
+      throw new Error(`Unexpected path: ${call.path}`);
+    });
+    const store = new CloudConfigStore(m.client);
+
+    expect((await store.listConfigs()).map((item) => item.id)).toEqual(["cfg-0", "cfg-1"]);
+    expect((await store.listSnapshots("cfg-1")).map((item) => item.id)).toEqual(["snapshot-0", "snapshot-1"]);
+    expect((await store.listMachines()).map((item) => item.id)).toEqual(["machine-0", "machine-1"]);
+    expect(m.calls.map((call) => call.path)).toEqual([
+      "/configs?limit=100&cursor=0",
+      "/configs?limit=100&cursor=1",
+      "/configs/cfg-1/snapshots?limit=100&cursor=0",
+      "/configs/cfg-1/snapshots?limit=100&cursor=1",
+      "/machines?limit=100&cursor=0",
+      "/machines?limit=100&cursor=1",
+    ]);
+  });
+
+  test("new client safely pages complete arrays returned by an older server", async () => {
+    const legacy = Array.from({ length: 125 }, (_, index) => ({
+      ...SAMPLE,
+      id: `legacy-${index}`,
+      slug: `legacy-${index}`,
+      name: `Legacy ${index}`,
+    }));
+    const m = fakeStorageClient(() => ({ json: { configs: legacy, count: legacy.length } }));
+    const store = new CloudConfigStore(m.client);
+
+    expect(await store.listConfigs()).toHaveLength(125);
+    expect(m.calls.map((call) => call.path)).toEqual([
+      "/configs?limit=100&cursor=0",
+      "/configs?limit=100&cursor=100",
+    ]);
+  });
+});
+
+describe("CloudConfigStore stable bounded aggregation", () => {
+  test("retries the whole config scan after the mutable-sort omission/duplicate pattern", async () => {
+    let scan = 0;
+    const stableFirst = Array.from({ length: 100 }, (_, index) => ({
+      ...SAMPLE,
+      id: `cfg-${String(index).padStart(3, "0")}`,
+      slug: `cfg-${index}`,
+    }));
+    const final = { ...SAMPLE, id: "cfg-100", slug: "cfg-100" };
+    const duplicate = stableFirst[99]!;
+    const m = fakeStorageClient((call) => {
+      const url = new URL(`https://example.test${call.path}`);
+      const cursor = Number(url.searchParams.get("cursor"));
+      if (cursor === 0) {
+        scan += 1;
+        return { json: page(stableFirst, 101, 100, 0) };
+      }
+      return { json: page([scan === 1 ? duplicate : final], 101, 100, 100) };
+    });
+
+    const configs = await new CloudConfigStore(m.client).listConfigs();
+
+    expect(configs).toHaveLength(101);
+    expect(new Set(configs.map((config) => config.id)).size).toBe(101);
+    expect(configs.at(-1)?.id).toBe("cfg-100");
+    expect(m.calls.map((call) => call.path)).toEqual([
+      "/configs?limit=100&cursor=0",
+      "/configs?limit=100&cursor=100",
+      "/configs?limit=100&cursor=0",
+      "/configs?limit=100&cursor=100",
+    ]);
+  });
+
+  test("retries a profile scan whose total changes between pages", async () => {
+    let scan = 0;
+    const m = fakeStorageClient((call) => {
+      const url = new URL(`https://example.test${call.path}`);
+      const cursor = Number(url.searchParams.get("cursor"));
+      if (cursor === 0) {
+        scan += 1;
+        return { json: page([{ ...SAMPLE_PROFILE, id: `profile-${scan}-0` }], 2, 100, 0) };
+      }
+      const total = scan === 1 ? 3 : 2;
+      return { json: page([{ ...SAMPLE_PROFILE, id: `profile-${scan}-1` }], total, 100, 1) };
+    });
+
+    const profiles = await new CloudConfigStore(m.client).listProfiles();
+
+    expect(profiles.map((profile) => profile.id)).toEqual(["profile-2-0", "profile-2-1"]);
+    expect(m.calls).toHaveLength(4);
+  });
+
+  test("rejects a persistently corrupt machine scan after one bounded retry", async () => {
+    const m = fakeStorageClient((call) => {
+      const url = new URL(`https://example.test${call.path}`);
+      const cursor = Number(url.searchParams.get("cursor"));
+      const machine = { ...SAMPLE_MACHINE, id: "machine-duplicate" };
+      return { json: page([machine], 2, 100, cursor) };
+    });
+
+    await expect(new CloudConfigStore(m.client).listMachines()).rejects.toThrow(/changed while paging|duplicate/i);
+    expect(m.calls).toHaveLength(4);
+  });
+
+  test("aggregates bounded profile config and asset binding pages while retaining legacy arrays", async () => {
+    const configBinding = {
+      profile_id: "p1",
+      config_id: "cfg-1",
+      sort_order: 0,
+      binding: {
+        schema: "hasna.instructions.profile-config-binding/v1" as const,
+        activation: { mode: "always" as const },
+        required: true,
+        fallback: "fail" as const,
+      },
+    };
+    const current = fakeStorageClient((call) => {
+      const url = new URL(`https://example.test${call.path}`);
+      const cursor = Number(url.searchParams.get("cursor"));
+      if (url.pathname.endsWith("/bindings")) {
+        const item = { ...configBinding, config_id: `cfg-${cursor}` };
+        return { json: { ...page([item], 2, 100, cursor), bindings: [item] } };
+      }
+      if (url.pathname.endsWith("/assets")) {
+        const item = { ...SAMPLE_ASSET, binding: { ...SAMPLE_ASSET.binding, assetKey: `asset-${cursor}` } };
+        return { json: { ...page([item], 2, 100, cursor), assets: [item] } };
+      }
+      throw new Error(`Unexpected path: ${call.path}`);
+    });
+    const store = new CloudConfigStore(current.client);
+    expect((await store.getProfileConfigBindings("p1")).map((item) => item.config_id)).toEqual(["cfg-0", "cfg-1"]);
+    expect((await store.getProfileAssetBindings("p1")).map((item) => item.binding.assetKey)).toEqual(["asset-0", "asset-1"]);
+
+    const legacy = fakeStorageClient((call) => call.path.endsWith("/bindings?limit=100&cursor=0")
+      ? { json: { bindings: [configBinding] } }
+      : { json: { assets: [SAMPLE_ASSET] } });
+    const legacyStore = new CloudConfigStore(legacy.client);
+    expect(await legacyStore.getProfileConfigBindings("p1")).toEqual([configBinding]);
+    expect(await legacyStore.getProfileAssetBindings("p1")).toEqual([SAMPLE_ASSET]);
   });
 });

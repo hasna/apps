@@ -10,6 +10,7 @@ export function buildManagedSenderResolver(
   external: SenderResolver,
   secrets: (tenant: string) => Pick<ManagedProviderSecrets, "read">,
   build: (env: NodeJS.ProcessEnv) => SelfHostedSender = buildSelfHostedSender,
+  env: NodeJS.ProcessEnv = process.env,
 ): SenderResolver {
   return async (tenant, provider) => {
     // An unreadable envelope is a failure, never permission to use another identity.
@@ -25,6 +26,7 @@ export function buildManagedSenderResolver(
         throw new Error("Managed SES credentials require a valid registered provider region.");
       }
       config.EMAILS_AWS_REGION = material.region;
+      if (env.EMAILS_SES_MESSAGE_ID_DOMAINS !== undefined) config.EMAILS_SES_MESSAGE_ID_DOMAINS = env.EMAILS_SES_MESSAGE_ID_DOMAINS;
       config.EMAILS_SES_ACCESS_KEY_ID = credentials.access_key;
       config.EMAILS_SES_SECRET_ACCESS_KEY = credentials.secret_key;
     }

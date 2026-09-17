@@ -19,6 +19,18 @@ import { tmpdir } from "os";
 import { connectorsHome } from "../lib/paths.js";
 import { startServer } from "./serve.js";
 
+// Every /api/* route requires the serve bearer token (serve-auth.ts). The
+// tests pin it through the environment BEFORE the server starts and send it
+// on every request; the anonymous path is covered by server-auth-gate.test.ts.
+const TEST_TOKEN = `connectors-test-token-${process.pid}`;
+const ORIGINAL_SERVE_TOKEN = process.env.HASNA_CONNECTORS_SERVE_TOKEN;
+
+function authedFetch(input: string, init: RequestInit = {}): Promise<Response> {
+  const headers = new Headers(init.headers);
+  headers.set("Authorization", `Bearer ${TEST_TOKEN}`);
+  return fetch(input, { ...init, headers });
+}
+
 const TEST_ID = `zzztest${process.pid}c`;
 const ORIGINAL_HOME = process.env.HOME;
 const TEST_HOME = mkdtempSync(join(tmpdir(), "connectors-server-"));
@@ -45,12 +57,15 @@ describe("server API routes", () => {
 
   beforeAll(async () => {
     process.env.HOME = TEST_HOME;
+    process.env.HASNA_CONNECTORS_SERVE_TOKEN = TEST_TOKEN;
     serverPort = 40000 + Math.floor(Math.random() * 10000);
     serverPort = await startServer(serverPort);
     baseUrl = `http://localhost:${serverPort}`;
   });
 
   afterAll(() => {
+    if (ORIGINAL_SERVE_TOKEN === undefined) delete process.env.HASNA_CONNECTORS_SERVE_TOKEN;
+    else process.env.HASNA_CONNECTORS_SERVE_TOKEN = ORIGINAL_SERVE_TOKEN;
     if (ORIGINAL_HOME) {
       process.env.HOME = ORIGINAL_HOME;
     } else {
@@ -63,7 +78,7 @@ describe("server API routes", () => {
 
   describe("GET /api/connectors", () => {
     test("returns an array of connectors", async () => {
-      const res = await fetch(`${baseUrl}/api/connectors`);
+      const res = await authedFetch(`${baseUrl}/api/connectors`);
       expect(res.status).toBe(200);
 
       const data = (await res.json()) as Array<Record<string, unknown>>;
@@ -72,7 +87,7 @@ describe("server API routes", () => {
     });
 
     test("each connector has required fields", async () => {
-      const res = await fetch(`${baseUrl}/api/connectors`);
+      const res = await authedFetch(`${baseUrl}/api/connectors`);
       const data = (await res.json()) as Array<Record<string, unknown>>;
 
       const first = data[0];
@@ -85,12 +100,12 @@ describe("server API routes", () => {
     });
 
     test("response has correct content-type header", async () => {
-      const res = await fetch(`${baseUrl}/api/connectors`);
+      const res = await authedFetch(`${baseUrl}/api/connectors`);
       expect(res.headers.get("content-type")).toBe("application/json");
     });
 
     test("includes known connectors like stripe and anthropic", async () => {
-      const res = await fetch(`${baseUrl}/api/connectors`);
+      const res = await authedFetch(`${baseUrl}/api/connectors`);
       const data = (await res.json()) as Array<{ name: string }>;
 
       const names = data.map((c) => c.name);
@@ -104,7 +119,7 @@ describe("server API routes", () => {
 
   describe("GET /api/connectors/:name", () => {
     test("returns connector details for a valid name", async () => {
-      const res = await fetch(`${baseUrl}/api/connectors/stripe`);
+      const res = await authedFetch(`${baseUrl}/api/connectors/stripe`);
       expect(res.status).toBe(200);
 
       const data = (await res.json()) as Record<string, unknown>;
@@ -115,7 +130,7 @@ describe("server API routes", () => {
     });
 
     test("returns 404 for non-existent connector", async () => {
-      const res = await fetch(
+      const res = await authedFetch(
         `${baseUrl}/api/connectors/nonexistent-xyz-abc`
       );
       expect(res.status).toBe(404);
@@ -125,7 +140,7 @@ describe("server API routes", () => {
     });
 
     test("returns auth status with type field", async () => {
-      const res = await fetch(`${baseUrl}/api/connectors/stripe`);
+      const res = await authedFetch(`${baseUrl}/api/connectors/stripe`);
       const data = (await res.json()) as {
         auth: { type: string; configured: boolean };
       };
@@ -146,7 +161,7 @@ describe("server API routes", () => {
     });
 
     test("saves API key and returns success", async () => {
-      const res = await fetch(
+      const res = await authedFetch(
         `${baseUrl}/api/connectors/${testKeyName}/key`,
         {
           method: "POST",
@@ -172,7 +187,7 @@ describe("server API routes", () => {
     });
 
     test("returns 400 when key is missing from body", async () => {
-      const res = await fetch(`${baseUrl}/api/connectors/stripe/key`, {
+      const res = await authedFetch(`${baseUrl}/api/connectors/stripe/key`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ field: "apiKey" }),
@@ -184,7 +199,7 @@ describe("server API routes", () => {
     });
 
     test("returns 400 when key is empty string", async () => {
-      const res = await fetch(`${baseUrl}/api/connectors/stripe/key`, {
+      const res = await authedFetch(`${baseUrl}/api/connectors/stripe/key`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ key: "" }),
@@ -196,7 +211,7 @@ describe("server API routes", () => {
     });
 
     test("returns 500 for invalid JSON body", async () => {
-      const res = await fetch(`${baseUrl}/api/connectors/stripe/key`, {
+      const res = await authedFetch(`${baseUrl}/api/connectors/stripe/key`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: "not valid json",
@@ -210,14 +225,14 @@ describe("server API routes", () => {
 
   describe("unknown routes", () => {
     test("GET /api/nonexistent returns 404 json, never HTML", async () => {
-      const res = await fetch(`${baseUrl}/api/nonexistent`);
+      const res = await authedFetch(`${baseUrl}/api/nonexistent`);
       expect(res.status).toBe(404);
       const data = await res.json();
       expect(data.error).toContain("Not found");
     });
 
     test("POST to unknown path returns 404 JSON", async () => {
-      const res = await fetch(`${baseUrl}/api/unknown/route`, {
+      const res = await authedFetch(`${baseUrl}/api/unknown/route`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ test: true }),
@@ -232,7 +247,7 @@ describe("server API routes", () => {
 
   describe("OPTIONS (CORS)", () => {
     test("returns CORS headers for OPTIONS request", async () => {
-      const res = await fetch(`${baseUrl}/api/connectors`, {
+      const res = await authedFetch(`${baseUrl}/api/connectors`, {
         method: "OPTIONS",
       });
 
@@ -257,7 +272,7 @@ describe("server API routes", () => {
     });
 
     test("OPTIONS returns empty body", async () => {
-      const res = await fetch(`${baseUrl}/api/connectors`, {
+      const res = await authedFetch(`${baseUrl}/api/connectors`, {
         method: "OPTIONS",
       });
 
@@ -270,7 +285,7 @@ describe("server API routes", () => {
 
   describe("response headers", () => {
     test("JSON responses include Access-Control-Allow-Origin with port", async () => {
-      const res = await fetch(`${baseUrl}/api/connectors`);
+      const res = await authedFetch(`${baseUrl}/api/connectors`);
       const origin = res.headers.get("Access-Control-Allow-Origin");
       expect(origin).toBeDefined();
       expect(origin).toContain("localhost");
@@ -278,7 +293,7 @@ describe("server API routes", () => {
     });
 
     test("JSON responses include security headers", async () => {
-      const res = await fetch(`${baseUrl}/api/connectors`);
+      const res = await authedFetch(`${baseUrl}/api/connectors`);
       expect(res.headers.get("X-Content-Type-Options")).toBe("nosniff");
       expect(res.headers.get("X-Frame-Options")).toBe("DENY");
     });
@@ -288,28 +303,28 @@ describe("server API routes", () => {
 
   describe("invalid connector name validation", () => {
     test("GET /api/connectors/:name returns 400 for names with dots", async () => {
-      const res = await fetch(`${baseUrl}/api/connectors/stripe.test`);
+      const res = await authedFetch(`${baseUrl}/api/connectors/stripe.test`);
       expect(res.status).toBe(400);
       const data = (await res.json()) as { error: string };
       expect(data.error).toContain("Invalid connector name");
     });
 
     test("GET /api/connectors/:name returns 400 for uppercase names", async () => {
-      const res = await fetch(`${baseUrl}/api/connectors/STRIPE`);
+      const res = await authedFetch(`${baseUrl}/api/connectors/STRIPE`);
       expect(res.status).toBe(400);
       const data = (await res.json()) as { error: string };
       expect(data.error).toContain("Invalid connector name");
     });
 
     test("GET /api/connectors/:name returns 400 for names with special chars", async () => {
-      const res = await fetch(`${baseUrl}/api/connectors/stripe%21`);
+      const res = await authedFetch(`${baseUrl}/api/connectors/stripe%21`);
       expect(res.status).toBe(400);
       const data = (await res.json()) as { error: string };
       expect(data.error).toContain("Invalid connector name");
     });
 
     test("POST /api/connectors/:name/key returns 400 for invalid name", async () => {
-      const res = await fetch(`${baseUrl}/api/connectors/INVALID/key`, {
+      const res = await authedFetch(`${baseUrl}/api/connectors/INVALID/key`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ key: "test" }),
@@ -324,7 +339,7 @@ describe("server API routes", () => {
 
   describe("POST /api/connectors/:name/refresh", () => {
     test("returns 400 for invalid connector name", async () => {
-      const res = await fetch(`${baseUrl}/api/connectors/INVALID/refresh`, {
+      const res = await authedFetch(`${baseUrl}/api/connectors/INVALID/refresh`, {
         method: "POST",
       });
       expect(res.status).toBe(400);
@@ -333,7 +348,7 @@ describe("server API routes", () => {
     });
 
     test("returns 500 when no OAuth credentials configured", async () => {
-      const res = await fetch(
+      const res = await authedFetch(
         `${baseUrl}/api/connectors/gmail/refresh`,
         { method: "POST" }
       );
@@ -348,7 +363,7 @@ describe("server API routes", () => {
 
   describe("OAuth routes", () => {
     test("GET /oauth/:name/start returns HTML error when no credentials", async () => {
-      const res = await fetch(`${baseUrl}/oauth/gmail/start`, {
+      const res = await authedFetch(`${baseUrl}/oauth/gmail/start`, {
         redirect: "manual",
       });
       // No credentials => returns error HTML page (not a redirect)
@@ -370,7 +385,7 @@ describe("server API routes", () => {
       );
 
       try {
-        const res = await fetch(`${baseUrl}/oauth/gmail/start`, {
+        const res = await authedFetch(`${baseUrl}/oauth/gmail/start`, {
           redirect: "manual",
         });
         expect(res.status).toBe(302);
@@ -383,7 +398,7 @@ describe("server API routes", () => {
     });
 
     test("GET /oauth/:name/callback returns error when error param present", async () => {
-      const res = await fetch(
+      const res = await authedFetch(
         `${baseUrl}/oauth/gmail/callback?error=access_denied`
       );
       expect(res.status).toBe(200);
@@ -393,7 +408,7 @@ describe("server API routes", () => {
     });
 
     test("GET /oauth/:name/callback returns error for invalid state", async () => {
-      const res = await fetch(
+      const res = await authedFetch(
         `${baseUrl}/oauth/gmail/callback?code=test-code&state=invalid-state`
       );
       expect(res.status).toBe(200);
@@ -416,14 +431,14 @@ describe("server API routes", () => {
 
       try {
         // Get a valid state token via the start URL
-        const startRes = await fetch(`${baseUrl}/oauth/gmail/start`, {
+        const startRes = await authedFetch(`${baseUrl}/oauth/gmail/start`, {
           redirect: "manual",
         });
         const location = startRes.headers.get("location")!;
         const state = new URL(location).searchParams.get("state");
 
         // Call callback with valid state but no code
-        const res = await fetch(
+        const res = await authedFetch(
           `${baseUrl}/oauth/gmail/callback?state=${state}`
         );
         expect(res.status).toBe(200);
@@ -439,21 +454,21 @@ describe("server API routes", () => {
 
   describe("GET /api/connectors/:name additional", () => {
     test("returns overview from docs", async () => {
-      const res = await fetch(`${baseUrl}/api/connectors/anthropic`);
+      const res = await authedFetch(`${baseUrl}/api/connectors/anthropic`);
       const data = (await res.json()) as Record<string, unknown>;
       expect(data.name).toBe("anthropic");
       expect(data.overview).not.toBeNull();
     });
 
     test("returns correct category and displayName", async () => {
-      const res = await fetch(`${baseUrl}/api/connectors/figma`);
+      const res = await authedFetch(`${baseUrl}/api/connectors/figma`);
       const data = (await res.json()) as Record<string, unknown>;
       expect(data.displayName).toBe("Figma");
       expect(data.category).toBe("Design & Content");
     });
 
     test("returns oauth type for gmail", async () => {
-      const res = await fetch(`${baseUrl}/api/connectors/gmail`);
+      const res = await authedFetch(`${baseUrl}/api/connectors/gmail`);
       const data = (await res.json()) as {
         auth: { type: string; configured: boolean; hasRefreshToken?: boolean };
       };
@@ -466,7 +481,7 @@ describe("server API routes", () => {
 
   describe("HEAD requests", () => {
     test("HEAD to root path returns 404 (no SPA fallback)", async () => {
-      const res = await fetch(`${baseUrl}/`, { method: "HEAD" });
+      const res = await authedFetch(`${baseUrl}/`, { method: "HEAD" });
       expect(res.status).toBe(404);
     });
   });
@@ -481,7 +496,7 @@ describe("server API routes", () => {
     });
 
     test("saves API key with custom field name", async () => {
-      const res = await fetch(
+      const res = await authedFetch(
         `${baseUrl}/api/connectors/${testKeyName}/key`,
         {
           method: "POST",

@@ -3,6 +3,10 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { mkdtempSync } from "node:fs";
+import {
+  connect as tcpConnect,
+  createServer as createTcpServer,
+} from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -115,5 +119,98 @@ describe("logs streamable HTTP server", () => {
 
     expect(clients.every((entry) => entry.count > 0)).toBe(true);
     await Promise.all(clients.map((entry) => entry.client.close()));
+  });
+});
+
+// The listener factory is a public export: an embedder can reach it without
+// the bin's startup gate. It must therefore run the authority preflight
+// itself, before the harness creates a socket (hasna/apps#1720 validation,
+// round 3 — 0.5.0 bound first and refused per session).
+describe("logs streamable HTTP listener factory fails closed", () => {
+  const SCRUB = [
+    "HASNA_LOGS_LOCAL",
+    "LOGS_LOCAL",
+    "HASNA_LOGS_API_URL",
+    "HASNA_LOGS_API_KEY",
+    "LOGS_API_URL",
+    "LOGS_API_KEY",
+    "HASNA_LOGS_API_KEY_OVERRIDE",
+    "HASNA_LOGS_API_KEY_REF",
+    "HASNA_PROFILE",
+    "HASNA_STATION",
+    "HASNA_HOME",
+  ];
+
+  function reservePort(): Promise<number> {
+    return new Promise((resolve, reject) => {
+      const probe = createTcpServer();
+      probe.once("error", reject);
+      probe.listen(0, "127.0.0.1", () => {
+        const address = probe.address();
+        const port = typeof address === "object" && address ? address.port : 0;
+        probe.close(() => resolve(port));
+      });
+    });
+  }
+
+  function probePort(port: number): Promise<"open" | "refused"> {
+    return new Promise((resolve) => {
+      const socket = tcpConnect({ host: "127.0.0.1", port });
+      socket.once("connect", () => {
+        socket.destroy();
+        resolve("open");
+      });
+      socket.once("error", () => resolve("refused"));
+    });
+  }
+
+  test("startMcpHttpServer rejects with the remedy and binds nothing when no credential resolves", async () => {
+    const saved: Record<string, string | undefined> = {};
+    for (const key of SCRUB) {
+      saved[key] = process.env[key];
+      delete process.env[key];
+    }
+    // No opt-in, a Keychain account that exists on no station, an empty home.
+    process.env.HASNA_STATION = "no-such-station";
+    process.env.HASNA_HOME = mkdtempSync(
+      join(tmpdir(), "logs-mcp-http-nocred-"),
+    );
+    const port = await reservePort();
+    try {
+      await expect(startMcpHttpServer(buildServer, { port })).rejects.toThrow(
+        /hasna\.credentials\.logs\.api-key/,
+      );
+      expect(await probePort(port)).toBe("refused");
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
+  test("a deliberate tier that cannot be honoured is refused by the factory too", async () => {
+    const saved: Record<string, string | undefined> = {};
+    for (const key of SCRUB) {
+      saved[key] = process.env[key];
+      delete process.env[key];
+    }
+    process.env.HASNA_STATION = "no-such-station";
+    process.env.HASNA_HOME = mkdtempSync(
+      join(tmpdir(), "logs-mcp-http-profile-"),
+    );
+    process.env.HASNA_PROFILE = "no-such-profile";
+    const port = await reservePort();
+    try {
+      await expect(startMcpHttpServer(buildServer, { port })).rejects.toThrow(
+        /Profile 'no-such-profile'/,
+      );
+      expect(await probePort(port)).toBe("refused");
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
   });
 });

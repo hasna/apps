@@ -219,6 +219,112 @@ describe("hooks transport gate (fleet fail-closed)", () => {
     expect(existsSync(join(sb.dataDir, "hooks.db"))).toBe(false);
   });
 
+  // ── W6 2026-09-11: `hooks run` and the local-only verbs decide their ROUTE ──
+
+  test("`hooks run` with nothing configured fails closed: exit 1, first stderr line names the tiers + opt-in, no hooks.db", async () => {
+    const sb = makeSandbox();
+    sandboxes.push(sb);
+    const env = cleanEnv(sb);
+    env.HASNA_STATION = "no-such-station";
+    const result = await runCli(["run", "gitguard"], env);
+    expect(result.timedOut).toBe(false);
+    expect(result.exitCode).toBe(1);
+    const firstLine = result.stderr.split("\n").find((line) => line.trim() !== "") ?? "";
+    expect(firstLine).toContain("REMOTE_API_CONFIG_MISSING");
+    expect(firstLine).toContain("hasna.credentials.hooks.api-key");
+    expect(firstLine).toContain("~/.hasna/hooks/config/credentials");
+    expect(firstLine).toContain("HASNA_HOOKS_API_KEY");
+    expect(firstLine).toContain("HASNA_HOOKS_LOCAL=1");
+    expect(existsSync(sb.dataDir)).toBe(false);
+    expect(existsSync(join(sb.dataDir, "hooks.db"))).toBe(false);
+  });
+
+  test("`hooks run` under the explicit opt-in executes and records the event in the on-box store", async () => {
+    const sb = makeSandbox();
+    sandboxes.push(sb);
+    const env = cleanEnv(sb);
+    env.HASNA_HOOKS_LOCAL = "1";
+    const proc = Bun.spawn(["bun", "run", CLI, "run", "gitguard"], {
+      stdout: "pipe",
+      stderr: "pipe",
+      stdin: new Response(JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "echo ok" } })),
+      env,
+    });
+    const [stdout, stderr] = await Promise.all([
+      new Response(proc.stdout as ReadableStream).text(),
+      new Response(proc.stderr as ReadableStream).text(),
+    ]);
+    const exitCode = await proc.exited;
+    expect(exitCode, stderr).toBe(0);
+    expect(stdout).toContain("decision");
+    expect(stderr).toMatch(/LOCAL mode/);
+    expect(stderr).not.toContain("REMOTE_COMMAND_UNSUPPORTED");
+    expect(existsSync(join(sb.dataDir, "hooks.db"))).toBe(true);
+    const db = new (require("bun:sqlite").Database)(join(sb.dataDir, "hooks.db"), { readonly: true });
+    const row = db.query("SELECT COUNT(*) AS n FROM hook_events WHERE hook_name = 'gitguard'").get() as { n: number };
+    db.close();
+    expect(row.n).toBe(1);
+  });
+
+  test("`hooks run` on the hosted route executes the hook but REFUSES the local event write — no hooks.db", async () => {
+    const sb = makeSandbox();
+    sandboxes.push(sb);
+    const env = cleanEnv(sb);
+    env.HASNA_HOOKS_API_URL = "https://api.hasna.com/hooks";
+    env.HASNA_HOOKS_API_KEY = "gate-test-key";
+    const proc = Bun.spawn(["bun", "run", CLI, "run", "gitguard"], {
+      stdout: "pipe",
+      stderr: "pipe",
+      stdin: new Response(JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "echo ok" } })),
+      env,
+    });
+    const [stdout, stderr] = await Promise.all([
+      new Response(proc.stdout as ReadableStream).text(),
+      new Response(proc.stderr as ReadableStream).text(),
+    ]);
+    const exitCode = await proc.exited;
+    expect(exitCode, stderr).toBe(0);
+    expect(stdout).toContain("decision");
+    // Loud, once: the event log is local-only and the registry has no event route.
+    expect(stderr).toContain("REMOTE_COMMAND_UNSUPPORTED");
+    expect(stderr).toContain("HASNA_HOOKS_LOCAL=1");
+    // The trust pin went to hooks.lock only; the SQLite store was never opened.
+    expect(existsSync(join(sb.dataDir, "hooks.lock"))).toBe(true);
+    expect(existsSync(join(sb.dataDir, "hooks.db"))).toBe(false);
+  });
+
+  test("`hooks log tail` on the hosted route refuses (REMOTE_COMMAND_UNSUPPORTED) instead of answering from an empty hooks.db", async () => {
+    const sb = makeSandbox();
+    sandboxes.push(sb);
+    const env = cleanEnv(sb);
+    env.HASNA_HOOKS_API_URL = "https://api.hasna.com/hooks";
+    env.HASNA_HOOKS_API_KEY = "gate-test-key";
+    const tail = await runCli(["log", "tail"], env);
+    expect(tail.timedOut).toBe(false);
+    expect(tail.exitCode).toBe(1);
+    expect(tail.stderr).toContain("REMOTE_COMMAND_UNSUPPORTED");
+    expect(tail.stderr).toContain("HASNA_HOOKS_LOCAL=1");
+    expect(existsSync(join(sb.dataDir, "hooks.db"))).toBe(false);
+    // JSON callers get the same refusal as a JSON error, exit 1.
+    const json = await runCli(["log", "list", "--json"], env);
+    expect(json.exitCode).toBe(1);
+    expect(JSON.parse(json.stdout.trim()).error).toContain("REMOTE_COMMAND_UNSUPPORTED");
+    const status = await runCli(["storage", "status"], env);
+    expect(status.exitCode).toBe(1);
+    expect(status.stderr).toContain("REMOTE_COMMAND_UNSUPPORTED");
+    expect(existsSync(join(sb.dataDir, "hooks.db"))).toBe(false);
+  });
+
+  test("a bare `hooks` with no TTY refuses cleanly under the opt-in instead of an Ink raw-mode crash", async () => {
+    const sb = makeSandbox();
+    sandboxes.push(sb);
+    const env = cleanEnv(sb);
+    env.HASNA_HOOKS_LOCAL = "1";
+    const result = await runCli([], env);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("requires a TTY terminal");
+  });
+
   test("a config.json without api_url does not open the gate", async () => {
     const sb = makeSandbox();
     sandboxes.push(sb);

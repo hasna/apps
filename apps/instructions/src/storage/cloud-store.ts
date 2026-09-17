@@ -7,7 +7,7 @@
  * (slug uniqueness, optimistic version bumps, JSONB (de)serialization); it
  * throws clear errors rather than returning fake no-ops.
  */
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { TypedQueryClient } from "../generated/storage-kit/index.js";
 import {
   ConfigNotFoundError,
@@ -36,6 +36,242 @@ import { boundedReadPage, normalizeBoundedReadOptions } from "../lib/bounded-rea
 import { legacyProfileConfigBinding, normalizeProfileConfigBinding } from "../lib/instruction-graph.js";
 import { normalizeProfileAssetBinding } from "../lib/asset-plan.js";
 import { normalizeOsFamily } from "../lib/machine.js";
+
+
+class CollectionChangedWhilePagingError extends Error {
+  constructor(label: string, detail: string) {
+    super(`${label} changed while paging: ${detail}`);
+    this.name = "CollectionChangedWhilePagingError";
+  }
+}
+
+interface StableCollectionRead<T> {
+  items: T[];
+  total: number;
+}
+
+function isBoundedPageConsistencyError(error: unknown): error is Error {
+  return error instanceof Error && (
+    error.message.startsWith("bounded read returned ")
+    || error.message.startsWith("bounded read did not advance ")
+  );
+}
+
+async function aggregateBoundedCollectionRead<T>(
+  label: string,
+  readPage: (cursor: number) => Promise<BoundedReadPage<T>>,
+  identity: (item: T) => string,
+  requireAscendingIdentity = false,
+  retryBoundedPageConsistencyErrors = false,
+): Promise<StableCollectionRead<T>> {
+  let lastError: CollectionChangedWhilePagingError | null = null;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const items: T[] = [];
+      const seen = new Set<string>();
+      let expectedTotal: number | null = null;
+      let previousIdentity: string | null = null;
+      let cursor = 0;
+      while (true) {
+        let page: BoundedReadPage<T>;
+        try {
+          page = await readPage(cursor);
+        } catch (error) {
+          if (!retryBoundedPageConsistencyErrors || !isBoundedPageConsistencyError(error)) throw error;
+          throw new CollectionChangedWhilePagingError(label, error.message);
+        }
+        if (page.cursor !== cursor) {
+          throw new CollectionChangedWhilePagingError(label, `server returned cursor ${page.cursor} for requested cursor ${cursor}`);
+        }
+        if (expectedTotal === null) expectedTotal = page.total;
+        else if (page.total !== expectedTotal) {
+          throw new CollectionChangedWhilePagingError(label, `total changed from ${expectedTotal} to ${page.total}`);
+        }
+        for (const item of page.items) {
+          const key = identity(item);
+          if (!key) throw new CollectionChangedWhilePagingError(label, "an item had no stable identity");
+          if (seen.has(key)) throw new CollectionChangedWhilePagingError(label, `duplicate identity ${key}`);
+          if (requireAscendingIdentity && previousIdentity !== null && key <= previousIdentity) {
+            throw new CollectionChangedWhilePagingError(label, `identity order was not strictly increasing at ${key}`);
+          }
+          seen.add(key);
+          previousIdentity = key;
+          items.push(item);
+        }
+        if (page.complete) {
+          if (items.length !== expectedTotal) {
+            throw new CollectionChangedWhilePagingError(label, `received ${items.length} unique rows for total ${expectedTotal}`);
+          }
+          return { items, total: expectedTotal };
+        }
+        if (page.next_cursor === null || page.next_cursor <= cursor) {
+          throw new CollectionChangedWhilePagingError(label, `cursor did not advance from ${cursor}`);
+        }
+        cursor = page.next_cursor;
+      }
+    } catch (error) {
+      if (!(error instanceof CollectionChangedWhilePagingError)) throw error;
+      lastError = error;
+    }
+  }
+  throw lastError ?? new CollectionChangedWhilePagingError(label, "read did not stabilize");
+}
+
+async function aggregateBoundedCollection<T>(
+  label: string,
+  readPage: (cursor: number) => Promise<BoundedReadPage<T>>,
+  identity: (item: T) => string,
+  requireAscendingIdentity = false,
+): Promise<T[]> {
+  return (await aggregateBoundedCollectionRead(label, readPage, identity, requireAscendingIdentity)).items;
+}
+
+export class StoreValidationError extends Error {
+  constructor(
+    message: string,
+    readonly code: "NAME_REQUIRED" | "CATEGORY_REQUIRED",
+  ) {
+    super(message);
+    this.name = "StoreValidationError";
+  }
+}
+
+export class IdempotencyConflictError extends Error {
+  readonly code = "IDEMPOTENCY_KEY_REUSED" as const;
+  constructor() {
+    super("Idempotency-Key was already used for a different request body");
+    this.name = "IdempotencyConflictError";
+  }
+}
+
+export interface IdempotentRequestInput {
+  principal: string;
+  operation: string;
+  key: string;
+  body: unknown;
+}
+
+export interface IdempotentResponse<T> {
+  status: number;
+  body: T;
+  replayed: boolean;
+}
+
+type TransactionalQueryClient = TypedQueryClient & {
+  transaction<T>(fn: (client: TypedQueryClient) => Promise<T>): Promise<T>;
+};
+
+interface IdempotencyReceiptRow {
+  request_sha256: string;
+  response_status: number | null;
+  response_body: unknown;
+}
+
+const IDEMPOTENCY_SCHEMA_SQL = `CREATE TABLE IF NOT EXISTS instruction_idempotency_receipts (
+  principal TEXT NOT NULL,
+  operation TEXT NOT NULL,
+  idempotency_key TEXT NOT NULL,
+  request_sha256 TEXT NOT NULL,
+  response_status INTEGER,
+  response_body JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  completed_at TIMESTAMPTZ,
+  PRIMARY KEY (principal, operation, idempotency_key),
+  CHECK (length(principal) BETWEEN 1 AND 512),
+  CHECK (length(operation) BETWEEN 1 AND 255),
+  CHECK (length(idempotency_key) BETWEEN 1 AND 255),
+  CHECK (length(request_sha256) = 64),
+  CHECK (
+    (response_status IS NULL AND response_body IS NULL AND completed_at IS NULL)
+    OR
+    (response_status BETWEEN 200 AND 599 AND response_body IS NOT NULL AND completed_at IS NOT NULL)
+  )
+)`;
+
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return JSON.stringify(value);
+  if (typeof value === "number") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record).sort().filter((key) => record[key] !== undefined).map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(null);
+}
+
+export function idempotencyBodyDigest(body: unknown): string {
+  return createHash("sha256").update(canonicalJson(body)).digest("hex");
+}
+
+function hasTransaction(client: TypedQueryClient): client is TransactionalQueryClient {
+  return typeof (client as Partial<TransactionalQueryClient>).transaction === "function";
+}
+
+/**
+ * Execute a retryable mutation under one durable PostgreSQL receipt.
+ *
+ * The placeholder receipt, domain mutation, and completed response commit in
+ * the same transaction. The primary key serializes concurrent duplicates;
+ * `FOR UPDATE` makes a waiter replay the first committed response. A failed
+ * domain mutation rolls the placeholder back, so a later retry may safely run.
+ */
+const idempotencySchemaReady = new WeakSet<object>();
+
+export async function ensureIdempotencySchema(client: TypedQueryClient): Promise<void> {
+  if (idempotencySchemaReady.has(client as object)) return;
+  await client.execute(IDEMPOTENCY_SCHEMA_SQL);
+  await client.execute(
+    "CREATE INDEX IF NOT EXISTS instruction_idempotency_receipts_created_at_idx ON instruction_idempotency_receipts (created_at)",
+  );
+  idempotencySchemaReady.add(client as object);
+}
+
+export async function executeIdempotentRequest<T>(
+  client: TypedQueryClient,
+  input: IdempotentRequestInput,
+  perform: (client: TypedQueryClient) => Promise<{ status: number; body: T }>,
+): Promise<IdempotentResponse<T>> {
+  if (!hasTransaction(client)) {
+    throw new Error("durable idempotency requires a transactional PostgreSQL client");
+  }
+  await ensureIdempotencySchema(client);
+  const digest = idempotencyBodyDigest(input.body);
+  return client.transaction(async (tx) => {
+    const identity = [input.principal, input.operation, input.key] as const;
+    const inserted = await tx.query<{ inserted: boolean }>(
+      `INSERT INTO instruction_idempotency_receipts
+         (principal, operation, idempotency_key, request_sha256)
+       VALUES ($1,$2,$3,$4)
+       ON CONFLICT (principal, operation, idempotency_key) DO NOTHING
+       RETURNING true AS inserted`,
+      [...identity, digest],
+    );
+    const receipt = await tx.get<IdempotencyReceiptRow>(
+      `SELECT request_sha256, response_status, response_body
+         FROM instruction_idempotency_receipts
+        WHERE principal = $1 AND operation = $2 AND idempotency_key = $3
+        FOR UPDATE`,
+      identity,
+    );
+    if (!receipt) throw new Error("idempotency receipt disappeared during transaction");
+    if (receipt.request_sha256 !== digest) throw new IdempotencyConflictError();
+    if (inserted.rowCount === 0) {
+      if (receipt.response_status === null || receipt.response_body === null) {
+        throw new Error("idempotency receipt is incomplete after serialization");
+      }
+      return { status: Number(receipt.response_status), body: receipt.response_body as T, replayed: true };
+    }
+
+    const response = await perform(tx);
+    await tx.execute(
+      `UPDATE instruction_idempotency_receipts
+          SET response_status = $5, response_body = $6::jsonb, completed_at = now()
+        WHERE principal = $1 AND operation = $2 AND idempotency_key = $3 AND request_sha256 = $4`,
+      [...identity, digest, response.status, JSON.stringify(response.body)],
+    );
+    return { ...response, replayed: false };
+  });
+}
 
 function slugify(name: string): string {
   return name
@@ -140,10 +376,7 @@ async function uniqueSlug(
 
 // ── Configs ────────────────────────────────────────────────────────────────
 
-export async function listConfigs(
-  client: TypedQueryClient,
-  filter: ConfigFilter = {},
-): Promise<Config[]> {
+function configFilterSql(filter: ConfigFilter): { where: string; params: unknown[] } {
   const conditions: string[] = [];
   const params: unknown[] = [];
   const add = (sql: string, value: unknown) => {
@@ -156,15 +389,94 @@ export async function listConfigs(
   if (filter.is_template !== undefined) add("is_template = $?", filter.is_template);
   if (filter.search) {
     params.push(`%${filter.search}%`);
-    const p = `$${params.length}`;
-    conditions.push(`(name ILIKE ${p} OR description ILIKE ${p} OR content ILIKE ${p})`);
+    const parameter = `$${params.length}`;
+    conditions.push(`(name ILIKE ${parameter} OR description ILIKE ${parameter} OR content ILIKE ${parameter})`);
   }
-  const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
-  const rows = await client.many<ConfigDbRow>(
-    `SELECT * FROM configs ${where} ORDER BY category, name`,
+  return {
+    where: conditions.length ? `WHERE ${conditions.join(" AND ")}` : "",
+    params,
+  };
+}
+
+export async function listConfigsPage(
+  client: TypedQueryClient,
+  filter: ConfigFilter = {},
+  options: BoundedReadOptions = {},
+): Promise<BoundedReadPage<Config>> {
+  const normalized = normalizeBoundedReadOptions(options);
+  const { where, params } = configFilterSql(filter);
+  const count = await client.get<{ total: number | string }>(
+    `SELECT COUNT(*) AS total FROM configs ${where}`,
     params,
   );
-  return rows.map(rowToConfig);
+  const rows = await client.many<ConfigDbRow>(
+    `SELECT * FROM configs ${where} ORDER BY id LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+    [...params, normalized.limit, normalized.cursor],
+  );
+  return boundedReadPage(rows.map(rowToConfig), Number(count?.total ?? 0), normalized);
+}
+
+export async function listConfigs(
+  client: TypedQueryClient,
+  filter: ConfigFilter = {},
+): Promise<Config[]> {
+  return aggregateBoundedCollection(
+    "config list",
+    (cursor) => listConfigsPage(client, filter, { limit: 100, cursor }),
+    (config) => config.id,
+    true,
+  );
+}
+
+export interface ConfigIdentity {
+  id: string;
+  name: string;
+  slug: string;
+  kind: string;
+  category: string;
+  agent: string;
+  format: string;
+  is_template: boolean;
+  version: number;
+  created_at: string;
+  updated_at: string;
+  synced_at: string | null;
+}
+
+export function listConfigIdentitiesPage(
+  client: TypedQueryClient,
+  options?: BoundedReadOptions,
+): Promise<BoundedReadPage<ConfigIdentity>>;
+export function listConfigIdentitiesPage(
+  client: TypedQueryClient,
+  filter: ConfigFilter,
+  options?: BoundedReadOptions,
+): Promise<BoundedReadPage<ConfigIdentity>>;
+export async function listConfigIdentitiesPage(
+  client: TypedQueryClient,
+  filterOrOptions: ConfigFilter | BoundedReadOptions = {},
+  maybeOptions?: BoundedReadOptions,
+): Promise<BoundedReadPage<ConfigIdentity>> {
+  const filterKeys = ["category", "agent", "kind", "is_template", "search", "tags"] as const;
+  const isFilterOnly = maybeOptions === undefined && filterKeys.some((key) => key in filterOrOptions);
+  const filter = maybeOptions === undefined && !isFilterOnly ? {} : filterOrOptions as ConfigFilter;
+  const options = maybeOptions === undefined && !isFilterOnly ? filterOrOptions as BoundedReadOptions : (maybeOptions ?? {});
+  const normalized = normalizeBoundedReadOptions(options);
+  const { where, params } = configFilterSql(filter);
+  const count = await client.get<{ total: number | string }>(`SELECT COUNT(*) AS total FROM configs ${where}`, params);
+  const rows = await client.many<Omit<ConfigIdentity, "created_at" | "updated_at" | "synced_at"> & {
+    created_at: unknown; updated_at: unknown; synced_at: unknown;
+  }>(
+    `SELECT id, name, slug, kind, category, agent, format, is_template, version, created_at, updated_at, synced_at
+       FROM configs ${where} ORDER BY id LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+    [...params, normalized.limit, normalized.cursor],
+  );
+  return boundedReadPage(rows.map((row) => ({
+    ...row,
+    created_at: toIso(row.created_at),
+    updated_at: toIso(row.updated_at),
+    synced_at: row.synced_at == null ? null : toIso(row.synced_at),
+  })), Number(count?.total ?? 0), normalized);
 }
 
 export async function getConfig(client: TypedQueryClient, idOrSlug: string): Promise<Config> {
@@ -180,8 +492,8 @@ export async function createConfig(
   client: TypedQueryClient,
   input: CreateConfigInput,
 ): Promise<Config> {
-  if (!input.name || !input.name.trim()) throw new Error("name is required");
-  if (!input.category) throw new Error("category is required");
+  if (typeof input.name !== "string" || !input.name.trim()) throw new StoreValidationError("name is required", "NAME_REQUIRED");
+  if (typeof input.category !== "string" || !input.category.trim()) throw new StoreValidationError("category is required", "CATEGORY_REQUIRED");
   const id = randomUUID();
   const slug = await uniqueSlug(client, input.name);
   const snapshotId = randomUUID();
@@ -318,16 +630,44 @@ export async function createSnapshotContent(
   return { id: row.id, config_id: row.config_id, content: row.content, version: Number(row.version), created_at: toIso(row.created_at) };
 }
 
+export async function listSnapshotsPage(
+  client: TypedQueryClient,
+  idOrSlug: string,
+  options: BoundedReadOptions = {},
+): Promise<BoundedReadPage<ConfigSnapshot>> {
+  const config = await getConfig(client, idOrSlug);
+  const normalized = normalizeBoundedReadOptions(options);
+  const count = await client.get<{ total: number | string }>(
+    "SELECT COUNT(*) AS total FROM config_snapshots WHERE config_id = $1",
+    [config.id],
+  );
+  const rows = await client.many<{ id: string; config_id: string; content: string; version: number; created_at: unknown }>(
+    `SELECT id, config_id, content, version, created_at
+       FROM config_snapshots WHERE config_id = $1
+       ORDER BY version DESC, id LIMIT $2 OFFSET $3`,
+    [config.id, normalized.limit, normalized.cursor],
+  );
+  return boundedReadPage(rows.map((row) => ({
+    id: row.id,
+    config_id: row.config_id,
+    content: row.content,
+    version: Number(row.version),
+    created_at: toIso(row.created_at),
+  })), Number(count?.total ?? 0), normalized);
+}
+
 export async function listSnapshots(
   client: TypedQueryClient,
   idOrSlug: string,
 ): Promise<ConfigSnapshot[]> {
-  const config = await getConfig(client, idOrSlug);
-  const rows = await client.many<{ id: string; config_id: string; content: string; version: number; created_at: unknown }>(
-    "SELECT id, config_id, content, version, created_at FROM config_snapshots WHERE config_id = $1 ORDER BY version DESC",
-    [config.id],
-  );
-  return rows.map((r) => ({ id: r.id, config_id: r.config_id, content: r.content, version: Number(r.version), created_at: toIso(r.created_at) }));
+  const snapshots: ConfigSnapshot[] = [];
+  let cursor = 0;
+  while (true) {
+    const page = await listSnapshotsPage(client, idOrSlug, { limit: 100, cursor });
+    snapshots.push(...page.items);
+    if (page.complete) return snapshots;
+    cursor = page.next_cursor!;
+  }
 }
 
 export async function getSnapshotById(
@@ -396,14 +736,12 @@ function rowToProfile(row: ProfileDbRow): Profile {
 }
 
 export async function listProfiles(client: TypedQueryClient): Promise<Profile[]> {
-  const profiles: Profile[] = [];
-  let cursor = 0;
-  while (true) {
-    const page = await listProfilesPage(client, { limit: 100, cursor });
-    profiles.push(...page.items);
-    if (page.complete) return profiles;
-    cursor = page.next_cursor!;
-  }
+  return aggregateBoundedCollection(
+    "profile list",
+    (cursor) => listProfilesPage(client, { limit: 100, cursor }),
+    (profile) => profile.id,
+    true,
+  );
 }
 
 export async function listProfilesPage(
@@ -413,10 +751,38 @@ export async function listProfilesPage(
   const normalized = normalizeBoundedReadOptions(options);
   const count = await client.get<{ total: number | string }>("SELECT COUNT(*) AS total FROM profiles");
   const rows = await client.many<ProfileDbRow>(
-    "SELECT * FROM profiles ORDER BY name LIMIT $1 OFFSET $2",
+    "SELECT * FROM profiles ORDER BY id LIMIT $1 OFFSET $2",
     [normalized.limit, normalized.cursor],
   );
   return boundedReadPage(rows.map(rowToProfile), Number(count?.total ?? 0), normalized);
+}
+
+export interface ProfileIdentity {
+  id: string;
+  name: string;
+  slug: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export async function listProfileIdentitiesPage(
+  client: TypedQueryClient,
+  options: BoundedReadOptions = {},
+): Promise<BoundedReadPage<ProfileIdentity>> {
+  const normalized = normalizeBoundedReadOptions(options);
+  const count = await client.get<{ total: number | string }>("SELECT COUNT(*) AS total FROM profiles");
+  const rows = await client.many<{ id: string; name: string; slug: string; created_at: unknown; updated_at: unknown }>(
+    `SELECT id, name, slug, created_at, updated_at
+       FROM profiles ORDER BY id LIMIT $1 OFFSET $2`,
+    [normalized.limit, normalized.cursor],
+  );
+  return boundedReadPage(rows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    slug: row.slug,
+    created_at: toIso(row.created_at),
+    updated_at: toIso(row.updated_at),
+  })), Number(count?.total ?? 0), normalized);
 }
 
 export async function getProfile(client: TypedQueryClient, idOrSlug: string): Promise<Profile> {
@@ -432,14 +798,11 @@ export async function getProfileConfigs(
   client: TypedQueryClient,
   idOrSlug: string,
 ): Promise<Config[]> {
-  const configs: Config[] = [];
-  let cursor = 0;
-  while (true) {
-    const page = await getProfileConfigsPage(client, idOrSlug, { limit: 100, cursor });
-    configs.push(...page.items);
-    if (page.complete) return configs;
-    cursor = page.next_cursor!;
-  }
+  return aggregateBoundedCollection(
+    "profile membership",
+    (cursor) => getProfileConfigsPage(client, idOrSlug, { limit: 100, cursor }),
+    (config) => config.id,
+  );
 }
 
 export async function getProfileConfigsPage(
@@ -457,7 +820,7 @@ export async function getProfileConfigsPage(
     `SELECT c.* FROM configs c
        JOIN profile_configs pc ON pc.config_id = c.id
       WHERE pc.profile_id = $1
-      ORDER BY pc.sort_order
+      ORDER BY pc.sort_order, c.id
       LIMIT $2 OFFSET $3`,
     [profile.id, normalized.limit, normalized.cursor],
   );
@@ -468,7 +831,7 @@ export async function createProfile(
   client: TypedQueryClient,
   input: CreateProfileInput,
 ): Promise<Profile> {
-  if (!input.name || !input.name.trim()) throw new Error("name is required");
+  if (typeof input.name !== "string" || !input.name.trim()) throw new StoreValidationError("name is required", "NAME_REQUIRED");
   const id = randomUUID();
   const slug = await uniqueProfileSlug(client, input.name);
   await client.execute(
@@ -544,24 +907,66 @@ export async function addConfigToProfile(
   );
 }
 
-export async function getProfileConfigBindings(
-  client: TypedQueryClient,
-  profileIdOrSlug: string,
-): Promise<ProfileConfigBinding[]> {
-  const profile = await getProfile(client, profileIdOrSlug);
-  const rows = await client.many<{ profile_id: string; config_id: string; sort_order: number; binding: unknown }>(
-    `SELECT profile_id, config_id, sort_order, binding
-       FROM profile_configs
-      WHERE profile_id = $1
-      ORDER BY sort_order, config_id`,
-    [profile.id],
-  );
-  return rows.map((row) => ({
+function rowToProfileConfigBinding(row: {
+  profile_id: string;
+  config_id: string;
+  sort_order: number;
+  binding: unknown;
+}): ProfileConfigBinding {
+  return {
     profile_id: row.profile_id,
     config_id: row.config_id,
     sort_order: Number(row.sort_order),
     binding: row.binding == null ? legacyProfileConfigBinding() : normalizeProfileConfigBinding(row.binding),
-  }));
+  };
+}
+
+export async function getProfileConfigBindingsPage(
+  client: TypedQueryClient,
+  profileIdOrSlug: string,
+  options: BoundedReadOptions = {},
+): Promise<BoundedReadPage<ProfileConfigBinding>> {
+  const profile = await getProfile(client, profileIdOrSlug);
+  const normalized = normalizeBoundedReadOptions(options);
+  const count = await client.get<{ total: number | string }>(
+    "SELECT COUNT(*) AS total FROM profile_configs WHERE profile_id = $1",
+    [profile.id],
+  );
+  const rows = await client.many<{ profile_id: string; config_id: string; sort_order: number; binding: unknown }>(
+    `SELECT profile_id, config_id, sort_order, binding
+       FROM profile_configs
+      WHERE profile_id = $1
+      ORDER BY sort_order, config_id
+      LIMIT $2 OFFSET $3`,
+    [profile.id, normalized.limit, normalized.cursor],
+  );
+  return boundedReadPage(rows.map(rowToProfileConfigBinding), Number(count?.total ?? 0), normalized);
+}
+
+export async function getProfileConfigBindings(
+  client: TypedQueryClient,
+  profileIdOrSlug: string,
+): Promise<ProfileConfigBinding[]> {
+  return aggregateBoundedCollection(
+    "profile config bindings",
+    (cursor) => getProfileConfigBindingsPage(client, profileIdOrSlug, { limit: 100, cursor }),
+    (binding) => `${binding.profile_id}\0${binding.config_id}`,
+  );
+}
+
+async function getProfileConfigBinding(
+  client: TypedQueryClient,
+  profileId: string,
+  configId: string,
+): Promise<ProfileConfigBinding> {
+  const row = await client.get<{ profile_id: string; config_id: string; sort_order: number; binding: unknown }>(
+    `SELECT profile_id, config_id, sort_order, binding
+       FROM profile_configs
+      WHERE profile_id = $1 AND config_id = $2`,
+    [profileId, configId],
+  );
+  if (!row) throw new Error(`Config ${configId} is not a member of profile ${profileId}.`);
+  return rowToProfileConfigBinding(row);
 }
 
 export async function setProfileConfigBinding(
@@ -577,7 +982,7 @@ export async function setProfileConfigBinding(
     [JSON.stringify(normalized), profile.id, configId],
   );
   if ((result.rowCount ?? 0) !== 1) throw new Error(`Config ${configId} is not a member of profile ${profile.slug}.`);
-  return (await getProfileConfigBindings(client, profile.id)).find((row) => row.config_id === configId)!;
+  return getProfileConfigBinding(client, profile.id, configId);
 }
 
 export async function removeConfigFromProfile(
@@ -590,6 +995,68 @@ export async function removeConfigFromProfile(
     "DELETE FROM profile_configs WHERE profile_id = $1 AND config_id = $2",
     [profile.id, configId],
   );
+}
+
+function rowToProfileAssetBinding(row: {
+  profile_id: string;
+  source_config_id: string;
+  sort_order: number;
+  binding: unknown;
+}): ProfileAssetBinding {
+  return {
+    profile_id: row.profile_id,
+    source_config_id: row.source_config_id,
+    sort_order: Number(row.sort_order),
+    binding: normalizeProfileAssetBinding(row.binding),
+  };
+}
+
+export async function getProfileAssetBindingsPage(
+  client: TypedQueryClient,
+  profileIdOrSlug: string,
+  options: BoundedReadOptions = {},
+): Promise<BoundedReadPage<ProfileAssetBinding>> {
+  const profile = await getProfile(client, profileIdOrSlug);
+  const normalized = normalizeBoundedReadOptions(options);
+  const count = await client.get<{ total: number | string }>(
+    "SELECT COUNT(*) AS total FROM profile_assets WHERE profile_id = $1",
+    [profile.id],
+  );
+  const rows = await client.many<{ profile_id: string; source_config_id: string; sort_order: number; binding: unknown }>(
+    `SELECT profile_id, source_config_id, sort_order, binding
+       FROM profile_assets
+      WHERE profile_id = $1
+      ORDER BY sort_order, asset_key
+      LIMIT $2 OFFSET $3`,
+    [profile.id, normalized.limit, normalized.cursor],
+  );
+  return boundedReadPage(rows.map(rowToProfileAssetBinding), Number(count?.total ?? 0), normalized);
+}
+
+export async function getProfileAssetBindings(
+  client: TypedQueryClient,
+  profileIdOrSlug: string,
+): Promise<ProfileAssetBinding[]> {
+  return aggregateBoundedCollection(
+    "profile asset bindings",
+    (cursor) => getProfileAssetBindingsPage(client, profileIdOrSlug, { limit: 100, cursor }),
+    (asset) => `${asset.profile_id}\0${asset.binding.assetKey}`,
+  );
+}
+
+async function getProfileAssetBinding(
+  client: TypedQueryClient,
+  profileId: string,
+  assetKey: string,
+): Promise<ProfileAssetBinding> {
+  const row = await client.get<{ profile_id: string; source_config_id: string; sort_order: number; binding: unknown }>(
+    `SELECT profile_id, source_config_id, sort_order, binding
+       FROM profile_assets
+      WHERE profile_id = $1 AND asset_key = $2`,
+    [profileId, assetKey],
+  );
+  if (!row) throw new Error(`Asset ${assetKey} is not a member of profile ${profileId}.`);
+  return rowToProfileAssetBinding(row);
 }
 
 export async function addAssetToProfile(
@@ -610,7 +1077,7 @@ export async function addAssetToProfile(
     "INSERT INTO profile_assets (profile_id, source_config_id, asset_key, sort_order, binding) VALUES ($1,$2,$3,$4,$5::jsonb)",
     [profile.id, sourceConfigId, normalized.assetKey, order, JSON.stringify(normalized)],
   );
-  return (await getProfileAssetBindings(client, profile.id)).find((row) => row.binding.assetKey === normalized.assetKey)!;
+  return getProfileAssetBinding(client, profile.id, normalized.assetKey);
 }
 
 export async function setProfileAssetBinding(
@@ -627,24 +1094,7 @@ export async function setProfileAssetBinding(
     [JSON.stringify(normalized), profile.id, assetKey],
   );
   if ((result.rowCount ?? 0) !== 1) throw new Error(`Asset ${assetKey} is not a member of profile ${profile.slug}.`);
-  return (await getProfileAssetBindings(client, profile.id)).find((row) => row.binding.assetKey === assetKey)!;
-}
-
-export async function getProfileAssetBindings(
-  client: TypedQueryClient,
-  profileIdOrSlug: string,
-): Promise<ProfileAssetBinding[]> {
-  const profile = await getProfile(client, profileIdOrSlug);
-  const rows = await client.many<{ profile_id: string; source_config_id: string; sort_order: number; binding: unknown }>(
-    "SELECT profile_id, source_config_id, sort_order, binding FROM profile_assets WHERE profile_id = $1 ORDER BY sort_order, asset_key",
-    [profile.id],
-  );
-  return rows.map((row) => ({
-    profile_id: row.profile_id,
-    source_config_id: row.source_config_id,
-    sort_order: Number(row.sort_order),
-    binding: normalizeProfileAssetBinding(row.binding),
-  }));
+  return getProfileAssetBinding(client, profile.id, assetKey);
 }
 
 export async function removeAssetFromProfile(
@@ -681,45 +1131,48 @@ export async function resolveProfileForMachineRead(
   const os = (machine.os ?? "").trim().toLowerCase();
   const osFamily = normalizeOsFamily(machine.os);
   const arch = (machine.arch ?? "").trim().toLowerCase();
-  let cursor = 0;
-  let scanned = 0;
-  let total = 0;
+  const readStableProfiles = (queryClient: TypedQueryClient) => aggregateBoundedCollectionRead(
+    "profile resolution",
+    (cursor) => listProfilesPage(queryClient, { limit, cursor }),
+    (profile) => profile.id,
+    true,
+    true,
+  );
+  const stableRead = hasTransaction(client)
+    ? await client.transaction(async (transaction) => {
+        await transaction.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY");
+        return readStableProfiles(transaction);
+      })
+    : await readStableProfiles(client);
   let selected: { profile: Profile; score: number } | null = null;
 
-  while (true) {
-    const page = await listProfilesPage(client, { limit, cursor });
-    total = page.total;
-    scanned += page.items.length;
-    for (const p of page.items) {
-      if (!profileHasSelectors(p.selectors)) continue;
-      const s = p.selectors;
-      const osOk = !s.os?.length || s.os.some((c) => {
-        const value = c.trim().toLowerCase();
-        return value === os || normalizeOsFamily(c) === osFamily;
-      });
-      const archOk = !s.arch?.length || s.arch.some((c) => c.trim().toLowerCase() === arch);
-      const hostOk = !s.hostnames?.length || s.hostnames.some((c) => c.trim().toLowerCase() === host);
-      if (!osOk || !archOk || !hostOk) continue;
-      const score =
-        (p.selectors.hostnames?.length ? 100 : 0) +
-        (p.selectors.os?.length ? 10 : 0) +
-        (p.selectors.arch?.length ? 10 : 0);
-      if (
-        !selected ||
-        score > selected.score ||
-        (score === selected.score && p.name.localeCompare(selected.profile.name) < 0)
-      ) {
-        selected = { profile: p, score };
-      }
+  for (const p of stableRead.items) {
+    if (!profileHasSelectors(p.selectors)) continue;
+    const s = p.selectors;
+    const osOk = !s.os?.length || s.os.some((c) => {
+      const value = c.trim().toLowerCase();
+      return value === os || normalizeOsFamily(c) === osFamily;
+    });
+    const archOk = !s.arch?.length || s.arch.some((c) => c.trim().toLowerCase() === arch);
+    const hostOk = !s.hostnames?.length || s.hostnames.some((c) => c.trim().toLowerCase() === host);
+    if (!osOk || !archOk || !hostOk) continue;
+    const score =
+      (p.selectors.hostnames?.length ? 100 : 0) +
+      (p.selectors.os?.length ? 10 : 0) +
+      (p.selectors.arch?.length ? 10 : 0);
+    if (
+      !selected ||
+      score > selected.score ||
+      (score === selected.score && p.name.localeCompare(selected.profile.name) < 0)
+    ) {
+      selected = { profile: p, score };
     }
-    if (page.complete) break;
-    cursor = page.next_cursor!;
   }
 
   return {
     profile: selected?.profile ?? null,
-    scanned,
-    total,
+    scanned: stableRead.items.length,
+    total: stableRead.total,
     batch_limit: limit,
     source_bounded: true,
     complete: true,
@@ -749,11 +1202,43 @@ function rowToMachine(row: MachineDbRow): Machine {
   };
 }
 
-export async function listMachines(client: TypedQueryClient): Promise<Machine[]> {
+export async function listMachinesPage(
+  client: TypedQueryClient,
+  options: BoundedReadOptions = {},
+): Promise<BoundedReadPage<Machine>> {
+  const normalized = normalizeBoundedReadOptions(options);
+  const count = await client.get<{ total: number | string }>("SELECT COUNT(*) AS total FROM machines");
   const rows = await client.many<MachineDbRow>(
-    "SELECT * FROM machines ORDER BY last_applied_at DESC NULLS LAST",
+    `SELECT * FROM machines
+      ORDER BY id LIMIT $1 OFFSET $2`,
+    [normalized.limit, normalized.cursor],
   );
-  return rows.map(rowToMachine);
+  return boundedReadPage(rows.map(rowToMachine), Number(count?.total ?? 0), normalized);
+}
+
+export async function listMachines(client: TypedQueryClient): Promise<Machine[]> {
+  return aggregateBoundedCollection(
+    "machine list",
+    (cursor) => listMachinesPage(client, { limit: 100, cursor }),
+    (machine) => machine.id,
+    true,
+  );
+}
+
+export type MachineIdentity = Machine;
+
+export async function listMachineIdentitiesPage(
+  client: TypedQueryClient,
+  options: BoundedReadOptions = {},
+): Promise<BoundedReadPage<MachineIdentity>> {
+  const normalized = normalizeBoundedReadOptions(options);
+  const count = await client.get<{ total: number | string }>("SELECT COUNT(*) AS total FROM machines");
+  const rows = await client.many<MachineDbRow>(
+    `SELECT id, hostname, os, arch, last_applied_at, created_at
+       FROM machines ORDER BY id LIMIT $1 OFFSET $2`,
+    [normalized.limit, normalized.cursor],
+  );
+  return boundedReadPage(rows.map(rowToMachine), Number(count?.total ?? 0), normalized);
 }
 
 export async function registerMachine(

@@ -11,6 +11,8 @@ import {
   generateSkillMd,
   detectProjectSkills,
 } from "./skillinfo";
+import { writeOwnedFixture } from "./private-corpus-test-utils.js";
+import { clearRegistryCache } from "./registry.js";
 import { INSTALLED_SKILLS_DIRNAME } from "./config";
 import { installSkill } from "./installer";
 
@@ -20,10 +22,7 @@ useDefaultTestTimeout();
 
 let testDir: string;
 
-// The OSS catalog is declarative-only (every shipped skill is kind: "instruction"
-// with no bin, no src/, and no provider credentials). Tests that need an
-// executable/BYO-key skill shape build an isolated fixture under a temp
-// $HASNA_SKILLS_DIR/custom/<name>/ instead of leaning on a bundled skill.
+// All documents and package metadata in this file are synthetic owner-local fixtures.
 let fixtureRoot: string | undefined;
 let savedSkillsDir: string | undefined;
 
@@ -36,7 +35,8 @@ function customSkill(
     fixtureRoot = mkdtempSync(join(tmpdir(), "skillinfo-fixture-"));
     process.env.HASNA_SKILLS_DIR = fixtureRoot;
   }
-  const dir = join(fixtureRoot, "custom", name);
+  const dir = join(fixtureRoot, "installed", name);
+  clearRegistryCache();
   mkdirSync(dir, { recursive: true });
   if (files.pkg !== undefined) writeFileSync(join(dir, "package.json"), JSON.stringify(files.pkg, null, 2));
   if (files.skillMd !== undefined) writeFileSync(join(dir, "SKILL.md"), files.skillMd);
@@ -46,6 +46,9 @@ function customSkill(
 
 beforeEach(() => {
   testDir = mkdtempSync(join(tmpdir(), "skillinfo-test-"));
+  writeOwnedFixture("owned-design", { displayName: "Owned Design", category: "Design & Branding" });
+  writeOwnedFixture("owned-report", { category: "Research & Writing" });
+  writeOwnedFixture("owned-document");
 });
 
 afterEach(() => {
@@ -62,10 +65,10 @@ afterEach(() => {
 describe("skillinfo", () => {
   describe("getSkillDocs", () => {
     test("returns docs for skill with SKILL.md", () => {
-      const docs = getSkillDocs("brand-kit");
+      const docs = getSkillDocs("owned-design");
       expect(docs).not.toBeNull();
       expect(docs!.skillMd).toBeTruthy();
-      expect(docs!.skillMd).toContain("Brand Kit");
+      expect(docs!.skillMd).toContain("Owned Design");
     });
 
     test("returns docs for skill with CLAUDE.md only", () => {
@@ -96,9 +99,9 @@ describe("skillinfo", () => {
 
   describe("getSkillBestDoc", () => {
     test("returns SKILL.md when available", () => {
-      const doc = getSkillBestDoc("brand-kit");
+      const doc = getSkillBestDoc("owned-design");
       expect(doc).toBeTruthy();
-      expect(doc).toContain("Brand Kit");
+      expect(doc).toContain("Owned Design");
     });
 
     test("falls back to CLAUDE.md", () => {
@@ -142,15 +145,15 @@ describe("skillinfo", () => {
     });
 
     test("extracts CLI command from the registry", () => {
-      const reqs = getSkillRequirements("brand-kit");
+      const reqs = getSkillRequirements("owned-design");
       expect(reqs).not.toBeNull();
-      expect(reqs!.cliCommand).toBe("skills run brand-kit");
+      expect(reqs!.cliCommand).toBe("skills run owned-design");
     });
 
     test("extracts CLI command for a hosted report skill", () => {
-      const reqs = getSkillRequirements("market-research-report");
+      const reqs = getSkillRequirements("owned-report");
       expect(reqs).not.toBeNull();
-      expect(reqs!.cliCommand).toBe("skills run market-research-report");
+      expect(reqs!.cliCommand).toBe("skills run owned-report");
     });
 
     test("returns null for nonexistent skill", () => {
@@ -311,23 +314,23 @@ describe("skillinfo", () => {
 
   describe("generateSkillMd", () => {
     test("generates SKILL.md for a skill without one", () => {
-      const md = generateSkillMd("market-research-report");
+      const md = generateSkillMd("owned-report");
       expect(md).not.toBeNull();
       expect(md!).toContain("---");
-      expect(md!).toContain("name: market-research-report");
+      expect(md!).toContain("name: owned-report");
       expect(md!).toContain("description:");
-      expect(md!).toContain("Market Research Report");
+      expect(md!).toContain("Owned Report");
     });
 
     test("generates SKILL.md for a skill with existing SKILL.md source", () => {
-      // brand-kit ships a SKILL.md, but generateSkillMd still works
-      const md = generateSkillMd("brand-kit");
+      // owned-design ships a SKILL.md, but generateSkillMd still works
+      const md = generateSkillMd("owned-design");
       expect(md).not.toBeNull();
-      expect(md!).toContain("name: brand-kit");
+      expect(md!).toContain("name: owned-design");
     });
 
     test("includes category and tags", () => {
-      const md = generateSkillMd("market-research-report");
+      const md = generateSkillMd("owned-report");
       expect(md).not.toBeNull();
       expect(md!).toContain("Category: Research & Writing");
       expect(md!).toContain("Tags:");
@@ -336,7 +339,7 @@ describe("skillinfo", () => {
     test("omits the CLI section for an instruction skill (no bin entry)", () => {
       // Declarative catalog: shipped skills carry no bin, so generateSkillMd emits
       // no `## CLI` block. (The block is added only when package.json declares a bin.)
-      const md = generateSkillMd("market-research-report");
+      const md = generateSkillMd("owned-report");
       expect(md).not.toBeNull();
       expect(md!).not.toContain("## CLI");
     });
@@ -347,14 +350,14 @@ describe("skillinfo", () => {
     });
 
     test("builds a non-trivial document from a shipped skill's metadata and docs", () => {
-      const md = generateSkillMd("blog-article");
+      const md = generateSkillMd("owned-document");
       expect(md).not.toBeNull();
-      expect(md!).toContain("name: blog-article");
+      expect(md!).toContain("name: owned-document");
       expect(md!.length).toBeGreaterThan(100);
     });
 
     test("has valid YAML frontmatter", () => {
-      const md = generateSkillMd("market-research-report");
+      const md = generateSkillMd("owned-report");
       expect(md).not.toBeNull();
       // Check frontmatter structure
       const parts = md!.split("---");
@@ -367,119 +370,27 @@ describe("skillinfo", () => {
   });
 
   describe("detectProjectSkills", () => {
-    test("returns always-recommended skills when no package.json", () => {
-      const result = detectProjectSkills(testDir);
-      expect(result.detected).toEqual([]);
-      const names = result.recommended.map((s) => s.name);
-      expect(names).toContain("market-research-report");
-      expect(names).toContain("repo-onboarding-report");
-      expect(names).toContain("blog-article");
-    });
-
-    test("detects react and recommends frontend skills", () => {
-      writeFileSync(
-        join(testDir, "package.json"),
-        JSON.stringify({ dependencies: { react: "^18.0.0", typescript: "^5.0.0" } })
-      );
-      const result = detectProjectSkills(testDir);
-      expect(result.detected).toContain("react");
-      expect(result.detected).toContain("typescript");
-      const names = result.recommended.map((s) => s.name);
-      expect(names).toContain("landing-page-pack");
-      expect(names).toContain("seo-content-pack");
-      expect(names).toContain("brand-kit");
-      // Always included
-      expect(names).toContain("market-research-report");
-      expect(names).toContain("repo-onboarding-report");
-      expect(names).toContain("blog-article");
-    });
-
-    test("detects express and recommends backend skills", () => {
-      writeFileSync(
-        join(testDir, "package.json"),
-        JSON.stringify({ dependencies: { express: "^4.0.0" } })
-      );
-      const result = detectProjectSkills(testDir);
-      expect(result.detected).toContain("express");
-      const names = result.recommended.map((s) => s.name);
-      expect(names).toContain("test-suite-generator");
-      expect(names).toContain("security-audit-report");
-    });
-
-    test("detects anthropic SDK and recommends AI skills", () => {
-      writeFileSync(
-        join(testDir, "package.json"),
-        JSON.stringify({ dependencies: { "@anthropic-ai/sdk": "^0.20.0" } })
-      );
-      const result = detectProjectSkills(testDir);
-      expect(result.detected).toContain("@anthropic-ai/sdk");
-      const names = result.recommended.map((s) => s.name);
-      expect(names).toContain("market-research-report");
-      expect(names).toContain("seo-content-pack");
-    });
-
-    test("detects stripe and recommends a sales artifact skill", () => {
-      writeFileSync(
-        join(testDir, "package.json"),
-        JSON.stringify({ dependencies: { stripe: "^14.0.0" } })
-      );
-      const result = detectProjectSkills(testDir);
-      expect(result.detected).toContain("stripe");
-      const names = result.recommended.map((s) => s.name);
-      expect(names).toContain("proposal-pack");
-    });
-
-    test("detects test framework and recommends a test-suite skill", () => {
-      writeFileSync(
-        join(testDir, "package.json"),
-        JSON.stringify({ devDependencies: { vitest: "^1.0.0" } })
-      );
-      const result = detectProjectSkills(testDir);
-      expect(result.detected).toContain("vitest");
-      const names = result.recommended.map((s) => s.name);
-      expect(names).toContain("test-suite-generator");
-    });
-
-    test("returns unique recommended skills with no duplicates", () => {
-      writeFileSync(
-        join(testDir, "package.json"),
-        JSON.stringify({
-          dependencies: {
-            react: "^18.0.0",
-            "@anthropic-ai/sdk": "^0.20.0",
-          },
-          devDependencies: {
-            vitest: "^1.0.0",
-          },
-        })
-      );
-      const result = detectProjectSkills(testDir);
-      const names = result.recommended.map((s) => s.name);
-      const uniqueNames = Array.from(new Set(names));
-      expect(names).toEqual(uniqueNames);
-    });
-
-    test("recommended skills are all valid SkillMeta objects", () => {
-      writeFileSync(
-        join(testDir, "package.json"),
-        JSON.stringify({ dependencies: { next: "^14.0.0", typescript: "^5.0.0" } })
-      );
-      const result = detectProjectSkills(testDir);
-      for (const skill of result.recommended) {
-        expect(skill).toHaveProperty("name");
-        expect(skill).toHaveProperty("displayName");
-        expect(skill).toHaveProperty("description");
-        expect(skill).toHaveProperty("category");
-        expect(skill).toHaveProperty("tags");
-      }
-    });
-
-    test("handles invalid JSON in package.json gracefully", () => {
+    test("has no default skill recommendations without valid project metadata", () => {
+      expect(detectProjectSkills(testDir)).toEqual({ detected: [], recommended: [] });
       writeFileSync(join(testDir, "package.json"), "{ invalid json }");
+      expect(detectProjectSkills(testDir)).toEqual({ detected: [], recommended: [] });
+    });
+
+    test.each([
+      ["react", "frontend"], ["express", "backend"], ["@anthropic-ai/sdk", "ai"],
+      ["stripe", "payments"], ["vitest", "testing"], ["nodemailer", "email"],
+    ])("recommends only owned skills whose tags match %s or %s", (dependency, tag) => {
+      writeOwnedFixture("private-arbitrary-name", { tags: [tag, dependency] });
+      writeFileSync(join(testDir, "package.json"), JSON.stringify({ dependencies: { [dependency]: "1.0.0" } }));
       const result = detectProjectSkills(testDir);
-      expect(result.detected).toEqual([]);
-      const names = result.recommended.map((s) => s.name);
-      expect(names).toContain("market-research-report");
+      expect(result.detected).toContain(dependency);
+      expect(result.recommended.map(s => s.name)).toEqual(["private-arbitrary-name"]);
+    });
+
+    test("uses dev dependencies and deduplicates matches without suggesting absent catalog entries", () => {
+      writeOwnedFixture("owned-check", { tags: ["typescript", "testing"] });
+      writeFileSync(join(testDir, "package.json"), JSON.stringify({ dependencies: { typescript: "5" }, devDependencies: { vitest: "1" } }));
+      expect(detectProjectSkills(testDir).recommended.map(s => s.name)).toEqual(["owned-check"]);
     });
   });
 });

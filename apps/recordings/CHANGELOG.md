@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.5.5
+
+### Patch Changes
+
+- Fix native microphone conversion for three or more channel input layouts by selecting the primary channel explicitly before mono transcription conversion. Add opt-in aggregate capture diagnostics for input, conversion, engine and configuration state without retaining audio samples.
+
+## 0.5.4
+
+### Patch Changes
+
+- Add explicit-consent WAV uploads and streamed audio downloads, including byte ranges, across the SDK, CLI, MCP server and HTTP proxy. Validate transferred byte counts and digests, and release transport resources after refused uploads or cancelled downloads.
+- Add explicit hosted paste receipt saving across the SDK, CLI, MCP server and HTTP proxy.
+- Expose the existing validated hosted recording save operation through the
+  CLI, hosted MCP server and hosted HTTP proxy. Hosted MCP and HTTP save remain
+  behind the existing explicit `--allow-writes` startup option, and all surfaces
+  return metadata without private transcript text.
+- Add explicit hosted transcript export as UTF-8 plain text through the SDK, CLI,
+  MCP and hosted HTTP proxy. CLI export creates a new private file without replacing
+  existing destinations. Ordinary Library reads continue to omit private text.
+- Centralize the native updater's validated product identity, protected paths and
+  candidate metadata policy while keeping installation restricted to the existing
+  legacy product. Add isolated cross-product and ARM64 metadata checks; additional
+  product installation, feed support and packaging remain disabled.
+
+## 0.5.3
+
+### Patch Changes
+
+- Add hosted recording rename and delete to the CLI, MCP and HTTP proxy through the existing SDK. MCP and HTTP startup stays read-only unless `--allow-writes` is supplied. Preserve pending deletion responses, cancellation before mutation dispatch, strict inputs and bounded HTTP body reads without automatic retries.
+
+## 0.5.2
+
+### Patch Changes
+
+- Add explicit hosted Library list/get support across CLI, stdio MCP, the loopback serve proxy, and SDK exports. The shared adapter uses the existing hosted client, typed cursors and metadata-only output by default. API authority and credential references are explicit; HTTP callers supply their own bearer session. Legacy modes remain available. This does not add hosted sign-in, writes, microphone control or transcription.
+- Add read-only hosted paste history to CLI, MCP, serve and SDK. Preserve destination and client-reported delivery evidence, omit private text by default, and reuse bounded authenticated transport and keyset pagination.
+- Expose server-configured transcription provider catalogs through the hosted SDK, CLI, MCP and HTTP reads. Add optional provider selection to the shared session contract while preserving legacy defaults and capability negotiation.
+
 ## 0.5.1
 
 ### Patch Changes

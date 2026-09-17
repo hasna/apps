@@ -1,3 +1,6 @@
+import { deriveReplyHeaders, ReplyHeaderError, replyMailboxes } from "../../lib/reply-headers.js";
+import { findSendBodyUrlBoundary } from "../../lib/send-body-boundary.js";
+import { messageSearchErrorResponse } from "./search-admission.js";
 import { setupBoundSesInbound, type SesInboundSetupCloudFactory, type SesInboundSetupInput } from "./ses-inbound-setup.js";
 import { readDomainDnsRecords, DomainDnsReadError } from "./domain-dns-read.js";
 import { normalizeSendMetadata } from "../../lib/send-metadata.js";
@@ -1570,10 +1573,12 @@ export async function handleSelfHostedRequest(
       // content, so it reads against the attachment-derived budget rather than
       // the 1MiB default every other route keeps.
       const body = await readJsonBody(req, MAX_SEND_JSON_BODY_BYTES);
+      const bodyFinding = findSendBodyUrlBoundary(body.text, body.html);
+      if (bodyFinding) return json(400, { error: bodyFinding.message, reason: bodyFinding.code });
       let metadata: ReturnType<typeof normalizeSendMetadata>;
       try { metadata = normalizeSendMetadata(body.headers, body.tags); }
       catch (error) { return json(400, { error: error instanceof Error ? error.message : "Invalid send metadata", reason: "invalid_send_metadata" }); }
-      const sendHeaders = metadata.headers || trustedSendHeaders ? { ...metadata.headers, ...trustedSendHeaders } : undefined;
+      let sendHeaders = metadata.headers || trustedSendHeaders ? { ...metadata.headers, ...trustedSendHeaders } : undefined;
       let scheduledAt: string | undefined;
       if (enqueue) {
         try {
@@ -1587,7 +1592,7 @@ export async function handleSelfHostedRequest(
           }
           if (body.send_key || req.headers.get("x-emails-send-key")) return json(403, { error: "Scoped send-key delegation cannot be persisted in a scheduled job; use a tenant operator credential" });
           if (body.allow_suppressed_recipients !== undefined && typeof body.allow_suppressed_recipients !== "boolean") return json(400, { error: "allow_suppressed_recipients must be boolean" });
-          if (body.reply_to !== undefined && (typeof body.reply_to !== "string" || body.reply_to.split(",").some(value => !canonicalSender(value)))) return json(400, { error: "reply_to must contain valid mailbox addresses" });
+          if (body.reply_to !== undefined && (typeof body.reply_to !== "string" || !replyMailboxes(body.reply_to))) return json(400, { error: "reply_to must contain valid mailbox addresses" });
         } catch (error) { return json(400, { error: error instanceof Error ? error.message : "invalid scheduled_at" }); }
       }
       const rawFrom = String(body.from ?? "").trim();
@@ -1681,49 +1686,6 @@ export async function handleSelfHostedRequest(
           unsubscribeUrl = parsed.toString();
         } catch { return json(400, { error: "unsubscribe_url must be an HTTP(S) URL", reason: "invalid_unsubscribe_url" }); }
       }
-      const payload = {
-        ...(tracking ?? {}),
-        from,
-        to,
-        cc,
-        bcc,
-        reply_to: typeof body.reply_to === "string" ? body.reply_to : null,
-        subject,
-        text: typeof body.text === "string" ? body.text : null,
-        html: typeof body.html === "string" ? body.html : null,
-        attachments,
-        provider: sender.provider,
-        ...(sendHeaders ? { headers: sendHeaders } : {}),
-        ...(metadata.tags ? { tags: metadata.tags } : {}),
-        ...(requestedProviderId ? { provider_id: providerId } : {}),
-        ...(unsubscribeUrl ? { unsubscribe_url: unsubscribeUrl } : {}),
-      };
-      if (enqueue && scheduledAt) {
-        const queuedPayload = {
-          ...(tracking ?? {}),
-          from: rawFrom, to, cc, bcc, reply_to: payload.reply_to, subject,
-          text: payload.text, html: payload.html, attachments,
-          ...(requestedProviderId ? { provider_id: providerId } : {}),
-          ...(unsubscribeUrl ? { unsubscribe_url: unsubscribeUrl } : {}),
-          ...metadata,
-          allow_suppressed_recipients: body.allow_suppressed_recipients === true,
-        };
-        try {
-          safeHeaderValue("from", rawFrom);
-          const queued = await auth.store.enqueueScheduled({
-            key: idempotencyKey, scheduledAt, payload: queuedPayload,
-            hash: sendPayloadHash({ scheduled_at: scheduledAt, payload: queuedPayload }),
-          });
-          return json(queued.created ? 201 : 200, {
-            enqueued: true, scheduled: { id: queued.id, status: queued.status, scheduled_at: queued.scheduled_at },
-            idempotent_replay: !queued.created,
-          });
-        } catch (error) {
-          if (error instanceof IdempotencyKeyConflictError) return json(409, { error: error.message, retry_safe: false });
-          if (error instanceof RangeError) return json(400, { error: error.message });
-          throw error;
-        }
-      }
       const rawSendKey = Object.hasOwn(body, "send_key") ? body.send_key : req.headers.get("x-emails-send-key");
       const sendKeyProvided = Object.hasOwn(body, "send_key") || req.headers.has("x-emails-send-key");
       if (sendKeyProvided && (typeof rawSendKey !== "string" || !rawSendKey.trim())) {
@@ -1743,6 +1705,78 @@ export async function handleSelfHostedRequest(
           error: authority.message, reason: authority.code, retry_safe: false,
         });
       }
+      if (body.reply_to !== undefined && !replyMailboxes(body.reply_to)) return json(400, { error: "reply_to must contain valid mailbox addresses", reason: "invalid_reply_to" });
+      let replyParentId: string | undefined;
+      if (body.reply_to_message_id !== undefined) {
+        if (typeof body.reply_to_message_id !== "string" || !body.reply_to_message_id.trim() || body.reply_to_message_id.length > 256) return json(400, { error: "reply_to_message_id must be a nonempty parent message identifier", reason: "invalid_reply_parent" });
+        let parent = await auth.store.getMessage(body.reply_to_message_id);
+        if (!parent) return json(404, { error: "Reply parent not found in this tenant", reason: "reply_parent_not_found", sent: false, retry_safe: true });
+        try {
+          let headers: Record<string, string>;
+          try { headers = deriveReplyHeaders(parent, from, subject); }
+          catch (error) {
+            if (!(error instanceof ReplyHeaderError) || error.reason !== "reply_parent_message_id_unavailable" || parent.direction !== "outbound" || parent.send_state !== "sent" || !parent.provider_message_id) throw error;
+            // Resolve the PARENT's provider, which may differ from this reply's sender.
+            const parentSender = parent.provider_id === `self-hosted-${deps.sender.provider}` ? deps.sender : parent.provider_id ? await deps.resolveSender?.(auth.ctx.tenantId, parent.provider_id) : undefined;
+            const identity = await parentSender?.readMessageIdentity?.(parent.provider_message_id, AbortSignal.timeout(5000)).catch(() => null);
+            if (!identity) throw error;
+            const expectedProviderId = parent.provider_message_id;
+            const expectedSenderProviderId = parent.provider_id!;
+            parent = await auth.store.recordProviderMessageIdentity(parent.id, expectedProviderId, expectedSenderProviderId, identity);
+            if (!parent) throw new ReplyHeaderError("reply_parent_not_found", 404, "Reply parent not found in this tenant");
+            if (parent.provider_message_id !== expectedProviderId || parent.provider_id !== expectedSenderProviderId || parent.message_id !== identity.messageId) throw new ReplyHeaderError("reply_parent_identity_conflict", 409, "The parent changed while its provider identity was being read.");
+            headers = deriveReplyHeaders(parent, from, subject);
+          }
+          sendHeaders = { ...sendHeaders, ...headers };
+        }
+        catch (error) { if (error instanceof ReplyHeaderError) return json(error.status, { error: error.message, reason: error.reason, sent: false, retry_safe: true }); throw error; }
+        replyParentId = parent.id;
+      }
+      const payload = {
+        ...(tracking ?? {}),
+        from,
+        to,
+        cc,
+        bcc,
+        reply_to: typeof body.reply_to === "string" ? body.reply_to : null,
+        ...(replyParentId ? { reply_to_message_id: replyParentId } : {}),
+        subject,
+        text: typeof body.text === "string" ? body.text : null,
+        html: typeof body.html === "string" ? body.html : null,
+        attachments,
+        provider: sender.provider,
+        ...(sendHeaders ? { headers: sendHeaders } : {}),
+        ...(metadata.tags ? { tags: metadata.tags } : {}),
+        ...(requestedProviderId ? { provider_id: providerId } : {}),
+        ...(unsubscribeUrl ? { unsubscribe_url: unsubscribeUrl } : {}),
+      };
+      if (enqueue && scheduledAt) {
+        const queuedPayload = {
+          ...(tracking ?? {}),
+          from: rawFrom, to, cc, bcc, reply_to: payload.reply_to, subject,
+          text: payload.text, html: payload.html, attachments,
+          ...(requestedProviderId ? { provider_id: providerId } : {}),
+          ...(unsubscribeUrl ? { unsubscribe_url: unsubscribeUrl } : {}),
+          ...metadata,
+          ...(replyParentId ? { reply_to_message_id: replyParentId } : {}),
+          allow_suppressed_recipients: body.allow_suppressed_recipients === true,
+        };
+        try {
+          safeHeaderValue("from", rawFrom);
+          const queued = await auth.store.enqueueScheduled({
+            key: idempotencyKey, scheduledAt, payload: queuedPayload,
+            hash: sendPayloadHash({ scheduled_at: scheduledAt, payload: queuedPayload }),
+          });
+          return json(queued.created ? 201 : 200, {
+            enqueued: true, scheduled: { id: queued.id, status: queued.status, scheduled_at: queued.scheduled_at },
+            idempotent_replay: !queued.created,
+          });
+        } catch (error) {
+          if (error instanceof IdempotencyKeyConflictError) return json(409, { error: error.message, retry_safe: false });
+          if (error instanceof RangeError) return json(400, { error: error.message });
+          throw error;
+        }
+      }
       let reserved;
       try {
         reserved = await auth.store.reserveSendIntent({
@@ -1755,6 +1789,7 @@ export async function handleSelfHostedRequest(
           body_text: payload.text,
           body_html: payload.html,
           headers: sendHeaders,
+          ...(replyParentId ? { in_reply_to: sendHeaders!["In-Reply-To"] } : {}),
           tags: metadata.tags,
           attachments: attachments.map(({ filename, content_type, content }) => ({
             filename,
@@ -3170,6 +3205,8 @@ export async function handleSelfHostedRequest(
 
     return json(404, { error: "not found" });
   } catch (err) {
+    const searchFailure = messageSearchErrorResponse(err);
+    if (searchFailure) return searchFailure;
     if (err instanceof ManagedSenderUnavailableError) return json(503, { error: err.message, reason: "provider_credentials_unavailable" });
     if (err instanceof RequestBodyTooLargeError) {
       return json(413, { error: "request body too large" });

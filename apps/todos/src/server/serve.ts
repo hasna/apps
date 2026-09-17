@@ -21,6 +21,7 @@ import type { RouteContext, FilteredClient } from "./routes.js";
 import * as handlers from "./routes.js";
 import { env } from "../lib/env.js";
 import { resolveRequestClientIp, resolveTrustProxy, trustedProxiesFromEnv } from "./client-ip.js";
+import { resolveRateLimitMax } from "./rate-limit-config.js";
 
 export const SECURITY_HEADERS: Record<string, string> = {
   "X-Content-Type-Options": "nosniff",
@@ -103,7 +104,6 @@ export function checkAuth(
 /** Simple in-memory rate limiter — tracks requests per IP per window */
 const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
 const RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute
-const RATE_LIMIT_MAX = Number.parseInt(env.rateLimitMax() || "120", 10); // requests per window
 
 /**
  * Resolve the rate-limit bucket key for a request.
@@ -128,7 +128,7 @@ function resolveClientIp(
   }) ?? "unknown";
 }
 
-function checkRateLimit(ip: string): { allowed: boolean; retryAfter?: number } {
+function checkRateLimit(ip: string, maximum: number): { allowed: boolean; retryAfter?: number } {
   const now = Date.now();
   const entry = rateLimitMap.get(ip);
   if (!entry || now > entry.resetAt) {
@@ -136,7 +136,7 @@ function checkRateLimit(ip: string): { allowed: boolean; retryAfter?: number } {
     return { allowed: true };
   }
   entry.count++;
-  if (entry.count > RATE_LIMIT_MAX) {
+  if (entry.count > maximum) {
     return { allowed: false, retryAfter: Math.ceil((entry.resetAt - now) / 1000) };
   }
   return { allowed: true };
@@ -223,6 +223,9 @@ function hasGeneratedApiKeysSafely(): boolean {
 }
 
 export async function startServer(port: number, options?: StartServerOptions): Promise<void> {
+  // Validate before touching the store or binding a socket. Canonical and legacy
+  // environment precedence stays owned by the shared env resolver.
+  const rateLimitMax = resolveRateLimitMax(env.rateLimitMax());
   // Accepted-key source, highest first: an explicit --api-key, then the server
   // credential env var (HASNA_TODOS_SERVER_API_KEY), then — for one release —
   // the client credential env names. The server must never read the CLIENT
@@ -347,7 +350,7 @@ export async function startServer(port: number, options?: StartServerOptions): P
       // resolveClientIp: with TODOS_TRUST_PROXY=1 a client could otherwise spoof
       // `x-forwarded-for: 127.0.0.1` and impersonate a loopback caller.
       const peerIp = server.requestIP(req)?.address;
-      const rl = checkRateLimit(ip);
+      const rl = checkRateLimit(ip, rateLimitMax);
       if (!rl.allowed) {
         return new Response(JSON.stringify({ error: "Too many requests", retry_after: rl.retryAfter }), {
           status: 429,

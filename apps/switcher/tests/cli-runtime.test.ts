@@ -5,20 +5,22 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { openCliRuntime } from "../src/runtime";
+import { startServer } from "../src/server";
 import { providerFromPreset, providerCredential } from "../src/presets";
 import { SwitcherClient } from "../src/sdk";
 
 const cli = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
 const scratch = process.env.SWITCHER_TEST_ROOT ?? join(homedir(), "Workspace/scratch/switcher-tests");
 async function directory() { await mkdir(scratch, {recursive:true}); return mkdtemp(join(scratch, "cli-runtime-")); }
+const withoutLocalNotice = (stderr: string) => stderr.replace(/^switcher: LOCAL mode [^\n]*\n/, ""); // The opt-in notice is asserted in fail-closed.test.ts; here it would only mask the command's own diagnostics.
 async function command(home: string, args: string[], extra: NodeJS.ProcessEnv = {}) {
   const child = Bun.spawn([process.execPath, cli, ...args], {cwd: home, env: {
-    PATH: process.env.PATH, HOME: home, USER: "fixture", HASNA_STATION: "switcher-runtime-fixture", HASNA_SWITCHER_HOME: join(home, "data"), ...extra,
+    PATH: process.env.PATH, HOME: home, USER: "fixture", HASNA_STATION: "switcher-runtime-fixture", HASNA_SWITCHER_LOCAL: "1", HASNA_SWITCHER_HOME: join(home, "data"), ...extra,
   }, stdout: "pipe", stderr: "pipe", stdin: "ignore"});
   const timer = setTimeout(() => child.kill("SIGKILL"), 20_000);
   try {
     const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-    return {code, stdout, stderr};
+    return {code, stdout, stderr: withoutLocalNotice(stderr)};
   } finally { clearTimeout(timer); }
 }
 
@@ -50,7 +52,7 @@ test("models add persists expiry metadata while preserving discovery and rejects
   } finally {await upstream.stop(true);await rm(dir,{recursive:true,force:true});}
 });
 
-test("the CLI launches Ori from a real OpenRouter preset with its complete catalog and keyless dry-run",async()=>{
+test("the CLI builds an Ori plan from a real OpenRouter preset without resolving a credential",async()=>{
   const dir=await directory(),executable=join(dir,"ori-fixture"),nativeExecutable=join(dir,"native-codex");
   await writeFile(nativeExecutable,"#!/bin/sh\necho codex-cli 0.153.4\n",{mode:0o700});
   const upstream=Bun.serve({hostname:"127.0.0.1",port:0,fetch:()=>Response.json({data:[{id:"fixture/one",supported_parameters:["tools"]},{id:"fixture/two",supported_parameters:["tools"]}]})});
@@ -70,13 +72,6 @@ process.exit(23);
     const dry=await command(dir,[...args,"--dry-run"]);
     expect(dry.code,dry.stderr).toBe(0);expect(dry.stdout).toContain('openrouter-responses');
     expect(await Bun.file(join(dir,"ori-proof.json")).exists()).toBe(false);
-    const launched=await command(dir,[...args,"--","exec","literal $value `text`"],{SWITCHER_PROVIDER_OPENROUTER:"fixture-key"});
-    expect(launched.code,launched.stderr).toBe(23);expect(launched.stdout+launched.stderr).not.toContain("fixture-key");
-    const proof=JSON.parse(await readFile(join(dir,"ori-proof.json"),"utf8"));
-    expect(proof.models).toEqual(["fixture/one","fixture/two"]);expect(proof.keyPresent).toBe(true);
-    expect(proof.args.slice(-2)).toEqual(["exec","literal $value `text`"]);
-    const runs=await command(dir,["runs","list"]);expect(runs.code,runs.stderr).toBe(0);expect(JSON.parse(runs.stdout).data[0]).toMatchObject({harness:"codex",model:"fixture/one",status:"failed",exitCode:23});
-    expect(await readdir(join(dir,"data/state"))).toEqual([]);
   } finally {await upstream.stop(true);await rm(dir,{recursive:true,force:true});}
 },30_000);
 
@@ -87,7 +82,7 @@ test("interactive model selection cancels on Ctrl-C, Ctrl-D and SIGTERM without 
       const dir = await directory();
       let output = "", cancelled = false, timedOut = false;
       const child = Bun.spawn([process.execPath,cli,"launch","claude","--provider","generic-anthropic-messages","--url",upstream.url.origin], {
-        cwd:dir, env:{PATH:process.env.PATH,HOME:process.env.HOME,USER:process.env.USER,HASNA_SWITCHER_HOME:join(dir,"data")},
+        cwd:dir, env:{PATH:process.env.PATH,HOME:process.env.HOME,USER:process.env.USER,HASNA_SWITCHER_LOCAL:"1",HASNA_SWITCHER_HOME:join(dir,"data")},
         terminal:{cols:120,rows:40,data(terminal,data) {
           output += new TextDecoder().decode(data);
           if (!cancelled && output.includes("Ctrl-C cancels): ")) {
@@ -111,6 +106,94 @@ test("interactive model selection cancels on Ctrl-C, Ctrl-D and SIGTERM without 
   } finally { await upstream.stop(true); }
 },40_000);
 
+test("direct and saved-profile launches fail credential preflight before catalog access or picker output", async () => {
+  const dir=await directory();let requests=0;
+  const upstream=Bun.serve({hostname:"127.0.0.1",port:0,fetch:()=>{requests++;return Response.json({data:[{id:"fixture-model",supported_parameters:["tools"]}]});}});
+  const native=join(dir,"codex-fixture");
+  await writeFile(native,`#!${process.execPath}\nif(process.argv.includes('--version'))console.log('codex-cli 0.153.4');else process.exit(99);\n`,{mode:0o700});
+  try{
+    const direct=await command(dir,["launch","codex","--provider","generic-openai-responses","--url",upstream.url.origin,"--credential-env","SWITCHER_PROVIDER_FIXTURE","--model","fixture-model","--executable",native]);
+    expect(direct.code,direct.stderr).toBe(1);expect(JSON.parse(direct.stderr).error).toMatchObject({code:"credential_setup_required"});expect(direct.stderr).toContain("switcher credentials bind SWITCHER_PROVIDER_FIXTURE");
+    expect(requests).toBe(0);
+    expect((await command(dir,["providers","add","saved-provider","--url",upstream.url.origin,"--protocol","openai-responses","--credential-env","SWITCHER_PROVIDER_FIXTURE"])).code).toBe(0);
+    expect((await command(dir,["profiles","add","saved-profile","--provider","saved-provider","--harness","codex","--model","fixture-model"])).code).toBe(0);
+    const saved=await command(dir,["launch","saved-profile","--executable",native]);
+    expect(saved.code,saved.stderr).toBe(1);expect(JSON.parse(saved.stderr).error.code).toBe("credential_setup_required");expect(requests).toBe(0);
+
+    let output="",timedOut=false;
+    const interactive=Bun.spawn([process.execPath,cli,"launch","codex","--provider","generic-openai-responses","--url",upstream.url.origin,"--credential-env","SWITCHER_PROVIDER_INTERACTIVE"],{
+      cwd:dir,env:{PATH:dir,HOME:dir,USER:"fixture",HASNA_SWITCHER_LOCAL:"1",HASNA_SWITCHER_HOME:join(dir,"interactive-data")},
+      terminal:{cols:120,rows:40,data(_terminal,data){output+=new TextDecoder().decode(data);}},
+    });
+    const timer=setTimeout(()=>{timedOut=true;interactive.kill("SIGKILL");},10_000);
+    try{expect(await interactive.exited,output).toBe(1);expect(timedOut,output).toBe(false);expect(output).toContain("vault_exec_unavailable");expect(output).not.toContain("Models:");expect(requests).toBe(0);}
+    finally{clearTimeout(timer);interactive.terminal?.close();}
+  }finally{await upstream.stop(true);await rm(dir,{recursive:true,force:true});}
+},30_000);
+
+test("interactive first-run discovers a metadata reference, binds it, launches, and reuses its current vault value",async()=>{
+  const dir=await directory(),valueFile=join(dir,"current-provider-value"),operations=join(dir,"secrets-operations"),providerFile=join(dir,"provider.json");
+  const secrets=join(dir,"secrets"),native=join(dir,"codex-fixture");let accepted="fixture-provider-value-one";const paths:string[]=[];
+  const upstream=Bun.serve({hostname:"127.0.0.1",port:0,fetch:req=>{
+    const path=new URL(req.url).pathname;paths.push(path);
+    if(req.headers.get("authorization")!==`Bearer ${accepted}`)return new Response(null,{status:401});
+    return path==="/auth"?Response.json({ok:true}):path==="/models"?Response.json({data:[{id:"fixture-model",supported_parameters:["tools"]}]}):new Response(null,{status:404});
+  }});
+  try{
+    await writeFile(valueFile,accepted,{mode:0o600});
+    await writeFile(secrets,`#!${process.execPath}
+import {appendFile,readFile} from "node:fs/promises";
+const args=process.argv.slice(2);
+if(process.env.HASNA_SECRETS_API_URL!=="https://vault.example"||process.env.HASNA_SECRETS_API_KEY_OVERRIDE!=="fixture-vault-operator")process.exit(80);
+if(args[0]==="search"&&args[2]==="--json"){
+  await appendFile(${JSON.stringify(operations)},"search:"+args[1]+"\\n");
+  console.log(JSON.stringify([{key:"accounts/acme/live/api_key",type:"api_key",label:"Acme",expires_at:null,created_at:"2026-09-01",updated_at:"2026-09-15"}]));process.exit(0);
+}
+if(args[0]!=="exec"||args[1]!=="accounts/acme/live/api_key"||args[2]!=="--as"||args[4]!=="--")process.exit(81);
+await appendFile(${JSON.stringify(operations)},"exec:"+args[1]+"\\n");
+const value=await readFile(${JSON.stringify(valueFile)},"utf8");
+const child=Bun.spawn(args.slice(5),{env:{...process.env,[args[3]]:value},stdin:"ignore",stdout:"ignore",stderr:"ignore"});
+process.exit(await child.exited);
+`,{mode:0o700});
+    await writeFile(native,`#!${process.execPath}\nif(process.argv.includes('--version'))console.log('codex-cli 0.153.4');else await Bun.write(${JSON.stringify(join(dir,"native-started"))},'started');\n`,{mode:0o700});
+    await writeFile(providerFile,JSON.stringify({id:"onboarding-provider",name:"Acme Gateway",baseUrl:upstream.url.origin,protocol:"openai-responses",credentialEnv:"SWITCHER_PROVIDER_ACME",credentialCheck:{method:"GET",path:"auth"}}));
+    const env={PATH:`${dir}:${process.env.PATH}`,HASNA_SECRETS_API_URL:"https://vault.example",HASNA_SECRETS_API_KEY:"fixture-vault-operator"};
+    const created=await command(dir,["providers","add","onboarding-provider","--file",providerFile],env);expect(created.code,created.stderr).toBe(0);
+    const args=["launch","codex","--provider","onboarding-provider","--model","fixture-model","--executable",native];
+    let output="",selected=false,timedOut=false;
+    const first=Bun.spawn([process.execPath,cli,...args],{cwd:dir,env:{HOME:dir,USER:"fixture",HASNA_STATION:"switcher-onboarding-fixture",HASNA_SWITCHER_LOCAL:"1",HASNA_SWITCHER_HOME:join(dir,"data"),...env},terminal:{cols:120,rows:40,data(terminal,data){output+=new TextDecoder().decode(data);if(!selected&&output.includes("Credential number")){selected=true;terminal.write("1\n");}}}});
+    const timer=setTimeout(()=>{timedOut=true;first.kill("SIGKILL");},20_000);
+    try{expect(await first.exited,output).toBe(0);expect(selected,output).toBe(true);expect(timedOut,output).toBe(false);}
+    finally{clearTimeout(timer);first.terminal?.close();}
+    const binding=await readFile(join(dir,"data/config/credential-bindings/SWITCHER_PROVIDER_ACME.json"),"utf8");
+    expect(JSON.parse(binding)).toMatchObject({credentialEnv:"SWITCHER_PROVIDER_ACME",origins:[upstream.url.origin],requireProviderAuthentication:true,source:{kind:"vault",key:"accounts/acme/live/api_key",url:"https://vault.example",operator:{kind:"contracts",expectedSource:"HASNA_SECRETS_API_KEY",expectedTier:"env"}}});
+    const before=(await readFile(operations,"utf8")).split("\n").filter(Boolean);expect(before.filter(line=>line.startsWith("search:"))).not.toHaveLength(0);
+    expect(paths).toEqual(["/auth","/models"]);expect(await Bun.file(join(dir,"native-started")).exists()).toBe(true);
+
+    accepted="fixture-provider-value-two";await writeFile(valueFile,accepted,{mode:0o600});
+    const second=await command(dir,args,env);expect(second.code,second.stderr).toBe(0);
+    const after=(await readFile(operations,"utf8")).split("\n").filter(Boolean);
+    expect(after.filter(line=>line.startsWith("search:")).length).toBe(before.filter(line=>line.startsWith("search:")).length);
+    expect(paths).toEqual(["/auth","/models","/auth","/models"]);
+    for(const secret of ["fixture-vault-operator","fixture-provider-value-one","fixture-provider-value-two"]){expect(output+second.stdout+second.stderr+binding+(await readFile(operations,"utf8"))).not.toContain(secret);}
+  }finally{await upstream.stop(true);await rm(dir,{recursive:true,force:true});}
+},30_000);
+
+test("dry-run reads an authenticated catalog snapshot without resolving or transmitting its credential",async()=>{
+  const dir=await directory(),providerFile=join(dir,"dry-provider.json");let requests=0;
+  const upstream=Bun.serve({hostname:"127.0.0.1",port:0,fetch:req=>{requests++;if(req.headers.get("authorization")!=="Bearer fixture-catalog-key")return new Response(null,{status:401});return Response.json({data:[{id:"fixture-model",supported_parameters:["tools"]}]});}});
+  try{
+    await writeFile(providerFile,JSON.stringify({id:"dry-provider",name:"Dry Provider",baseUrl:upstream.url.origin,protocol:"openai-responses",credentialEnv:"SWITCHER_PROVIDER_DRY"}));
+    expect((await command(dir,["providers","add","dry-provider","--file",providerFile])).code).toBe(0);
+    const refreshed=await command(dir,["models","dry-provider","--refresh"],{SWITCHER_PROVIDER_DRY:"fixture-catalog-key"});expect(refreshed.code,refreshed.stderr).toBe(0);expect(requests).toBe(1);
+    const dry=await command(dir,["launch","codex","--provider","dry-provider","--model","fixture-model","--dry-run"],{SWITCHER_PROVIDER_DRY:"fixture-must-not-be-read"});
+    expect(dry.code,dry.stderr).toBe(0);expect(requests).toBe(1);expect(dry.stdout+dry.stderr).not.toContain("fixture-must-not-be-read");
+    expect((await command(dir,["profiles","add","dry-profile","--provider","dry-provider","--harness","codex","--model","fixture-model"])).code).toBe(0);
+    const saved=await command(dir,["launch","dry-profile","--dry-run"],{SWITCHER_PROVIDER_DRY:"fixture-must-not-be-read"});
+    expect(saved.code,saved.stderr).toBe(0);expect(requests).toBe(1);expect(saved.stdout+saved.stderr).not.toContain("fixture-must-not-be-read");
+  }finally{await upstream.stop(true);await rm(dir,{recursive:true,force:true});}
+});
+
 test.skipIf(process.platform === "win32")("owned native process group retains terminal input, resize and Ctrl-C",async()=>{
   const dir=await directory();
   const upstream=Bun.serve({hostname:"127.0.0.1",port:0,fetch:()=>Response.json({data:[{id:"fixture-model"}]})});
@@ -118,7 +201,7 @@ test.skipIf(process.platform === "win32")("owned native process group retains te
   await writeFile(executable,`#!${process.execPath}\nif(process.argv.includes('--version')){console.log('codex-cli 0.153.4');process.exit(0);}\nconst {openSync,closeSync,writeSync}=await import('node:fs');closeSync(openSync('/dev/tty','r'));console.log('CONTROLLING_TTY');const {spawnSync}=await import('node:child_process');spawnSync('/bin/stty',['-opost'],{stdio:['inherit','ignore','ignore']});writeSync(1,'RAW_BEGIN:A\\nB:RAW_END\\n');spawnSync('/bin/stty',['opost'],{stdio:['inherit','ignore','ignore']});process.on('SIGINT',()=>{console.log('NATIVE_INT');process.exit(130);});process.on('SIGWINCH',()=>console.log('RESIZED:'+spawnSync('/bin/stty',['size'],{stdio:['inherit','pipe','ignore'],encoding:'utf8'}).stdout.trim()));process.stdin.setEncoding('utf8');process.stdin.on('data',value=>console.log('READ:'+value.trim()));console.log('NATIVE_READY:'+process.pid+':'+process.stdin.isTTY+':'+process.stdout.isTTY);\n`,{mode:0o700});
   let output="",sent=false,interrupted=false,timedOut=false;
   const child=Bun.spawn([process.execPath,cli,"launch","codex","--provider","generic-openai-responses","--url",upstream.url.origin,"--model","fixture-model","--executable",executable],{
-    cwd:dir,env:{PATH:process.env.PATH,HOME:process.env.HOME,USER:process.env.USER,HASNA_SWITCHER_HOME:join(dir,"data")},
+    cwd:dir,env:{PATH:process.env.PATH,HOME:process.env.HOME,USER:process.env.USER,HASNA_SWITCHER_LOCAL:"1",HASNA_SWITCHER_HOME:join(dir,"data")},
     terminal:{cols:80,rows:24,data(terminal,data){
       output+=new TextDecoder().decode(data);
       if(!sent&&/NATIVE_READY:\d+:true:true/.test(output)){sent=true;terminal.write("terminal-proof\n");terminal.resize(101,37);}
@@ -181,7 +264,7 @@ test.skipIf(process.platform === "win32")("native controlling terminal coexists 
       const script=redirected.map(fd=>`exec ${fd}${fd===0?"<input":fd===1?">stdout":">stderr"};`).join(" ")+' exec "$@"';
       let output="",timedOut=false,keyboardSent=false;
       const child=Bun.spawn(["/bin/sh","-c",script,"fixture",process.execPath,cli,"launch","codex","--provider","generic-openai-responses","--url",upstream.url.origin,"--model","fixture-model","--executable",executable,"--","--fixture-argument",literal],{
-        cwd:project,env:{PATH:process.env.PATH,HOME:process.env.HOME,HASNA_SWITCHER_HOME:join(project,"data")},terminal:{data(terminal,data){output+=new TextDecoder().decode(data);if(!keyboardSent&&output.includes("TTY_READ_READY")){keyboardSent=true;terminal.write("keyboard-proof\n");}}},
+        cwd:project,env:{PATH:process.env.PATH,HOME:process.env.HOME,HASNA_SWITCHER_LOCAL:"1",HASNA_SWITCHER_HOME:join(project,"data")},terminal:{data(terminal,data){output+=new TextDecoder().decode(data);if(!keyboardSent&&output.includes("TTY_READ_READY")){keyboardSent=true;terminal.write("keyboard-proof\n");}}},
       });
       const timer=setTimeout(()=>{timedOut=true;child.kill("SIGKILL");},10_000);
       try {
@@ -203,17 +286,17 @@ test("owned API is authenticated, persists data on reopen and closes its listene
   const dir = await directory();
   let runtime: Awaited<ReturnType<typeof openCliRuntime>> | undefined;
   try {
-    runtime = await openCliRuntime({HASNA_SWITCHER_HOME: join(dir, "data")});
+    runtime = await openCliRuntime({HASNA_SWITCHER_LOCAL: "1", HASNA_SWITCHER_HOME: join(dir, "data")});
     expect(runtime.mode).toBe("local");
     expect((await runtime.client.health()).backend).toBe("sqlite");
-    expect((await runtime.client.ready()).ready).toBe(true);
+    expect(await runtime.client.ready()).toMatchObject({status:"ready",backend:"sqlite"});
     expect((await fetch(runtime.client.baseUrl + "/v1/providers")).status).toBe(401);
     expect((await runtime.client.getProviderPreset("deepseek")).protocols.find(p => p.protocol === "anthropic-messages")?.catalogBaseUrl).toBe("https://api.deepseek.com");
     await runtime.client.createProvider(providerFromPreset("deepseek", {harness:"claude"}));
     const address = runtime.client.baseUrl;
     await runtime.close(); await runtime.close();
     await expect(fetch(address + "/health")).rejects.toThrow();
-    runtime = await openCliRuntime({HASNA_SWITCHER_HOME: join(dir, "data")});
+    runtime = await openCliRuntime({HASNA_SWITCHER_LOCAL: "1", HASNA_SWITCHER_HOME: join(dir, "data")});
     expect((await runtime.client.listProviders()).total).toBe(1);
     expect((await stat(join(dir, "data"))).mode & 0o777).toBe(0o700);
     expect((await stat(join(dir, "data/switcher.db"))).mode & 0o777).toBe(0o600);
@@ -273,7 +356,7 @@ test("concurrent first-run CLI processes share SQLite without startup-lock failu
     expect(results.map(r=>({code:r.code,stderr:r.stderr}))).toEqual(results.map(()=>({code:0,stderr:""})));
     const list = await command(dir,["providers","list"]);
     expect(list.code, list.stderr).toBe(0); expect(JSON.parse(list.stdout).total).toBe(12);
-    const [a,b] = await Promise.all([openCliRuntime({HASNA_SWITCHER_HOME:join(dir,"data")}),openCliRuntime({HASNA_SWITCHER_HOME:join(dir,"data")})]);
+    const [a,b] = await Promise.all([openCliRuntime({HASNA_SWITCHER_LOCAL:"1",HASNA_SWITCHER_HOME:join(dir,"data")}),openCliRuntime({HASNA_SWITCHER_LOCAL:"1",HASNA_SWITCHER_HOME:join(dir,"data")})]);
     try {
       const input=providerFromPreset("deepseek");
       const [first,second] = await Promise.all([a.client.createProvider(input,"cross-process-idempotent"),b.client.createProvider(input,"cross-process-idempotent")]);
@@ -304,7 +387,7 @@ test.skipIf(!process.env.SWITCHER_TEST_DATABASE_URL)("CLI-owned PostgreSQL API p
   try {
     await admin.unsafe(`CREATE SCHEMA ${schema}`);
     const url = new URL(process.env.SWITCHER_TEST_DATABASE_URL!); url.searchParams.set("options", `-c search_path=${schema}`);
-    const env = {HASNA_SWITCHER_DATABASE_URL:url.href};
+    const env = {HASNA_SWITCHER_DATABASE_URL:url.href,HASNA_SWITCHER_LOCAL:"1"};
     const add = await command(dir,["providers","add","pg-deepseek","--preset","deepseek","--protocol","anthropic-messages"],env);
     expect(add.code,add.stderr).toBe(0);
     const read = await command(dir,["providers","get","pg-deepseek"],env);
@@ -350,3 +433,30 @@ test("CLI rejects conflicting file and saved-profile overrides before opening an
     expect((await readdir(dir)).filter(name=>!["Library",".bun"].includes(name))).toEqual([]); // Bun caches under Library on macOS and .bun on Linux; app data must remain absent.
   } finally { await rm(dir,{recursive:true,force:true}); }
 });
+
+test("hosted API launch authenticates and discovers locally, then persists only the catalog",async()=>{
+  const dir=await directory(),clientDir=join(dir,"client"),native=join(dir,"codex-hosted-fixture"),providerFile=join(dir,"provider.json");
+  await mkdir(clientDir);
+  const providerKey="fixture-hosted-provider-key-never-logged";const paths:string[]=[];
+  const upstream=Bun.serve({hostname:"127.0.0.1",port:0,fetch(request){
+    const path=new URL(request.url).pathname;paths.push(path);
+    if(request.headers.get("authorization")!==`Bearer ${providerKey}`)return new Response(null,{status:401});
+    if(path==="/auth")return Response.json({ok:true});
+    if(path==="/models")return Response.json({data:[{id:"hosted-model",name:"Hosted model",supported_parameters:["tools"]}]});
+    return new Response(null,{status:404});
+  }});
+  const service=await startServer({apiKey:"fixture-hosted-switcher-api-token",sqlitePath:join(dir,"remote.db"),providerEnv:{}});
+  try{
+    await writeFile(native,`#!${process.execPath}\nif(process.argv.includes('--version'))console.log('codex-cli 0.153.4');\n`,{mode:0o700});
+    await writeFile(providerFile,JSON.stringify({id:"hosted-provider",name:"Hosted provider",baseUrl:upstream.url.origin,protocol:"openai-responses",credentialEnv:"SWITCHER_PROVIDER_HOSTED_TEST",credentialCheck:{method:"GET",path:"auth"}}));
+    const env={HASNA_SWITCHER_API_URL:service.url,HASNA_SWITCHER_API_KEY:"fixture-hosted-switcher-api-token",SWITCHER_PROVIDER_HOSTED_TEST:providerKey};
+    const created=await command(clientDir,["providers","add","hosted-provider","--file",providerFile],env);expect(created.code,created.stderr).toBe(0);
+    const launched=await command(clientDir,["launch","codex","--provider","hosted-provider","--model","hosted-model","--executable",native],env);
+    expect(launched.code,launched.stderr).toBe(0);expect(paths).toEqual(["/auth","/models"]);
+    const client=new SwitcherClient({baseUrl:service.url,apiKey:"fixture-hosted-switcher-api-token"});
+    expect((await client.listModels("hosted-provider")).data.map(model=>model.id)).toEqual(["hosted-model"]);
+    const run=(await client.listRuns()).data[0];expect(run).toMatchObject({providerId:"hosted-provider",model:"hosted-model",status:"exited"});
+    expect(created.stdout+created.stderr+launched.stdout+launched.stderr+JSON.stringify(run)).not.toContain(providerKey);
+    expect(await Bun.file(join(clientDir,"data","switcher.db")).exists()).toBe(false);
+  }finally{await service.close();await upstream.stop(true);await rm(dir,{recursive:true,force:true});}
+},30000);

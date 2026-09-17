@@ -38,7 +38,7 @@ test("actual CLI rejects Aider startup configuration before opening the API or n
   try{
     await mkdir(home,{mode:0o700});await writeFile(join(dir,".aider.conf.yml"),'yes-always: true\n');
     await writeFile(native,`#!/bin/sh\n/usr/bin/touch '${marker}'\necho 'aider 0.86.2'\n`,{mode:0o700});
-    const child=Bun.spawn([process.execPath,fileURLToPath(new URL('../src/cli.ts',import.meta.url)),"launch","aider","--provider","generic-openai-chat","--model","fixture","--executable",native],{cwd:dir,env:{PATH:process.env.PATH,HOME:home,HASNA_SWITCHER_HOME:state},stdin:"ignore",stdout:"pipe",stderr:"pipe",detached:true});
+    const child=Bun.spawn([process.execPath,fileURLToPath(new URL('../src/cli.ts',import.meta.url)),"launch","aider","--provider","generic-openai-chat","--model","fixture","--executable",native],{cwd:dir,env:{PATH:process.env.PATH,HOME:home,HASNA_SWITCHER_LOCAL:"1",HASNA_SWITCHER_HOME:state},stdin:"ignore",stdout:"pipe",stderr:"pipe",detached:true});
     const timer=setTimeout(()=>{try{process.kill(-child.pid,"SIGKILL");}catch{}},5000);
     try{const [code,out,err]=await Promise.all([child.exited,new Response(child.stdout).text(),new Response(child.stderr).text()]);expect(code).not.toBe(0);expect(err).toContain("conflicts with a provider-bound launch");expect(out).toBe("");}
     finally{clearTimeout(timer);try{process.kill(-child.pid,"SIGKILL");}catch{}}

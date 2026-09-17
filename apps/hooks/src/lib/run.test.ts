@@ -7,6 +7,7 @@
  */
 
 import { describe, expect, test, beforeAll, afterAll } from "bun:test";
+import { localStoreChildEnv } from "../test/local-store-fixture.js";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
@@ -212,7 +213,9 @@ describe("CLI run verified execution", () => {
       stdin: new Response(stdin),
       stdout: "pipe",
       stderr: "pipe",
-      env: { ...process.env, HASNA_HOOKS_DATA_DIR: TEST_DIR, HASNA_HOOKS_DB_PATH: ":memory:", NO_COLOR: "1" },
+      // Explicit local route (hasna/apps#1720): `hooks run` decides its route
+      // like every client verb now and fails closed without it.
+      env: localStoreChildEnv({ HASNA_HOOKS_DATA_DIR: TEST_DIR, HASNA_HOOKS_DB_PATH: ":memory:", NO_COLOR: "1" }),
     });
     const [stdout, stderr] = await Promise.all([
       new Response(proc.stdout).text(),

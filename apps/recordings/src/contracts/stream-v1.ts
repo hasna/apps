@@ -21,13 +21,15 @@ function parser<T>(schema: { parse(value: unknown): T }): ContractParser<T> {
 
 export const WIRE_VERSION = "1.0" as const;
 export const REQUIRED_CAPABILITIES = Object.freeze(["version-negotiation", "pcm-s16le-24000-mono", "audio-ack", "session-authorize"] as const);
+/** Optional: send a provider selection only after the server advertises support. */
+export const PROVIDER_SELECTION_CAPABILITY = "provider-selection" as const;
 export const PCM_FORMAT = Object.freeze({ encoding: "pcm_s16le", sampleRateHz: 24_000, channels: 1 } as const);
 export const MAX_PCM_FRAME_BYTES = 24_000;
 export const MAX_PCM_BYTES = 86_400_000;
 export const MAX_CONTROL_BYTES = 20_000;
 export interface WireMetadata { wireVersion: string; capabilities: string[] }
 export interface StreamStart {
-  type: "session.start"; sessionId: string; model?: string; language?: string;
+  type: "session.start"; sessionId: string; provider?: string; model?: string; language?: string;
   wireVersion?: string; capabilities?: string[];
 }
 export type StreamControl = StreamStart | { type: "input.finish" } | { type: "session.cancel" }
@@ -68,7 +70,8 @@ function validAdvertisement(value: { wireVersion?: unknown; capabilities?: unkno
   try { optionalWireMetadata(value); return true; } catch { return false; }
 }
 const control = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("session.start"), sessionId: id, model: z.string().min(1).max(100).optional(),
+  z.object({ type: z.literal("session.start"), sessionId: id,
+    provider: z.string().regex(/^[a-z][a-z0-9-]{0,63}$(?![\s\S])/).optional(), model: z.string().min(1).max(100).optional(),
     language: z.string().regex(/^[a-z]{2}$(?![\s\S])/).optional(), ...advertised }).strict(),
   z.object({ type: z.literal("input.finish") }).strict(),
   z.object({ type: z.literal("session.cancel") }).strict(),

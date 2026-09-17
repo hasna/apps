@@ -1,4 +1,7 @@
+import { recurringSurfaceOperations } from "./recurring-surface.js";
+
 export type SkillsCliMcpParityDomain =
+  | "recurring-consent"
   | "discovery"
   | "portable-skills"
   | "runtime"
@@ -16,6 +19,12 @@ export interface SkillsCliMcpParityEntry {
 }
 
 export const SKILLS_CLI_MCP_PARITY: SkillsCliMcpParityEntry[] = [
+  ...recurringSurfaceOperations.map(operation => ({
+    domain: "recurring-consent" as const, operation: operation.action,
+    cliCommands: [`skills recurring ${operation.cli}`], mcpTools: [operation.name],
+    jsonContracts: ["recurring_consent_v1", "recurring_recovery_v1", "structured_error"], status: "matched" as const,
+    notes: "Both surfaces use the same SDK/service. Activation requires original terms and fresh human authority; local schedules and API keys cannot grant recurring spend.",
+  })),
   {
     domain: "portable-skills",
     operation: "scaffold",

@@ -57,7 +57,7 @@ const upstream=Bun.serve({hostname:"127.0.0.1",port:0,async fetch(request){
   } else {assert(toolProof,"native tool result must contain the file proof");if(phase===1)assert(prior,"resume must retain the prior assistant history");}
   return responseStream(body,phase===0&&!toolProof,(phase?"RESUMED:":"READ:")+proof);
 }});
-const env:NodeJS.ProcessEnv={PATH:process.env.PATH,HOME:join(root,"home"),USER:process.env.USER,LOGNAME:process.env.LOGNAME,HASNA_SWITCHER_HOME:join(root,"switcher"),SWITCHER_PROVIDER_FIXTURE:fixtureKey};
+const env:NodeJS.ProcessEnv={PATH:process.env.PATH,HOME:join(root,"home"),USER:process.env.USER,LOGNAME:process.env.LOGNAME,HASNA_SWITCHER_LOCAL:"1",HASNA_SWITCHER_HOME:join(root,"switcher"),SWITCHER_PROVIDER_FIXTURE:fixtureKey};
 await mkdir(env.HOME!,{mode:0o700});
 for(const kind of ["CONFIG","DATA","STATE","CACHE"]) {env[`XDG_${kind}_HOME`]=join(root,kind.toLowerCase());await mkdir(env[`XDG_${kind}_HOME`]!,{mode:0o700});}
 const cli=fileURLToPath(new URL("../src/cli.ts",import.meta.url));

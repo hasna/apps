@@ -241,7 +241,7 @@ export declare function resolveCredential(name: string, env: Env, options?: Cred
  * principal than the one the operator named is exactly the failure a
  * deliberate pointer exists to prevent.
  *
- * The @hasna/secrets module is imported lazily (via a non-literal specifier)
+ * The @hasna/secrets module is loaded lazily from its installed ESM entry file
  * so consumers that never set a pointer pay no import cost and need no peer
  * dependency at load time; a pointer REQUIRES it, and its absence is one of
  * the TERMINAL cases.

@@ -528,6 +528,21 @@ Service surface (unauthenticated): `GET /health`, `GET /ready`, `GET /version`
 (each returns `{status, version, mode}`), and `GET /openapi.json` (the OpenAPI
 3.1 document the SDK is generated from).
 
+The HTTP server allows **12,000 requests per minute per network peer**, per
+process, by default. Set `HASNA_RECORDINGS_RATE_LIMIT_MAX` to an integer from
+`1` to `1000000` to change the finite budget. The legacy
+`RECORDINGS_RATE_LIMIT_MAX` remains supported; the canonical variable takes
+precedence. An absent or blank value uses the default, and invalid values
+refuse startup. All routes count, including health probes and unauthenticated
+requests, except `OPTIONS`. Exceeding the budget returns `429` with
+`Retry-After` in seconds; authentication requirements remain unchanged.
+
+With proxy trust off, callers behind a proxy share its bucket. Only enable
+`RECORDINGS_TRUST_PROXY=1` when ingress is restricted to proxies that overwrite
+forwarding headers. `RECORDINGS_TRUSTED_PROXIES` resolves the forwarded chain;
+it is not a socket access-control list. A larger allowance does not prove
+sustainable throughput or change database, gateway, or provider capacity.
+
 Versioned API (`/v1/*`, API-key auth via `x-api-key` or `Authorization: Bearer`):
 
 | Method | Path | Scope |

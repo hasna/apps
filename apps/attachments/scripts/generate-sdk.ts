@@ -34,19 +34,23 @@ const required = (before: string, after: string) => {
   hardened = hardened.replace(before, after);
 };
 required('let payload: BodyInit | undefined;', 'let payload: RequestInit["body"];');
-required('apiKey?: string;', 'apiKey: string;');
+required('apiKey?: string;', 'apiKey: string | (() => string | Promise<string>);');
 required('const headers: Record<string, string> = { Accept: "application/json", ...this.baseHeaders, ...(opts.init?.headers as Record<string, string> | undefined) };', 'const supplied = new Headers(this.baseHeaders); new Headers(opts.init?.headers).forEach((value, name) => supplied.set(name, value)); const headers: Record<string, string> = { Accept: "application/json", ...Object.fromEntries(supplied) };');
-required('private readonly apiKey: string | undefined;', '#credentials: () => string;');
-required('this.apiKey = options.apiKey;', 'const authority = options.baseUrl; this.#credentials = () => { validateSdkConfig(options.baseUrl, options.apiKey); if (options.baseUrl !== authority) throw new Error("SDK authority changed; construct a new client explicitly."); return options.apiKey; };');
-required('if (this.apiKey) headers["x-api-key"] = this.apiKey;', 'for (const name of Object.keys(headers)) { if (/^(authorization|x-api-key)$/i.test(name)) throw new Error("Authentication header overrides are not supported."); } headers["x-api-key"] = this.#credentials();');
+required('private readonly apiKey: string | undefined;', '#credentials: () => Promise<string>;');
+required('this.apiKey = options.apiKey;', 'const authority = options.baseUrl; this.#credentials = async () => { if (options.baseUrl !== authority) throw new Error("SDK authority changed; construct a new client explicitly."); const key = typeof options.apiKey === "function" ? await options.apiKey() : options.apiKey; validateSdkKey(key); validateSdkConfig(options.baseUrl, key); if (options.baseUrl !== authority) throw new Error("SDK authority changed; construct a new client explicitly."); return key; };');
+required('if (this.apiKey) headers["x-api-key"] = this.apiKey;', 'for (const name of Object.keys(headers)) { if (/^(authorization|x-api-key)$/i.test(name)) throw new Error("Authentication header overrides are not supported."); } headers["x-api-key"] = await this.#credentials();');
 required('this.baseHeaders = options.headers ?? {};', 'if (Object.keys(options.headers ?? {}).some(name => /^(authorization|x-api-key)$/i.test(name))) throw new Error("Authentication header overrides are not supported."); this.baseHeaders = { ...options.headers };');
 required('if (!options.baseUrl) throw new Error("AttachmentsApiClient requires a baseUrl.");', 'validateSdkConfig(options.baseUrl, options.apiKey);');
 required('{ ...opts.init, method, headers, body: payload }', '{ ...opts.init, method, headers, body: payload, redirect: "error" }');
 required('failed: ${response.status}`, data)', 'failed: ${response.status}`, undefined)');
 required('const text = await response.text();', 'if (!response.ok) throw new ApiError(response.status, "Attachments API request failed: HTTP " + response.status, undefined); const text = await response.text();');
 const validation = `
-export function validateSdkConfig(url: string, key: string): void {
-  if (typeof url !== "string" || typeof key !== "string" || !key || key !== key.trim() || /[\\s\\x00-\\x1f\\x7f]/.test(key)) throw new Error("Explicit HTTPS URL and API key required.");
+function validateSdkKey(key: unknown): asserts key is string {
+  if (typeof key !== "string" || !key || key !== key.trim() || /[\\s\\x00-\\x1f\\x7f]/.test(key)) throw new Error("Explicit HTTPS URL and API key required.");
+}
+export function validateSdkConfig(url: string, key: string | (() => string | Promise<string>)): void {
+  if (typeof url !== "string") throw new Error("Explicit HTTPS URL and API key required.");
+  if (typeof key !== "function") validateSdkKey(key);
   let parsed: URL;
   try { parsed = new URL(url); } catch { throw new Error("Valid HTTPS API URL required."); }
   if (url !== url.trim() || Array.from(url).some(c => c.charCodeAt(0) <= 32 || c.charCodeAt(0) === 127) || parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.search || parsed.hash) throw new Error("HTTPS API URL must not include credentials, query, or fragment.");

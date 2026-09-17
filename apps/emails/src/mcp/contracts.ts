@@ -1,3 +1,4 @@
+import { searchAdmissionFailure } from "../lib/search-admission-error.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { redactSecrets } from "../lib/redaction.js";
 import { formatError } from "./helpers.js";
@@ -217,7 +218,8 @@ function fixCommands(message: string, cliEquivalent: string): string[] {
 function structuredError(toolName: string, input: unknown, error: unknown): ToolResult {
   const message = formatError(error).replace(/^Error:\s*/i, "");
   const cliEquivalent = cliEquivalentForTool(toolName, input);
-  const commands = fixCommands(message, cliEquivalent);
+  const searchFailure = searchAdmissionFailure(error);
+  const commands = searchFailure ? [cliEquivalent] : fixCommands(message, cliEquivalent);
   return {
     isError: true,
     content: [{
@@ -230,6 +232,7 @@ function structuredError(toolName: string, input: unknown, error: unknown): Tool
           fix_command: commands[0],
           fix_commands: commands,
           retryable: /timeout|rate limit|temporary|network|unavailable/i.test(message),
+          ...searchFailure,
         },
         cli_equivalent: cliEquivalent,
       }), null, 2),

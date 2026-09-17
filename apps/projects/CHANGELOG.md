@@ -1,5 +1,182 @@
 # Changelog
 
+## 1.2.1
+
+### Patch Changes
+
+- b9461a0: Resolve Projects API credentials through the installed Secrets SDK, including references saved in the credential file. Adopt the shared resolver's ESM loading and keep missing, denied, or empty vault items terminal, so an old literal credential cannot be used instead.
+
+## 1.2.0
+
+### Minor Changes
+
+- e034112: Published declarations no longer import anything from `@hasna/contracts`
+  (hasna/apps#1782, adversarial credential-seam audit). A strict `nodenext`
+  consumer with `skipLibCheck: false` failed with `TS2835` inside contracts'
+  own distribution the moment a `dist/*.d.ts` named a contracts type — the
+  crossing types (the `ProjectResource*` link shapes, the client-seam
+  `KeychainTierOptions`/`CredentialChainOptions`/`ResolvedCredential`, and the
+  serve's `ApiKeyStatus`/`AuthAuditHook`) are now spelled structurally in
+  `src/types/client-types.ts`, a declaration-only leaf asserted mutually
+  assignable with the real contracts declarations by
+  `src/types/client-types.test.ts` in every direction each type crosses. The
+  root's zod schema re-exports keep the very same contract objects as values,
+  re-typed through the local spellings (`src/types/project-resource-schemas.ts`,
+  identity-pinned by the conformance test). The `./sdk` bundle additionally
+  builds `--external @hasna/contracts`, so the runtime keeps resolving the
+  dependency instead of inlining a second copy. Verified by a packed-package
+  strict consumer compile (`moduleResolution: nodenext`, `skipLibCheck: false`)
+  across every export subpath.
+
+  **Breaking type change for consumers of the re-exported zod schemas.** Five of
+  the seven `ProjectResource*Schema` exports from the package root are published
+  as `z.ZodType<Output>` (the two enums keep their exact `z.ZodEnum<[...]>`
+  spelling). The runtime values are unchanged — they are still the very
+  `@hasna/contracts` schema objects, pinned by identity, and `.parse()` /
+  `.safeParse()` / composition still work — but the published TYPE no longer
+  carries the concrete zod members. Consumer code that reads them stops
+  compiling after this release:
+
+  - `ProjectResourceLinkLabelsSchema`: `.shape`, `.extend()`, `.pick()`,
+    `.partial()`, `.keyof()`
+  - `ProjectResourceLinkLocatorSchema`: `.options`, `.discriminator`
+  - `ProjectResourceLinkSchema`: `.innerType()`, `.sourceType`
+  - `ProjectResourceLinkInputSchema`, `ProjectResourceLinkCollectionV1Schema`:
+    `.innerType()`
+
+  Import the schemas from `@hasna/contracts/schemas` directly if you need those
+  members. Input and output types are unchanged and asserted equal to the
+  contracts schemas in `src/types/client-types.test.ts`. The narrowing is the
+  price of a self-contained declaration graph: spelling the object/effect
+  schemas member-faithfully would mean hand-re-declaring the eight-branch unions
+  and their discriminated locators.
+
+- 9339d64: Fail closed under a hosted credential: no on-box SQLite, ever (owner ruling
+  2026-09-07, hasna/apps#1720; supersedes the `projects-allcmds` branch #1893,
+  which made SQLite the no-credential default).
+
+  - Once the ambient environment resolves a hosted Projects authority, the
+    process refuses every open of `~/.hasna/projects/projects.db` and of a
+    per-project `data/<id>/project.db` (`refuseLocalStore` choke point in
+    `getDatabase()` and the project.db openers). The refusal is
+    `REMOTE_COMMAND_UNSUPPORTED`, names the authority, the credential tiers and
+    the `HASNA_PROJECTS_LOCAL=1` opt-in, never a value.
+  - The hosted store no longer falls through to machine-local SQLite for project
+    data models/records, loop links, `store inspect`'s app store and tmux
+    profiles; like budgets/spend they throw the exported
+    `LocalOnlyOperationError` (`code: REMOTE_COMMAND_UNSUPPORTED`). Nothing
+    configured still fails closed; `HASNA_PROJECTS_LOCAL=1` is the only route to
+    the on-box store.
+  - `projects store ensure <wks_id>` on the hosted backend provisions the folder
+    layout only (`app_store: null`), never creates `project.db`, and takes its
+    mutation lock through `/v1/locks` instead of the local `workspace_locks`
+    table. `store inspect` reports `app_store: null` + `app_store_unavailable`.
+  - `start`, `cleanup-create`, `cleanup-evals`, `agent-eval` and the MCP
+    `projects_start`/`projects_render_start` no longer mint an on-box CLI agent
+    row under a hosted credential (attribution is server-side). A hosted
+    `create --dry-run` previews against an in-memory scratch registry.
+  - `projects update --canonical-machine <slug>` is validated against the
+    machines registry first and names the registered slugs (the hosted API
+    rejects unknown slugs with HTTP 400 "Machine not found"). The storage
+    client is now built from the enriched transport, so every hosted error
+    carries the server's reason (`… -> 400: Machine not found: station03`)
+    instead of a bare status.
+
+### Patch Changes
+
+- bf2b6b0: A write that pins `integrations.conversations_channel` at a name the
+  conversations app has no channel for is refused (BUG-0063). The registry stored
+  the channel as a free-form name and nothing checked it, so a renamed project
+  kept pointing at its old name — `employee-contracts` still carrying
+  `employee-contract-closing`. That name resolved as an agent DM handle and not
+  as a channel, so a project-channel post landed in the DM lane (nobody watching
+  the project channel saw it) or failed closed with HTTP 400 "Channel ... does
+  not exist, so this message was not sent."
+
+  Guarded surfaces, each checked on the exact integrations value it persists:
+
+  - CLI `create` / `update` / `guarded-update` / `link` `--integrations-json`;
+  - MCP `projects_create` (hosted and local), `projects_update`, `projects_link`;
+  - the prompt-agent tools `projects_agent_prompt` builds (`workspace-agent.ts`:
+    `projects_update`, `projects_create`, `projects_link`);
+  - the project step of the prefix migration (`project-prefix-migration.ts`,
+    guarded plan-aware: a pin that no existing channel and no channel step in the
+    migration produces is refused);
+  - the typed resource-link projection, in both transports
+    (`db/workspaces.ts` and `serve/pg-store.ts`): a conversations channel link is
+    authoritative for `integrations.conversations_channel`, so a link whose
+    `labels.channel_name` names no channel — including a stale label left behind
+    by a channel rename, the bug's own trigger — is refused before the link, the
+    pin and the receipt are written. The rule lives in a database-free module
+    (`lib/project-channel-guard.ts`) precisely so the PostgreSQL store can apply
+    it without pulling in `bun:sqlite`; `lib/project-channel.ts` re-exports every
+    symbol, so existing importers are unchanged.
+
+  Each probe reads the conversations channel listing (`conversations channel
+list -j`, cached per process) and refuses only a positive `missing` verdict; the
+  error names the channel and both failure modes. The migration check reads
+  channel names from the plan itself rather than probing, because a rename that
+  creates the target channel must succeed.
+
+  The check fires only when the write actually sets or changes the channel — a
+  full-integrations write that carries an existing value forward still succeeds,
+  so repairing a record stays a deliberate, separate act. An unavailable probe or
+  an `unknown` listing passes through: the guard never fabricates a refusal from
+  an answer it could not obtain, the same discipline the workspace doctor follows
+  when it reports "not verified". `HASNA_PROJECTS_CHANNEL_VERIFY=0` (already
+  honored by the doctor) turns it off. `projectChannelWriteProbe`,
+  `changedProjectChannel`, `assertProjectChannelWritable` and
+  `assertProjectChannelIntegrationWritable` are exported for callers that write
+  integrations themselves.
+
+  Two boundaries this change does NOT cross, stated because a guard whose
+  coverage is implied to be total is worse than one whose edge is named:
+
+  1. The hosted HTTP API accepted a caller-supplied `integrations` blob
+     (`PATCH`/`PUT /v1/workspaces/{id}`, and `POST` create) with no
+     channel-existence check. The rule was client-side by construction, so this
+     was left as a documented boundary rather than a silent one. CLOSED by the
+     follow-up in this same release: the store now applies the same db-free rule
+     at its own write points (`pg-store.ts` update, guarded patch, create and
+     resource-link projection), which needs no conversations client — the probe
+     is the same one-shot CLI call, and an unavailable probe or an `unknown`
+     verdict still passes.
+  2. A channel derived at create (`workspace-plan.ts` locally;
+     `pg-store.createWorkspace` on the hosted side) is not validated — the local
+     path ensures it through `ensureProjectChannel` after the write, and the
+     hosted path has no ensure. Only caller-supplied pins are adjudicated.
+
+- 3f6d584: The conversations-channel write guard BUG-0063 added to the client surfaces is
+  now applied to the hosted store's own write points, so a caller holding a valid
+  key can no longer pin `integrations.conversations_channel` at a name the
+  conversations app has no channel for by talking to the HTTP API directly
+  (BUG-0076):
+
+  - `PATCH`/`PUT /v1/workspaces/{id}` (`pg-store.updateWorkspace`);
+  - `POST /v1/workspaces/{id}/guarded-metadata` (`guardedConditionalUpdate`, so
+    also the duplicate-quarantine accept and its rollback), checked before the
+    dry-run preview so an unwritable plan is never reported `planned`;
+  - `POST /v1/workspaces` — a caller-supplied channel on create, matching the
+    check the CLI and the MCP create tool already ran at their own call sites;
+  - the typed resource-link projection, which already carried the rule and now
+    shares the same one-home helper.
+
+  The rule is imported from the db-free `lib/project-channel-guard.ts`, so this
+  store still never touches `bun:sqlite`, and it needs no conversations client:
+  the probe is the same bounded one-shot CLI call, and an unavailable probe or an
+  `unknown` listing passes through rather than inventing a refusal.
+
+  One boundary remains, stated rather than implied: a channel DERIVED at create
+  (the slug-derived name `pg-store.createWorkspace` pins when the caller supplies
+  none) is not probed. Local create ensures the channel after the write
+  (`ensureProjectChannel`); the hosted create has no ensure, and refusing here
+  would break every hosted create for a brand-new project whose channel does not
+  exist yet. Closing it means giving the hosted service an ensure step — a design
+  decision, tracked in the task this fixes, not a line of validation.
+
+- 5a52e67: Align the exact `@hasna/contracts` pin with the 1.0.2 optional secrets peer release.
+- b10f16c: Expose `--status` on `projects guarded-update` so registry status changes use the existing revision, idempotency, dry-run, receipt, and rollback controls. Status changes preserve project content and reject invalid values.
+
 ## 1.1.2
 
 ### Patch Changes

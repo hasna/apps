@@ -31,3 +31,5 @@ export type {
 // Versioned /v1 client, generated from the serve OpenAPI document
 // (src/server/openapi.ts). Regenerate with `bun run scripts/generate-sdk.ts`.
 export * from "./v1.generated.js";
+export { InstructionsV1Client } from "./v1-client.js";
+export type { InstructionsV1ClientOptions } from "./v1-client.js";

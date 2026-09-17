@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { HasnaHttpError } from "@hasna/contracts/client";
-import { closeDatabase } from "../db/database.js";
+import { closeDatabase, getDatabase, isLocalStoreRefused } from "../db/database.js";
 import {
   PROJECTS_HOME_ENV,
   ensureProjectStore,
@@ -17,10 +17,12 @@ import {
   testConversationsProducerFixture,
 } from "../lib/project-resource-link-producer-verifier.test-support.js";
 import {
+  LocalOnlyOperationError,
   resolveProjectStore,
   __resetProjectStore,
   __resetLocalModeNotice,
 } from "./project-store.js";
+import { silenceHostedApiEnv } from "../testing/spawn-env.js";
 
 /**
  * A caller-built env is HERMETIC in the shared @hasna/contracts seam: it never
@@ -859,7 +861,7 @@ describe("projects store api transport (roots/agents/recipes)", () => {
   // The `calls` assertion is load-bearing in the other direction: it proves the
   // rows came from the local store rather than from the network, so a stub that
   // merely returned data could not make these pass.
-  describe("machine-local app store resolves in the hosted backend (todos 4c17afb1)", () => {
+  describe("on-box SQLite families REFUSE in the hosted backend (owner ruling 2026-09-07, hasna/apps#1720)", () => {
     const project: ProjectStoreProject = {
       id: "wks_apiloops",
       name: "Api Loops",
@@ -869,33 +871,11 @@ describe("projects store api transport (roots/agents/recipes)", () => {
       primary_path: null,
     };
 
-    const fakeLoops: LoopsClientLike = {
-      get(idOrName) {
-        if (idOrName !== "loop_api") throw new Error("missing");
-        return {
-          id: "loop_api",
-          name: "Api Loop",
-          status: "active",
-          schedule: { type: "interval", everyMs: 3_600_000 },
-          target: { type: "command" },
-          nextRunAt: "2026-08-04T00:00:00.000Z",
-          updatedAt: "2026-08-03T00:00:00.000Z",
-        };
-      },
-      runs: () => [],
-    };
-
-    // Isolation is asserted, not assumed: every test drives a fresh temp
-    // PROJECTS_HOME and the finally-block removes it, so no production store
-    // under ~/.hasna/projects is opened, migrated, or written by this suite.
-    // Awaits `fn` before restoring the env and removing the temp root. Declared
-    // synchronous previously, while every call site passes an async callback, so
-    // the finally block ran when the promise was RETURNED rather than when it
-    // resolved -- restoring PROJECTS_HOME and deleting the root at the callback's
-    // first await. The comment above asserted isolation that the helper did not
-    // actually provide.
+    // Isolation is asserted, not assumed: a fresh temp PROJECTS_HOME per test,
+    // removed in the finally block, so no production store under
+    // ~/.hasna/projects is opened, migrated, or written by this suite.
     async function withTempHome<T>(fn: (root: string) => T | Promise<T>): Promise<T> {
-      const root = mkdtempSync(join(tmpdir(), "store-api-loops-"));
+      const root = mkdtempSync(join(tmpdir(), "store-api-refusal-"));
       const previous = process.env[PROJECTS_HOME_ENV];
       process.env[PROJECTS_HOME_ENV] = root;
       try {
@@ -907,123 +887,112 @@ describe("projects store api transport (roots/agents/recipes)", () => {
       }
     }
 
-    test("listLoopLinks returns the rows on disk instead of a hardcoded []", async () => {
-      await withTempHome(async () => {
-        ensureProjectStore(project);
-        linkProjectLoop(project, { loop_id: "loop_api", loop_name: "Api Loop", role: "maintenance" });
+    const REFUSAL = /REMOTE_COMMAND_UNSUPPORTED[\s\S]*local-only operation[\s\S]*HASNA_PROJECTS_LOCAL=1/;
 
+    // Regression: the hosted store used to bind these to the machine-local
+    // SQLite implementations (data/<id>/project.db) while budgets threw — five
+    // families fell through to on-box SQLite under a HOSTED credential.
+    test("app store reads and writes refuse with REMOTE_COMMAND_UNSUPPORTED, touch no network, create no project.db", async () => {
+      await withTempHome(async (root) => {
         const { store, calls } = stubStore(() => ({}));
-        const links = await store.listLoopLinks(project as never);
-
-        expect(links).toHaveLength(1);
-        expect(links[0]?.loop_id).toBe("loop_api");
-        expect(calls).toHaveLength(0); // read the local file, not the network
-      });
-    });
-
-    test("inspectAppStore reports exists:true and the real loop_links count", async () => {
-      await withTempHome(async () => {
-        ensureProjectStore(project);
-        linkProjectLoop(project, { loop_id: "loop_api", loop_name: "Api Loop", role: "maintenance" });
-
-        const { store } = stubStore(() => ({}));
-        const summary = await store.inspectAppStore(project as never);
-
-        // The exact pair the audit measured as false/0 on a 5-row store.
-        expect(summary.exists).toBe(true);
-        expect(summary.counts.loop_links).toBe(1);
-      });
-    });
-
-    test("inspectAppStore reports a missing store without creating it", async () => {
-      await withTempHome(async () => {
-        const { store } = stubStore(() => ({}));
-        const summary = await store.inspectAppStore(project as never);
-
-        expect(summary.exists).toBe(false);
-        expect(summary.schema_version).toBeNull();
-        expect(summary.counts).toEqual({ data_models: 0, data_records: 0, loop_links: 0 });
-        expect(existsSync(summary.paths.db_path)).toBe(false);
-      });
-    });
-
-    test("inspectAppStoreWithLoops surfaces the linked loop, not loops:[]", async () => {
-      await withTempHome(async () => {
-        ensureProjectStore(project);
-        linkProjectLoop(project, { loop_id: "loop_api", loop_name: "Api Loop", role: "maintenance" });
-
-        const { store } = stubStore(() => ({}));
-        const summary = await store.inspectAppStoreWithLoops(project as never, { loopsClient: fakeLoops } as never);
-
-        expect(summary.loops).toHaveLength(1);
-        expect(summary.loops?.[0]?.link.loop_id).toBe("loop_api");
-      });
-    });
-
-    // The instrument must be able to return a genuine zero, or the tests above
-    // only prove it always returns rows. An empty store must still read empty.
-    test("negative control: an empty store still reports 0 links in the hosted backend", async () => {
-      await withTempHome(async () => {
-        ensureProjectStore(project);
-
-        const { store } = stubStore(() => ({}));
-        const summary = await store.inspectAppStore(project as never);
-
-        expect(summary.exists).toBe(true);
-        expect(summary.counts.loop_links).toBe(0);
-        expect(await store.listLoopLinks(project as never)).toEqual([]);
-      });
-    });
-
-    // Regression for the write half. Making the app store resolve in the hosted backend
-    // also made createDataModel / createDataRecord / linkLoop reachable there,
-    // and each routes through withLock(project.id, ...). workspace_locks
-    // .workspace_id is FK-constrained to the machine-local `workspaces` table,
-    // so an api-created / hosted-only project -- which by definition has no local
-    // registry row -- failed with "FOREIGN KEY constraint failed" before ever
-    // touching its project.db. The reads this PR fixes were fine; the writes it
-    // newly enabled were not.
-    //
-    // `project` here is deliberately never inserted into the local `workspaces`
-    // table, which is exactly the hosted-only shape.
-    test("hosted-backend writes succeed for a hosted-only project with no local workspaces row", async () => {
-      await withTempHome(async () => {
-        ensureProjectStore(project);
-
-        // Precondition: the local registry genuinely has no row for this id, so
-        // the test cannot pass by accident on a project that happens to be local.
-        expect(getWorkspace(project.id)).toBeNull();
-
-        const { store } = stubStore(() => ({}));
-
-        const link = await store.linkLoop(
+        await expect(store.listLoopLinks(project as never)).rejects.toThrow(REFUSAL);
+        await expect(store.inspectAppStore(project as never)).rejects.toThrow(REFUSAL);
+        await expect(store.inspectAppStoreWithLoops(project as never)).rejects.toThrow(REFUSAL);
+        await expect(store.listLoopSummaries(project as never)).rejects.toThrow(REFUSAL);
+        await expect(store.listDataModels(project as never)).rejects.toThrow(REFUSAL);
+        await expect(store.listDataRecords(project as never, "notes")).rejects.toThrow(REFUSAL);
+        await expect(store.linkLoop(
           project as never,
           { loop_id: "loop_api", loop_name: "Api Loop", role: "maintenance" } as never,
           { source: "cli" } as never,
-        );
-        expect(link.loop_id).toBe("loop_api");
-
-        const model = await store.createDataModel(
+        )).rejects.toThrow(REFUSAL);
+        await expect(store.createDataModel(
           project as never,
           { name: "notes", schema: { fields: [] } } as never,
           { source: "cli" } as never,
-        );
-        expect(model.name).toBe("notes");
-
-        // The write actually landed in the machine-local store, rather than the
-        // call merely not throwing.
-        expect(await store.listLoopLinks(project as never)).toHaveLength(1);
-
-        // The lock is released, not leaked, so a second write still succeeds.
-        const second = await store.createDataModel(
-          project as never,
-          { name: "notes-2", schema: { fields: [] } } as never,
-          { source: "cli" } as never,
-        );
-        expect(second.name).toBe("notes-2");
+        )).rejects.toThrow(REFUSAL);
+        await expect(store.createDataRecord(project as never, {} as never, { source: "cli" } as never)).rejects.toThrow(REFUSAL);
+        // Load-bearing in both directions: nothing went to the network and
+        // nothing was created on disk.
+        expect(calls).toHaveLength(0);
+        expect(existsSync(join(root, "data", project.id))).toBe(false);
       });
     });
 
+    test("tmux profiles refuse the same way (projects.db is on-box too)", async () => {
+      const { store, calls } = stubStore(() => ({}));
+      await expect(store.listTmuxProfiles()).rejects.toThrow(REFUSAL);
+      await expect(store.getTmuxProfile("dev")).rejects.toThrow(REFUSAL);
+      await expect(store.createTmuxProfile({} as never)).rejects.toThrow(REFUSAL);
+      await expect(store.addTmuxProfileWindow({} as never)).rejects.toThrow(REFUSAL);
+      await expect(store.listTmuxProfileWindows("tmp_x")).rejects.toThrow(REFUSAL);
+      expect(calls).toHaveLength(0);
+    });
+
+    test("the refusal is typed: LocalOnlyOperationError with code REMOTE_COMMAND_UNSUPPORTED", async () => {
+      const { store } = stubStore(() => ({}));
+      const error = await store.listTmuxProfiles().catch((e: unknown) => e) as Error & { code?: string };
+      expect(error).toBeInstanceOf(LocalOnlyOperationError);
+      expect(error.name).toBe("LocalOnlyOperationError");
+      expect(error.code).toBe("REMOTE_COMMAND_UNSUPPORTED");
+    });
+
+    // The instrument must still be able to say yes: the explicit local opt-in
+    // reads the real file (never a vacuous empty summary; todos 4c17afb1).
+    test("negative control: the local opt-in store still reads the on-box app store", async () => {
+      await withTempHome(async () => {
+        ensureProjectStore(project);
+        linkProjectLoop(project, { loop_id: "loop_api", loop_name: "Api Loop", role: "maintenance" });
+        const local = localFixtureStore();
+        expect(await local.listLoopLinks(project as never)).toHaveLength(1);
+        expect((await local.inspectAppStore(project as never)).counts.loop_links).toBe(1);
+      });
+    });
+  });
+
+  describe("hosted resolution from the AMBIENT environment refuses every on-box SQLite open (choke point)", () => {
+    test("after process.env resolves hosted, getDatabase() and the project.db opener throw; __resetProjectStore lifts it", () => {
+      const snapshot = { ...process.env };
+      const root = mkdtempSync(join(tmpdir(), "projects-hosted-refusal-"));
+      try {
+        silenceHostedApiEnv(process.env);
+        delete process.env["HASNA_PROJECTS_LOCAL"];
+        process.env["HASNA_PROJECTS_API_URL"] = "http://127.0.0.1:9";
+        process.env["HASNA_PROJECTS_API_KEY"] = "test-key";
+        process.env["HASNA_PROJECTS_DB_PATH"] = join(root, "projects.db");
+        process.env[PROJECTS_HOME_ENV] = root;
+        __resetProjectStore();
+        closeDatabase();
+
+        const store = resolveProjectStore();
+        expect(store.transport).toBe("http");
+        expect(isLocalStoreRefused()).toBe(true);
+        const refusal = /REMOTE_COMMAND_UNSUPPORTED[\s\S]*http:\/\/127\.0\.0\.1:9[\s\S]*hasna\.credentials\.projects\.api-key[\s\S]*HASNA_PROJECTS_LOCAL=1/;
+        expect(() => getDatabase()).toThrow(refusal);
+        expect(() => getDatabase(join(root, "explicit.db"))).toThrow(refusal);
+        expect(() => ensureProjectStore({ id: "wks_hostedrefusal" })).toThrow(refusal);
+        // Nothing was created: no registry, no data dir, no project.db.
+        expect(existsSync(join(root, "projects.db"))).toBe(false);
+        expect(existsSync(join(root, "explicit.db"))).toBe(false);
+        expect(existsSync(join(root, "data"))).toBe(false);
+
+        __resetProjectStore();
+        expect(isLocalStoreRefused()).toBe(false);
+      } finally {
+        for (const key of Object.keys(process.env)) if (!(key in snapshot)) delete process.env[key];
+        Object.assign(process.env, snapshot);
+        __resetProjectStore();
+        closeDatabase();
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    test("a caller-built hosted env (tests, embedders) does NOT install the process-wide refusal", () => {
+      __resetProjectStore();
+      const { store } = stubStore(() => ({}));
+      expect(store.transport).toBe("http");
+      expect(isLocalStoreRefused()).toBe(false);
+    });
   });
 
   // Regression (todos 9ddd325c): budget READS in the hosted backend were hardcoded

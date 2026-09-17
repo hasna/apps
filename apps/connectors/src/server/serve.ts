@@ -47,6 +47,13 @@ import {
   type AuthStatus,
 } from "./auth.js";
 import { handleMcpHttpRequest } from "../mcp/http.js";
+import {
+  SERVE_DEFAULT_HOSTNAME,
+  describeServeTokenSource,
+  isServeAuthorized,
+  resolveServeToken,
+  unauthorizedPayload,
+} from "./serve-auth.js";
 
 // ── Activity Log ──
 interface ActivityEntry {
@@ -199,9 +206,32 @@ async function findAvailablePort(preferred: number, strict = false): Promise<num
   throw new Error(`No available port found in range ${preferred}-${preferred + 99}`);
 }
 
-export async function startServer(requestedPort: number, options?: { strict?: boolean }): Promise<number> {
+export interface StartServerOptions {
+  /** Refuse to start when `requestedPort` is taken (OAuth needs a fixed port). */
+  strict?: boolean;
+  /**
+   * Interface to bind. Defaults to loopback (`127.0.0.1`): this server hands
+   * out vendor credentials on `/api/export` and must never listen on every
+   * interface by accident. An operator who really needs another address must
+   * name it.
+   */
+  hostname?: string;
+  /**
+   * The bearer token every `/api/*` and `/mcp` request must present. When
+   * omitted the token is `HASNA_CONNECTORS_SERVE_TOKEN`, then the owner-only
+   * `<connectors home>/serve-token` file, generated on first start.
+   */
+  token?: string;
+}
+
+export async function startServer(requestedPort: number, options?: StartServerOptions): Promise<number> {
   const strict = options?.strict ?? false;
+  const hostname = options?.hostname ?? SERVE_DEFAULT_HOSTNAME;
   loadConnectorVersions();
+
+  // Resolve (or mint) the token BEFORE the port is bound so no request can
+  // ever be answered by an unauthenticated server, not even for a moment.
+  const serveToken = resolveServeToken({ token: options?.token });
 
   const port = await findAvailablePort(requestedPort, strict);
   if (port !== requestedPort) {
@@ -209,11 +239,29 @@ export async function startServer(requestedPort: number, options?: { strict?: bo
   }
 
   const server = Bun.serve({
+    hostname,
     port,
     async fetch(req) {
       const url = new URL(req.url);
       const path = url.pathname;
       const method = req.method;
+
+      // ── Authentication gate ──
+      // Every `/api/*` route and the `/mcp` mount require the bearer token;
+      // `/health`, the OAuth browser routes and CORS preflights do not.
+      // Checked FIRST, before any handler can touch the credential store.
+      if (!isServeAuthorized(req, serveToken.token)) {
+        const body = unauthorizedPayload();
+        return new Response(JSON.stringify(body), {
+          status: 401,
+          headers: {
+            "Content-Type": "application/json",
+            "WWW-Authenticate": 'Bearer realm="connectors-serve"',
+            "Access-Control-Allow-Origin": `http://localhost:${port}`,
+            ...SECURITY_HEADERS,
+          },
+        });
+      }
 
       const mcpResponse = await handleMcpHttpRequest(req);
       if (mcpResponse) return mcpResponse;
@@ -949,7 +997,7 @@ export async function startServer(requestedPort: number, options?: { strict?: bo
           headers: {
             "Access-Control-Allow-Origin": `http://localhost:${port}`,
             "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Connectors-Token",
           },
         });
       }
@@ -972,8 +1020,9 @@ export async function startServer(requestedPort: number, options?: { strict?: bo
   const { getDatabase } = await import("../db/database.js");
   startScheduler(getDatabase());
 
-  const url = `http://localhost:${port}`;
+  const url = `http://${hostname}:${port}`;
   console.log(`Connectors API + OAuth server running at ${url}`);
+  console.log(`  /api/* and /mcp require ${describeServeTokenSource(serveToken)}; /health and /oauth/* are public`);
 
   return port;
 }

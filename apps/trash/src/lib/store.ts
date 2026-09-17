@@ -36,7 +36,7 @@
  * weight, and keeping `bun:sqlite` out of the hook bundle.
  */
 
-import { closeSync, lstatSync, openSync, fsyncSync, readdirSync, readFileSync, renameSync, linkSync, unlinkSync } from "node:fs";
+import { closeSync, lstatSync, openSync, fsyncSync, readdirSync, readFileSync, readlinkSync, renameSync, linkSync, symlinkSync, unlinkSync } from "node:fs";
 import { hostname } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import {
@@ -573,10 +573,23 @@ export class TrashStore {
       if (kind === "dir") {
         // rename(2): atomic, O(1), and link(2) cannot do it at all (§15 correction 1).
         renameSync(sourcePath, payloadPath);
+      } else if (kind === "symlink" && process.platform === "darwin") {
+        // Darwin's link(2) follows the source symlink: a link to a file captures
+        // the target inode, a link to a directory fails with EPERM, and a
+        // dangling link fails with ENOENT. Re-create the symlink object with
+        // symlink(2), whose destination is exclusive (EEXIST, never clobber),
+        // then remove the original only while its captured inode still owns the
+        // pathname. Linux keeps the hard-link move below unchanged.
+        symlinkSync(readlinkSync(sourcePath), payloadPath);
+        if (!this.unlinkOriginalIfSameIdentity(sourcePath, entry) && lstatOrNull(sourcePath) === null) {
+          removeFile(payloadPath);
+          throw new SourceVanishedError(sourcePath);
+        }
       } else if (this.config.capture.linkWhenSameDevice) {
         // link(2) + unlink(2): the inode survives, and EEXIST is a detectable
-        // identity collision rather than a clobber. For a symlink this links
-        // the LINK, never its target.
+        // identity collision rather than a clobber. On Linux this links a
+        // symlink object itself; Darwin symlinks use the branch above because
+        // Darwin follows the link source.
         linkSync(sourcePath, payloadPath);
         if (!this.unlinkOriginalIfSameIdentity(sourcePath, entry) && lstatOrNull(sourcePath) === null) {
           // link(2) is not exclusive the way rename(2) is: two captures of the
@@ -830,8 +843,15 @@ export class TrashStore {
           throw new Error(`refusing to restore over the occupied path ${destination}`);
         }
         renameSync(payload, destination);
+      } else if (entry.kind === "symlink" && process.platform === "darwin") {
+        // As in capture, Darwin link(2) follows a symlink source. symlink(2)
+        // restores the link object and refuses an occupied destination; only
+        // after that exclusive publish succeeds is the staged link removed.
+        symlinkSync(readlinkSync(payload), destination);
+        unlinkSync(payload);
       } else {
-        // link(2) gives an atomic no-replace move for loose files.
+        // link(2) gives an atomic no-replace move for loose files and retains
+        // Linux's hard-link treatment of symlink objects.
         linkSync(payload, destination);
         unlinkSync(payload);
       }

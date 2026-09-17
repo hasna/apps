@@ -106,7 +106,7 @@ await execFileAsync("git", ["init", "-q", project]);
    return stream([sse("message_start", { type: "message_start", message }), sse("content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }), sse("content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text } }), sse("content_block_stop", { type: "content_block_stop", index: 0 }), sse("message_delta", { type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 1 } }), sse("message_stop", { type: "message_stop" })].join(""));
  } });
 
- const envBase = { PATH: "/Users/hasna/.bun/bin:/opt/homebrew/bin:/usr/bin:/bin", HOME: home, HASNA_SWITCHER_HOME: switcherHome, SWITCHER_PROVIDER_FIXTURE: key };
+ const envBase = { PATH: "/Users/hasna/.bun/bin:/opt/homebrew/bin:/usr/bin:/bin", HOME: home, HASNA_SWITCHER_LOCAL: "1", HASNA_SWITCHER_HOME: switcherHome, SWITCHER_PROVIDER_FIXTURE: key };
  async function runCli(args: string[], extra: Record<string, string> = {}) {
    const child = Bun.spawn([process.execPath, cli, ...args], { cwd: project, env: { ...process.env, ...envBase, ...extra }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
    const [stdout, stderr] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()]);

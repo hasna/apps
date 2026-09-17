@@ -1,7 +1,8 @@
 # Hosted auth runbook — `/api/*` and `/mcp` fail closed
 
 Applies from `@hasna/todos` **0.13.0**. Read this before redeploying a hosted
-deployment or upgrading a machine that runs `todos serve` / `todos-mcp --http`.
+deployment or upgrading a machine that runs `todos serve` / `todos-serve`
+(`todos-mcp --http` no longer exists — the MCP bin is stdio-only and refuses `--http`, exit 2).
 
 > **Server credential naming (2026-09-05).** The env var that configures this
 > static credential is `HASNA_TODOS_SERVER_API_KEY` — the server's own
@@ -65,10 +66,19 @@ hosted deployment must keep serving `/api/*` or `/mcp`:
 
 Related hardening worth applying in the same revision (pre-existing, not fixed here):
 
-- Set `TODOS_TRUST_PROXY=1` (or key the limiter on a trusted forwarded-for header).
-  Behind a proxy the limiter otherwise buckets every internet client on the proxy's
-  address, so all callers share one `TODOS_RATE_LIMIT_MAX` bucket and an anonymous
-  flood can `429` authenticated `/v1` traffic.
+- Set an explicit finite `HASNA_TODOS_RATE_LIMIT_MAX` request budget appropriate
+  for the deployment (legacy `TODOS_RATE_LIMIT_MAX` remains supported). The OSS
+  default is 12,000 per minute, per peer, per process; valid overrides are integers
+  from 1 to 1,000,000. Invalid values refuse startup instead of disabling denial.
+  Behind a proxy, callers share its bucket by default, including health probes
+  and unauthenticated requests. Increasing that allowance does not establish the
+  service's sustainable throughput or change upstream gateway limits.
+- Keep proxy trust off unless network access is restricted to trusted proxies
+  that overwrite forwarding headers. Only under that restriction should you set
+  `TODOS_TRUST_PROXY=1` and configure `TODOS_TRUSTED_PROXIES` for forwarded-chain
+  resolution. The latter does not enforce a socket allowlist; enabling trust on
+  a directly reachable server lets callers forge bucket keys. Raw transport-peer
+  checks still control anonymous-loopback authentication.
 - The http transport is selected by `HASNA_TODOS_API_URL` + `HASNA_TODOS_API_KEY`; the
   storage-mode variables are retired and their presence is a hard error. Client
   processes fail closed (2026-09-04 ruling, hasna/apps#1613) when the API pair is
@@ -87,7 +97,7 @@ Related hardening worth applying in the same revision (pre-existing, not fixed h
 | --- | --- | --- |
 | CLI / SDK against `/v1` with an API key | `/v1` with a key | unchanged — `/v1` was never affected |
 | `todos-mcp` (stdio, the default for MCP clients) | local SQLite, no HTTP | unchanged |
-| `todos-mcp --http` (loopback `127.0.0.1`) | anonymous | unchanged — the transport is loopback-pinned and opts in implicitly; set `HASNA_TODOS_SERVER_API_KEY` and send it from the client to enforce auth |
+| `todos-mcp --http` | anonymous `todos-serve` started from the MCP bin | **refused (exit 2)** — the MCP bin is stdio-only; run `todos-serve` for `/mcp` and apply the rows below |
 | `todos serve` / `todos-serve`, no key, loopback | anonymous | **breaking** — add `--allow-anonymous` (or `TODOS_ALLOW_ANONYMOUS=1`), or mint a key with `todos api-keys create "<name>"` |
 | `todos serve --host 0.0.0.0`, no key | anonymous, off-box | **refuses to start** — set `HASNA_TODOS_SERVER_API_KEY` |
 | Load-balancer / container health checks (`/ready`) | public | unchanged (pre-auth) |

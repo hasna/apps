@@ -76,18 +76,18 @@ describe("data directory isolation", () => {
     useAsDataDir();
     try {
       const registry = loadRegistry();
-      expect(registry.every((skill) => skill.source === "official")).toBe(true);
+      expect(registry).toEqual([]);
     } finally {
       cleanup();
     }
   });
 
-  test("a portable skill shadows the official entry only within its own root", () => {
+  test("an owned skill is visible only within its own root", () => {
     // deepresearch is the exact skill that shadowed in the wild: a custom copy
     // categorised "Development Tools" displaced the official "Research & Writing" one.
     try {
       const root = useAsDataDir();
-      const skillDir = join(root, "market-research-report");
+      const skillDir = join(root, INSTALLED_SKILLS_DIRNAME, "market-research-report");
       mkdirSync(skillDir, { recursive: true });
       writeFileSync(
         join(skillDir, "SKILL.md"),
@@ -101,8 +101,7 @@ describe("data directory isolation", () => {
       // rather than serving the previous root's result from the 5s cache.
       useAsDataDir();
       const restored = loadRegistry().find((skill) => skill.name === "market-research-report");
-      expect(restored?.source).toBe("official");
-      expect(restored?.category).toBe("Research & Writing");
+      expect(restored).toBeUndefined();
     } finally {
       cleanup();
     }

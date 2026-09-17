@@ -3,7 +3,6 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDatabase } from "../db/database.js";
-import { acquireWorkspaceLock, releaseWorkspaceLock } from "../db/workspaces.js";
 import type { WorkspaceLock } from "../types/workspace.js";
 import type { ProjectStore } from "../store/project-store.js";
 import type {
@@ -96,10 +95,27 @@ function mutationResult(input: GuardedProjectMutationRequest, project: Workspace
   };
 }
 
-function apiStore(project: Workspace, updates: GuardedProjectMutationRequest[], failUpdate = false): ProjectStore {
+/** Hosted store fake. `lockHeld` simulates a live /v1 lock on the same key (the hosted contention case). */
+function apiStore(
+  project: Workspace,
+  updates: GuardedProjectMutationRequest[],
+  failUpdate = false,
+  options: { lockHeld?: boolean; lockCalls?: string[] } = {},
+): ProjectStore {
   return {
     transport: "http",
     baseUrl: "https://projects.example.test/v1",
+    // The mutation lock is a hosted /v1 resource; hosted `store ensure` must
+    // take it here, never from the on-box workspace_locks table.
+    async acquireLock(input: { key: string }) {
+      options.lockCalls?.push(`acquire ${input.key}`);
+      if (options.lockHeld) throw new Error(`Workspace lock already held: ${input.key}`);
+      return { id: "lock_fake", lock_key: input.key, workspace_id: project.id } as unknown as WorkspaceLock;
+    },
+    async releaseLock(key: string, lockId: string) {
+      options.lockCalls?.push(`release ${key} ${lockId}`);
+      return true;
+    },
     async guardedReadProject(input: GuardedProjectReadRequest) {
       return {
         ok: true,
@@ -183,8 +199,14 @@ describe("API-backed project store ensure", () => {
       expect(applied.primary_updated).toBe(true);
       expect(applied.registry_mutation?.receipt?.receipt_id).toBe("gpmr_store_ensure");
       expect(applied.project.primary_path).toBe(applied.paths.workspace_path);
-      expect(applied.app_store).toMatchObject({ exists: true, project_id: id, schema_version: 3 });
-      expect(existsSync(applied.paths.project_db_path)).toBe(true);
+      // Hosted: the folder layout is provisioned; the on-box app store is NOT
+      // (no SQLite under a hosted credential, owner ruling 2026-09-07) and the
+      // mutation lock came from the Store, so the local registry was never opened.
+      expect(applied.app_store).toBeNull();
+      expect(applied.created).not.toContain(applied.paths.project_db_path);
+      expect(existsSync(applied.paths.project_db_path)).toBe(false);
+      expect(existsSync(applied.paths.assets_path)).toBe(true);
+      expect(existsSync(join(root, "registry.db"))).toBe(false);
     } finally {
       if (previousHome === undefined) delete process.env.HASNA_PROJECTS_HOME;
       else process.env.HASNA_PROJECTS_HOME = previousHome;
@@ -212,7 +234,7 @@ describe("API-backed project store ensure", () => {
       await expect(ensureProjectStoreForTarget(apiStore(workspace(id, null), [], true), id)).rejects.toThrow("outcome remains ambiguous");
       expect(existsSync(sentinel)).toBe(true);
       expect(existsSync(dataPath)).toBe(true);
-      expect(existsSync(join(dataPath, "project.db"))).toBe(true);
+      expect(existsSync(join(dataPath, "project.db"))).toBe(false);
       expect(existsSync(join(dataPath, "assets"))).toBe(true);
       expect(existsSync(join(home, "workspaces", id))).toBe(true);
     } finally {
@@ -260,7 +282,7 @@ describe("API-backed project store ensure", () => {
       const applied = await ensureProjectStoreForTarget(store, id);
       expect(applied.registry_mutation?.receipt?.receipt_id).toBe("gpmr_store_ensure");
       expect(applied.project.primary_path).toBe(applied.paths.workspace_path);
-      expect(existsSync(applied.paths.project_db_path)).toBe(true);
+      expect(existsSync(applied.paths.project_db_path)).toBe(false);
       expect(existsSync(applied.paths.assets_path)).toBe(true);
     } finally {
       if (previousHome === undefined) delete process.env.HASNA_PROJECTS_HOME;
@@ -330,14 +352,17 @@ describe("API-backed project store ensure", () => {
     closeDatabase();
     const id = "wks_hostedstorelocked001";
     const lockKey = `workspace:${id}`;
-    let lock: WorkspaceLock | undefined;
     try {
-      lock = acquireWorkspaceLock({ lock_key: lockKey, reason: "concurrent ensure control", ttl_seconds: 600 });
-      await expect(ensureProjectStoreForTarget(apiStore(workspace(id, null), []), id))
+      // The lock is a hosted /v1 resource: a live lock on the same key (another
+      // station's ensure) refuses this apply before any path is claimed, and
+      // the on-box registry is never consulted for it.
+      const lockCalls: string[] = [];
+      await expect(ensureProjectStoreForTarget(apiStore(workspace(id, null), [], false, { lockHeld: true, lockCalls }), id))
         .rejects.toThrow("Project lock already held");
+      expect(lockCalls).toEqual([`acquire ${lockKey}`]);
       expect(existsSync(join(home, "data", id))).toBe(false);
+      expect(existsSync(join(root, "registry.db"))).toBe(false);
     } finally {
-      if (lock) releaseWorkspaceLock(lockKey, lock.id);
       if (previousHome === undefined) delete process.env.HASNA_PROJECTS_HOME;
       else process.env.HASNA_PROJECTS_HOME = previousHome;
       closeDatabase();

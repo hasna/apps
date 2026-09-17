@@ -10,7 +10,7 @@ import {
 import { z } from "zod";
 
 export const CONTRACTS_PACKAGE_NAME = "@hasna/contracts";
-export const CONTRACTS_PACKAGE_VERSION = "1.0.2";
+export const CONTRACTS_PACKAGE_VERSION = "1.1.0";
 
 export const SCHEMA_IDS = {
   actorRef: "hasna.actor_ref.v1",
@@ -5666,7 +5666,11 @@ export const ALLOWED_BIN_SUFFIXES = [
  * for arbitrary `hasna-*` binaries.
  */
 const CANONICAL_HASNA_BIN_ALIASES: Readonly<Record<string, readonly string[]>> = Object.freeze({
-  deployment: Object.freeze(["hasna-deploy"])
+  deployment: Object.freeze(["hasna-deploy"]),
+  // @hasna/configs was renamed to @hasna/instructions. The historical CLI
+  // and MCP names remain a deliberate fleet compatibility surface while new
+  // installs use instructions / instructions-mcp.
+  instructions: Object.freeze(["configs", "configs-mcp"]),
 });
 
 /** All bin names an app named `name` may declare by default. */

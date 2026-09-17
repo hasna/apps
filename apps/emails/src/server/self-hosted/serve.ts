@@ -6,6 +6,7 @@ import {buildProviderRootKms,unconfiguredProviderRootKms} from "./provider-root-
 // Wires the product-owned Postgres pool, the API-key verifier
 // (@hasna/contracts/auth), the migration set, and the request handler together.
 
+import { createMessageSearchAdmission } from "./search-admission.js";
 import { readTrackingConfig } from "./tracking.js";
 import { ApiKeyStore, type ApiKeyVerifier } from "@hasna/contracts/auth";
 import { assertServingRoleCannotBypassRls } from "./rls-guard.js";
@@ -24,6 +25,7 @@ import { buildIdpAuthenticatorFromEnv } from "./auth/idp-token.js";
 /** Assemble the service dependencies from the environment. */
 export function buildSelfHostedService(version: string): SelfHostedServiceDeps {
   const { client } = getSelfHostedPool();
+  const searchAdmission = createMessageSearchAdmission(process.env, client.pool.options.max ?? 10);
   const signingSecret = requireSigningSecret();
   // Fail closed at BOOT, before any request can reach the auth gates, and BEFORE
   // any pool/sender/verifier is built: neither the signup/login/invite allowlist
@@ -79,7 +81,7 @@ export function buildSelfHostedService(version: string): SelfHostedServiceDeps {
   );
   return {
     client,
-    store: new EmailsSelfHostedStore(client),
+    store: new EmailsSelfHostedStore(client, { searchAdmission }),
     verifier,
     sender,
     resolveSender: buildManagedSenderResolver(externalSender,managedProviderSecrets),
@@ -125,6 +127,8 @@ export async function startSelfHostedServer(
   const server = Bun.serve({
     port,
     hostname,
+    // Let the proxy close idle backend connections first (ALB default: 60s).
+    idleTimeout: 75,
     fetch: async (req, bunServer) => {
       // The socket peer address is the only client identity a request cannot
       // forge; the auth rate limits are anchored on it (see auth/client-ip.ts).

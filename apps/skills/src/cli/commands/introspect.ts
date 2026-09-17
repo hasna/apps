@@ -18,6 +18,8 @@ import { findPortableSkill, normalizePortableSkillName, validatePortableSkillDir
 import { SYNC_AGENTS, SYNC_MARKER_FILE, agentGlobalSkillsDir, isPointerSkillMd } from "../../lib/agent-sync.js";
 import { resolveCorpusRoot } from "../../lib/home-migration.js";
 import { hashSkillMarkdownFile } from "../../lib/skill-hash.js";
+import { loadSelectedSkill, selectedSkillRequirements } from "../../lib/selection-resolver.js";
+import { selectedProfileId } from "./context.js";
 import {
   getPublicSkillDiscovery,
   publicDiscoveryDependencies,
@@ -54,16 +56,18 @@ export function registerIntrospect(parent: Command) {
     .argument("<skill>", "Skill name")
     .option("--json", "Output as JSON", false)
     .option("--file <file>", "Specific file: skill, readme, claude", "")
+    .option("--selection-profile <id>", "Authoritative selection profile")
     .description("Show documentation for a skill")
-    .action((name: string, options: { json: boolean; file: string }) => handleDocs(name, options).catch(handleReadRefusal));
+    .action((name: string, options: { json: boolean; file: string; selectionProfile?: string }) => handleDocs(name, options).catch(handleReadRefusal));
 
   // Requires
   parent
     .command("requires")
     .argument("<skill>", "Skill name")
     .option("--json", "Output as JSON", false)
+    .option("--selection-profile <id>", "Authoritative selection profile")
     .description("Show what a skill needs (env vars, system deps, dependencies)")
-    .action((name: string, options: { json: boolean }) => handleRequires(name, options).catch(handleReadRefusal));
+    .action((name: string, options: { json: boolean; selectionProfile?: string }) => handleRequires(name, options).catch(handleReadRefusal));
 
   // Validate
   parent
@@ -113,14 +117,15 @@ async function handleInfo(name: string, options: { json: boolean; brief: boolean
   // without a credential and without the local opt-in this is a refusal, as
   // `skills list` already was (#1720 validation). `--remote` resolves through
   // the same ladder inside loadRemoteSkill().
-  if (!options.remote) await requireSkillsReadAccess();
-  const skill = options.remote ? await loadRemoteSkill(name) : getSkill(name);
+  const access = await requireSkillsReadAccess();
+  const remote = options.remote || access.mode === "hosted";
+  const skill = remote ? await loadRemoteSkill(name) : getSkill(name);
   if (!skill) {
     if (options.json) console.log(JSON.stringify({ error: `Skill '${name}' not found`, similar: findSimilarSkills(name) }));
     else skillNotFound(name);
     process.exitCode = 1; return;
   }
-  const reqs = options.remote ? null : getSkillRequirements(name);
+  const reqs = remote ? null : getSkillRequirements(name);
   const discovery = getPublicSkillDiscovery(skill);
   const publicReqs = reqs ? {
     ...reqs,
@@ -169,8 +174,14 @@ async function resolveRemoteNotFound(name: string, remote: boolean | undefined, 
   }
 }
 
-async function handleDocs(name: string, options: { json: boolean; file: string }) {
-  await requireSkillsReadAccess();
+async function handleDocs(name: string, options: { json: boolean; file: string; selectionProfile?: string }) {
+  const access = await requireSkillsReadAccess();
+  if (access.mode === "hosted") {
+    const file = options.file === "readme" ? "README.md" : options.file === "claude" ? "CLAUDE.md" : options.file ? "SKILL.md" : undefined;
+    const result = await loadSelectedSkill(name, selectedProfileId(options.selectionProfile), { projectDir: process.cwd(), file });
+    console.log(options.json ? JSON.stringify({ skill: name, ...result }) : result.content);
+    return;
+  }
   const docs = getSkillDocs(name);
   if (!docs) {
     if (options.json) console.log(JSON.stringify({ skill: name, error: `Skill '${name}' not found`, similar: findSimilarSkills(name) }));
@@ -201,9 +212,11 @@ async function handleDocs(name: string, options: { json: boolean; file: string }
   console.log(content);
 }
 
-async function handleRequires(name: string, options: { json: boolean }) {
-  await requireSkillsReadAccess();
-  const reqs = getSkillRequirements(name);
+async function handleRequires(name: string, options: { json: boolean; selectionProfile?: string }) {
+  const access = await requireSkillsReadAccess();
+  const reqs = access.mode === "hosted"
+    ? await selectedSkillRequirements(name, selectedProfileId(options.selectionProfile), { projectDir: process.cwd() })
+    : getSkillRequirements(name);
   if (!reqs) {
     if (options.json) console.log(JSON.stringify({ skill: name, error: `Skill '${name}' not found`, similar: findSimilarSkills(name) }));
     else skillNotFound(name);

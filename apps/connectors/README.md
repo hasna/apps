@@ -91,14 +91,51 @@ connectors-serve
 ```
 
 The local REST API is served by the one-product runtime at
-`http://localhost:9876`. Use `@hasna/connectors-sdk` with
-`ConnectorsClient` or `LocalConnectorsClient` for this local
-`connectors-serve` API.
+`http://127.0.0.1:9876` (loopback only by default).
 
-Hosted SaaS products should use `HostedConnectorsClient` from
-`@hasna/connectors-sdk`. The hosted client talks to a platform
-`/api/v1` endpoint with bearer API keys and does not require local connector
-installs or individual connector packages.
+### Authentication
+
+Every `/api/*` route and the `/mcp` mount require a bearer token:
+`Authorization: Bearer <token>` (or `X-Connectors-Token: <token>`).
+`GET /api/export` returns every configured vendor credential, so the server
+never answers it — or anything else under `/api/` — anonymously. `/health`
+and the OAuth browser routes (`/oauth/:name/start`, `/oauth/:name/callback`)
+are public.
+
+The token is resolved in this order and never printed:
+
+1. `HASNA_CONNECTORS_SERVE_TOKEN` in the environment.
+2. The owner-only file `<connectors home>/serve-token` (mode `0600`, default
+   `~/.hasna/connectors/serve-token`), generated on first start.
+
+The `connectors` CLI, `connectors-mcp` and the `./sdk` client read the same two
+sources, so a same-user process on the box authenticates with no configuration
+while a remote or other-user process gets `401 CONNECTORS_SERVE_UNAUTHORIZED`.
+There is no anonymous mode. To listen on another interface deliberately, call
+`startServer(port, { hostname })`.
+
+### SDK (`@hasna/connectors/sdk`)
+
+The TypeScript SDK ships inside this package as the `./sdk` export subpath
+(one package per app — there is no separate `-sdk` package; the former
+`@hasna/connectors-sdk` is superseded by this subpath). The built
+`dist/sdk/index.js` imports node builtins only.
+
+```ts
+import { ConnectorsClient, LocalConnectorsClient, HostedConnectorsClient } from "@hasna/connectors/sdk";
+
+const local = new ConnectorsClient();                 // token from env or ~/.hasna/connectors/serve-token
+const explicit = new LocalConnectorsClient({
+  serverUrl: "http://127.0.0.1:9876",
+  token: process.env.HASNA_CONNECTORS_SERVE_TOKEN,   // or omit to auto-resolve
+});
+await local.list();
+```
+
+Hosted SaaS products should use `HostedConnectorsClient` from the same
+subpath. The hosted client talks to a platform `/api/v1` endpoint with bearer
+API keys and does not require local connector installs or individual connector
+packages.
 
 ## OpenActions And OpenAutomations Boundary
 

@@ -36,15 +36,42 @@ export interface HealthCheckSummary {
 // ---------------------------------------------------------------------------
 
 /**
- * Check whether a URL is reachable via HEAD request.
- * Returns true if 2xx/3xx, false for 4xx/5xx or network error.
+ * Check an ordinary share page with HEAD. S3 download signatures bind GET,
+ * so a HEAD can return 403 for a working download. Probe those URLs with a
+ * one-byte ranged GET and cancel the response without buffering the object.
+ * Keep ordinary links on HEAD: a GET can consume a constrained share's use.
  */
 export async function isLinkAlive(url: string): Promise<boolean> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10_000);
   try {
-    const res = await fetch(url, { method: "HEAD" });
-    return res.ok || (res.status >= 300 && res.status < 400);
+    const query = new URL(url).searchParams;
+    const signedDownload = query.get("X-Amz-Algorithm") === "AWS4-HMAC-SHA256"
+      && query.has("X-Amz-Signature");
+    const signal = controller.signal;
+    let res = await fetch(url, {
+      method: signedDownload ? "GET" : "HEAD",
+      ...(signedDownload ? { headers: { Range: "bytes=0-0" }, redirect: "error" as const } : {}),
+      signal,
+    });
+    // Empty S3 objects reject bytes=0-0 with 416. Verify the same signed GET
+    // without Range once, sharing the original deadline and cancelling both
+    // bodies. A 416 alone is not evidence that a link is healthy.
+    if (signedDownload && res.status === 416) {
+      await res.body?.cancel();
+      res = await fetch(url, { method: "GET", redirect: "error", signal });
+    }
+    const alive = res.ok || (!signedDownload && res.status >= 300 && res.status < 400);
+    // Some compatible stores ignore Range. Stop the body in that case too.
+    await res.body?.cancel();
+    return alive;
   } catch {
     return false;
+  } finally {
+    clearTimeout(timeout);
+    // Bun can continue receiving bytes after body.cancel(). Abort the request
+    // itself so a store that ignores Range cannot stream until the deadline.
+    controller.abort();
   }
 }
 
@@ -72,7 +99,7 @@ export async function checkAttachment(
     };
   }
 
-  // Live HEAD check
+  // Live link check
   const alive = await isLinkAlive(att.link);
   return {
     id: att.id,
@@ -165,7 +192,7 @@ function compactOutput(summary: HealthCheckSummary): string {
       lines.push(`  Expired: ${r.id} ${r.filename}${ago}${fixedNote}`);
     }
     if (r.status === "dead") {
-      lines.push(`  Dead: ${r.id} ${r.filename} (link 404)`);
+      lines.push(`  Dead: ${r.id} ${r.filename} (link check failed)`);
     }
     if (r.status === "no-link") {
       lines.push(`  No link: ${r.id} ${r.filename}`);

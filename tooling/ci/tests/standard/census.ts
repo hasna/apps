@@ -311,7 +311,6 @@ export const MCP_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "automations", reason: "Daemon-shaped member (automations-daemon); no MCP surface declared." },
   { member: "contracts", reason: "Library-shaped (manifest validator kit); ships `contracts` + `contracts-cli` bins only." },
   { member: "guardrails", reason: "Library-shaped (guardrail policies); no MCP surface." },
-  { member: "hooks", reason: "CLI+serve member (hooks registry/serve); no MCP surface yet." },
   { member: "orgs", reason: "Registry-shaped; no MCP surface." },
 ];
 
@@ -337,9 +336,7 @@ export const SDK_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "automations", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "bridge", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "changelog", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
-  { member: "connectors", reason: "SDK lane (c7ce8b75); no ./sdk export yet. Imported by #80 after the original census." },
   { member: "emails", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
-  { member: "hooks", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "orgs", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "releases", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "repos", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
@@ -425,11 +422,6 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
     member: "hooks",
     cause: "no_cloud_guard: hasna.contract.json carries a legacy .hasna/cloud runtime-config reference (in-tree kit 1.0.2; first measured failing when validation moved in-tree).",
     task: "fleet-alignment wave 2026-09-11 (W2 census) — owner: hooks lane (W6); remove the retired location from the manifest",
-  },
-  {
-    member: "instructions",
-    cause: "bins_match_package: legacy alias bins configs/configs-mcp undeclared; storage_capabilities: storage.pgTestGate required; published_artifact_gate: metadata.release.artifactScan.script required (in-tree kit 1.0.2).",
-    task: "todos c15cca18 (contracts task — instructions)",
   },
   {
     member: "logs",

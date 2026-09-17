@@ -2,10 +2,8 @@ import type { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import {
-  acquireWorkspaceLock,
   addWorkspaceLocation,
   recordWorkspaceEvent,
-  releaseWorkspaceLock,
   resolveWorkspace,
 } from "../db/workspaces.js";
 import type { EventSource, JsonObject, Workspace, WorkspaceLocation, WorkspaceLock } from "../types/workspace.js";
@@ -75,7 +73,13 @@ export interface ProjectStoreEnsureResult {
   created: string[];
   primary_updated: boolean;
   dry_run: boolean;
-  app_store: ProjectStoreSummary;
+  /**
+   * The per-project app store (`data/<id>/project.db`) summary, or `null` when
+   * this run did not touch it: the hosted transport provisions the filesystem
+   * layout only and never opens or creates on-box SQLite (owner ruling
+   * 2026-09-07, hasna/apps#1720). Use the explicit local opt-in to initialize it.
+   */
+  app_store: ProjectStoreSummary | null;
   registry_mutation: GuardedProjectMutationResult | null;
 }
 
@@ -222,7 +226,7 @@ function projectMarkerId(path: string): string | null {
   }
 }
 
-function assertCanonicalStoreClaim(project: Workspace, paths: ProjectStorePaths): void {
+function assertCanonicalStoreClaim(project: Workspace, paths: ProjectStorePaths, options: { appStore: boolean }): void {
   const markerOwner = projectMarkerId(paths.workspace_path);
   if (markerOwner && markerOwner !== project.id) {
     throw new Error(`Project store collision: canonical workspace belongs to project ${markerOwner}, not ${project.id}`);
@@ -235,6 +239,9 @@ function assertCanonicalStoreClaim(project: Workspace, paths: ProjectStorePaths)
   ) {
     throw new Error(`Project store collision: canonical workspace is non-empty and is not claimed by project ${project.id}: ${paths.workspace_path}`);
   }
+  // The app-store ownership check opens project.db; skip it when this run does
+  // not touch the app store (hosted transport: no on-box SQLite).
+  if (!options.appStore) return;
   const appStoreOwner = inspectProjectStoreOwner(project.id);
   if (appStoreOwner && appStoreOwner !== project.id) {
     throw new Error(`Project store collision: canonical app store belongs to project ${appStoreOwner}, not ${project.id}`);
@@ -283,6 +290,12 @@ export function ensureProjectStore(
     dryRun?: boolean;
     setPrimaryIfMissing?: boolean;
     recordRegistryEvent?: boolean;
+    /**
+     * `false` provisions the filesystem layout only and never opens or creates
+     * the on-box `project.db` (the hosted transport: no SQLite under a hosted
+     * credential). Default `true` (local transport) initializes the app store.
+     */
+    appStore?: boolean;
     agentId?: string;
     source?: EventSource;
     command?: string;
@@ -290,11 +303,14 @@ export function ensureProjectStore(
 ): ProjectStoreEnsureResult {
   const paths = projectStorePaths(project.id);
   const dryRun = Boolean(options.dryRun);
-  assertCanonicalStoreClaim(project, paths);
+  const provisionAppStore = options.appStore !== false;
+  assertCanonicalStoreClaim(project, paths, { appStore: provisionAppStore });
   const created = ensureDataDirs(paths, dryRun);
   const appStoreExisted = existsSync(paths.project_db_path);
-  if (!appStoreExisted) created.push(paths.project_db_path);
-  const appStore = dryRun ? inspectProjectAppStoreReadOnly(project) : ensureProjectAppStore(project);
+  if (provisionAppStore && !appStoreExisted) created.push(paths.project_db_path);
+  const appStore = !provisionAppStore
+    ? null
+    : dryRun ? inspectProjectAppStoreReadOnly(project) : ensureProjectAppStore(project);
   let primaryUpdated = false;
   let nextProject = project;
 
@@ -381,8 +397,13 @@ export async function ensureProjectStoreForTarget(
     let localResult: ProjectStoreEnsureResult | null = null;
     let compensationAuthorized = false;
     try {
+      // Hosted: provision the machine-local FOLDER layout only. The per-project
+      // app store is on-box SQLite, which no hosted run may create (owner ruling
+      // 2026-09-07, hasna/apps#1720; live report: `store ensure` left a
+      // project.db under ~/.hasna/projects/data/<id>/ on a hosted station).
       localResult = ensureProjectStore(guardedProject, {
         ...options,
+        appStore: false,
         setPrimaryIfMissing: false,
         recordRegistryEvent: false,
       });
@@ -471,14 +492,19 @@ export async function ensureProjectStoreForTarget(
   };
 
   if (options.dryRun) return run();
+  // The mutation lock is a Store resource in both transports (hosted:
+  // /v1/locks). Taking it from the on-box `workspace_locks` table here opened
+  // projects.db on a hosted station, so it routes through the Store like every
+  // other hosted mutation.
   const lockKey = `workspace:${target}`;
   let lock: WorkspaceLock;
   try {
-    lock = acquireWorkspaceLock({
-      lock_key: lockKey,
-      workspace_id: resolveWorkspace(target) ? target : undefined,
+    lock = await store.acquireLock({
+      key: lockKey,
+      workspaceId: target,
+      agentId: options.agentId,
       reason: "project store ensure",
-      ttl_seconds: 600,
+      ttlSeconds: 600,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -493,7 +519,7 @@ export async function ensureProjectStoreForTarget(
     // Holder-scoped release (regression 6692dc56): release by the acquired
     // row's unique id, never by key alone — a guarded mutation that outlives
     // the TTL must not delete a successor's live lock.
-    releaseWorkspaceLock(lockKey, lock.id);
+    await store.releaseLock(lockKey, lock.id);
   }
 }
 

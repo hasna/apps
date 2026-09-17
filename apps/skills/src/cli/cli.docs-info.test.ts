@@ -21,7 +21,7 @@ useDefaultTestTimeout();
 // fixtures in a throwaway corpus the CLI resolves via $HASNA_SKILLS_DIR.
 const FIXTURE_HOME = mkdtempSync(join(tmpdir(), "cli-docs-fixtures-"));
 function writeFixture(name: string, files: { pkg?: unknown; skillMd?: string; claudeMd?: string }): void {
-  const dir = join(FIXTURE_HOME, "custom", name);
+  const dir = join(FIXTURE_HOME, "installed", name);
   mkdirSync(dir, { recursive: true });
   if (files.pkg !== undefined) writeFileSync(join(dir, "package.json"), JSON.stringify(files.pkg, null, 2));
   if (files.skillMd !== undefined) writeFileSync(join(dir, "SKILL.md"), files.skillMd);
@@ -77,8 +77,8 @@ describe("CLI docs and validation", () => {
     });
 
     test("shows claude file with --file claude", async () => {
-      const { stdout } = await runCli(["docs", "blog-article", "--file", "claude"]);
-      expect(stdout).toContain("blog-article");
+      const { stdout } = await runCli(["docs", "claude-only-fixture", "--file", "claude"], FIXTURE_ENV);
+      expect(stdout).toContain("claude-only-fixture");
     });
   });
 

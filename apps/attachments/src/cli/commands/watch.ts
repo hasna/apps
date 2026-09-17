@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import { resolveStore, type Store } from "../../core/store";
 import { withTodosAuth, serviceConfig } from "../../core/todos";
+import { stripV1 } from "../../core/client-config";
 import { checkAttachment } from "./health-check";
 
 // ---------------------------------------------------------------------------
@@ -35,7 +36,7 @@ export interface HandleTaskEventResult {
 // ---------------------------------------------------------------------------
 
 /**
- * Handle a `task.completed` event: look up each attachment_id in the local DB,
+ * Handle a `task.completed` event: look up each attachment_id on the configured HTTPS authority,
  * check if its link is expired or dead, regenerate if needed.
  *
  * Returns a summary: how many attachments were checked and how many regenerated.
@@ -129,6 +130,8 @@ export function parseSseBlock(block: string): { event: string; data: string } | 
  * aborted.  On network error, waits `backoffMs` before reconnecting (capped
  * at `maxBackoffMs`).
  */
+class TerminalStreamError extends Error {}
+
 export async function connectAndWatch(
   url: string,
   opts: { verbose?: boolean } = {},
@@ -138,14 +141,14 @@ export async function connectAndWatch(
   sleepFn: (ms: number) => Promise<void> = (ms) =>
     new Promise((resolve) => setTimeout(resolve, ms))
 ): Promise<void> {
-  withTodosAuth(url, { signal });
-  const authority = serviceConfig("TODOS").url;
+  await withTodosAuth(url, { signal });
+  const authority = (await serviceConfig("TODOS")).url;
   let backoffMs = 5000;
   const maxBackoffMs = 60_000;
 
   while (!signal?.aborted) {
-    if (serviceConfig("TODOS").url !== authority) throw new Error("Todos authority changed; restart the watch explicitly.");
-    const requestInit = withTodosAuth(url, { signal });
+    if ((await serviceConfig("TODOS")).url !== authority) throw new Error("Todos authority changed; restart the watch explicitly.");
+    const requestInit = await withTodosAuth(url, { signal });
     try {
       if (opts.verbose) {
         process.stdout.write(`[watch] Connecting to ${url}\n`);
@@ -154,6 +157,9 @@ export async function connectAndWatch(
       const response = await fetchFn(url, requestInit);
 
       if (!response.ok) {
+        if ([401, 403, 404, 405, 410, 501].includes(response.status)) {
+          throw new TerminalStreamError(`Todos stream unavailable (HTTP ${response.status}); check credentials and server v1 stream support.`);
+        }
         throw new Error(`HTTP ${response.status}`);
       }
 
@@ -208,6 +214,7 @@ export async function connectAndWatch(
       reader.cancel();
     } catch (err: unknown) {
       if (signal?.aborted) break;
+      if (err instanceof TerminalStreamError) throw err;
 
       const msg = err instanceof Error ? err.message : String(err);
       process.stderr.write(
@@ -240,12 +247,12 @@ export function registerWatch(program: Command): void {
     )
     .option("--verbose", "Log all events received, not just ones with attachments", false)
     .action(async (options: WatchOptions) => {
-      const todosUrl = options.todosUrl ?? serviceConfig("TODOS").url;
+      const todosUrl = options.todosUrl ?? (await serviceConfig("TODOS")).url;
       const events = options.events ?? "task.completed";
       const verbose = !!options.verbose;
 
       const params = new URLSearchParams({ events });
-      const url = `${todosUrl}/api/tasks/stream?${params.toString()}`;
+      const url = `${stripV1(todosUrl)}/v1/tasks/stream?${params.toString()}`;
 
       const controller = new AbortController();
 

@@ -6,20 +6,22 @@ public enum RecordingsUpdateConstants {
     public static let lifecycle = "bootstrap-v1-app-updates-only"
     public static let rootMaintenanceSupported = false
     public static let keyRotationSupported = false
-    public static let machServiceName = "com.hasna.recordings.updater"
-    public static let applicationPath = "/Applications/Hasna Recordings.app"
-    public static let brokerExecutablePath = "/Library/PrivilegedHelperTools/com.hasna.recordings.updater"
-    public static let stateRoot = "/Library/Application Support/Hasna/Recordings/Updates"
-    public static let trustRoot = "/Library/Application Support/Hasna/Recordings/Trust"
-    public static let policyPath = trustRoot + "/broker-policy.json"
-    public static let envelopePublicKeyDirectory = trustRoot + "/envelope-keys"
-    public static let monotonicStateDirectory = "/private/var/db/com.hasna.recordings.updater"
-    public static let monotonicStatePath = monotonicStateDirectory + "/release-state.json"
-    public static let artifactVerifierPath = "/Library/PrivilegedHelperTools/com.hasna.recordings.artifact-verifier"
-    public static let artifactVerifierSandboxProfilePath = trustRoot + "/artifact-verifier.sb"
-    public static let bootstrapMarkerPath = trustRoot + "/bootstrap-marker.json"
-    public static let artifactVerifierAccount = "_recordingsverify"
-    public static let updateClientRelativePath = "Contents/Helpers/recordings-update-client"
+    // Runtime selection stays legacy-only until all installation guards are threaded.
+    public static let productPolicy = UpdateProductPolicy.legacy
+    public static let machServiceName = productPolicy.machServiceName
+    public static let applicationPath = productPolicy.applicationPath
+    public static let brokerExecutablePath = productPolicy.brokerExecutablePath
+    public static let stateRoot = productPolicy.stateRoot
+    public static let trustRoot = productPolicy.trustRoot
+    public static let policyPath = productPolicy.policyPath
+    public static let envelopePublicKeyDirectory = productPolicy.envelopePublicKeyDirectory
+    public static let monotonicStateDirectory = productPolicy.monotonicStateDirectory
+    public static let monotonicStatePath = productPolicy.monotonicStatePath
+    public static let artifactVerifierPath = productPolicy.artifactVerifierPath
+    public static let artifactVerifierSandboxProfilePath = productPolicy.artifactVerifierSandboxProfilePath
+    public static let bootstrapMarkerPath = productPolicy.bootstrapMarkerPath
+    public static let artifactVerifierAccount = productPolicy.artifactVerifierAccount
+    public static let updateClientRelativePath = productPolicy.updateClientRelativePath
 }
 
 public enum RecordingsUpdateErrorCode: String, Codable, Sendable {

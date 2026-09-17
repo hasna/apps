@@ -154,7 +154,7 @@ console.log('CANONICAL_LAUNCH_OK');
   }});
   const cli=fileURLToPath(new URL("../src/cli.ts",import.meta.url));
   const command=async(args:string[])=>{
-    const child=Bun.spawn([process.execPath,cli,...args],{cwd:f.root,env:{HOME:f.root,PATH:process.env.PATH,HASNA_STATION:"switcher-canonical-fixture"},stdin:"ignore",stdout:"pipe",stderr:"pipe"});
+    const child=Bun.spawn([process.execPath,cli,...args],{cwd:f.root,env:{HOME:f.root,PATH:process.env.PATH,HASNA_STATION:"switcher-canonical-fixture",HASNA_SWITCHER_LOCAL:"1"},stdin:"ignore",stdout:"pipe",stderr:"pipe"});
     const timeout=setTimeout(()=>child.kill("SIGKILL"),15000);
     try { const [code,stdout,stderr]=await Promise.all([child.exited,new Response(child.stdout).text(),new Response(child.stderr).text()]);return {code,stdout,stderr}; }
     finally {clearTimeout(timeout);}

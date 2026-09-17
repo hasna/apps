@@ -30,7 +30,7 @@ export interface AttachmentsApiClientOptions {
   /** Base URL, e.g. process.env.APP_API_URL. */
   baseUrl: string;
   /** API key, e.g. process.env.APP_API_KEY. Sent as the 'x-api-key' header. */
-  apiKey: string;
+  apiKey: string | (() => string | Promise<string>);
   /** Custom fetch (defaults to global fetch). */
   fetch?: typeof fetch;
   /** Extra headers merged into every request. */
@@ -46,14 +46,14 @@ export class ApiError extends Error {
 
 export class AttachmentsApiClient {
   private readonly baseUrl: string;
-  #credentials: () => string;
+  #credentials: () => Promise<string>;
   private readonly fetchImpl: typeof fetch;
   private readonly baseHeaders: Record<string, string>;
 
   constructor(options: AttachmentsApiClientOptions) {
     validateSdkConfig(options.baseUrl, options.apiKey);
     this.baseUrl = options.baseUrl.replace(/\/$/, "");
-    const authority = options.baseUrl; this.#credentials = () => { validateSdkConfig(options.baseUrl, options.apiKey); if (options.baseUrl !== authority) throw new Error("SDK authority changed; construct a new client explicitly."); return options.apiKey; };
+    const authority = options.baseUrl; this.#credentials = async () => { if (options.baseUrl !== authority) throw new Error("SDK authority changed; construct a new client explicitly."); const key = typeof options.apiKey === "function" ? await options.apiKey() : options.apiKey; validateSdkKey(key); validateSdkConfig(options.baseUrl, key); if (options.baseUrl !== authority) throw new Error("SDK authority changed; construct a new client explicitly."); return key; };
     this.fetchImpl = options.fetch ?? globalThis.fetch;
     if (Object.keys(options.headers ?? {}).some(name => /^(authorization|x-api-key)$/i.test(name))) throw new Error("Authentication header overrides are not supported."); this.baseHeaders = { ...options.headers };
   }
@@ -73,7 +73,7 @@ export class AttachmentsApiClient {
       }
     }
     const supplied = new Headers(this.baseHeaders); new Headers(opts.init?.headers).forEach((value, name) => supplied.set(name, value)); const headers: Record<string, string> = { Accept: "application/json", ...Object.fromEntries(supplied) };
-    for (const name of Object.keys(headers)) { if (/^(authorization|x-api-key)$/i.test(name)) throw new Error("Authentication header overrides are not supported."); } headers["x-api-key"] = this.#credentials();
+    for (const name of Object.keys(headers)) { if (/^(authorization|x-api-key)$/i.test(name)) throw new Error("Authentication header overrides are not supported."); } headers["x-api-key"] = await this.#credentials();
     let payload: RequestInit["body"];
     if (opts.body !== undefined) {
       headers["Content-Type"] = "application/json";
@@ -197,8 +197,12 @@ export class AttachmentsApiClient {
     }
 }
 
-export function validateSdkConfig(url: string, key: string): void {
-  if (typeof url !== "string" || typeof key !== "string" || !key || key !== key.trim() || /[\s\x00-\x1f\x7f]/.test(key)) throw new Error("Explicit HTTPS URL and API key required.");
+function validateSdkKey(key: unknown): asserts key is string {
+  if (typeof key !== "string" || !key || key !== key.trim() || /[\s\x00-\x1f\x7f]/.test(key)) throw new Error("Explicit HTTPS URL and API key required.");
+}
+export function validateSdkConfig(url: string, key: string | (() => string | Promise<string>)): void {
+  if (typeof url !== "string") throw new Error("Explicit HTTPS URL and API key required.");
+  if (typeof key !== "function") validateSdkKey(key);
   let parsed: URL;
   try { parsed = new URL(url); } catch { throw new Error("Valid HTTPS API URL required."); }
   if (url !== url.trim() || Array.from(url).some(c => c.charCodeAt(0) <= 32 || c.charCodeAt(0) === 127) || parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.search || parsed.hash) throw new Error("HTTPS API URL must not include credentials, query, or fragment.");

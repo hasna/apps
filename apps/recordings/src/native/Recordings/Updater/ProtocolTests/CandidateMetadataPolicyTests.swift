@@ -104,6 +104,42 @@ struct CandidateMetadataPolicyTests {
         }
     }
 
+    @Test("fictional ARM64 product metadata is admitted only under its matching policy")
+    func arm64ProductMetadata() throws {
+        let product = try UpdateProductPolicyTests.fixture()
+        try validate(applicationIdentifier: product.applicationIdentifier,
+                     applicationArchitectures: ["arm64"], actualUpdateClientArchitectures: ["arm64"],
+                     provenanceArchitectures: ["arm64"], actualCompanionArchitectures: ["arm64"],
+                     companionArchitectures: ["arm64"], productPolicy: product)
+        #expect(throws: CandidateMetadataPolicyError.applicationArchitectureMismatch) {
+            try validate(applicationIdentifier: product.applicationIdentifier,
+                         actualUpdateClientArchitectures: ["arm64"], provenanceArchitectures: ["arm64"],
+                         actualCompanionArchitectures: ["arm64"], companionArchitectures: ["arm64"],
+                         productPolicy: product)
+        }
+        #expect(throws: UpdateProductPolicyError.runtimeUnsupported) { try product.requireRuntimeSupport() }
+    }
+
+    @Test("legacy and fictional product candidates cannot cross identity policies")
+    func crossProductMetadataRejected() throws {
+        let product = try UpdateProductPolicyTests.fixture(architectures: ["arm64", "x86_64"])
+        #expect(throws: CandidateMetadataPolicyError.applicationIdentifierMismatch) {
+            try validate(applicationIdentifier: product.applicationIdentifier)
+        }
+        #expect(throws: CandidateMetadataPolicyError.applicationIdentifierMismatch) {
+            try validate(productPolicy: product)
+        }
+        #expect(throws: CandidateMetadataPolicyError.provenanceIdentifierMismatch) {
+            try validate(applicationIdentifier: product.applicationIdentifier,
+                         productPolicy: product, provenanceApplicationIdentifier: "com.hasna.recordings")
+        }
+        // Changing the expected envelope identity cannot override its product policy.
+        #expect(throws: CandidateMetadataPolicyError.productPolicyMismatch) {
+            try validate(applicationIdentifier: product.applicationIdentifier,
+                         expectedApplicationIdentifier: product.applicationIdentifier)
+        }
+    }
+
     private func validate(
         applicationIdentifier: String = "com.hasna.recordings",
         applicationVersion: String = "0.2.13",
@@ -123,7 +159,10 @@ struct CandidateMetadataPolicyTests {
         companionVersion: String = "0.2.13",
         companionSHA256: String = String(repeating: "d", count: 64),
         companionArchitectures: [String] = ["arm64", "x86_64"],
-        containsLocalOnlyFields: Bool = false
+        containsLocalOnlyFields: Bool = false,
+        productPolicy: UpdateProductPolicy = .legacy,
+        expectedApplicationIdentifier: String? = nil,
+        provenanceApplicationIdentifier: String? = nil
     ) throws {
         try CandidateMetadataPolicy.validate(
             application: CandidateApplicationMetadata(
@@ -142,7 +181,7 @@ struct CandidateMetadataPolicyTests {
             provenance: CandidateBuildProvenanceMetadata(
                 schemaVersion: 4,
                 containsLocalOnlyFields: containsLocalOnlyFields,
-                bundleIdentifier: "com.hasna.recordings",
+                bundleIdentifier: provenanceApplicationIdentifier ?? productPolicy.applicationIdentifier,
                 bundleVersion: provenanceVersion,
                 bundleBuildVersion: provenanceBuild,
                 sourceCommit: sourceCommit,
@@ -154,15 +193,16 @@ struct CandidateMetadataPolicyTests {
                 companionArchitectures: companionArchitectures
             ),
             expected: CandidateReleaseMetadataExpectation(
-                applicationIdentifier: "com.hasna.recordings",
+                applicationIdentifier: expectedApplicationIdentifier ?? productPolicy.applicationIdentifier,
                 applicationExecutable: "Recordings",
                 version: "0.2.13",
                 build: "0.2.13",
                 sourceCommit: String(repeating: "a", count: 40),
                 signingTeamIdentifier: "EXAMPLE123",
                 minimumOSVersion: "26.0",
-                architectures: ["arm64", "x86_64"]
-            )
+                architectures: productPolicy.architectures
+            ),
+            productPolicy: productPolicy
         )
     }
 }

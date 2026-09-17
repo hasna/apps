@@ -97,4 +97,32 @@ describe("cloud profile API-key authentication", () => {
       }
     }
   });
+
+  test("a registered read-only key is denied on a write-scoped route", async () => {
+    const readOnly = mintApiKey({
+      app: "instructions",
+      scopes: ["instructions:read"],
+      signingSecret: FIXTURE_SIGNING_MATERIAL.toString("hex"),
+      kid: "read-only-test-key",
+      nowMs: Date.UTC(2026, 0, 1),
+      ttlSeconds: null,
+    });
+    Object.defineProperty(getApiKeyStore(), "keyStatus", {
+      configurable: true,
+      value: async (kid: string) => kid === readOnly.kid ? "active" : "unknown",
+    });
+
+    const app = new Hono();
+    app.use("/v1/*", getHonoAuthMiddleware(["instructions:write"]));
+    app.post("/v1/configs", (context) => context.json({ created: true }, 201));
+
+    const response = await app.request("/v1/configs", {
+      method: "POST",
+      headers: { "x-api-key": readOnly.token, "content-type": "application/json" },
+      body: JSON.stringify({ name: "denied" }),
+    });
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ reason: "insufficient_scope" });
+  });
+
 });

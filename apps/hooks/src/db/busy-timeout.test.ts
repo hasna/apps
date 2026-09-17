@@ -6,6 +6,7 @@
  */
 
 import { describe, expect, test, beforeAll, afterAll } from "bun:test";
+import { enterLocalStoreRoute } from "../test/local-store-fixture.js";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
@@ -15,10 +16,13 @@ const TEST_DIR = mkdtempSync(join(tmpdir(), "hooks-busy-test-"));
 const DATA_DIR = join(TEST_DIR, "data");
 const DB_PATH = join(DATA_DIR, "hooks.db");
 const CLI = join(import.meta.dir, "..", "..", "src", "cli", "index.tsx");
+// Hermetic local route (see src/test/local-store-fixture.ts).
+let restoreRoute: () => void = () => {};
 
 beforeAll(() => {
   process.env.HASNA_HOOKS_DATA_DIR = DATA_DIR;
   process.env.HASNA_HOOKS_DB_PATH = DB_PATH;
+  restoreRoute = enterLocalStoreRoute();
   mkdirSync(DATA_DIR, { recursive: true });
   const hookDir = join(DATA_DIR, "hooks", "busy-demo");
   mkdirSync(hookDir, { recursive: true });
@@ -38,6 +42,7 @@ beforeAll(() => {
 afterAll(() => {
   delete process.env.HASNA_HOOKS_DATA_DIR;
   delete process.env.HASNA_HOOKS_DB_PATH;
+  restoreRoute();
   closeDb();
   rmSync(TEST_DIR, { recursive: true, force: true });
 });
