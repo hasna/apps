@@ -193,19 +193,28 @@ export function createInstructionsS3ObjectStore(
   return {
     async putIfAbsent(key, bytes, options) {
       assertSafeInstructionsObjectKey(key);
+      let credentials: InstructionsS3Credentials;
+      try {
+        credentials = resolveRequestCredentials(config);
+      } catch {
+        throw new Error("Instructions S3 conditional object creation failed");
+      }
       for (let attempt = 1; attempt <= CONDITIONAL_CREATE_ATTEMPTS; attempt += 1) {
         let response: Response;
         const controller = new AbortController();
         try {
-          const url = client.presign(key, { method: "PUT", expiresIn: 60 });
+          const signed = signConditionalCreateRequest(
+            config,
+            key,
+            bytes,
+            options.contentType,
+            credentials,
+            new Date(),
+          );
           response = await runWithDeadline(
-            () => requestFetch(url, {
+            () => requestFetch(signed.url, {
               method: "PUT",
-              headers: {
-                "content-type": options.contentType,
-                "content-md5": createHash("md5").update(bytes).digest("base64"),
-                "if-none-match": "*",
-              },
+              headers: signed.headers,
               body: Uint8Array.from(bytes),
               redirect: "error",
               signal: controller.signal,
@@ -348,7 +357,7 @@ function resolveRequestCredentials(config: InstructionsS3Config): InstructionsS3
   const secretAccessKey = process.env.AWS_SECRET_ACCESS_KEY?.trim();
   const sessionToken = process.env.AWS_SESSION_TOKEN?.trim();
   if (!accessKeyId || !secretAccessKey) {
-    throw new Error("Instructions S3 exact-version reads require explicit or AWS environment credentials");
+    throw new Error("Instructions S3 signed requests require explicit or AWS environment credentials");
   }
   return { accessKeyId, secretAccessKey, ...(sessionToken ? { sessionToken } : {}) };
 }
@@ -371,23 +380,65 @@ function signVersionedRequest(
     "x-amz-date": amzDate,
     ...(credentials.sessionToken ? { "x-amz-security-token": credentials.sessionToken } : {}),
   });
-  const signedHeaderNames = [
-    "host",
-    "x-amz-content-sha256",
-    "x-amz-date",
-    ...(credentials.sessionToken ? ["x-amz-security-token"] : []),
-  ].sort();
-  const canonicalHeaders = signedHeaderNames.map((name) => `${name}:${headers.get(name)!.trim()}\n`).join("");
   const canonicalQuery = `versionId=${awsEncode(versionId)}`;
+  authorizeRequest(method, url, canonicalQuery, headers, EMPTY_SHA256, credentials, config.region, shortDate, amzDate);
+  return { url: url.toString(), headers };
+}
+
+function signConditionalCreateRequest(
+  config: InstructionsS3Config,
+  key: string,
+  bytes: Uint8Array,
+  contentType: string,
+  credentials: InstructionsS3Credentials,
+  now: Date,
+): { url: string; headers: Headers } {
+  const url = buildObjectUrl(config, key);
+  const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, "");
+  const shortDate = amzDate.slice(0, 8);
+  const payloadHash = createHash("sha256").update(bytes).digest("hex");
+  const headers = new Headers({
+    "content-md5": createHash("md5").update(bytes).digest("base64"),
+    "content-type": contentType,
+    host: url.host,
+    "if-none-match": "*",
+    "x-amz-content-sha256": payloadHash,
+    "x-amz-date": amzDate,
+    ...(credentials.sessionToken ? { "x-amz-security-token": credentials.sessionToken } : {}),
+  });
+  // S3 rejects a conditional presigned PUT when If-None-Match and the checksum
+  // headers are added after signing. Bind every sent integrity and condition
+  // header into SigV4 so the request remains both authenticated and create-only.
+  authorizeRequest("PUT", url, "", headers, payloadHash, credentials, config.region, shortDate, amzDate);
+  return { url: url.toString(), headers };
+}
+
+function authorizeRequest(
+  method: "GET" | "HEAD" | "PUT",
+  url: URL,
+  canonicalQuery: string,
+  headers: Headers,
+  payloadHash: string,
+  credentials: InstructionsS3Credentials,
+  region: string,
+  shortDate: string,
+  amzDate: string,
+): void {
+  const signedHeaderNames: string[] = [];
+  headers.forEach((_value, name) => signedHeaderNames.push(name));
+  signedHeaderNames.sort();
+  const canonicalHeaders = signedHeaderNames
+    .map((name) => `${name}:${headers.get(name)!.trim().replace(/\s+/g, " ")}\n`)
+    .join("");
   const canonicalRequest = [
     method,
     url.pathname,
     canonicalQuery,
     canonicalHeaders,
     signedHeaderNames.join(";"),
-    EMPTY_SHA256,
+    payloadHash,
   ].join("\n");
-  const scope = `${shortDate}/${config.region}/s3/aws4_request`;
+  const scope = `${shortDate}/${region}/s3/aws4_request`;
   const stringToSign = [
     "AWS4-HMAC-SHA256",
     amzDate,
@@ -395,7 +446,7 @@ function signVersionedRequest(
     createHash("sha256").update(canonicalRequest).digest("hex"),
   ].join("\n");
   const dateKey = hmac(`AWS4${credentials.secretAccessKey}`, shortDate);
-  const regionKey = hmac(dateKey, config.region);
+  const regionKey = hmac(dateKey, region);
   const serviceKey = hmac(regionKey, "s3");
   const signingKey = hmac(serviceKey, "aws4_request");
   const signature = createHmac("sha256", signingKey).update(stringToSign).digest("hex");
@@ -403,7 +454,6 @@ function signVersionedRequest(
     "authorization",
     `AWS4-HMAC-SHA256 Credential=${credentials.accessKeyId}/${scope}, SignedHeaders=${signedHeaderNames.join(";")}, Signature=${signature}`,
   );
-  return { url: url.toString(), headers };
 }
 
 function buildObjectUrl(config: InstructionsS3Config, key: string): URL {
