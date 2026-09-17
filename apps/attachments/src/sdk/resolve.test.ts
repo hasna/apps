@@ -5,6 +5,7 @@ import { join } from "path";
 import { createAttachmentsApiClient, resolveAttachmentsSdkTransport } from "./resolve";
 
 let scratch: string;
+const SDK_TEST_KEYS = { rotated: "rotated-key", different: "different-key", second: "second-key" };
 
 beforeEach(() => {
   scratch = mkdtempSync(join(tmpdir(), "attachments-sdk-resolve-"));
@@ -76,9 +77,58 @@ describe("createAttachmentsApiClient — ./sdk factory", () => {
       }) as typeof fetch,
     });
     await client.listAttachments();
-    env.HASNA_ATTACHMENTS_API_KEY = "rotated-key";
+    env.HASNA_ATTACHMENTS_API_KEY = SDK_TEST_KEYS.rotated;
     await client.listAttachments();
     expect(keys).toEqual(["first-key", "rotated-key"]);
     expect(JSON.stringify(client)).not.toContain("rotated-key");
+  });
+
+  for (const refusal of ["missing", "blank", "conflicting", "blank-pointer"] as const) {
+    test(`a ${refusal} credential refuses the next request without reusing the initial key`, async () => {
+      const env: Record<string, string | undefined> = {
+        HOME: scratch,
+        HASNA_ATTACHMENTS_API_URL: "https://rotate.example.test",
+        HASNA_ATTACHMENTS_API_KEY: "first-key",
+      };
+      const sentKeys: string[] = [];
+      const client = createAttachmentsApiClient({
+        env,
+        fetch: (async (_url, init) => {
+          sentKeys.push(new Headers(init?.headers).get("x-api-key")!);
+          return Response.json([]);
+        }) as typeof fetch,
+      });
+      await client.listAttachments();
+
+      if (refusal === "missing") delete env.HASNA_ATTACHMENTS_API_KEY;
+      if (refusal === "blank") env.HASNA_ATTACHMENTS_API_KEY = " ";
+      if (refusal === "conflicting") env.ATTACHMENTS_API_KEY = SDK_TEST_KEYS.different;
+      if (refusal === "blank-pointer") env.HASNA_ATTACHMENTS_API_KEY_REF = " ";
+
+      await expect(client.listAttachments()).rejects.toThrow();
+      expect(sentKeys).toEqual(["first-key"]);
+    });
+  }
+
+  test("an authority change never sends the new authority's key to the original URL", async () => {
+    const env = {
+      HOME: scratch,
+      HASNA_ATTACHMENTS_API_URL: "https://first.example.test",
+      HASNA_ATTACHMENTS_API_KEY: "first-key",
+    };
+    const sent: Array<{ url: string; key: string | null }> = [];
+    const client = createAttachmentsApiClient({
+      env,
+      fetch: (async (url, init) => {
+        sent.push({ url: String(url), key: new Headers(init?.headers).get("x-api-key") });
+        return Response.json([]);
+      }) as typeof fetch,
+    });
+    await client.listAttachments();
+    env.HASNA_ATTACHMENTS_API_URL = "https://second.example.test";
+    env.HASNA_ATTACHMENTS_API_KEY = SDK_TEST_KEYS.second;
+
+    await expect(client.listAttachments()).rejects.toThrow(/authority changed/i);
+    expect(sent).toEqual([{ url: "https://first.example.test/v1/attachments", key: "first-key" }]);
   });
 });

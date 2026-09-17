@@ -2,6 +2,7 @@ import { canonicalPolicyJSON } from "./model-policy-schema";
 import { createHash } from "node:crypto";
 import { createInterface } from "node:readline/promises";
 import { SwitcherClient, SwitcherError, type Provider, type Profile } from "./sdk";
+export { launchCatalog } from "./provider-credential-onboarding";
 import { codingEligible, harnessEligible, Fault, CommandInterrupted, parse, providerInputSchema, profileInputSchema, modelPolicySchema, type Model, type ModelPolicy } from "./domain";
 import { providerFromPreset, type PresetOptions } from "./presets";
 
@@ -23,9 +24,9 @@ export async function resolveLaunchProvider(client: SwitcherClient, selector: st
   const {version, updatedAt, ...input} = existing;
   // Additive model metadata belongs to the saved provider. A preset gaining a
   // preview must not invalidate an existing provider or replace its additions.
-  const {additionalModels: _savedAdditions, ...savedSettings} = parse(providerInputSchema, input);
-  const {additionalModels: _presetAdditions, ...presetSettings} = desired;
-  if (JSON.stringify(savedSettings) !== JSON.stringify(presetSettings))
+  const {additionalModels: _savedAdditions, credentialCheck:savedCredentialCheck, ...savedSettings} = parse(providerInputSchema, input);
+  const {additionalModels: _presetAdditions, credentialCheck:presetCredentialCheck, ...presetSettings} = desired;
+  if (JSON.stringify(savedSettings) !== JSON.stringify(presetSettings) || (savedCredentialCheck !== undefined && JSON.stringify(savedCredentialCheck) !== JSON.stringify(presetCredentialCheck)))
     throw new Fault(409, "provider_conflict", "A saved provider with this preset ID has different settings. Select its ID directly or update it explicitly.");
   return existing;
 }

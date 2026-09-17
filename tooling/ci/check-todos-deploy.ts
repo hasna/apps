@@ -604,8 +604,18 @@ export function validateTodosDeploy(
     [STEP_ECR, ["aws ecr describe-repositories"]],
     [STEP_PUSH, ["docker push", "aws ecr describe-images"]],
     [STEP_MIGRATION, ["aws ecs run-task", "aws ecs wait tasks-stopped"]],
-    [STEP_DEPLOY, ["aws ecs register-task-definition", "aws ecs update-service", "aws ecs wait services-stable"]],
-    [STEP_VERIFY_LIVE, ['[[ "${deployed_image}" == "${IMAGE}" ]]', "curl"]],
+    [STEP_DEPLOY, [
+      '[[ "${API_RATE_LIMIT_MAX}" =~ ^[1-9][0-9]{0,6}$ ]]',
+      '(( API_RATE_LIMIT_MAX <= 1000000 ))',
+      '[[ "${live_task_definition}" == "${PREVIOUS_TASK_DEFINITION}" ]]',
+      'aws ecs describe-task-definition --task-definition "${PREVIOUS_TASK_DEFINITION}"',
+      'jq --arg image "${IMAGE}" --arg c "${WEB_CONTAINER}" --arg limit "${API_RATE_LIMIT_MAX}"',
+      "aws ecs register-task-definition", "aws ecs update-service", "aws ecs wait services-stable",
+    ]],
+    [STEP_VERIFY_LIVE, [
+      '[[ "${deployed_image}" == "${IMAGE}" ]]',
+      'jq -e --arg c "${WEB_CONTAINER}" --arg limit "${API_RATE_LIMIT_MAX}"', "curl",
+    ]],
     [STEP_ROLLBACK, [
       "aws ecs update-service",
       "aws ecs wait services-stable",
@@ -633,6 +643,15 @@ export function validateTodosDeploy(
   }
 
   const deployStep = stepNamed(deploySteps, STEP_DEPLOY);
+  if (deployStep) {
+    const deployEnv = asMap(deployStep.env);
+    for (const [key, output] of Object.entries({
+      PREVIOUS_TASK_DEFINITION: "steps.before.outputs.previous_task_definition",
+      API_RATE_LIMIT_MAX: "steps.manifest.outputs.api_rate_limit_max",
+    })) {
+      if (asText(deployEnv[key]) !== "${{ " + output + " }}") push(`"${STEP_DEPLOY}" must bind ${key} to ${output}`);
+    }
+  }
   if (deployStep && !asText(deployStep.run).includes("service_mutated=true")) {
     push(`"${STEP_DEPLOY}" must record service_mutated=true before mutating the service`);
   }
@@ -722,6 +741,21 @@ interface Mutation {
 }
 
 const MUTATIONS: Mutation[] = [
+  {
+    label: "omitted runtime budget validation",
+    mutate: (source) => source.replace('          [[ "${API_RATE_LIMIT_MAX}" =~ ^[1-9][0-9]{0,6}$ ]] && (( API_RATE_LIMIT_MAX <= 1000000 ))', "          true"),
+    expect: (errors) => errors.some(error => error.includes("does not run the control") && error.includes("API_RATE_LIMIT_MAX")),
+  },
+  {
+    label: "omitted live runtime budget readback",
+    mutate: (source) => source.replace('          jq -e --arg c "${WEB_CONTAINER}" --arg limit "${API_RATE_LIMIT_MAX}"', '          echo jq -e --arg c "${WEB_CONTAINER}" --arg limit "${API_RATE_LIMIT_MAX}"'),
+    expect: (errors) => errors.some(error => error.includes(STEP_VERIFY_LIVE) && error.includes("API_RATE_LIMIT_MAX")),
+  },
+  {
+    label: "adopting the latest unused task family revision",
+    mutate: (source) => source.replace('task-definition "${PREVIOUS_TASK_DEFINITION}" --query taskDefinition', 'task-definition "${WEB_FAMILY}" --query taskDefinition'),
+    expect: (errors) => errors.some(error => error.includes("does not run the control: aws ecs describe-task-definition")),
+  },
   {
     label: "quoted (echoed) aws ecs update-service in the deploy step",
     mutate: (source) => source.replace(REAL_UPDATE_SERVICE, QUOTED_UPDATE_SERVICE),

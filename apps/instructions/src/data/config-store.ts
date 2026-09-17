@@ -64,7 +64,11 @@ import { INSTRUCTIONS_LOCAL_OPT_IN_ENV, INSTRUCTIONS_LOCAL_OPT_IN_ENV_KEYS, anno
 import { selectsInstructionsLocalStore } from "../lib/local-opt-in.js";
 import type { InstructionsClientEnv, InstructionsStorageClient, InstructionsCredentialChainOptions } from "../lib/client-types.js";
 
-function parseBoundedPagePayload<T>(value: unknown, label: string): BoundedReadPage<T> {
+function parseBoundedPagePayload<T>(
+  value: unknown,
+  label: string,
+  expected?: { limit: number; cursor: number },
+): BoundedReadPage<T> {
   const page = value as Partial<BoundedReadPage<T>> | null;
   const consumed = Number(page?.cursor) + (page?.items?.length ?? 0);
   const complete = Boolean(page && Number.isSafeInteger(page.total) && consumed >= Number(page.total));
@@ -84,7 +88,8 @@ function parseBoundedPagePayload<T>(value: unknown, label: string): BoundedReadP
     (page.next_cursor !== null && !Number.isSafeInteger(page.next_cursor)) ||
     page.complete !== complete ||
     page.has_more !== !complete ||
-    page.next_cursor !== (complete ? null : consumed)
+    page.next_cursor !== (complete ? null : consumed) ||
+    (expected !== undefined && Number(page.cursor) !== expected.cursor)
   ) {
     throw new Error(`${label} returned an invalid or truncated bounded-read envelope`);
   }
@@ -109,7 +114,7 @@ function parseBoundedOrLegacyPage<T>(
       "truncated" in candidate ||
       "next_cursor" in candidate
     ) {
-      return parseBoundedPagePayload<T>(value, label);
+      return parseBoundedPagePayload<T>(value, label, normalizeBoundedReadOptions(options));
     }
   }
   if (!Array.isArray(legacyItems)) {
@@ -122,6 +127,69 @@ function parseBoundedOrLegacyPage<T>(
     normalized,
   );
   return { ...page, source_bounded: false };
+}
+
+
+class CollectionChangedWhilePagingError extends Error {
+  constructor(label: string, detail: string) {
+    super(`${label} changed while paging: ${detail}`);
+    this.name = "CollectionChangedWhilePagingError";
+  }
+}
+
+const COLLECTION_READ_ATTEMPTS = 2;
+
+async function aggregateBoundedCollection<T>(
+  label: string,
+  readPage: (cursor: number) => Promise<BoundedReadPage<T>>,
+  identity: (item: T) => string,
+  options: { requireAscendingIdentity?: boolean } = {},
+): Promise<T[]> {
+  let lastError: CollectionChangedWhilePagingError | null = null;
+  for (let attempt = 0; attempt < COLLECTION_READ_ATTEMPTS; attempt += 1) {
+    try {
+      const items: T[] = [];
+      const seen = new Set<string>();
+      let expectedTotal: number | null = null;
+      let cursor = 0;
+      let previousIdentity: string | null = null;
+      while (true) {
+        const page = await readPage(cursor);
+        if (page.cursor !== cursor) {
+          throw new CollectionChangedWhilePagingError(label, `server returned cursor ${page.cursor} for requested cursor ${cursor}`);
+        }
+        if (expectedTotal === null) expectedTotal = page.total;
+        else if (page.total !== expectedTotal) {
+          throw new CollectionChangedWhilePagingError(label, `total changed from ${expectedTotal} to ${page.total}`);
+        }
+        for (const item of page.items) {
+          const key = identity(item);
+          if (!key) throw new CollectionChangedWhilePagingError(label, "an item had no stable identity");
+          if (seen.has(key)) throw new CollectionChangedWhilePagingError(label, `duplicate identity ${key}`);
+          if (options.requireAscendingIdentity && page.source_bounded && previousIdentity !== null && key <= previousIdentity) {
+            throw new CollectionChangedWhilePagingError(label, `identity order was not strictly increasing at ${key}`);
+          }
+          seen.add(key);
+          previousIdentity = key;
+          items.push(item);
+        }
+        if (page.complete) {
+          if (items.length !== expectedTotal) {
+            throw new CollectionChangedWhilePagingError(label, `received ${items.length} unique rows for total ${expectedTotal}`);
+          }
+          return items;
+        }
+        if (page.next_cursor === null || page.next_cursor <= cursor) {
+          throw new CollectionChangedWhilePagingError(label, `cursor did not advance from ${cursor}`);
+        }
+        cursor = page.next_cursor;
+      }
+    } catch (error) {
+      if (!(error instanceof CollectionChangedWhilePagingError)) throw error;
+      lastError = error;
+    }
+  }
+  throw lastError ?? new CollectionChangedWhilePagingError(label, "read did not stabilize");
 }
 
 /**
@@ -330,14 +398,11 @@ export class LocalConfigStore implements ConfigStore {
   }
   // Profiles
   async listProfiles(): Promise<Profile[]> {
-    const profiles: Profile[] = [];
-    let cursor = 0;
-    while (true) {
-      const page = await this.listProfilesPage({ limit: 100, cursor });
-      profiles.push(...page.items);
-      if (page.complete) return profiles;
-      cursor = page.next_cursor!;
-    }
+    return aggregateBoundedCollection(
+      "profile list",
+      (cursor) => this.listProfilesPage({ limit: 100, cursor }),
+      (profile) => profile.id,
+    );
   }
   async listProfilesPage(options: BoundedReadOptions = {}): Promise<BoundedReadPage<Profile>> {
     return (await localStoreModule()).listProfilesPage(options, this.db);
@@ -346,14 +411,11 @@ export class LocalConfigStore implements ConfigStore {
     return (await localStoreModule()).getProfile(idOrSlug, this.db);
   }
   async getProfileConfigs(idOrSlug: string): Promise<Config[]> {
-    const configs: Config[] = [];
-    let cursor = 0;
-    while (true) {
-      const page = await this.getProfileConfigsPage(idOrSlug, { limit: 100, cursor });
-      configs.push(...page.items);
-      if (page.complete) return configs;
-      cursor = page.next_cursor!;
-    }
+    return aggregateBoundedCollection(
+      "profile membership",
+      (cursor) => this.getProfileConfigsPage(idOrSlug, { limit: 100, cursor }),
+      (config) => config.id,
+    );
   }
   async getProfileConfigsPage(idOrSlug: string, options: BoundedReadOptions = {}): Promise<BoundedReadPage<Config>> {
     return (await localStoreModule()).getProfileConfigsPage(idOrSlug, options, this.db);
@@ -450,25 +512,40 @@ export class CloudConfigStore implements ConfigStore {
   }
 
   // Configs
-  async listConfigs(filter: ConfigFilter = {}): Promise<Config[]> {
+  private async listConfigsPageRemote(
+    filter: ConfigFilter,
+    options: BoundedReadOptions,
+  ): Promise<BoundedReadPage<Config>> {
+    const normalized = normalizeBoundedReadOptions(options);
     const params = new URLSearchParams();
     if (filter.category) params.set("category", filter.category);
     if (filter.agent) params.set("agent", filter.agent);
     if (filter.kind) params.set("kind", filter.kind);
     if (filter.search) params.set("search", filter.search);
-    const qs = params.toString();
-    const { data } = await this.request<{ configs: Config[] }>(
+    params.set("limit", String(normalized.limit));
+    params.set("cursor", String(normalized.cursor));
+    const { data } = await this.request<BoundedReadPage<Config> & { configs?: Config[] }>(
       "GET",
-      `/configs${qs ? `?${qs}` : ""}`,
+      `/configs?${params.toString()}`,
     );
-    let configs = data?.configs ?? [];
+    return parseBoundedOrLegacyPage<Config>(data, data?.configs, normalized, "config list");
+  }
+
+  async listConfigs(filter: ConfigFilter = {}): Promise<Config[]> {
+    const configs = await aggregateBoundedCollection(
+      "config list",
+      (cursor) => this.listConfigsPageRemote(filter, { limit: 100, cursor }),
+      (config) => config.id,
+      { requireAscendingIdentity: true },
+    );
+    let filtered = configs;
     if (filter.tags && filter.tags.length > 0) {
-      configs = configs.filter((c) => filter.tags!.every((t) => c.tags.includes(t)));
+      filtered = filtered.filter((config) => filter.tags!.every((tag) => config.tags.includes(tag)));
     }
     if (filter.is_template !== undefined) {
-      configs = configs.filter((c) => c.is_template === filter.is_template);
+      filtered = filtered.filter((config) => config.is_template === filter.is_template);
     }
-    return configs;
+    return filtered;
   }
 
   async getConfig(idOrSlug: string): Promise<Config> {
@@ -519,11 +596,18 @@ export class CloudConfigStore implements ConfigStore {
 
   // Snapshots
   async listSnapshots(configId: string): Promise<ConfigSnapshot[]> {
-    const { data } = await this.request<{ snapshots: ConfigSnapshot[] }>(
-      "GET",
-      `/configs/${encodeURIComponent(configId)}/snapshots`,
+    return aggregateBoundedCollection(
+      "snapshot list",
+      async (cursor) => {
+        const normalized = normalizeBoundedReadOptions({ limit: 100, cursor });
+        const { data } = await this.request<BoundedReadPage<ConfigSnapshot> & { snapshots?: ConfigSnapshot[] }>(
+          "GET",
+          `/configs/${encodeURIComponent(configId)}/snapshots?limit=${normalized.limit}&cursor=${normalized.cursor}`,
+        );
+        return parseBoundedOrLegacyPage<ConfigSnapshot>(data, data?.snapshots, normalized, "snapshot list");
+      },
+      (snapshot) => snapshot.id,
     );
-    return data?.snapshots ?? [];
   }
 
   async getSnapshot(id: string): Promise<ConfigSnapshot | null> {
@@ -569,14 +653,12 @@ export class CloudConfigStore implements ConfigStore {
 
   // Profiles
   async listProfiles(): Promise<Profile[]> {
-    const profiles: Profile[] = [];
-    let cursor = 0;
-    while (true) {
-      const page = await this.listProfilesPage({ limit: 100, cursor });
-      profiles.push(...page.items);
-      if (page.complete) return profiles;
-      cursor = page.next_cursor!;
-    }
+    return aggregateBoundedCollection(
+      "profile list",
+      (cursor) => this.listProfilesPage({ limit: 100, cursor }),
+      (profile) => profile.id,
+      { requireAscendingIdentity: true },
+    );
   }
 
   async listProfilesPage(options: BoundedReadOptions = {}): Promise<BoundedReadPage<Profile>> {
@@ -614,14 +696,11 @@ export class CloudConfigStore implements ConfigStore {
   }
 
   async getProfileConfigs(idOrSlug: string): Promise<Config[]> {
-    const configs: Config[] = [];
-    let cursor = 0;
-    while (true) {
-      const page = await this.getProfileConfigsPage(idOrSlug, { limit: 100, cursor });
-      configs.push(...page.items);
-      if (page.complete) return configs;
-      cursor = page.next_cursor!;
-    }
+    return aggregateBoundedCollection(
+      "profile membership",
+      (cursor) => this.getProfileConfigsPage(idOrSlug, { limit: 100, cursor }),
+      (config) => config.id,
+    );
   }
 
   async getProfileConfigsPage(
@@ -647,23 +726,33 @@ export class CloudConfigStore implements ConfigStore {
   }
 
   async getProfileConfigBindings(idOrSlug: string): Promise<ProfileConfigBinding[]> {
-    const { status, data } = await this.requestProfileRoute<{ bindings: ProfileConfigBinding[] }>(
-      idOrSlug,
-      (profileId) => `/profiles/${encodeURIComponent(profileId)}/bindings`,
-      (value) => Array.isArray(value?.bindings),
+    let routeMissing = false;
+    const bindings = await aggregateBoundedCollection(
+      "profile config bindings",
+      async (cursor) => {
+        const normalized = normalizeBoundedReadOptions({ limit: 100, cursor });
+        const { status, data } = await this.requestProfileRoute<BoundedReadPage<ProfileConfigBinding> & { bindings?: ProfileConfigBinding[] }>(
+          idOrSlug,
+          (profileId) => `/profiles/${encodeURIComponent(profileId)}/bindings?limit=${normalized.limit}&cursor=${normalized.cursor}`,
+          (value) => Boolean(value && (Array.isArray(value.bindings) || Array.isArray(value.items))),
+        );
+        if (status === 404) {
+          routeMissing = true;
+          return { ...boundedReadPage([], 0, normalized), source_bounded: false };
+        }
+        return parseBoundedOrLegacyPage<ProfileConfigBinding>(data, data?.bindings, normalized, "profile config bindings");
+      },
+      (binding) => `${binding.profile_id}\0${binding.config_id}`,
     );
-    if (status === 404) {
-      const profile = await this.getProfile(idOrSlug);
-      const configs = await this.getProfileConfigs(idOrSlug);
-      return configs.map((config, sort_order) => ({
-        profile_id: profile.id,
-        config_id: config.id,
-        sort_order,
-        binding: legacyProfileConfigBinding(),
-      }));
-    }
-    if (!data || !Array.isArray(data.bindings)) throw new ProfileNotFoundError(idOrSlug);
-    return data.bindings;
+    if (!routeMissing) return bindings;
+    const profile = await this.getProfile(idOrSlug);
+    const configs = await this.getProfileConfigs(idOrSlug);
+    return configs.map((config, sort_order) => ({
+      profile_id: profile.id,
+      config_id: config.id,
+      sort_order,
+      binding: legacyProfileConfigBinding(),
+    }));
   }
 
   private async requestProfileRoute<T>(
@@ -756,17 +845,27 @@ export class CloudConfigStore implements ConfigStore {
   }
 
   async getProfileAssetBindings(profileIdOrSlug: string): Promise<ProfileAssetBinding[]> {
-    const { status, data } = await this.requestProfileRoute<{ assets: ProfileAssetBinding[] }>(
-      profileIdOrSlug,
-      (profileId) => `/profiles/${encodeURIComponent(profileId)}/assets`,
-      (value) => Array.isArray(value?.assets),
+    let routeMissing = false;
+    const assets = await aggregateBoundedCollection(
+      "profile asset bindings",
+      async (cursor) => {
+        const normalized = normalizeBoundedReadOptions({ limit: 100, cursor });
+        const { status, data } = await this.requestProfileRoute<BoundedReadPage<ProfileAssetBinding> & { assets?: ProfileAssetBinding[] }>(
+          profileIdOrSlug,
+          (profileId) => `/profiles/${encodeURIComponent(profileId)}/assets?limit=${normalized.limit}&cursor=${normalized.cursor}`,
+          (value) => Boolean(value && (Array.isArray(value.assets) || Array.isArray(value.items))),
+        );
+        if (status === 404) {
+          routeMissing = true;
+          return { ...boundedReadPage([], 0, normalized), source_bounded: false };
+        }
+        return parseBoundedOrLegacyPage<ProfileAssetBinding>(data, data?.assets, normalized, "profile asset bindings");
+      },
+      (asset) => `${asset.profile_id}\0${asset.binding.assetKey}`,
     );
-    if (status === 404) {
-      await this.getProfile(profileIdOrSlug);
-      return [];
-    }
-    if (!data || !Array.isArray(data.assets)) throw new ProfileNotFoundError(profileIdOrSlug);
-    return data.assets;
+    if (!routeMissing) return assets;
+    await this.getProfile(profileIdOrSlug);
+    return [];
   }
 
   async addAssetToProfile(profileIdOrSlug: string, sourceConfigId: string, binding: ProfileAssetBindingSpec): Promise<ProfileAssetBinding> {
@@ -869,8 +968,19 @@ export class CloudConfigStore implements ConfigStore {
   }
 
   async listMachines(): Promise<Machine[]> {
-    const { data } = await this.request<{ machines: Machine[] }>("GET", "/machines");
-    return data?.machines ?? [];
+    return aggregateBoundedCollection(
+      "machine list",
+      async (cursor) => {
+        const normalized = normalizeBoundedReadOptions({ limit: 100, cursor });
+        const { data } = await this.request<BoundedReadPage<Machine> & { machines?: Machine[] }>(
+          "GET",
+          `/machines?limit=${normalized.limit}&cursor=${normalized.cursor}`,
+        );
+        return parseBoundedOrLegacyPage<Machine>(data, data?.machines, normalized, "machine list");
+      },
+      (machine) => machine.id,
+      { requireAscendingIdentity: true },
+    );
   }
 
   async sendFeedback(input: FeedbackInput): Promise<void> {

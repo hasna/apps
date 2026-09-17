@@ -87,7 +87,7 @@ test("actual MCP discovery is inert and paste-history dispatch retains client-re
   await server.connect(serverTransport); await client.connect(clientTransport);
   try {
     const { tools } = await client.listTools();
-    expect(tools.map(tool => tool.name).sort()).toEqual(["recordings_hosted_get", "recordings_hosted_list", "recordings_hosted_paste_history", "recordings_hosted_providers"]);
+    expect(tools.map(tool => tool.name).sort()).toEqual(["recordings_hosted_audio_metadata", "recordings_hosted_export", "recordings_hosted_get", "recordings_hosted_list", "recordings_hosted_paste_history", "recordings_hosted_providers"]);
     const tool = tools.find(tool => tool.name === "recordings_hosted_paste_history")!;
     expect(tool.annotations).toMatchObject({ readOnlyHint: true, destructiveHint: false, idempotentHint: true });
     expect(f.credentials()).toBe(0); expect(f.requests).toHaveLength(0);
@@ -148,4 +148,121 @@ test("paste projection rejects unsupported delivery evidence and retains absent 
     await expect(history.list()).rejects.toMatchObject({ code: "invalid_response" });
   }
   expect(requests).toBe(3);
+});
+
+
+function writeFixture(apiBase = base) {
+  const requests: Array<{ url: URL; init: RequestInit }> = [];
+  let credentials = 0;
+  const client = new HostedRecordingsClient({ apiBase, credentialProvider: () => {
+    credentials++;
+    return "fictional-session";
+  }, fetch: fakeFetch((url, init) => {
+    expect(init.method).toBe("POST");
+    expect(init.redirect).toBe("manual");
+    expect(init.credentials).toBe("omit");
+    expect(new Headers(init.headers).get("authorization")).toBe("Bearer fictional-session");
+    requests.push({ url, init });
+    return Response.json({ receipt: rows[1] }, { status: 201 });
+  }) });
+  return { client, requests, credentials: () => credentials };
+}
+
+test("SDK paste save projects private text and forwards one validated hosted write", async () => {
+  const f = writeFixture(), history = new HostedPasteHistory(f.client);
+  const value = { id: rows[1]!.id, recordingId: rows[1]!.recordingId, text: rows[1]!.text,
+    destinationAppId: rows[1]!.destinationAppId, destinationAppName: rows[1]!.destinationAppName,
+    status: rows[1]!.status, occurredAt: rows[1]!.occurredAt };
+  expect(await history.save(value)).toEqual({ receipt: projected[1] });
+  expect(f.requests).toHaveLength(1);
+  expect(f.requests[0]!.url.origin + f.requests[0]!.url.pathname).toBe(base + "paste-history");
+  expect(JSON.parse(String(f.requests[0]!.init.body))).toEqual(value);
+  expect(f.credentials()).toBe(1);
+  expect(JSON.stringify(await history.save({ ...value, text: "" }))).not.toContain("Private fictional paste");
+});
+
+test("SDK paste save validates before credentials and permits empty retained text", async () => {
+  const f = writeFixture(), history = new HostedPasteHistory(f.client);
+  await expect(history.save({ id: "not-a-uuid", text: "", status: "confirmed" } as never))
+    .rejects.toMatchObject({ code: "invalid_input" });
+  expect(f.credentials()).toBe(0);
+  expect(await history.save({ id: rows[0]!.id, text: "", status: "confirmed" })).toEqual({ receipt: projected[1] });
+  expect(f.credentials()).toBe(1);
+});
+
+test("CLI paste-save accepts private text from one explicit source and redacts the response", async () => {
+  const f = writeFixture(), written: string[] = [];
+  const result = await runHostedCLI(["--api-base", base, "--credential-env", "SELECTED_SESSION",
+    "paste-save", rows[1]!.id, "--text", rows[1]!.text, "--status", "confirmed",
+    "--recording-id", rows[1]!.recordingId!, "--destination-app-name", "Fictional editor"], {
+      client: f.client, write: value => { written.push(value); },
+    });
+  expect(result).toBe(0);
+  expect(JSON.parse(written[0]!)).toEqual({ receipt: projected[1] });
+  expect(JSON.parse(String(f.requests[0]!.init.body)).text).toBe("Private fictional paste");
+  expect(f.requests).toHaveLength(1);
+});
+
+test("MCP paste-save is write-gated and returns metadata without private text", async () => {
+  const f = writeFixture();
+  const readonly = buildHostedServer(f.client), readonlyClient = new Client({ name: "readonly", version: "1" });
+  const [readClientTransport, readServerTransport] = InMemoryTransport.createLinkedPair();
+  await readonly.connect(readServerTransport);
+  await readonlyClient.connect(readClientTransport);
+  try {
+    const readTools = await readonlyClient.listTools();
+    expect(readTools.tools.map(tool => tool.name)).not.toContain("recordings_hosted_paste_save");
+  } finally {
+    await readonlyClient.close();
+    await readonly.close();
+  }
+  const writable = buildHostedServer(f.client, { allowWrites: true }), writableClient = new Client({ name: "writable", version: "1" });
+  const [writeClientTransport, writeServerTransport] = InMemoryTransport.createLinkedPair();
+  await writable.connect(writeServerTransport);
+  await writableClient.connect(writeClientTransport);
+  try {
+    const tools = await writableClient.listTools();
+    const tool = tools.tools.find(value => value.name === "recordings_hosted_paste_save");
+    expect(tool).toBeDefined();
+    expect(tool!.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: false });
+    const result = await writableClient.callTool({ name: tool!.name, arguments: {
+      id: rows[1]!.id, recordingId: rows[1]!.recordingId, text: rows[1]!.text, status: "confirmed",
+    } });
+    expect(result.structuredContent).toEqual({ receipt: projected[1] });
+    expect(JSON.stringify(result)).not.toContain("Private fictional paste");
+  } finally {
+    await writableClient.close();
+    await writable.close();
+  }
+});
+
+test("HTTP paste-save is explicit, route-specific and bounded", async () => {
+  let calls = 0;
+  const value = { id: rows[1]!.id, recordingId: rows[1]!.recordingId, text: rows[1]!.text,
+    destinationAppName: "Fictional editor", status: "confirmed" as const };
+  const handle = buildHostedFetch({ apiBase: base, allowWrites: true, fetch: fakeFetch((url, init) => {
+    calls++;
+    expect(url.pathname).toBe("/prefix/api/v1/paste-history");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(String(init.body))).toEqual(value);
+    return Response.json({ receipt: rows[1] }, { status: 201 });
+  }) });
+  const headers = { authorization: "Bearer fictional-A", "content-type": "application/json" };
+  const response = await handle(new Request("http://127.0.0.1/v1/paste-history", {
+    method: "POST", headers, body: JSON.stringify(value),
+  }));
+  expect(response.status).toBe(201);
+  expect(await response.json()).toEqual({ receipt: projected[1] });
+  expect(calls).toBe(1);
+  const denied = await buildHostedFetch({ apiBase: base, fetch: fakeFetch(() => {
+    throw Error("unexpected upstream");
+  }) })(new Request("http://127.0.0.1/v1/paste-history", {
+    method: "POST", headers, body: JSON.stringify(value),
+  }));
+  expect(denied.status).toBe(405);
+  const invalid = await handle(new Request("http://127.0.0.1/v1/paste-history?before=x", {
+    method: "POST", headers, body: JSON.stringify(value),
+  }));
+  expect(invalid.status).toBe(400);
+  expect(calls).toBe(1);
 });

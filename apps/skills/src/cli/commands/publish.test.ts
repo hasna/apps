@@ -14,12 +14,15 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { RemoteSkillsClient } from "../../lib/remote-client.js";
-import { computeContentHash } from "../../lib/skill-hash.js";
-import { unpackSkillBundle } from "../../lib/skill-bundle.js";
+import { computeContentHash, computeContentHashFromEntries } from "../../lib/skill-hash.js";
+import { packSkillBundle, unpackSkillBundle } from "../../lib/skill-bundle.js";
 import { createSkillsFetchHandler } from "../../server/app.js";
 import { MemorySkillsStore } from "../../server/store.js";
 import { hashApiKey } from "../../server/auth.js";
 import { PushSkillError, pushSkill } from "./publish.js";
+import { scaffoldPortableSkill, validatePortableSkillDirectory } from "../../lib/portable-skills.js";
+import { prepareSkill } from "../../lib/prepare-skill.js";
+import { pullSkills } from "../../lib/pull.js";
 
 const pushAuth = "test-push-token";
 const PRINCIPAL = { orgId: "org_push", orgSlug: "org-push", orgName: "Push Org", userId: "user_push", email: "push@example.com", apiKeyId: "key_push" };
@@ -105,48 +108,107 @@ function catalogueCorpus(slug: string, flavor: string): string {
 }
 
 describe("skills push", () => {
-  test("explicit catalogue-only authority permits an initial override and remains organization scoped", async () => {
+  test("edited drafts require explicit preparation and round-trip exact versions, kinds and bytes through the API", async () => {
+    const root = mkdtempSync(join(tmpdir(), "skills-author-roundtrip-"));
+    const pulled = mkdtempSync(join(tmpdir(), "skills-author-receiver-"));
+    try {
+      await withServer(async ({ baseUrl, requests }) => {
+        const client = new RemoteSkillsClient(pushAuth, baseUrl);
+        for (const kind of ["executable", "instruction"] as const) {
+          const name = `reviewed-${kind}`;
+          const created = scaffoldPortableSkill(name, { rootDir: root, kind });
+          const original = readFileSync(join(created.path, "skill.json"), "utf8");
+          const document = readFileSync(join(created.path, "SKILL.md"), "utf8") + "\nReviewed example: use this draft for release preparation.\n";
+          writeFileSync(join(created.path, "SKILL.md"), document);
+          const requestCount = requests.length;
+          try {
+            await pushSkill(name, { rootDir: root, client });
+            throw new Error("Expected stale draft refusal");
+          } catch (error) {
+            expect(error).toBeInstanceOf(PushSkillError);
+            expect((error as PushSkillError).detail?.join("\n")).toContain(`skills prepare ${name} --version`);
+          }
+          expect(requests.length).toBe(requestCount);
+          expect(readFileSync(join(created.path, "skill.json"), "utf8")).toBe(original);
+          const prepared = prepareSkill(name, { rootDir: root, version: "0.2.0" });
+          const exactManifest = readFileSync(join(created.path, "skill.json"), "utf8");
+          const pushed = await pushSkill(name, { rootDir: root, client });
+          expect(pushed).toMatchObject({ published: true, version: "0.2.0" });
+          expect(readFileSync(join(created.path, "skill.json"), "utf8")).toBe(exactManifest);
+          const received = await pullSkills({ names: [`${name}@0.2.0`], rootDir: pulled, client, signingKey: "" });
+          expect(received.results[0]).toMatchObject({ success: true, version: "0.2.0", kind, contentHash: pushed.sha256 });
+          expect(readFileSync(join(pulled, name, "SKILL.md"), "utf8")).toBe(document);
+          expect(readFileSync(join(pulled, name, "skill.json"), "utf8")).toBe(exactManifest);
+          expect(computeContentHash(join(pulled, name))).toBe(prepared.contentHash);
+          expect(validatePortableSkillDirectory(name, join(pulled, name)).valid).toBe(true);
+        }
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(pulled, { recursive: true, force: true });
+    }
+  });
+
+  test("fresh executable and instruction scaffolds retain author intent on the actual API", async () => {
+    const root = mkdtempSync(join(tmpdir(), "skills-push-author-kind-"));
+    try {
+      await withServer(async ({ baseUrl }) => {
+        const client = new RemoteSkillsClient(pushAuth, baseUrl);
+        for (const kind of ["executable", "instruction"] as const) {
+          const name = `authored-${kind}`;
+          const created = scaffoldPortableSkill(name, { rootDir: root, kind });
+          const original = readFileSync(join(created.path, "skill.json"), "utf8");
+          await pushSkill(name, { rootDir: root, client });
+          const readback = await client.getSkillStatus(name);
+          expect(readback.status).toBe(200);
+          expect(readback.body).toMatchObject({ kind });
+          expect(readFileSync(join(created.path, "skill.json"), "utf8")).toBe(original);
+        }
+      });
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+  test("initial publication into an empty account remains organization scoped", async () => {
     await withServer(async ({ baseUrl, store, requests }) => {
       const client = new RemoteSkillsClient(pushAuth, baseUrl);
       const principal = await store.authenticateApiKeyHash(hashApiKey(pushAuth));
       expect(principal).not.toBeNull();
-      const bundled = (await client.listSkills()).find(row => !row.bundleSha256 && typeof row.name === "string");
-      expect(bundled).toBeDefined(); const slug = bundled!.name as string;
+      expect(await client.listSkills()).toEqual([]);
+      const slug = "private-publication-control";
       const root = catalogueCorpus(slug, "Owned catalogue override");
       try {
         expect(await store.getSkill(principal!, slug)).toBeNull();
         const observed = await client.getSkillStatus(slug);
-        expect(observed.status).toBe(200); expect(observed.body).toMatchObject({ name: slug, publicationState: "catalogue-only", revisionId: null });
+        expect(observed.status).toBe(404); expect(observed.body).toMatchObject({ code: "SKILL_NOT_FOUND" });
         const start = requests.length, result = await pushSkill(slug, { rootDir: root, client });
         expect(result.published).toBe(true);
-        expect(requests.slice(start)).toEqual([{ method: "GET", path: `/api/v1/skills/${slug}`, ifMatch: null, status: 200 },
+        expect(requests.slice(start)).toEqual([{ method: "GET", path: `/api/v1/skills/${slug}`, ifMatch: null, status: 404 },
           { method: "POST", path: "/api/v1/skills", ifMatch: null, status: 201 }]);
         const published = await client.getSkillStatus(slug);
         expect(published.body).toMatchObject({ slug, bundleSha256: result.sha256 });
         expect((published.body as Record<string, unknown>).revisionId).toMatch(/^[a-f0-9]{64}$/);
         expect((published.body as Record<string, unknown>).publicationState).not.toBe("catalogue-only");
         const other = await new RemoteSkillsClient("test-other-token", baseUrl).getSkillStatus(slug);
-        expect(other.body).toMatchObject({ name: slug, publicationState: "catalogue-only", revisionId: null });
+        expect(other.status).toBe(404); expect(other.body).toMatchObject({ code: "SKILL_NOT_FOUND" });
         const otherPrincipal = await store.authenticateApiKeyHash(hashApiKey("test-other-token"));
         expect(otherPrincipal).not.toBeNull(); expect(await store.getSkill(otherPrincipal!, slug)).toBeNull();
       } finally { rmSync(root, { recursive: true, force: true }); }
     });
   });
 
-  test("publication after a catalogue-only read refuses the stale upload without overwriting the winner", async () => {
+  test("publication after an absent-record read refuses the stale upload without overwriting the winner", async () => {
     await withServer(async ({ baseUrl, store, requests }) => {
       const client = new RemoteSkillsClient(pushAuth, baseUrl);
       const principal = await store.authenticateApiKeyHash(hashApiKey(pushAuth));
       expect(principal).not.toBeNull();
-      const bundled = (await client.listSkills()).find(row => !row.bundleSha256 && typeof row.name === "string");
-      expect(bundled).toBeDefined(); const slug = bundled!.name as string;
+      expect(await client.listSkills()).toEqual([]);
+      const slug = "private-publication-control";
       const local = catalogueCorpus(slug, "Owned losing edit"), competing = catalogueCorpus(slug, "Owned winning edit");
       let winner: Awaited<ReturnType<MemorySkillsStore["getSkill"]>>, intercepted = 0;
       let winnerVersions: Awaited<ReturnType<MemorySkillsStore["listSkillVersions"]>> = [];
       class RacingClient extends RemoteSkillsClient {
         override async getSkillStatus(requested: string) {
           const observation = await super.getSkillStatus(requested);
-          expect(requested).toBe(slug); expect(observation.body).toMatchObject({ publicationState: "catalogue-only", revisionId: null }); intercepted++;
+          expect(requested).toBe(slug); expect(observation.status).toBe(404); expect(observation.body).toMatchObject({ code: "SKILL_NOT_FOUND" }); intercepted++;
           // The real first GET has completed. Commit another real HTTP publication
           // before releasing this exact observation to the losing push.
           await pushSkill(slug, { rootDir: competing, client });
@@ -159,8 +221,8 @@ describe("skills push", () => {
         const start = requests.length;
         await expect(pushSkill(slug, { rootDir: local, client: new RacingClient(pushAuth, baseUrl) })).rejects.toThrow("NEWER revision");
         expect(intercepted).toBe(1);
-        expect(requests.slice(start)).toEqual([{ method: "GET", path: `/api/v1/skills/${slug}`, ifMatch: null, status: 200 },
-          { method: "GET", path: `/api/v1/skills/${slug}`, ifMatch: null, status: 200 },
+        expect(requests.slice(start)).toEqual([{ method: "GET", path: `/api/v1/skills/${slug}`, ifMatch: null, status: 404 },
+          { method: "GET", path: `/api/v1/skills/${slug}`, ifMatch: null, status: 404 },
           { method: "POST", path: "/api/v1/skills", ifMatch: null, status: 201 },
           { method: "POST", path: "/api/v1/skills", ifMatch: null, status: 409 }]);
         expect(winner!).not.toBeNull(); expect(winner!.skillMd).toContain("Owned winning edit");
@@ -217,8 +279,7 @@ describe("skills push", () => {
           source: "remote",
           bundleSha256: result.sha256,
         });
-        // Merged with the bundled corpus, not replacing it.
-        expect(listed.length).toBeGreaterThan(1);
+        expect(listed).toHaveLength(1);
 
         expect(await reader.getSkillMd("release-notes")).toBe(VALID_SKILL["SKILL.md"]);
 
@@ -411,6 +472,69 @@ describe("skills push", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  test("refuses a repaired canonical hash whose packed archive drops source, then accepts the deliberate repair", async () => {
+    const root = makeCorpus({
+      "release-notes": {
+        ...VALID_SKILL,
+        "src/Node_Modules/fixture.txt": "Mixed-case dependency-like source.\n",
+        "scripts/node_modules": "Regular dependency-named source.\n",
+        "references/credentials": "Credential-like source.\n",
+        ".hasna-skills.json": "{\"managed\":true}\n",
+        "src/.skills-dependency-preparation/nested-source.ts": "Nested authored source.\n",
+      },
+    });
+    const skillDir = join(root, "release-notes");
+    const manifestPath = join(skillDir, "skill.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    // This is a deliberately repaired canonical declaration: validation accepts it, while
+    // the old push path would silently drop the three canonical files during packing.
+    manifest.provenance.content_hash = computeContentHash(skillDir);
+    writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+    try {
+      await withServer(async ({ baseUrl, requests }) => {
+        const client = new RemoteSkillsClient(pushAuth, baseUrl);
+        const start = requests.length;
+        await expect(pushSkill("release-notes", { rootDir: root, client })).rejects.toThrow("packed archive does not match");
+        expect(requests.length).toBe(start);
+
+        // Remove only the canonical files the packer excludes. The marker and nested source
+        // have distinct semantics and must survive preparation and publication.
+        for (const relative of ["src/Node_Modules/fixture.txt", "scripts/node_modules", "references/credentials"]) rmSync(join(skillDir, relative));
+        const prepared = prepareSkill("release-notes", { rootDir: root, version: "2.2.0", kind: "executable" });
+        expect(validatePortableSkillDirectory("release-notes", skillDir).valid).toBe(true);
+        const packed = packSkillBundle(skillDir);
+        expect(await computeContentHashFromEntries(unpackSkillBundle(packed.bytes))).toBe(prepared.contentHash);
+        expect(readFileSync(join(skillDir, ".hasna-skills.json"), "utf8")).toBe("{\"managed\":true}\n");
+        expect(readFileSync(join(skillDir, "src/.skills-dependency-preparation/nested-source.ts"), "utf8")).toBe("Nested authored source.\n");
+
+        const pushed = await pushSkill("release-notes", { rootDir: root, client });
+        expect(pushed).toMatchObject({ published: true, version: "2.2.0", contentHash: packed.sha256 });
+        expect(requests.slice(start)).toEqual([
+          { method: "GET", path: "/api/v1/skills/release-notes", ifMatch: null, status: 404 },
+          { method: "POST", path: "/api/v1/skills", ifMatch: null, status: 201 },
+        ]);
+      });
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  test("legacy SKILL.md-only pushes keep working without a canonical archive declaration", async () => {
+    const root = mkdtempSync(join(tmpdir(), "skills-push-legacy-"));
+    const skillDir = join(root, "legacy-instruction");
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(join(skillDir, "SKILL.md"), "---\nname: legacy-instruction\ndescription: Legacy prose skill\nversion: 1.0.0\nkind: instruction\n---\n\n# Legacy\n");
+    try {
+      await withServer(async ({ baseUrl, requests }) => {
+        const pushed = await pushSkill("legacy-instruction", { rootDir: root, client: new RemoteSkillsClient(pushAuth, baseUrl) });
+        expect(pushed.published).toBe(true);
+        expect(pushed.paths).toEqual(["SKILL.md"]);
+        expect(requests.map(({ method, path }) => ({ method, path }))).toEqual([
+          { method: "GET", path: "/api/v1/skills/legacy-instruction" },
+          { method: "POST", path: "/api/v1/skills" },
+        ]);
+      });
+    } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
   test("--dry-run packs and reports without uploading", async () => {

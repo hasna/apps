@@ -165,7 +165,7 @@ describe("skills-server answers --version/--help before any bind (row 7e5f8f3d)"
     // appears and the process keeps serving until killed. A fix that
     // swallowed the start path would regress this side.
     const result = await runServe([]);
-    expect(result.timedOut).toBe(true);
+    expect(result.timedOut, result.stderr).toBe(true);
     expect(result.stdout + result.stderr).toContain(BIND_MARKER);
   });
 });

@@ -1,8 +1,50 @@
 import { Command, CommanderError } from "commander";
+import { transcriptDestination, writeTranscriptExport } from "./hosted-export.js";
 import { HostedLibrary } from "../hosted/library.js";
 import { HostedPasteHistory } from "../hosted/paste-history.js";
+import { RecordingsSDKError } from "../hosted/transport.js";
+import { assertAudioDestination, prepareAudioUpload, writeAudioDownload } from "../hosted/audio-files.js";
 import { hostedFailure, hostedProcessClient } from "../hosted/process-options.js";
 import type { HostedRecordingsClient } from "../hosted/index.js";
+
+const MAX_HOSTED_STDIN_BYTES = 1_048_576;
+
+/** Read one bounded, fatal-UTF-8 private text value without retaining shell-visible arguments. */
+async function readHostedTextFromStdin(): Promise<string> {
+  const reader = Bun.stdin.stream().getReader();
+  const chunks: Uint8Array[] = [];
+  let length = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      length += value.byteLength;
+      if (length > MAX_HOSTED_STDIN_BYTES) throw new RecordingsSDKError("invalid_input");
+      chunks.push(value);
+    }
+    const bytes = new Uint8Array(length);
+    let offset = 0;
+    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch (error) {
+    if (error instanceof RecordingsSDKError) throw error;
+    throw new RecordingsSDKError("invalid_input");
+  } finally {
+    void reader.cancel().catch(() => {});
+    reader.releaseLock();
+  }
+}
+
+async function hostedTextInput(text: string | undefined, fromStdin: boolean): Promise<string> {
+  const sourceCount = [text !== undefined, fromStdin].filter(Boolean).length;
+  if (sourceCount !== 1) throw new RecordingsSDKError("invalid_input");
+  return fromStdin ? await readHostedTextFromStdin() : text!;
+}
+async function hostedTranscriptInput(text: string | undefined, fromStdin: boolean): Promise<string> {
+  const transcript = await hostedTextInput(text, fromStdin);
+  if (!transcript.trim()) throw new RecordingsSDKError("invalid_input");
+  return transcript;
+}
 
 export interface HostedCLIOptions {
   write?: (value: string) => void;
@@ -12,11 +54,12 @@ export interface HostedCLIOptions {
 }
 export function buildHostedCommand(options: HostedCLIOptions = {}): Command {
   const write = options.write ?? ((value: string) => { process.stdout.write(value); });
-  const program = new Command("hosted").description("Read hosted recordings, paste history and transcription providers; private text is omitted by default.")
+  const program = new Command("hosted").description("Manage hosted recordings and read paste history and providers; private text is omitted by default.")
     .requiredOption("--api-base <url>", "Complete hosted API base ending in /v1/")
     .requiredOption("--credential-env <name>", "Name of the environment variable containing this API's bearer session")
     .exitOverride().configureOutput({ writeOut: write, writeErr: () => {} });
-  const library = () => new HostedLibrary(options.client ?? hostedProcessClient(program.opts(), options.env));
+  const client = () => options.client ?? hostedProcessClient(program.opts(), options.env);
+  const library = () => new HostedLibrary(client());
   program.command("providers").description("Read the server's transcription providers, models and defaults")
     .action(async () => {
       const client = options.client ?? hostedProcessClient(program.opts(), options.env);
@@ -35,6 +78,64 @@ export function buildHostedCommand(options: HostedCLIOptions = {}): Command {
   program.command("get <id>").description("Read one hosted recording's metadata")
     .option("--include-text", "Include its private transcript", false)
     .action(async (id, values) => { write(JSON.stringify(await library().get(id, { includeText: values.includeText })) + "\n"); });
+  program.command("export <id>").description("Export a private transcript as UTF-8 plain text to a new file; never overwrites an existing path")
+    .requiredOption("--output <path>", "Destination for the transcript file")
+    .action(async (id, values) => {
+      const destination = transcriptDestination(values.output);
+      const exported = await library().export(id);
+      write(JSON.stringify(writeTranscriptExport(exported, destination)) + "\n");
+    });
+  program.command("audio-metadata <id>").description("Read hosted audio availability and canonical format metadata")
+    .action(async id => { write(JSON.stringify(await client().getAudioMetadata(id)) + "\n"); });
+  program.command("audio-upload <id>").description("Upload one canonical WAV from an explicit regular file with retention consent")
+    .requiredOption("--input <path>", "Existing regular WAV file to upload")
+    .option("--retain-audio", "Explicitly retain hosted audio", false)
+    .action(async (id, values) => {
+      if (values.retainAudio !== true) throw new RecordingsSDKError("invalid_input");
+      const upload = await prepareAudioUpload(values.input);
+      write(JSON.stringify(await client().uploadAudio(id, upload)) + "\n");
+    });
+  program.command("audio-download <id>").description("Download one complete hosted WAV to a new destination file; existing files are preserved")
+    .requiredOption("--output <path>", "New destination file; an existing path is refused")
+    .action(async (id, values) => {
+      await assertAudioDestination(values.output);
+      const downloaded = await client().downloadAudio(id);
+      const receipt = await writeAudioDownload(values.output, downloaded);
+      write(JSON.stringify(receipt) + "\n");
+    });
+  program.command("rename <id> <title>").description("Rename one hosted recording; returns metadata without transcript text")
+    .action(async (id, title) => { write(JSON.stringify(await library().rename(id, title)) + "\n"); });
+  program.command("save <id> <title>").description("Save one hosted recording; returns metadata without transcript text")
+    .option("--transcript <text>", "Recording transcript")
+    .option("--transcript-stdin", "Read recording transcript from bounded UTF-8 stdin")
+    .requiredOption("--duration-ms <number>", "Recording duration in milliseconds")
+    .option("--session-id <id>", "Optional recording session ID")
+    .action(async (id, title, values) => {
+      const transcript = await hostedTranscriptInput(values.transcript, Boolean(values.transcriptStdin));
+      const input = { id, title, transcript, durationMs: Number(values.durationMs),
+        ...(values.sessionId === undefined ? {} : { sessionId: values.sessionId }) };
+      write(JSON.stringify(await library().save(input)) + "\n");
+    });
+  program.command("delete <id>").description("Permanently delete one hosted recording; pending means audio cleanup is unfinished, with no automatic retry")
+    .action(async id => { write(JSON.stringify(await library().delete(id)) + "\n"); });
+  program.command("paste-save <id>").description("Save one client-reported paste receipt; private text is read explicitly and omitted from output")
+    .option("--text <text>", "Pasted text")
+    .option("--text-stdin", "Read pasted text from bounded UTF-8 stdin")
+    .requiredOption("--status <status>", "Delivery status: attempted, confirmed or failed")
+    .option("--recording-id <id>", "Optional source recording ID")
+    .option("--destination-app-id <id>", "Destination application bundle or application ID")
+    .option("--destination-app-name <name>", "Destination application name")
+    .option("--occurred-at <timestamp>", "Optional UTC timestamp ending in Z")
+    .action(async (id, values) => {
+      const text = await hostedTextInput(values.text, Boolean(values.textStdin));
+      const value = { id, text, status: values.status,
+        ...(values.recordingId === undefined ? {} : { recordingId: values.recordingId }),
+        ...(values.destinationAppId === undefined ? {} : { destinationAppId: values.destinationAppId }),
+        ...(values.destinationAppName === undefined ? {} : { destinationAppName: values.destinationAppName }),
+        ...(values.occurredAt === undefined ? {} : { occurredAt: values.occurredAt }) };
+      const history = new HostedPasteHistory(options.client ?? hostedProcessClient(program.opts(), options.env));
+      write(JSON.stringify(await history.save(value)) + "\n");
+    });
   program.command("paste-history").description("Read client-reported paste history; private text is omitted by default")
     .option("--limit <number>", "Page size, 1–100", "25")
     .option("--before <timestamp>", "UTC timestamp from the returned nextCursor")

@@ -189,7 +189,7 @@ describe("concurrent CLI captures (station04 P1 2026-08-24)", () => {
     })));
 
     for (const result of results) {
-      expect(result.exitCode).toBe(0);
+      expect(result.exitCode, JSON.stringify(result)).toBe(0);
       expect(result.stderr).not.toContain("UNIQUE constraint");
       expect(result.stdout).toContain('"snapshot"');
     }

@@ -1,7 +1,7 @@
 {
   "name": "@hasna/instructions",
-  "version": "0.6.0",
-  "description": "AI coding agent instruction & configuration manager \u2014 store, version, apply, and share all your AI coding configs. CLI + MCP + HTTP API (instructions-serve) + generated SDK.",
+  "version": "0.7.0",
+  "description": "AI coding agent instruction and configuration manager with fail-closed hosted clients, explicit local SQLite, native S3 backups, CLI, MCP, HTTP API, and generated SDK.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -20,34 +20,41 @@
     "./sdk": {
       "types": "./dist/sdk/index.d.ts",
       "import": "./dist/sdk/index.js"
+    },
+    "./storage": {
+      "types": "./dist/storage/index.d.ts",
+      "import": "./dist/storage/index.js"
     }
   },
   "files": [
     "dist",
-    "assets/skills/inbox/SKILL.md",
     "LICENSE",
     "README.md",
     "!dist/**/*.test.d.ts",
     "!dist/**/*.test.d.ts.map",
-    "!dist/test-support/**"
+    "!dist/test-support/**",
+    "migrations",
+    "hasna.contract.json"
   ],
   "scripts": {
     "clean": "rm -rf dist",
-    "build": "bun run clean && bun build src/cli/index.tsx --outdir dist --root src --target bun --splitting --chunk-naming \"chunks/[name]-[hash].[ext]\" --external ink --external react --external chalk --external pg --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts --outdir dist --root src --target bun --splitting --chunk-naming \"chunks/[name]-[hash].[ext]\" --external pg --external @modelcontextprotocol/sdk && bun build src/server/index.ts --outdir dist/server --target bun --external pg && bun build src/index.ts --outdir dist --target bun --external pg && bun build src/sdk/index.ts --outdir dist/sdk --target bun && tsc --emitDeclarationOnly --outDir dist",
-    "build:server": "bun run clean && bun build src/cli/index.tsx --outdir dist --root src --target bun --splitting --chunk-naming \"chunks/[name]-[hash].[ext]\" --external ink --external react --external chalk --external pg --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts --outdir dist --root src --target bun --splitting --chunk-naming \"chunks/[name]-[hash].[ext]\" --external pg --external @modelcontextprotocol/sdk && bun build src/server/index.ts --outdir dist/server --target bun --external pg && bun build src/index.ts --outdir dist --target bun --external pg && bun build src/sdk/index.ts --outdir dist/sdk --target bun",
+    "build": "bun run clean && bun build src/cli/index.tsx --outdir dist --root src --target bun --splitting --chunk-naming \"chunks/[name]-[hash].[ext]\" --external ink --external react --external chalk --external pg --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts --outdir dist --root src --target bun --splitting --chunk-naming \"chunks/[name]-[hash].[ext]\" --external pg --external @modelcontextprotocol/sdk && bun build src/server/index.ts --outdir dist/server --target bun --external pg && bun build src/index.ts --outdir dist --target bun --external pg && bun build src/storage/index.ts --outdir dist/storage --target bun && bun build src/sdk/index.ts --outdir dist/sdk --target bun && tsc --emitDeclarationOnly --outDir dist",
+    "build:server": "bun run clean && bun build src/cli/index.tsx --outdir dist --root src --target bun --splitting --chunk-naming \"chunks/[name]-[hash].[ext]\" --external ink --external react --external chalk --external pg --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts --outdir dist --root src --target bun --splitting --chunk-naming \"chunks/[name]-[hash].[ext]\" --external pg --external @modelcontextprotocol/sdk && bun build src/server/index.ts --outdir dist/server --target bun --external pg && bun build src/index.ts --outdir dist --target bun --external pg && bun build src/storage/index.ts --outdir dist/storage --target bun && bun build src/sdk/index.ts --outdir dist/sdk --target bun",
     "migrate": "bun run src/server/index.ts migrate",
     "generate:sdk": "bun run scripts/generate-sdk.ts",
     "kit:check": "bunx @hasna/contracts vendor-kit --check",
     "typecheck": "tsc --noEmit",
-    "test": "env -u HASNA_INSTRUCTIONS_API_URL -u HASNA_INSTRUCTIONS_API_KEY -u INSTRUCTIONS_API_URL -u INSTRUCTIONS_API_KEY -u HASNA_INSTRUCTIONS_API_KEY_OVERRIDE -u HASNA_INSTRUCTIONS_API_KEY_REF -u HASNA_PROFILE HASNA_STATE_HOME=$(mktemp -d) bun test",
+    "test": "env -u HASNA_INSTRUCTIONS_API_URL -u HASNA_INSTRUCTIONS_API_KEY -u INSTRUCTIONS_API_URL -u INSTRUCTIONS_API_KEY -u HASNA_INSTRUCTIONS_API_KEY_OVERRIDE -u HASNA_INSTRUCTIONS_API_KEY_REF -u HASNA_PROFILE HASNA_STATE_HOME=$(mktemp -d) bun test --timeout 120000",
     "check:package-secrets": "bun run src/cli/index.tsx package-manager-scan --fail-on-findings .",
     "dev:cli": "bun run src/cli/index.tsx",
     "dev:mcp": "bun run src/mcp/index.ts",
     "dev:serve": "bun run src/server/index.ts",
     "seed": "bun run scripts/seed.ts",
-    "prepublishOnly": "bun run scripts/check-publish-hold.ts && bun run build",
+    "prepublishOnly": "bun run scripts/check-publish-hold.ts && bun run typecheck && bun run test && bun run build && bun run scan:artifact",
     "postinstall": "node -e \"const fs=require('node:fs'),path=require('node:path'),os=require('node:os');const home=process.env.HOME||process.env.USERPROFILE||os.homedir();const exact=process.env.HASNA_CONFIGS_HOME;const configHome=process.env.HASNA_CONFIG_HOME;const root=exact&&exact.trim()?path.resolve(exact.trim()):(configHome&&configHome.trim()?path.join(configHome.trim(),'configs'):path.join(home,'.hasna','instructions'));try{fs.mkdirSync(root,{recursive:true,mode:0o700});fs.mkdirSync(path.join(root,'backups'),{recursive:true,mode:0o700});}catch{}\"",
-    "prepack": "bun run build"
+    "prepack": "bun run build && bun run scan:artifact",
+    "test:postgres": "bun scripts/live-postgres-test.ts",
+    "scan:artifact": "bun scripts/scan-artifact.ts"
   },
   "keywords": [
     "instructions",
@@ -85,11 +92,14 @@
     "@modelcontextprotocol/sdk": "^1.12.1",
     "chalk": "^5.4.1",
     "commander": "^13.1.0",
-    "hono": "4.13.3",
+    "hono": "4.13.7",
     "ink": "^5.2.0",
     "pg": "^8.13.3",
     "react": "^18.3.1",
     "zod": "^3.24.2"
+  },
+  "overrides": {
+    "hono": "4.13.7"
   },
   "devDependencies": {
     "@hasna/contracts": "1.0.2",
@@ -98,5 +108,6 @@
     "@types/react": "^18.3.18",
     "bun-types": "1.3.14",
     "typescript": "^5.7.3"
-  }
+  },
+  "packageManager": "bun@1.3.14"
 }

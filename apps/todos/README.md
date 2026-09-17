@@ -81,6 +81,27 @@ detail lives under `apps/todos/docs/` (`PLAN_API.md`,
 five documents alongside `dist/`, so they are readable from an installed
 package; `docs/cli-help.md` is repo-only.
 
+## HTTP request budget
+
+`todos-serve` defaults to **12,000 requests per minute per network peer**, per
+server process. Set `HASNA_TODOS_RATE_LIMIT_MAX` to an integer from `1` to
+`1000000` to choose a different finite budget. The legacy `TODOS_RATE_LIMIT_MAX`
+variable still works; the canonical variable takes precedence when both are set.
+An absent or blank value uses the default. Invalid values fail startup before
+the database is opened or the server listens.
+
+The fixed one-minute window covers all routes, including health checks and
+unauthenticated requests, except CORS `OPTIONS`. Exceeding the budget returns
+HTTP `429` with `Retry-After` in seconds. Authentication requirements stay the
+same. This setting is a request allowance, not a throughput guarantee; size a
+deployment using observed latency, database load, and its gateway limits.
+
+Behind a reverse proxy, callers share the proxy's bucket unless the operator
+has explicitly configured trusted forwarding. Keep proxy trust off for direct
+traffic. Only enable `TODOS_TRUST_PROXY=1` when network rules restrict access to
+proxies that overwrite forwarding headers; `TODOS_TRUSTED_PROXIES` helps resolve
+the forwarded chain and does not itself restrict which sockets may connect.
+
 ## Credentials and Service Authority
 
 The CLI, the MCP server and the `./sdk` client all resolve their credential

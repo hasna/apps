@@ -80,6 +80,7 @@ function makeFetch(status: number, body: string = ""): typeof fetch {
     ok: status >= 200 && status < 300,
     status,
     text: async () => body,
+    json: async () => ({ task: { id: "TASK-001", version: (_opts as RequestInit)?.method === "PATCH" ? 2 : 1, metadata: (_opts as RequestInit)?.method === "PATCH" ? JSON.parse(String((_opts as RequestInit).body)).metadata : {} } }),
   })) as unknown as typeof fetch;
 }
 
@@ -122,7 +123,7 @@ describe("linkAttachmentToTask", () => {
     mockDbClose.mockReset();
   });
 
-  it("calls PATCH /api/tasks/:taskId with attachment info", async () => {
+  it("calls PATCH /v1/tasks/:taskId with attachment info", async () => {
     const att = makeAttachment();
     mockFindById.mockImplementation(() => att);
 
@@ -131,9 +132,9 @@ describe("linkAttachmentToTask", () => {
     await linkAttachmentToTask("att_abc123", "TASK-001", "https://todos.example.test", fakeFetch);
     delete process.env.TODOS_API_KEY;
 
-    expect(fakeFetch).toHaveBeenCalledTimes(1);
-    const [url, opts] = (fakeFetch as ReturnType<typeof mock>).mock.calls[0] as [string, RequestInit];
-    expect(url).toBe("https://todos.example.test/api/tasks/TASK-001");
+    expect(fakeFetch).toHaveBeenCalledTimes(2);
+    const [url, opts] = (fakeFetch as ReturnType<typeof mock>).mock.calls[1] as [string, RequestInit];
+    expect(url).toBe("https://todos.example.test/v1/tasks/TASK-001");
     expect(opts.method).toBe("PATCH");
     expect(new Headers(opts.headers).get("x-api-key")).toBe("k");
 
@@ -184,7 +185,7 @@ describe("linkAttachmentToTask", () => {
     const fakeFetch = makeFetch(200);
     await linkAttachmentToTask("att_abc123", "TASK-001", "https://todos.example.test", fakeFetch);
 
-    const [, opts] = (fakeFetch as ReturnType<typeof mock>).mock.calls[0] as [string, RequestInit];
+    const [, opts] = (fakeFetch as ReturnType<typeof mock>).mock.calls[1] as [string, RequestInit];
     const body = JSON.parse(opts.body as string);
     expect(body.metadata._attachments[0].link).toBeNull();
   });
@@ -236,9 +237,10 @@ describe("link-task CLI command", () => {
     mockFindById.mockImplementation(() => att);
 
     let capturedUrl = "";
-    globalThis.fetch = mock(async (url: unknown) => {
+    const base = makeFetch(200);
+    globalThis.fetch = mock(async (url: unknown, init?: unknown) => {
       capturedUrl = String(url);
-      return { ok: true, status: 200, text: async () => "" } as Response;
+      return base(url as string, init as RequestInit);
     }) as unknown as typeof fetch;
 
     const capture = captureOutput();

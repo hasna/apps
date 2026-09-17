@@ -2405,6 +2405,111 @@ describe("project-first CLI surface", () => {
     });
   }
 
+  cliProcessTest("guarded-update status previews, archives, rejects drift and rolls back without removing content", () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-cli-guarded-status-"));
+    const env = { HASNA_PROJECTS_DB_PATH: join(root, "projects.db") };
+    const projectPath = join(root, "working");
+    try {
+      const create = runProjects(["create", "--name", "Guarded Status", "--path", projectPath, "--json"], env);
+      expect(create.exitCode).toBe(0);
+      const created = JSON.parse(text(create.stdout)) as {
+        project: { id: string; status: string; updated_at: string };
+      };
+      mkdirSync(projectPath, { recursive: true });
+      const content = join(projectPath, "preserved.txt");
+      writeFileSync(content, "project content remains owned by the project\n");
+      const archiveArgs = [
+        "guarded-update", created.project.id,
+        "--status", "archived",
+        "--expected-revision", created.project.updated_at,
+        "--operation-id", "guarded-status-forward",
+        "--step-id", "archive",
+        "--response-byte-limit", "40000",
+        "--time-budget-ms", "5000",
+        "--json",
+      ];
+      const preview = runProjects([...archiveArgs, "--dry-run"], env);
+      expect(preview.exitCode).toBe(0);
+      expect(JSON.parse(text(preview.stdout))).toMatchObject({ dry_run: true, after: { status: "archived" } });
+      const before = runProjects(["show", created.project.id, "--json"], env);
+      expect(before.exitCode).toBe(0);
+      expect(JSON.parse(text(before.stdout))).toMatchObject({ project: { status: "active", updated_at: created.project.updated_at } });
+
+      const forward = runProjects(archiveArgs, env);
+      expect(forward.exitCode).toBe(0);
+      const accepted = JSON.parse(text(forward.stdout)) as {
+        outcome: string;
+        after: { status: string; updated_at: string };
+        receipt: { receipt_id: string; post_revision: string };
+      };
+      expect(accepted.outcome).toBe("accepted");
+      expect(accepted.after.status).toBe("archived");
+      expect(accepted.receipt.post_revision).toBe(accepted.after.updated_at);
+      expect(readFileSync(content, "utf8")).toBe("project content remains owned by the project\n");
+
+      const duplicate = runProjects(archiveArgs, env);
+      expect(duplicate.exitCode).toBe(0);
+      expect(JSON.parse(text(duplicate.stdout))).toMatchObject({ outcome: "duplicate_of_accepted", after: { status: "archived" } });
+      const stale = runProjects([
+        "guarded-update", created.project.id,
+        "--status", "active",
+        "--expected-revision", created.project.updated_at,
+        "--operation-id", "guarded-status-stale",
+        "--step-id", "unarchive",
+        "--response-byte-limit", "40000",
+        "--time-budget-ms", "5000",
+        "--json",
+      ], env);
+      expect(JSON.parse(text(stale.stdout))).toMatchObject({ ok: false, outcome: "terminal_nonacceptance", after: null });
+
+      const rollback = runProjects([
+        "guarded-rollback", created.project.id,
+        "--accepted-receipt-id", accepted.receipt.receipt_id,
+        "--expected-current-revision", accepted.receipt.post_revision,
+        "--operation-id", "guarded-status-rollback",
+        "--step-id", "restore",
+        "--response-byte-limit", "40000",
+        "--time-budget-ms", "5000",
+        "--json",
+      ], env);
+      expect(rollback.exitCode).toBe(0);
+      expect(JSON.parse(text(rollback.stdout))).toMatchObject({ outcome: "accepted", after: { status: "active" } });
+      const restored = runProjects(["show", created.project.id, "--json"], env);
+      expect(restored.exitCode).toBe(0);
+      expect(JSON.parse(text(restored.stdout))).toMatchObject({ project: { id: created.project.id, status: "active", primary_path: projectPath } });
+      expect(readFileSync(content, "utf8")).toBe("project content remains owned by the project\n");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("guarded-update status rejects invalid values without changing the project", () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-cli-guarded-status-invalid-"));
+    const env = { HASNA_PROJECTS_DB_PATH: join(root, "projects.db") };
+    try {
+      const create = runProjects(["create", "--name", "Guarded Invalid Status", "--path", join(root, "working"), "--json"], env);
+      expect(create.exitCode).toBe(0);
+      const created = JSON.parse(text(create.stdout)) as { project: { id: string; updated_at: string } };
+      const result = runProjects([
+        "guarded-update", created.project.id,
+        "--status", "not-a-status",
+        "--expected-revision", created.project.updated_at,
+        "--operation-id", "guarded-status-invalid",
+        "--step-id", "invalid",
+        "--response-byte-limit", "40000",
+        "--time-budget-ms", "5000",
+        "--json",
+      ], env);
+      expect(result.exitCode).toBe(1);
+      expect(text(result.stderr)).toContain("Invalid workspace status");
+      const unchanged = runProjects(["show", created.project.id, "--json"], env);
+      expect(unchanged.exitCode).toBe(0);
+      expect(JSON.parse(text(unchanged.stdout))).toMatchObject({ project: { status: "active", updated_at: created.project.updated_at } });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   for (const { firstFlag, secondFlag } of [
     { firstFlag: "--path", secondFlag: "--primary-path" },
     { firstFlag: "--primary-path", secondFlag: "--path" },

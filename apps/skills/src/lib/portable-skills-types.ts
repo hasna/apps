@@ -150,6 +150,8 @@ export interface PortPortableSkillOptions extends PortableSkillOptions {
 
 export interface BulkPortPortableSkillOptions extends PortableSkillOptions {
   overwrite?: boolean;
+  /** Explicitly permit imported names that shadow bundled official skills. */
+  allowShadow?: boolean;
   /** When false, the first failure is rethrown. Defaults to true (skip-on-error). */
   continueOnError?: boolean;
 }

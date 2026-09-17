@@ -13,71 +13,462 @@ bun install -g @hasna/skills
 
 Requires [Bun](https://bun.sh/) 1.3+.
 
+## Private skill catalogs
+
+The public package provides the CLI, API, SDK, hooks, and runtime. A skill's
+instructions and executable bundle belong to the organization that publishes
+them. API reads require authentication and use that organization's catalog,
+including tag filters, versions, and downloads. An empty account starts empty;
+neither a repository checkout nor files on the server machine supply defaults.
+Server startup and upgrades never import a bundled catalog.
+
+Each operator can use their own compatible server and storage. S3 is optional:
+the server supports durable SQLite or PostgreSQL and database-backed bundles
+when no S3 bucket is configured. Publishing through an authenticated account
+does not publish to GitHub or npm. Keep private source documents and executable
+payloads outside public software repositories.
+
 ## Quick Start
 
-```bash
-# Browse skills interactively
-skills
-
-# Sign in. With a credential and no URL, the CLI talks to the fleet gateway;
-# point it at your own instance first if you run one.
-skills setup --api-url https://skills.example.com   # only for your own instance
-skills auth login --api-key "$HASNA_SKILLS_API_KEY"
-
-# With no credential and no URL, skills simply run on this machine
-skills list
-
-# Optionally pin a skill preference in this project
-skills pin logo-design
-
-# Register the Skills MCP server with every supported agent
-skills setup agents
-
-# See what a skill needs
-skills info logo-design
-
-# Server-owned (premium) skills run through the configured Skills API
-skills run <server-owned-skill> --brief "minimal geometric owl mark"
-
-# Every other skill runs on this machine by default, even when an API is
-# configured; local skills may use your own provider keys when documented
-skills requires brand-style-guide
-OPENAI_API_KEY=... skills run brand-style-guide ./brand-notes.md
-```
-
-## Server-Side Runtime Skills
-
-Premium skills run on the server. A skill is premium — server-owned — when its
-published contract carries the server-owned marker (`skills.runtime: "hosted"`
-or `skills.source: "remote" | "private-hosted"` in the skill's `package.json`).
-The CLI and MCP server submit server-owned skills to the configured Skills API,
-create local run metadata, and then expose status and artifact commands. They
-do not fall back to bundled local execution when auth is missing or the server
-runtime is unavailable.
-
-Routing is credential-driven and local is the default: a run is sent to the API
-only when a credential resolves (see **Credentials** below) and the skill carries
-the server-owned marker. Every other skill runs on this machine, whether or not
-a credential exists. No skill in the OSS catalog is server-owned today; the
-marker arrives with skills synced from a Skills API deployment. A server-owned
-skill run without a credential fails closed with an error naming the missing
-setup — it never silently runs locally.
+The fleet authority is `https://api.hasna.com/skills`; versioned requests use
+`/skills/v1`. Obtain a workspace API key through your administrator's
+provisioning process and configure it using the [credential resolution](#credentials)
+below. Check the selected identity and
+available capabilities before syncing:
 
 ```bash
-skills auth login --api-key "$HASNA_SKILLS_API_KEY"
-skills run <server-owned-skill> --brief "minimal geometric owl mark"
-skills runs status <run-id>
-skills exports download <run-id>
+skills auth whoami --json
+skills capabilities --json
 ```
 
-Browser/device-code and email-code login commands are retained for compatible
-deployments. A Skills deployment can bootstrap with a provisioned API key via
-`skills auth login --api-key`.
+The default authority is `https://api.hasna.com/skills`; a full `/skills/v1`
+base is also accepted. For your own compatible server, select it with
+`skills setup --api-url https://skills.example.com`, then use `skills auth login`.
+Browser/device-code and email-code login are for compatible deployments; the
+fleet gateway has no interactive login service and does not issue keys that way.
 
-`HASNA_SKILLS_API_KEY` is the Skills API credential. It is not a provider
-credential. Provider keys such as `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or
-`GEMINI_API_KEY` remain supported only for free/local OSS skills whose
-requirements explicitly document local provider use.
+A workspace administrator creates a shared profile selecting published skills by
+exact version and SHA-256 digest. Consumers sync that profile into a verified
+Skills cache, then load instructions through the CLI. Replace `default` with
+your assigned profile; these examples assume it selects `pdf-generate@0.5.2`:
+
+```bash
+skills list --json
+skills profiles show default --json
+skills sync --selection-profile default --json
+skills install pdf-generate@0.5.2 --selection-profile default --json
+skills load pdf-generate@0.5.2 --selection-profile default
+skills context 'Use $pdf-generate to create a PDF' --selection-profile default --json
+
+# Preview retirement, then archive ordinary copies and vendor discovery files.
+skills migrate native --include-unmanaged --include-vendor --json
+skills migrate native --include-unmanaged --include-vendor --apply --json
+
+# Preview the available adapters, then install one bridge plus hooks per agent.
+skills hook agents --json
+skills hook install --agent all --selection-profile default --json
+skills hook install --agent all --selection-profile default --apply --json
+```
+
+Native hook invocations must use their installed adapter's selection profile.
+An old client command or environment override naming another profile refuses
+before synchronization or context loading. Review the hook installation and
+restart the native client to load its current commands. Explicit `skills load`,
+`skills context`, and `skills sync` commands can still select other profiles.
+
+The hook install `--include-vendor` option is retained for compatibility with
+older scripts. Hook planning always inventories and disables discovered vendor
+system skills; use `migrate native --include-vendor` when retiring their
+discovery files.
+
+Restart the agent after applying the hooks. In Codex, review and grant normal
+trust to the installed hook definitions before starting a new session. Then
+request a selected skill in a prompt, for example `Use $pdf-generate to create
+a PDF`. The hooks supply instructions; executing the skill remains a separate
+explicit action.
+
+Each supported agent gets one small `skills-cli` native skill containing CLI
+instructions, without a copied catalogue. Claude's native Skill tool admits
+that bridge after other copies are retired. Prompt guards verify the owned
+bridge bytes, required native configuration, and discovered home/project skill
+paths before loading context. A missing or changed bridge, newly discovered
+copy, stale plugin registration, or incomplete scan reports repair guidance and
+refuses loading. Most adapters also block the prompt; Hermes has the native
+non-blocking prompt-hook limitation described below. These are checks on configured native discovery, not
+an operating-system restriction on arbitrary file reads.
+
+Agent policies support up to 1 MiB of serialized UTF-8 JSON, with bounded agent
+and discovery collections (2,048 sources and 512 roots per agent). Installation
+validates the complete resulting policy before writing configuration or backups;
+the same limits apply when reading and guarding native context. A rejected plan
+leaves the previous policy intact.
+
+Hermes 0.20.5 uses `pre_llm_call` to add selected context and `pre_tool_call`
+with `fail_closed: true` and a small owned supervisor to guard tool calls. The
+supervisor maps Skills child failures, timeouts and missing/invalid directives
+to the native explicit block response and exit code 2. Installation edits `config.yaml`
+while preserving unrelated values/comments and creates the native
+`.no-bundled-skills` opt-out marker to prevent bundled payloads from reappearing.
+The supervisor stays in the Skills data directory and its bytes/command are
+checked before native loading. Installation leaves the native shell-hook
+allowlist unchanged: approve the two exact
+managed event/command pairs through Hermes normal hook trust and restart.
+The adapter refuses unreviewed installed plugin sources and custom Hermes
+homes/profiles, user-specific tilde expansion, and `TERMINAL_CWD` overrides.
+Nonempty `HERMES_BUNDLED_PLUGINS` and `HERMES_BUNDLED_SKILLS` overrides are
+also refused during discovery and hook checks; unset them to use the reviewed
+default source paths. Custom bundle locations need a dedicated discovery adapter.
+Retire native payloads before use. Legacy `skills-cli.md` files can shadow the
+bridge and must also be preserved and retired before proceeding. Only `skill_view(name:
+"skills-cli")` is allowed natively; author payloads with Skills CLI commands.
+Hermes itself fails open on `pre_llm_call` errors. A returned refusal is visible
+context, and the trusted pre-tool guard blocks drift and native skill fallback;
+this is not a claim that Hermes can prevent every model call after a failed
+prompt hook or guarantee refusal if the native host/supervisor itself dies. Arbitrary project/plugin paths still require a discovery audit.
+
+Reviewed discovery can also bind `directories: [{ path, sha256 }]` alongside
+its full source-file hashes. The public SDK's `captureDiscoveryDirectories(paths)`
+captures recursive, sorted path/type membership without reading plugin payloads.
+Include every directory the reviewed loader scans, including plugin version
+selection parents and Python entrypoint discovery directories. Membership hashes
+detect added, removed or changed file types; keep source hashes for reviewed bytes.
+Missing directories bind as `sha256: null`. Symlinks and special nodes refuse.
+The bounds are 64 roots, 20,000 total entries, 8 MiB of path/type metadata and
+64 levels of recursion. Capture and checks require stable directory identities;
+quiesce source writers for installation because these checks are not atomic with
+a later native import.
+
+For full binary or source-byte coverage, use the public SDK's
+`captureDiscoveryByteSources(paths)` and retain its explicit `hashMode: "bytes"`
+on each source witness. It hashes the exact file bytes, including invalid UTF-8,
+with limits of 64 MiB per file and 256 MiB across one capture or verification.
+Missing files bind as `sha256: null`; symlinks, special files and changing file
+identities refuse. Raw witnesses cannot use configuration field projections.
+Existing witnesses without `hashMode` retain their original UTF-8 decoding
+contract and 16 MiB file limit; they are not silently converted into byte hashes.
+Directory membership and file bytes are separate witnesses. Neither substitutes
+for reviewing the actual executable, import paths or loader behavior.
+
+For an explicitly reviewed launcher or interpreter reached through symlinks,
+use `captureDiscoveryPathSources(paths)` and retain `hashMode: "path-bytes"`.
+Its digest binds the canonical input, directory identities, each link's identity
+and target, and the resolved regular file's identity and exact bytes. Relative
+link targets resolve component by component, including `..` after an alias.
+Missing targets also receive a digest that binds the path leading to their
+absence. Retargeting to identical bytes, replacing a link or an ancestor, or
+changing a file's metadata requires a fresh review. Unrelated sibling writes
+do not change directory identity witnesses.
+
+Path witnesses share the 64 MiB file and 256 MiB aggregate byte limits. Each
+path allows at most 40 links, 256 traversal steps and 64 KiB of metadata; one
+capture or verification permits 8 MiB of path metadata. Special nodes, cycles,
+oversized inputs and changes during capture refuse. Native hook checks repeat
+the witness verification; this does not make a later native execution atomic
+with external writers. Keep source writers quiescent during activation.
+Use `bytes` mode for configuration that hook installation will replace: path
+witnesses cannot predict the future identity of a planned write. Existing raw
+byte and directory witnesses still refuse links. Older clients reject the new
+mode; upgrade the CLI before installing a policy that uses it.
+
+Hermes requires directory witnesses, including when upgrading an older policy.
+For an automatic bridge with no runtime installed, rerun normal `skills hook install`
+to review and apply the new bindings. Existing native trust is preserved.
+Reviewed Hermes installations need fresh source and directory coverage in their
+`--discovery-inputs` file. Other agents may add directory witnesses to their
+reviewed bindings without changing existing source-only reviews.
+
+Hook installation preserves unrelated configuration, hooks, and plugin assets.
+It disables discovered Codex native skills; exact system-skill trees can remain
+only with their hash-bound disabled paths; migration preserves these package files. A client that restores or changes
+packaged skills requires a fresh inventory and disable plan. Native exports are
+refused while managed CLI loading is active. Migration preserves ordinary skill
+directories in private archives; `--include-unmanaged` includes user-authored
+copies, and `--include-vendor` retires vendor `SKILL.md` discovery files while
+preserving shared scripts and assets. Archive receipts and configuration backups
+live under the Skills data directory.
+
+After vendor documents are archived, inventory still scans their retained asset
+directories for newly introduced skills. Vendor container traversal allows 32
+directory levels; the ordinary native-root limit remains unchanged. Each inventory
+is bounded to 20,000 discovery entries and 4 MiB of UTF-8 path metadata before
+directory entries are retained or sorted. Unsupported special files and unsafe
+directory links are refused.
+
+Native archives persist a version 2 recovery journal before moving payloads;
+`migrate native --json --apply` returns its `receiptPath`. The journal records
+every source, archive path, expected hash, and move status, then marks successful
+completion. Interrupted operations can be inspected against that durable intent.
+On failure, recovery restores verified archives only when the original path is
+still absent. It preserves occupied paths or unverified archives, records that
+they require recovery, and continues compensating other unchanged entries.
+Keep native agents and other skill writers stopped throughout migration and
+recovery: portable directory rename cannot atomically reserve an absent target.
+Vendor file restoration uses an exclusive hard link to preserve concurrent files.
+Do not retry an interrupted operation until its journal and both paths have been
+reconciled; a failed final journal write may leave the earlier durable intent.
+
+`skills hook agents --json` reports the supported adapters and coverage limits.
+Claude and Codex have lifecycle context hooks; Gemini uses `BeforeAgent`, and
+OpenCode uses its awaited message plugin. Cursor receives selected context at
+session start and gates later prompt submission; its prompt hook does not
+inject context on the supported installed path. Other inventoried clients do
+not automatically gain a working prompt adapter.
+
+Gemini's `BeforeAgent` prompt can include the Skills policy emitted at session
+start. The hook excludes that exact leading policy from skill selection, so it
+does not displace the user's requested skill. Other hook context and user text
+remain part of the selection input.
+
+Known local plugin registrations are resolved automatically. Plugins with
+instruction-injecting hooks, unresolved runtime registrations, unsupported
+legacy command formats, and higher-precedence project discovery settings need
+separate review; a cache-only scan does not establish complete coverage. The
+advanced `--discovery-inputs <file>` option on hook installation and migration
+accepts reviewed active roots and full source-file SHA-256 witnesses. Its
+version-1 document has an `agents` array; each entry names `agent`, absolute
+`roots`, `sources` (`path` and `sha256`, or `null` for an absent file), and
+`pluginHooks: "reviewed-no-skill-injection"`. Include the agent configuration
+and every input establishing the active roots and plugin-hook behavior. A
+changed witness requires a new review. This option does not add support for an
+unknown native file format or make unreviewed plugin behavior safe. Managed
+system configuration, process-specific overrides, and alternate agent home
+directories are outside automatic coverage and require their own integration
+review before declaring a station migrated.
+
+If your home `.claude` or `.codex` directory intentionally links to another
+directory within your home, add `--allow-root-aliases` to hook installation and
+native migration. The plan records and rechecks the exact link and target;
+links inside skill contents or configuration files remain refused.
+
+At session start, the hook authenticates and refreshes the profile. Prompt hooks
+select complete skill instructions from that verified cache using explicit
+`$skill` references, profile keywords, paths and always-required selections.
+A session retains its selected versions; compaction restores loaded instructions,
+and subagents inherit the parent's selection. Instructions that exceed the
+context budget produce an explicit `skills load` command. A hook never executes
+a skill. Cached use is explicit and expires after 24 hours; authentication
+failures do not silently switch to a local catalog.
+
+## Profiles, station sync and rollback
+
+```bash
+# A writer creates a profile from a JSON selection document.
+skills profiles set default --file selections.json --json
+skills profiles show default --save profile-before.json --json
+
+# Update only the revision you reviewed. Restoring a saved document rolls back
+# the selection while producing a new profile revision.
+skills profiles set default --file profile-next.json --if-match REVISION --json
+skills profiles set default --file profile-before.json --if-match NEW_REVISION --json
+
+# Use the same profile on another station; record exact project selections.
+skills sync --selection-profile default --station station-example --json
+skills sync --selection-profile default --project --json
+skills sync --selection-profile default --check --json
+skills station-state station-example --json
+```
+
+With `--selection-profile`, `sync --check` checks the selected profile and cache
+without writing, and exits nonzero on drift. `sync --station` records a receipt
+for the named station; it is not a native-folder snapshot in this mode.
+`skills install --selection-profile default` without skill names also syncs the
+whole selection.
+
+After hook installation has enabled CLI loading, pull operations obey the same
+profile. `--all` refreshes its selected versions rather than the full catalog,
+and a named pull must belong to that profile:
+
+```bash
+skills pull --all --selection-profile default --json
+skills pull pdf-generate@0.5.2 --selection-profile default --json
+```
+
+Use `sync --selection-profile default --station station-example` when you also
+need a station receipt. Native-folder migration options belong to the older
+sync mode and cannot be mixed with profile sync.
+
+Selection documents contain a `selections` array. Each entry has `slug`,
+`version`, `bundleDigest` (`sha256:` followed by 64 lowercase hex characters),
+and optional `triggers` containing `keywords`, `paths`, or `always`. An optional
+`aliases` array gives a selection up to 32 reviewed kebab-case alternate names.
+Aliases cannot duplicate another alias or any canonical name in the profile.
+They resolve directly to that selection's exact version and digest in `load`,
+managed `run`/`pull`, and explicit prompt references such as `$old-name`.
+Receipts and bundle requests retain the canonical name. Aliases are scoped to
+the authority, workspace and profile revision; project/session locks preserve
+their pinned aliases. They do not create global registry entries or native
+redirect skills. Saving aliases requires an API advertising `selectionAliases`.
+Profiles support up to 4,096 exact selections. API responses and local profile,
+project and session documents share an 8 MiB UTF-8 JSON limit. Resolved profiles
+reserve space within that limit for all session-loaded keys; the API refuses an
+oversized candidate before replacing the existing profile. Saved snapshots and
+owned cache receipts use compact JSON; existing formatted receipts remain readable.
+The authenticated capabilities response advertises `profileLimits`, including
+`maxSelections`, `maxDocumentBytes`, `maxResolvedProfileBytes` and the effective
+`requestBodyLimitBytes`. Larger writes require these advertised limits. Operators
+can set `HASNA_SKILLS_REQUEST_BODY_LIMIT_BYTES=8388608` to admit larger requests;
+the default remains 1,000,000 bytes and a lower configured limit still applies.
+These limits apply to configured memory, SQLite and PostgreSQL stores;
+profile sync does not require S3 or native skill copies.
+Profile
+writes use compare-and-swap revisions. Station receipts belong to the workspace,
+user and stable station ID, so rotating a key does not create a new station.
+Consumers need `skills:read` and `stations:write`; profile publishers need
+`skills:write`. Key scopes apply even to workspace owners.
+
+`--selection-profile` chooses the shared skill selection. The top-level
+`--profile` option chooses an isolated credential file; these are separate
+settings. `HASNA_SKILLS_SELECTION_PROFILE` overrides the installed selection
+profile. A project lock and an existing session keep exact versions until they
+are explicitly changed or a new session starts.
+
+## Executable skills
+
+Selected local executables declaring `runtime.env` use shared execution grants
+by default. An owner or admin reviews a policy containing exact skill versions
+and bundle digests, actor IDs, station IDs, canonical workspace directories, a
+Secrets authority and vault reference names. Actual secret values stay in Secrets.
+Policy documents are private workspace data stored by the Skills service, with
+immutable revision history in SQLite or PostgreSQL; S3 is optional.
+
+For example, keep this policy input in private configuration outside the repository
+and skill bundles, replacing the example identifiers and digest with reviewed values:
+
+```json
+{
+  "grants": [{
+    "id": "provider-access",
+    "target": "local",
+    "selection": {
+      "slug": "your-skill",
+      "version": "1.0.0",
+      "bundleDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "actors": ["user-example"],
+    "consumers": [{"stationId": "workstation", "workspaceDirectory": "/workspace/project"}],
+    "secretsAuthority": "https://vault.example.com/v1",
+    "bindings": {"PROVIDER_TOKEN": "my/provider/key"}
+  }]
+}
+```
+
+```bash
+skills grants set default --file ./policy.json --json
+skills grants show default --json --save ./policy-snapshot.json
+skills run --target local --selection-profile default \
+  --input '{"requested":"work"}' --json your-skill@1.0.0
+# Updates and revocation require the current policy revision, not the profile revision:
+skills grants set default --file ./reviewed-policy.json --if-match <policy-revision>
+skills grants show default --revision <prior-policy-revision> --json
+```
+
+Updating a policy appends a revision and atomically changes its current pointer.
+An empty `grants` array revokes shared execution access. Historical policies remain
+readable and can be submitted as a new reviewed revision for rollback; they cannot
+authorize an execution directly. Unrelated selection-profile edits do not require
+rewriting the policy. A changed executable version or digest needs a new grant.
+
+Each run resolves current authorization through the Skills API before reading
+Secrets. Missing, expired, ambiguous or revoked grants, changed selections and API
+failures stop execution without using a cached grant. Optional `expiresAt` is an
+ISO timestamp; `includeDescendants: true` permits canonical directories beneath a
+consumer's workspace root. Station and path conditions describe client context;
+they are not cryptographic machine attestation. Revocation applies to subsequent
+authorization requests, not already running processes.
+
+Grant writers need an owner/admin role and `execution-grants:write` (or
+`execution-grants:*`/`*`); `skills:*` alone cannot grant access. Policy and history
+reads need `execution-grants:read`. Execution resolution accepts `skills:read` or
+`execution-grants:resolve`. Each client still needs independent Secrets access
+to the reviewed references. Managed MCP `run_skill` and SDK `executeSelectedLocal`
+use the same fresh authorization path. `--cached` cannot consume shared grants.
+
+Explicit local binding files remain available for callers that manage their own
+authorization. These caller-supplied grants are independent of shared-policy
+revocation. Prepare a template using the configured Skills and Secrets clients:
+
+```bash
+skills run --target local --selection-profile default \
+  --secret-bindings-template --json your-skill@1.0.0 > bindings.json
+# Fill each empty entry in bindings with its reviewed vault key, never its value.
+skills run --target local --selection-profile default \
+  --secret-bindings ./bindings.json --input '{"requested":"work"}' \
+  --json your-skill@1.0.0
+```
+
+The template contains no credential values and does not execute the skill or
+read the declared secrets. Keep the reviewed file in your private configuration,
+outside the skill bundle and agent discovery directories. It uses
+`hasna.skills-secret-bindings.v1` and binds the exact Skills authority, workspace,
+profile ID and revision, canonical skill name, version and bundle digest, plus
+the current station ID (`HASNA_STATION`, otherwise the hostname), canonical
+working directory and independently configured Secrets `/v1` authority. Its
+`bindings` object maps each declared environment name to one vault key. Changing
+any bound field requires reviewing a fresh template. These are explicit local
+execution grants; selection sync does not distribute or implicitly approve them.
+
+The CLI validates the complete binding before fetching values through
+`@hasna/secrets`. It resolves current values for each run, checks returned keys
+and expiry, and injects only the declared variables into the child process.
+Missing, extra, stale or mismatched bindings refuse execution; a failing vault
+read never falls back to an ambient value or a local vault. Wrapping `skills run`
+in `secrets exec` alone does not bind a declared variable. Runtime controls such
+as `PATH`, `NODE_OPTIONS` and `SKILLS_INPUT_JSON` cannot be credential names.
+Bindings require an explicit local target and a fresh API selection; they cannot
+be used with cached, cloud or legacy remote execution. No S3 deployment is required.
+
+Run receipts retain references and scope, never resolved values or captured
+output. Returned child output redacts literal, JSON-escaped, base64 and URL-encoded
+forms of injected values. This limits accidental disclosure; local execution
+has the calling user's filesystem and network access and is not a sandbox for
+hostile code. Review the exact executable and grant only the credentials its
+effects require. Cloud admission and cloud credential delivery remain separate.
+SDK callers use `resolveSelectedRun`, `prepareSelectedSecretBindings` and
+`executeSelectedLocal(selected, { secretBindings })` through `@hasna/skills/sdk`.
+The same SDK exports `readExecutionGrantPolicy`, `saveExecutionGrantPolicy` and
+`resolveExecutionGrant`. The HTTP contract is GET/PUT
+`/v1/execution-grants/:profile`, GET
+`/v1/execution-grants/:profile/versions/:revision`, and POST
+`/v1/execution-grants/:profile/resolve`. Writes use `If-None-Match: *` to create or
+the quoted policy revision in `If-Match` to update. The API advertises
+`executionGrants: true` and grant permissions in `/v1/capabilities` when supported.
+Upgrade the API and apply its database migrations before enabling shared grants.
+
+```bash
+skills capabilities --json
+skills run --target cloud --selection-profile default \
+  --input '{"title":"Example","content":"Hello"}' \
+  --idempotency-key YOUR_UNIQUE_JOB_KEY --wait --json pdf-generate@0.5.2
+skills executions show RUN_ID --json
+skills executions logs RUN_ID --json
+skills executions artifacts RUN_ID --json
+skills executions download RUN_ID document.pdf --output ./document.pdf
+```
+
+Use a new idempotency key for each new job and retain it with the exact input.
+If a response is lost or polling times out, reconcile the existing execution
+before submitting again. The selected profile must include this exact version,
+and the consumer needs `runs:write` as well as `skills:read`.
+
+Cloud execution is enabled only when the deployment configures a reviewed image
+and exact bundle allowlist. The first supported lane is `pdf-generate`; arbitrary
+uploaded code is not admitted. Runs capture version, bundle digest, input digest,
+runtime image digest, limits and policy. The cloud worker runs in a separate
+Fargate task; the skill process has no API/provider credentials, no network, a
+read-only root and bounded temporary storage, execution time and output.
+`GET /skills/v1/capabilities` reports whether this deployment has cloud execution
+configured. Authorization and runtime availability are checked separately.
+
+On a managed station, local execution also resolves the selected immutable
+bundle. Self-contained local executables run with explicit environment references
+and bounded time/output; declarations requiring isolation or dependency
+preparation are refused with cloud guidance. Local execution has the station
+user's filesystem privileges. Instruction skills use `skills load`.
+
+Browser/device-code login remains available for compatible custom deployments.
+The fleet gateway uses provisioned API keys. `HASNA_SKILLS_API_KEY` is a Skills
+API credential, not a provider key. Provider keys such as `OPENAI_API_KEY`
+are supplied only to local skills that explicitly declare them.
 
 ## Credentials
 
@@ -111,6 +502,20 @@ to be installed in the process. Every way that fetch can fail (SDK absent, vault
 unreachable, item missing or empty) is terminal and exits non-zero; a pointer
 never falls through to another tier, and never to the local corpus.
 
+For a durable reference without a raw Skills key, the same
+`HASNA_SKILLS_API_KEY_REF` field can be stored in the owner-only canonical or
+selected-profile credentials file, alongside its `HASNA_SKILLS_API_URL` and
+`HASNA_SKILLS_BOUND_API_URL`. Do not keep a literal API key in that file too.
+The file retains its existing priority, and the reference remains bound to its
+recorded Skills instance. Secrets needs its own working bootstrap provider;
+this setup does not unlock a Keychain or copy a Secrets bootstrap credential.
+If the file changes during a vault lookup, the request is refused.
+
+An explicit `skills auth login` replaces a stored reference with the newly
+authenticated key. `skills auth logout` removes the app's file reference, not
+the vault item or Secrets' credential. Changing the service URL preserves the
+reference's previous instance binding.
+
 **The service address, in the same shape:**
 
 `HASNA_SKILLS_API_URL` → the Keychain item `hasna.credentials.skills.api-url` →
@@ -127,8 +532,7 @@ customer-owned instance explicitly with `HASNA_SKILLS_API_URL=https://skills.exa
 its own profile/credential; configuring one instance does not select the other.
 The OSS server accepts `/v1/...` aliases through the same handlers as its
 `/api/v1/...` routes, plus `/v1/auth/whoami` for existing API-key identity and
-`/v1/health` for liveness. Gateway integration is incomplete until the internal
-origin runs this version and passes authenticated live acceptance. Login and
+`/v1/health` for liveness. Profile and runtime availability can be checked on the authenticated capabilities endpoint. Login and
 device authorization still use `/api/auth/...` on standalone instances; the
 internal gateway has no interactive login service, so these operations stop
 before transmitting account input or credentials. This is an explicit readiness gap, not support for
@@ -156,8 +560,8 @@ as silent aliases one rung below the canonical names, for one release. Use the
   and the bare `skills` listing all exit 1; `skills-mcp` exits 1 at startup
   before answering `initialize` or binding a port, and each MCP data tool
   answers `AUTH_REQUIRED` on its own;
-- the explicit local opt-in → **local**. Skills ships its corpus, so running on
-  this machine is a real mode — but it must be asked for:
+- the explicit local opt-in → **local**, using only owned drafts and the verified
+  local cache. An empty installation has no skills. Opt in with:
   `HASNA_SKILLS_LOCAL=1` (alias `SKILLS_LOCAL=1`). It prints one line saying
   "local mode" on stderr. A configured environment always outranks the opt-in:
   with an authority or credential in the environment, `HASNA_SKILLS_LOCAL` is
@@ -174,7 +578,7 @@ of app folders, and `XDG_CONFIG_HOME` is not consulted at all.
 |---|---|
 | `HASNA_SKILLS_API_KEY` | The API key (tier 5 of the ladder). The silent alias `SKILLS_API_KEY` is accepted for one release. |
 | `HASNA_SKILLS_API_URL` | The Skills API origin (HTTPS, or loopback HTTP). The silent alias `SKILLS_API_URL` is accepted for one release. |
-| `HASNA_SKILLS_LOCAL` | Explicit unhosted opt-in: run on this machine against the bundled corpus when no authority is configured. Any non-blank value (`1`). Alias `SKILLS_LOCAL`. Ignored whenever an authority or credential variable IS set. |
+| `HASNA_SKILLS_LOCAL` | Explicit unhosted opt-in: run on this machine against owned drafts and the verified cache when no authority is configured. Any non-blank value (`1`). Alias `SKILLS_LOCAL`. Ignored whenever an authority or credential variable IS set. |
 | `HASNA_SKILLS_API_KEY_OVERRIDE` | Deliberate tier-2 key that outranks every store. |
 | `HASNA_SKILLS_API_KEY_REF` | Deliberate tier-2 vault-item pointer (resolved through `@hasna/secrets`). |
 | `HASNA_PROFILE` | Selects an isolated `credentials-<profile>` file (tier 1). |
@@ -195,14 +599,27 @@ of app folders, and `XDG_CONFIG_HOME` is not consulted at all.
 | `skills list` | `ls` | List available skills (filter with `-c`, `--pinned`, `-t`, `--brief`) |
 | `skills search <query>` | `s` | Search by name, description, or tags |
 | `skills info <name>` | | Show metadata, env vars, and system dependencies |
-| `skills show <name>` | | Show bundled or portable skill details |
+| `skills show <name>` | | Show account or owned portable skill details |
 | `skills docs <name>` | | Show documentation (SKILL.md > README.md > CLAUDE.md) |
 | `skills requires <name>` | | Show env vars, system deps, and npm dependencies |
+| `skills profiles show <id>` / `skills profiles set <id> --file <json>` | | Read an exact shared selection or update it with writer authorization |
+| `skills install [name@version] --selection-profile <id>` | | Cache selected immutable bundles; without names, sync the profile |
+| `skills load <name> --selection-profile <id>` | | Load complete instructions from the verified selection |
+| `skills context <prompt> --selection-profile <id>` | | Resolve instructions matching the prompt and profile triggers |
+| `skills hook install --agent all --selection-profile <id>` | | Plan one CLI bridge plus supported native hooks; `--apply` installs it, then restart and trust the hooks |
+| `skills hook agents --json` | | Report maintained adapters and explicit coverage limits |
+| `skills migrate native` | | Inventory native copies; `--apply` archives managed copies, with explicit `--include-unmanaged` and `--include-vendor` retirement options |
+| `skills pull --all --selection-profile <id>` | | With CLI loading active, refresh the selected profile into the verified cache |
+| `skills sync --selection-profile <id> [--check] [--station <id>]` | | Sync or check the selected profile/cache; optionally record station state |
+| `skills station-state <id>` | | Read a station's sync receipt in the authenticated workspace |
 | `skills run <name> [args]` | | Execute a skill directly |
+| `skills run --target cloud --selection-profile <id> <name@version>` | | Submit an explicitly selected cloud execution |
+| `skills executions show <id>` / `logs <id>` / `artifacts <id>` | | Inspect a cloud execution and its output |
+| `skills executions download <id> <artifact> --output <path>` | | Download and verify one cloud execution artifact |
 | `skills runs status <run-id>` | | Poll a remote skill run |
 | `skills exports download <run-id>` | | Download completed remote artifacts |
 | `skills update` | | Refresh project pin metadata |
-| `skills diff <name>` | | Compare pin metadata against the bundled registry |
+| `skills diff <name>` | | Compare pin metadata against the active registry |
 | `skills init` | | Generate `.env.example` and update `.gitignore` for pinned skills |
 | `skills categories` | | List all categories with skill counts |
 | `skills tags` | | List all unique tags with occurrence counts |
@@ -224,10 +641,11 @@ of app folders, and `XDG_CONFIG_HOME` is not consulted at all.
 | `skills new <name>` | `scaffold` | Scaffold a portable skill under `~/.hasna/skills/installed/<name>` |
 | `skills port <path>` | `add` | Import an existing skill folder into the portable standard |
 | `skills create <name>` | | Scaffold a new custom skill directory |
+| `skills prepare <name> --version <semver>` | | Validate an edited draft and update only its manifest version/hash; `--dry-run` previews, `--kind` resolves legacy manifests without an explicit kind |
 | `skills sync --to claude` | | Disabled by design; use `skills mcp --register <agent|all>` |
 | `skills sync --from claude` | | Disabled by design; agent skill folders are not used |
-| `skills sync [names...] --check --for <agent> --source <path>` | `render` | Read-only drift census for the selected corpus, skills and agent; explicit source overrides `SKILLS_SOURCE`, then the installed cache. Unknown selections or drift exit nonzero. Without selectors, check all existing agent homes. |
-| `skills sync --station <id>` | | Per-station snapshot mode: snapshot the installed skill homes into `resources/<station>/skills` with a v3 sync-manifest (dry-run by default; `--populate` writes) |
+| `skills sync [names...] --check --for <agent> --source <path>` | `render` | Legacy native-folder mode only, without CLI loading or a selection profile: check the selected corpus and agent homes without writing. Unknown selections or drift exit nonzero. |
+| `skills sync --station <id>` | | Without CLI loading or a selection profile, legacy snapshot mode writes a v3 sync-manifest under `resources/<station>/skills` only with `--populate`; use explicit `--selection-profile` for API station receipts |
 | `skills hydrate --station <id>` | | Restore the canonical corpus cache from a reviewed per-station snapshot (dry-run by default; `--apply` writes) |
 | `skills validate <name>` | | Check a skill's directory structure |
 | `skills schedule add <skill> <cron>` | | Set up recurring skill execution |
@@ -341,11 +759,9 @@ Stable command shapes:
 
 ## Remote Registry
 
-The npm package ships no bundled skill corpus. Discovery reads the local corpus
-cache (`~/.hasna/skills/installed`, filled by `skills pull`) and, when a
-credential resolves, the server's registry. This is not a mode you select:
-whether browse/search commands read a server's registry is one fact, whether a
-credential resolves (see [Credentials](#credentials)). To point at your own
+The npm package ships no skill corpus. Authenticated discovery reads the
+account catalog. Explicit local mode reads owned drafts and verified downloads.
+A failed hosted read never substitutes local content. To point at your own
 instance:
 
 ```bash
@@ -377,6 +793,118 @@ and version-skew contract: `docs/architecture/remote-client-pins-tags-sync.md`.
 
 For the reusable upstream contract, see
 `docs/architecture/reusable-skills-engine.md`.
+
+### Recurring consent SDK
+
+The SDK exposes `previewRecurringConsent`, `getRecurringDraft`,
+`activateRecurringConsent`, `listRecurringConsents`, `getRecurringConsent`,
+`listRecurringOccurrences` and `revokeRecurringConsent`. These require a server
+that explicitly advertises the version-1 recurring capability; an unavailable
+server raises `RemoteRecurringUnavailableError`. This client does not create
+local schedules or enable a server policy. Use `createRemoteSkillsClient` for the
+existing selected-profile/API binding, or construct `RemoteSkillsClient` with an
+explicit bearer and API URL. Each operation captures that connection and all
+inputs before asynchronous work. An optional final `RemoteWorkspaceContext`
+restricts it to an observed user and membership; profile files are unchanged.
+
+`RecurringRequest` carries explicit cadence, lifetime, runtime limits and credit
+and occurrence ceilings. A preview returns immutable terms, their hash, the
+original quote and approval deadline; its quote states that admission reprices.
+Draft retrieval retains those values even after expiry and never refreshes the
+deadline. Activation requires the original draft ID and `RecurringActivation`:
+`contractVersion: 1`, its exact `acceptedTermsSha256`, the literal acceptance
+`authorize-recurring-credit-use`, and a caller-owned idempotency key. The client
+reads the stored draft before submitting; the server independently requires
+current fresh human authority. Client metadata cannot grant that authority.
+Read operations require `schedules:read`, while preview and revocation require
+`schedules:manage`; API keys cannot activate a grant. Consent read/history/revoke
+preserve tenant-wide control, including retained grants from other deployments.
+
+`RemoteRecurringUnconfirmedError` means a dispatched mutation could have
+committed. Keep its original server/account, inputs, terms hash and request key;
+explicitly reconcile that same identity with current authority. The client never
+retries a POST, creates a replacement key or asserts rollback. After uncertain
+revocation, inspect the original consent and occurrences; revocation does not
+promise cancellation of an already authorized attempt. Exact domain not-found
+responses return `null` only for draft/consent reads. Malformed or oversized
+responses fail closed. Pages accept 1–100 items and an opaque cursor; a large
+terms page can exceed the 64-MiB response bound, so request a smaller page
+explicitly. JSON input is limited to 1 MiB and 64 nesting levels. Dashboard
+approval and server enablement remain separate from these client interfaces.
+
+### Recurring consent from the terminal or MCP
+
+`skills recurring` uses the same hosted SDK methods. Existing `skills schedule`
+commands retain their local metadata and one-shot behavior. A compatible server
+must already support recurring consent; these commands install no server policy,
+daemon or default key scopes. Read/draft/history require `schedules:read`, and
+preview/revocation require `schedules:manage`.
+
+| Command | MCP tool |
+| --- | --- |
+| `recurring preview --request <file>` | `preview_recurring_consent` |
+| `recurring draft <draft-id>` | `get_recurring_draft` |
+| `recurring activate <draft-id>` | `activate_recurring_consent` |
+| `recurring list` / `recurring get <consent-id>` | `list_recurring_consents` / `get_recurring_consent` |
+| `recurring occurrences <consent-id>` | `list_recurring_occurrences` |
+| `recurring revoke <consent-id> --confirm` | `revoke_recurring_consent` |
+| `recurring recover --recovery-dir <original-directory>` | `recover_recurring_consent` |
+| `recurring verification <draft-id> --email <email> --confirm` | `request_recurring_verification` |
+
+Use the CLI's existing `--profile <name>` before the command, or the MCP host's
+explicitly configured connection. Fresh approval needs an enrolled workspace
+profile or both observed `--user-id` and `--membership-id`; those IDs restrict
+current authority. The target, profile and credential are captured before prompts
+and checked again before changes. No operation switches or overwrites saved
+credentials. A normal API-key login alone cannot activate recurring spend.
+Before requesting or verifying a code, the client checks the selected key's
+current account email, trimming whitespace and ignoring case as the server does.
+A different email is refused before the login endpoint can create an account.
+
+The request file contains every explicit `RecurringRequest` field, including
+JSON input/args, runtime and connector limits, cadence/start/expiry/grace, UTC-day
+period, finish-authorized-attempt policy, all three credit ceilings and both
+occurrence ceilings. No policy values are inferred. Preview and draft retrieval
+show the original server terms/hash, quote, first due instants and approval
+deadline. They create no run or credit reservation. Each grant adds its own
+budget; an occurrence reprices within the approved limits.
+
+To activate, provide `--accepted-terms <original-sha256>`,
+`--idempotency-key <original-key>`, `--recovery-dir <new-absolute-directory>`,
+`--email <email>` and `--confirm`. A terminal displays the complete immutable
+draft and requires typing `authorize-recurring-credit-use`, then requests a
+fresh code and reads it masked. For JSON or noninteractive use, also supply
+`--acceptance authorize-recurring-credit-use --code-stdin`; request the code
+first with `recurring verification`. Do not put the code or session in argv.
+Cancellation/EOF does not grant consent. The server independently verifies fresh,
+eligible, non-impersonated human authority and the original terms.
+
+MCP activation takes the same original draft, approval object, recovery directory
+and explicit `confirm: true`, plus account email and a fresh code. The MCP host
+may retain supplied code arguments in its history; the masked terminal flow
+avoids that disclosure. No tool returns or stores the resulting session. A tool
+confirmation boolean or API key never substitutes for verified human approval.
+
+Activation and revocation require a new recovery directory under an existing
+canonical parent. It is created privately and contains the original server,
+profile, account/membership, draft/hash/approval key or consent ID and attempt
+state. It contains no bearer, OTP or raw input payload. Preserve it after errors;
+unknown mutation outcomes exit 2 in the CLI and set MCP `isError` with
+`outcomeUnknown: true`. Read-only `recover` never resubmits. Explicit
+`recover --confirm` reuses the original activation key/terms and fresh approval,
+or the same revoked consent; it never creates a replacement request. An expired
+draft or lost current authority does not resolve an earlier unknown outcome.
+Aliased, replaced, malformed or locked recovery directories refuse changes.
+
+List/history expose one page (1–100 items, default 20) and the unchanged opaque
+cursor. Consent output includes period/total reserved and settled credits,
+admitted counts, ceilings, deployment and next due time; history includes stable
+occurrence/run IDs, outcomes, refusal reasons and allocation state. All hosts
+read the same server identities. Revocation reports residual authorized exposure
+and does not promise cancellation/refund of an already authorized attempt.
+Cancellation is separate. A lost preview response has no draft lookup key:
+report that uncertainty and explicitly choose any new preview, without silently
+turning it into an activation.
 
 ## Portable Skills
 
@@ -457,7 +985,11 @@ skills mcp --register all       # Register with all supported agents
 Use a named profile for each independently operated instance. A commercial Skills instance
 and an internal instance have separate credentials, accounts,
 credits and data. Selecting one does not change another profile or the fleet
-resolver's existing defaults.
+resolver's existing defaults. `run --remote` uses that instance's catalog and
+credit approval flow even on a managed station. It cannot be combined with
+`--target local` or `--target cloud`; without `--remote`, managed selection
+and execution defaults continue to apply. MCP `run_skill` with `remote: true`
+uses the same hosted approval flow and cannot also specify `target`.
 
 ```bash
 # Configure the commercial instance before signing in.
@@ -589,7 +1121,14 @@ const run = await client.submitQuotedRun("blog-article", {}, ["--topic", "Your t
 });
 ```
 
-`submitRun` remains a low-level compatibility transport. New paid integrations
+`submitRun` remains a compatibility transport for servers implementing the legacy
+submission protocol. This OSS server returns HTTP 410 (`LEGACY_EXECUTION_RETIRED`)
+for unversioned submissions and never queues or executes them. Use a selected,
+immutable executable version through `skills run <name>@<version> --target cloud`;
+see [versioned cloud execution](docs/architecture/cloud-execution-runtime.md).
+Historical run reads, logs, artifacts, and cancellation remain available.
+
+On servers that implement paid submission, new integrations
 should use `submitQuotedRun` or `submitQuotedRunWithFiles` so capability and
 approval checks run before submission. Credit counts are integers; `maxCostCents`
 is a legacy spelling for the same credit ceiling. An optional receipt is a
@@ -719,8 +1258,8 @@ src/
 ├── cli/index.tsx           # Commander.js CLI + Ink TUI
 ├── mcp/index.ts            # MCP server (stdio)
 ├── lib/
-│   ├── registry-data/       # The catalogue entries themselves, one file per category
-│   ├── registry.ts          # Registry API over registry-data: search, categories, tags
+│   ├── registry-data/       # Empty compatibility export; no catalog content
+│   ├── registry.ts          # Discovery over owned cache and explicit sources
 │   ├── installer.ts         # Project pins and disabled source-copy paths
 │   ├── project-state.ts     # .skills/project.json preferences
 │   ├── run-state.ts         # .skills/runs and .skills/exports metadata
@@ -730,19 +1269,15 @@ src/
 │   └── utils.ts             # normalizeSkillName()
 ├── index.ts                 # Library re-exports (npm package entry)
 └── *.test.ts                # Test files
-
-skills/                      # Public skill contracts and local OSS skills
-├── _common/                 # Shared utilities
-└── */                       # Local skills include src/; server-executed skills expose metadata/contracts
 ```
 
 ### Derived counts
 
 | Count | Value | Derived from |
 |---|---|---|
-| Catalog skills | 86 | `SKILLS.length` (`src/lib/registry-data/`) |
+| Catalog skills | 0 | `SKILLS.length` (`src/lib/registry-data/`) |
 | Categories | 17 | `CATEGORIES` (`src/lib/registry-types.ts`) |
-| MCP tools | 72 | `tools/list` against a live `buildServer()` |
+| MCP tools | 81 | `tools/list` against a live `buildServer()` |
 
 Every number in this table is re-derived from the source tree on each test run by
 `src/lib/readme-derived-counts.test.ts`, so a drifted figure fails a test rather

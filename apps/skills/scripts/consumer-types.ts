@@ -12,8 +12,8 @@ const env = { PATH: `${dirname(process.execPath)}:${process.env.PATH ?? "/usr/bi
   HOME: workspace, TMPDIR: workspace, NO_COLOR: "1", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0",
   NPM_CONFIG_USERCONFIG: join(workspace, "user.npmrc"), NPM_CONFIG_GLOBALCONFIG: join(workspace, "global.npmrc") };
 
-async function run(command: string[], cwd: string) {
-  const child = Bun.spawn(command, { cwd, env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+async function run(command: string[], cwd: string, extraEnv: Record<string, string> = {}) {
+  const child = Bun.spawn(command, { cwd, env: { ...env, ...extraEnv }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
   const timeout = setTimeout(() => child.kill("SIGKILL"), 120_000);
   try {
     const [stdout, stderr, status] = await Promise.all([
@@ -69,8 +69,52 @@ try {
   }, files: ["consumer.ts"] }));
   await writeFile(join(workspace, "consumer.ts"), `
 import { createRunService, runAdmissionSchema, runTerminalSchema, type SkillsProductStore, RemoteCapabilityUnavailableError, RemoteRequestError } from "@hasna/skills/sdk";
+import { resolveSelectedRun, executeSelectedLocal, prepareSelectedSecretBindings, readSelectedSecretBindings,
+  type ResolvedSelectedRun, type SelectedLocalRunOptions, type SelectedSecretBindings, type SelectedSecretsClient } from "@hasna/skills/sdk";
+declare const selectedExecution: ResolvedSelectedRun;
+declare const executionBindings: SelectedSecretBindings;
+declare const executionVaultClient: SelectedSecretsClient;
+const selectedResolution: Promise<ResolvedSelectedRun> = resolveSelectedRun("example@1.0.0", "default");
+const bindingTemplate: Promise<SelectedSecretBindings> = prepareSelectedSecretBindings(selectedExecution);
+const bindingFile: SelectedSecretBindings = readSelectedSecretBindings("bindings.json");
+const localRunOptions: SelectedLocalRunOptions = { secretBindings: executionBindings, createSecretsClient: () => executionVaultClient };
+const selectedExecutionResult = executeSelectedLocal(selectedExecution, localRunOptions);
+import { readExecutionGrantPolicy, saveExecutionGrantPolicy, resolveExecutionGrant,
+  type ExecutionGrant, type ExecutionGrantPolicy, type ExecutionGrantRequest, type ResolvedExecutionGrant } from "@hasna/skills/sdk";
+declare const reviewedGrant: ExecutionGrant;
+declare const grantRequest: ExecutionGrantRequest;
+const policyRead: Promise<ExecutionGrantPolicy> = readExecutionGrantPolicy("default");
+const policyUpdate: Promise<ExecutionGrantPolicy> = saveExecutionGrantPolicy("default", [reviewedGrant], "reviewed-revision");
+const grantDecision: Promise<ResolvedExecutionGrant> = resolveExecutionGrant(grantRequest);
+const sharedRunOptions: SelectedLocalRunOptions = { resolveExecutionGrant, sharedExecutionGrants: true };
+// @ts-expect-error Shared local grants do not authorize a cloud execution target.
+const unsupportedSharedTarget: ExecutionGrant = { ...reviewedGrant, target: "cloud" };
+// @ts-expect-error Shared authorization carries the selected revision and exact digest.
+const incompleteSharedRequest: ExecutionGrantRequest = { consumer: executionBindings.consumer };
+// @ts-expect-error Only the versioned reference binding contract is accepted.
+const unsupportedBinding: SelectedSecretBindings = { ...executionBindings, schema: "unversioned" };
 import { RemoteSkillsClient, RemoteSkillsAuthClient, RemoteCapabilityUnavailableError as RootCapabilityError, runSkill } from "@hasna/skills";
 import { RemoteSkillsClient as SdkQuoteClient, type RemoteRunQuote, type RemoteRunApproval } from "@hasna/skills/sdk";
+import { type RecurringRequest, type RecurringActivation, type RecurringPreview, type RecurringConsentView,
+  type RecurringPage, type RecurringOccurrenceView, type RecurringRevocation, type RecurringActivationResult,
+  RemoteRecurringUnconfirmedError, canonicalJsonSha256 } from "@hasna/skills/sdk";
+declare const recurringRequest: RecurringRequest;
+declare const recurringApproval: RecurringActivation;
+const recurringClient = new SdkQuoteClient("fixture", "https://skills.example.test");
+const recurringPreview: Promise<RecurringPreview> = recurringClient.previewRecurringConsent(recurringRequest);
+const recurringDraft: Promise<RecurringPreview | null> = recurringClient.getRecurringDraft("00000000-0000-4000-8000-000000000001");
+const recurringActivated: Promise<RecurringActivationResult> = recurringClient.activateRecurringConsent("00000000-0000-4000-8000-000000000001", recurringApproval);
+const recurringPage: Promise<RecurringPage<RecurringConsentView>> = recurringClient.listRecurringConsents({ limit: 10 });
+const recurringConsent: Promise<RecurringConsentView | null> = recurringClient.getRecurringConsent("00000000-0000-4000-8000-000000000001");
+const recurringHistory: Promise<RecurringPage<RecurringOccurrenceView>> = recurringClient.listRecurringOccurrences("00000000-0000-4000-8000-000000000001");
+const recurringRevoked: Promise<RecurringRevocation> = recurringClient.revokeRecurringConsent("00000000-0000-4000-8000-000000000001");
+const recurringUnknown: true = new RemoteRecurringUnconfirmedError().outcomeUnknown;
+const portableHash: string = canonicalJsonSha256({ nested: [1, true] });
+// @ts-expect-error Original caller-owned idempotency identity is mandatory.
+const recurringMissingKey: RecurringActivation = { contractVersion: 1, acceptedTermsSha256: "a".repeat(64), acceptance: "authorize-recurring-credit-use" };
+// @ts-expect-error A client boolean is not fresh human authority.
+const recurringForgedAuthority: RecurringActivation = { ...recurringApproval, human: true };
+
 import type { RemoteRunQuote as RootRunQuote, RemoteRunApproval as RootRunApproval } from "@hasna/skills";
 declare const receiptQuote: RemoteRunQuote;
 const opaqueReceipt: string | undefined = receiptQuote.quoteReceipt;
@@ -591,5 +635,16 @@ try {
 console.log("Installed quote error root/SDK runtime: 14 assertions passed.");
 `);
   console.log((await run([process.execPath, "--no-env-file", "quote-error-runtime.ts"], workspace)).trim());
+  // Exercise the installed CLI archive too: malformed polling values must not
+  // cross the quote/credit boundary; the maximum accepted delay must not overflow
+  // into rapid status requests after an owned loopback run is submitted.
+  await run([process.execPath, "--no-env-file", "test", resolve(root, "src/cli/cli.run-polling.test.ts")], workspace, {
+    SKILLS_RUN_POLLING_TEST_PACKAGE: join(workspace, "node_modules/@hasna/skills"),
+  });
+  console.log("Installed CLI polling: invalid inputs refused before HTTP or local run writes; valid quote and maximum-delay wait controls passed.");
+  await run([process.execPath, "--no-env-file", "test", resolve(root, "src/cli/cli.remote-routing.test.ts")], workspace, {
+    SKILLS_REMOTE_ROUTING_TEST_PACKAGE: join(workspace, "node_modules/@hasna/skills"),
+  });
+  console.log("Installed CLI routing: explicit remote approval, isolated profiles, target conflicts and managed defaults passed.");
   console.log(`Consumer types: @hasna/skills@${metadata.version} passed strict installed-package checking for all four exports (skipLibCheck=false).`);
 } finally { await rm(workspace, { recursive: true, force: true }); }

@@ -69,19 +69,7 @@ export const CATEGORIES = [
 
 export type Category = (typeof CATEGORIES)[number];
 
-// Compact "basic" profile: a curated subset of the shipped declarative catalog.
-// The OSS catalog is declarative-only (every skill is kind: "instruction"), so
-// this list must stay a subset of the shipped instruction skills. To reshape the
-// basic profile, add or remove names here — each must be a shipped skill name.
-export const BASIC_SKILL_NAMES = [
-  "blog-article",
-  "ad-creative-pack",
-  "email-sequence",
-  "seo-content-pack",
-  "social-content-calendar",
-  "pitch-deck",
-  "proposal-pack",
-  "market-research-report",
-] as const;
+/** @deprecated There is no software-owned default selection. Use an account profile. */
+export const BASIC_SKILL_NAMES: readonly string[] = [];
 
 export type SkillRegistryProfile = "basic" | "all";

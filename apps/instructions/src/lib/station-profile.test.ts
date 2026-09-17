@@ -147,7 +147,7 @@ describe("machines manifest resolution", () => {
       });
       expect(result.machine.id).toBe(osHostname());
       expect(result.machine.platform).toBe(osPlatform());
-      expect(result.machine.workspacePath).toBe(join(root, "workspace"));
+      expect(result.machine.workspacePath).toBe(join(root, osPlatform() === "darwin" ? "Workspace" : "workspace"));
       expect(result.statusProbe).toBe("skipped");
     } finally {
       rmSync(root, { recursive: true, force: true });

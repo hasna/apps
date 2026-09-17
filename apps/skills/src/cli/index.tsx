@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { writeCliOutput } from "./output.js";
 import React from "react";
 import { render } from "ink";
 import { Command } from "commander";
@@ -69,8 +70,8 @@ program
       process.exit(1);
     }
     if (!isTTY) {
-      console.log(JSON.stringify(loadBasicRegistry().map(getCompactSkillDiscovery)));
-      process.exit(0);
+      await writeCliOutput(JSON.stringify(loadBasicRegistry().map(getCompactSkillDiscovery)));
+      return;
     }
     render(<App />);
   });
@@ -99,12 +100,23 @@ registerRuntime(program);
 
 const { registerRemoteAccount } = await import("./commands/remote-account.js");
 registerRemoteAccount(program);
+const { registerRecurringCommands } = await import("./commands/recurring.js");
+registerRecurringCommands(program);
 
 const { registerCompletion } = await import("./commands/completion.js");
 registerCompletion(program);
 
 const { registerCreateSync } = await import("./commands/create-sync-config.js");
 registerCreateSync(program);
+
+const { registerContextCommands } = await import("./commands/context.js");
+registerContextCommands(program);
+const { registerAgentIntegration } = await import("./commands/agent-integration.js");
+registerAgentIntegration(program);
+const { registerProfiles } = await import("./commands/profiles.js");
+registerProfiles(program);
+const { registerGrants } = await import("./commands/grants.js");
+registerGrants(program);
 
 const { registerHydrate } = await import("./commands/hydrate.js");
 registerHydrate(program);

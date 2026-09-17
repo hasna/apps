@@ -5,8 +5,11 @@ import { z } from "zod";
 import type { SwitcherClient } from "./sdk";
 import { openCliRuntime } from "./runtime";
 import { Fault, VERSION, providerInputSchema, profileInputSchema, modelSchema } from "./domain";
+import { CredentialResolver } from "./credentials";
+import { ensureProviderCredential, launchCatalog } from "./provider-credential-onboarding";
 const server = new McpServer({name:"switcher",version:VERSION});
 let runtime: Awaited<ReturnType<typeof openCliRuntime>> | undefined;
+const credentials=new CredentialResolver();
 /** The authority is decided once, before the stdio transport exists; the client rereads its credential per request. */
 const clientFromEnv = (): SwitcherClient => { if (!runtime) throw new Fault(503,"unavailable","Switcher API runtime is not open."); return runtime.client; };
 const page = {limit:z.number().int().min(1).max(1000).optional(),offset:z.number().int().nonnegative().optional(),search:z.string().optional()};
@@ -25,7 +28,13 @@ tool("models_list","List catalog with capability information.",{id:z.string(),..
 tool("models_add","Add saved model metadata; discovery stays active unless the provider uses a manual catalog.",{providerId:z.string(),model:modelSchema},p=>clientFromEnv().addModel(p.providerId,p.model));
 tool("models_update","Replace all saved metadata for a configured model.",{providerId:z.string(),model:modelSchema},p=>clientFromEnv().updateModel(p.providerId,p.model));
 tool("models_remove","Remove saved model metadata; upstream catalog entries remain.",{providerId:z.string(),modelId:modelSchema.shape.id},p=>clientFromEnv().removeModel(p.providerId,p.modelId));
-tool("models_refresh","Discover provider models.",{id:z.string()},p=>clientFromEnv().refreshModels(p.id));
+tool("models_refresh","Discover provider models.",{id:z.string()},async p=>{
+  const client=clientFromEnv(),provider=await client.getProvider(p.id);
+  if(runtime?.mode!=="remote")return client.refreshModels(provider.id);
+  const prepared=await ensureProviderCredential(provider,{interactive:false,resolver:credentials});
+  const credential=await prepared.resolveCredential(provider);
+  return launchCatalog(client,provider,false,{clientSide:true,credential,resolveCredential:candidate=>credentials.resolve(candidate)});
+});
 tool("profiles_list","List harness launch profiles.",page,p=>clientFromEnv().listProfiles(p));
 tool("profiles_get","Get a harness profile.",{id:z.string()},p=>clientFromEnv().getProfile(p.id));
 tool("profiles_create","Create a harness launch profile.",profileInputSchema.shape,p=>clientFromEnv().createProfile(p));
@@ -39,7 +48,7 @@ else if(process.argv.includes("--help")) console.log("switcher-mcp: authenticate
 else {
   // Fail closed BEFORE the stdio transport exists: with no credential and no
   // opt-in this exits 1 without answering `initialize` and creates no store.
-  try { runtime = await openCliRuntime(process.env); }
+  try { runtime = await openCliRuntime(process.env,provider=>credentials.resolve(provider)); }
   catch (error) {
     const code = error instanceof Fault ? error.code : "remote_api_config_error";
     console.error(`${code.toUpperCase()}: ${error instanceof Error ? error.message : "Switcher API configuration could not be resolved."}`);

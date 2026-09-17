@@ -124,6 +124,90 @@ struct NativePCMRecorderTests {
         #expect(probe.emittedByteCount > bytesBeforeStop)
     }
 
+    @Test("Sustained conversion preserves twelve seconds of amplitude and drains every sample",
+          arguments: [44_100, 48_000])
+    func sustainedConversionPreservesAmplitude(inputSampleRate: Int) throws {
+        let seconds = 12
+        let amplitude = 0.25
+        let frequency = 1_000.0
+        let inputFrames = inputSampleRate * seconds
+        let outputSampleRate = 24_000
+        let expectedOutputFrames = outputSampleRate * seconds
+        let inputFormat = try #require(AVAudioFormat(
+            standardFormatWithSampleRate: Double(inputSampleRate), channels: 1
+        ))
+        let outputFormat = try #require(NativePCMRecorder.realtimeOutputFormat())
+        let converter = try #require(AVAudioConverter(from: inputFormat, to: outputFormat))
+        let probe = NativeRecorderLifecycleProbe()
+        // The test seam bypasses device capture, while exercising the production converter,
+        // PCM delivery and real end-of-stream tail. No microphone or playback is started.
+        let recorder = NativePCMRecorder(
+            testingInputFormat: inputFormat, outputFormat: outputFormat, converter: converter,
+            stopCapture: {}, onCallbackAdmitted: {},
+            finalizeConverter: { converter, format in
+                probe.finalizerRan()
+                return NativePCMRecorder.finalizeConverterTail(converter, outputFormat: format)
+            },
+            onPCM: { probe.emit($0) }
+        )
+        defer { recorder.stop() }
+
+        for offset in stride(from: 0, to: inputFrames, by: 1_024) {
+            let count = min(1_024, inputFrames - offset)
+            let buffer = try #require(AVAudioPCMBuffer(
+                pcmFormat: inputFormat, frameCapacity: AVAudioFrameCount(count)
+            ))
+            buffer.frameLength = AVAudioFrameCount(count)
+            let samples = try #require(buffer.floatChannelData?[0])
+            for index in 0..<count {
+                // Continuous phase across packet boundaries; never restart the tone per tap.
+                samples[index] = Float(amplitude * sin(
+                    2 * .pi * frequency * Double(offset + index) / Double(inputSampleRate)
+                ))
+            }
+            recorder.processInputBufferForTesting(buffer)
+        }
+
+        let bytesBeforeStop = probe.emittedByteCount
+        recorder.stop()
+        let pcm = probe.emissions.reduce(into: Data()) { $0.append($1) }
+        #expect(probe.finalizationCount == 1)
+        #expect(bytesBeforeStop.isMultiple(of: 2))
+        #expect(bytesBeforeStop < expectedOutputFrames * 2)
+        try #require(pcm.count == expectedOutputFrames * 2)
+        let tailFrames = (pcm.count - bytesBeforeStop) / 2
+        #expect(tailFrames > 0)
+        recorder.stop()
+        #expect(probe.emittedByteCount == pcm.count)
+        #expect(probe.finalizationCount == 1)
+
+        let expectedDBFS = 20 * log10(amplitude / sqrt(2))
+        let rmsDBFS = pcm.withUnsafeBytes { raw -> [Double] in
+            (0..<seconds).map { second in
+                var sum = 0.0
+                for frame in (second * outputSampleRate)..<((second + 1) * outputSampleRate) {
+                    let offset = frame * 2
+                    let sample = Int16(bitPattern: UInt16(raw[offset]) | UInt16(raw[offset + 1]) << 8)
+                    let normalized = Double(sample) / 32_768
+                    sum += normalized * normalized
+                }
+                return 20 * log10(sqrt(sum / Double(outputSampleRate)))
+            }
+        }
+        for (second, measuredDBFS) in rmsDBFS.enumerated() {
+            #expect(measuredDBFS.isFinite)
+            #expect(abs(measuredDBFS - expectedDBFS) < 0.1,
+                    "Amplitude changed in output second \(second) at \(inputSampleRate) Hz input")
+        }
+        let metrics: [String: Any] = [
+            "inputSampleRate": inputSampleRate, "inputFrames": inputFrames,
+            "outputFrames": pcm.count / 2, "framesBeforeStop": bytesBeforeStop / 2,
+            "tailFrames": tailFrames, "expectedDBFS": expectedDBFS, "rmsDBFS": rmsDBFS,
+        ]
+        let encoded = try JSONSerialization.data(withJSONObject: metrics, options: [.sortedKeys])
+        print("SUSTAINED_PCM_METRICS " + String(decoding: encoded, as: UTF8.self))
+    }
+
     @Test("start reports busy while recorder is running or another public start is failing")
     func concurrentStartNeverReportsFalseSuccess() throws {
         let inputFormat = try #require(AVAudioFormat(

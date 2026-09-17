@@ -1,8 +1,15 @@
+import { writeCliOutput } from "../output.js";
 /**
  * run / mcp / self-update — runtime commands
  */
 
 import chalk from "chalk";
+import { createHash, randomUUID } from "node:crypto";
+import { CloudExecutionClient } from "../../lib/cloud-executions.js";
+import { requiresCliSkillLoading } from "../../lib/managed-policy.js";
+import { resolveSelectedRun, executeSelectedLocal, prepareSelectedSecretBindings } from "../../lib/selected-run.js";
+import { readSelectedSecretBindings } from "../../lib/execution-secrets.js";
+import { selectedProfileId, contextResolverOptions } from "./context.js";
 import { lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "fs";
 import { basename, dirname, isAbsolute, join } from "path";
 import { createInterface } from "readline";
@@ -51,6 +58,14 @@ export function registerRuntime(parent: Command) {
     .passThroughOptions(true)
     .option("--json", "Output result as JSON", false)
     .option("--remote", "Run on the configured server, using its catalog and quote", false)
+    .option("--target <target>", "Execution target: local or cloud")
+    .option("--secret-bindings <path>", "Reviewed, exact-selection local execution vault bindings (JSON file)")
+    .option("--secret-bindings-template", "Print a scoped bindings template without resolving secrets or running the skill", false)
+    .option("--input <json>", "Structured cloud execution input")
+    .option("--skill-version <version>", "Exact selected skill version")
+    .option("--selection-profile <id>", "Selected Skills profile")
+    .option("--session <id>", "Pinned Skills session")
+    .option("--cached", "Use the explicit verified selected cache", false)
     .option("--yes", "Approve the server's quoted credit cost for this run", false)
     .option("--idempotency-key <key>", "Reuse this key when retrying the same remote submission")
     .option("--file <path>", "Attach a local input file to a remote run (repeatable)", (value: string, prior: string[]) => [...prior, value], [] as string[])
@@ -59,6 +74,27 @@ export function registerRuntime(parent: Command) {
     .option("--poll-timeout-ms <ms>", "Maximum time to wait for a remote run", "300000")
     .description("Run a skill directly")
     .action(async (name: string, args: string[], options: RunCommandOptions) => handleRun(name, args, options));
+
+  const executions = parent.command("executions").description("Inspect isolated cloud executions");
+  for (const operation of ["show", "logs", "artifacts", "cancel"] as const) {
+    executions.command(operation).argument("<execution-id>").option("--json", "Output as JSON", false)
+      .action(async (id: string) => {
+        try { const client = await CloudExecutionClient.configured();
+          const value = operation === "show" ? await client.get(id) : await client[operation](id);
+          await writeCliOutput(JSON.stringify(value, null, 2));
+        } catch (error) { console.error(JSON.stringify({ error: (error as Error).message })); process.exitCode = 1; }
+      });
+  }
+  executions.command("download").argument("<execution-id>").argument("<artifact-name>").requiredOption("--output <path>", "New output file path")
+    .action(async (id: string, name: string, options: { output: string }) => {
+      try { const client = await CloudExecutionClient.configured(); const manifest = await client.artifacts(id);
+        const expected = manifest.find(item => item.name === name); if (!expected) throw new Error("Cloud artifact not found");
+        const bytes = await client.download(id, name);
+        if (bytes.length !== expected.byteSize || createHash("sha256").update(bytes).digest("hex") !== expected.sha256) throw new Error("Cloud artifact integrity verification failed");
+        writeFileSync(options.output, bytes, { flag: "wx", mode: 0o600 });
+        console.log(JSON.stringify({ path: options.output, sha256: expected.sha256, byteSize: bytes.length }));
+      } catch (error) { console.error(JSON.stringify({ error: (error as Error).message })); process.exitCode = 1; }
+    });
 
   const runs = parent
     .command("runs")
@@ -403,6 +439,14 @@ function promptLine(question: string): Promise<string | null> {
 
 interface RunCommandOptions {
   json: boolean;
+  target?: string;
+  secretBindings?: string;
+  secretBindingsTemplate?: boolean;
+  input?: string;
+  skillVersion?: string;
+  selectionProfile?: string;
+  session?: string;
+  cached?: boolean;
   remote?: boolean;
   yes?: boolean;
   idempotencyKey?: string;
@@ -413,6 +457,77 @@ interface RunCommandOptions {
 }
 
 async function handleRun(name: string, args: string[], options: RunCommandOptions) {
+  let managed: boolean;
+  try { managed = requiresCliSkillLoading(); }
+  catch (error) { console.log(JSON.stringify({ error: (error as Error).message, exitCode: 1 })); process.exitCode = 1; return; }
+  // Commander preserves arguments after <skill>. Reserve run-control options
+  // for selected executions, and keep legacy skill arguments unchanged.
+  const targetIndex = args.indexOf("--target");
+  if ((managed && !options.remote) || options.target || targetIndex >= 0 || options.secretBindings || options.secretBindingsTemplate || args.includes("--secret-bindings") || args.includes("--secret-bindings-template")) {
+    options = { ...options }; args = [...args];
+    for (const [flag, key] of [["--target", "target"], ["--secret-bindings", "secretBindings"], ["--input", "input"], ["--skill-version", "skillVersion"], ["--selection-profile", "selectionProfile"], ["--session", "session"], ["--idempotency-key", "idempotencyKey"], ["--poll-timeout-ms", "pollTimeoutMs"], ["--poll-interval-ms", "pollIntervalMs"]] as const) {
+      const at = args.indexOf(flag);
+      if (at >= 0) {
+        const value = args[at + 1];
+        if (value === undefined || value.startsWith("--")) {
+          console.log(JSON.stringify({ error: `${flag} requires a value`, exitCode: 1 })); process.exitCode = 1; return;
+        }
+        options[key] = value; args.splice(at, 2);
+      }
+    }
+    for (const [flag, key] of [["--json", "json"], ["--secret-bindings-template", "secretBindingsTemplate"], ["--wait", "wait"], ["--cached", "cached"], ["--remote", "remote"]] as const) {
+      const at = args.indexOf(flag); if (at >= 0) { options[key] = true; args.splice(at, 1); }
+    }
+  }
+  // Explicit hosted execution uses the configured server catalog and quote,
+  // independently of the station's selected-bundle loading policy.
+  if (options.remote && options.target) {
+    console.error("Conflicting --remote and --target execution modes"); process.exitCode = 1; return;
+  }
+  if (options.target && !["local", "cloud"].includes(options.target)) { console.error("Execution target must be local or cloud"); process.exitCode = 1; return; }
+  if ((options.secretBindings || options.secretBindingsTemplate) && (options.target !== "local" || options.remote || options.cached || (options.secretBindings && options.secretBindingsTemplate))) {
+    console.log(JSON.stringify({ error: "Secret bindings require --target local and a fresh API selection; cached and remote execution are not supported.", exitCode: 1 })); process.exitCode = 1; return;
+  }
+  if (options.target === "cloud" || options.target === "local" || (managed && !options.remote)) {
+    try {
+      let input: unknown = {};
+      if (options.input !== undefined) { try { input = JSON.parse(options.input); } catch { throw new Error("Run --input must be valid JSON"); } }
+      const at = name.lastIndexOf("@");
+      const namedVersion = at > 0 ? name.slice(at + 1) : undefined;
+      if (namedVersion && options.skillVersion && namedVersion !== options.skillVersion) throw new Error("Conflicting exact skill versions");
+      let slug = at > 0 ? name.slice(0, at) : name;
+      let version = options.skillVersion ?? namedVersion;
+      const selected = managed || options.target === "local" ? await resolveSelectedRun(version ? `${slug}@${version}` : slug, selectedProfileId(options.selectionProfile), {
+        ...contextResolverOptions({ cached: options.cached }), projectDir: process.cwd(), sessionId: options.session,
+      }) : undefined;
+      if (selected?.kind === "instruction") throw new Error("This selected skill contains instructions. Use skills load instead of skills run.");
+      if (selected) { slug = selected.selection.slug; version = selected.selection.version; }
+      if (options.target !== "cloud") {
+        if (!selected) throw new Error("A selected skill is required for managed execution");
+        if (options.file?.length) throw new Error("Selected local execution accepts arguments and structured --input only");
+        if (options.secretBindingsTemplate) {
+          await writeCliOutput(JSON.stringify(await prepareSelectedSecretBindings(selected), null, 2)); return;
+        }
+        const result = await executeSelectedLocal(selected, { args, input, cwd: process.cwd(), sharedExecutionGrants: !options.cached, ...(options.secretBindings ? { secretBindings: readSelectedSecretBindings(options.secretBindings) } : {}) });
+        if (options.json) await writeCliOutput(JSON.stringify(result, null, 2));
+        else { await writeCliOutput(result.stdout, false); process.stderr.write(result.stderr); console.error(JSON.stringify({ selection: result.selection, target: result.target, exitCode: result.exitCode, runDirectory: result.runDirectory })); }
+        process.exitCode = result.exitCode;
+        return;
+      }
+      if (args.length || options.remote || options.file?.length) throw new Error("Cloud execution accepts structured --input only");
+      if (!version || options.input === undefined) throw new Error("Use skills run --target cloud --input '<json>' <skill>@<version>");
+      const timeoutMs = Number(options.pollTimeoutMs ?? "300000"), intervalMs = Number(options.pollIntervalMs ?? "1000");
+      if (!Number.isFinite(timeoutMs) || timeoutMs < 1 || timeoutMs > 1200000 || !Number.isFinite(intervalMs) || intervalMs < 100 || intervalMs > 60000) throw new Error("Invalid cloud polling bounds");
+      const client = await CloudExecutionClient.configured();
+      const admitted = await client.submit(slug, version, input, options.idempotencyKey ?? randomUUID(), selected?.selection);
+      // Print the durable identifier before waiting so a timeout can be recovered.
+      if (options.wait) console.error(JSON.stringify({ executionId: admitted.id, status: admitted.status }));
+      const result = options.wait ? await client.wait(admitted.id, { timeoutMs, intervalMs }) : admitted;
+      await writeCliOutput(JSON.stringify(result, null, 2));
+      if (["failed", "cancelled"].includes(result.status)) process.exitCode = 1;
+    } catch (error) { console.log(JSON.stringify({ error: (error as Error).message, exitCode: 1 })); process.exitCode = 1; }
+    return;
+  }
   // An explicit remote selection uses the server catalog. A private or newly
   // published skill need not exist in this package's local instruction corpus.
   const skill = options.remote ? { name, serverOwned: true } : getSkill(name);
@@ -436,6 +551,9 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
     }
   }
   const routing = await resolveConfiguredRunRouting(skill);
+  if (options.target === "local" && routing.route === "remote") {
+    console.error("This skill requires cloud execution and cannot run with --target local"); process.exitCode = 1; return;
+  }
   if (routing.route !== "remote" && options.file?.length) {
     const error = "File uploads require an explicitly remote run";
     if (options.json) console.log(JSON.stringify({ error })); else console.error(error);
@@ -512,6 +630,12 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
           return;
         }
         const remoteRunId = typeof run.id === "string" ? run.id : undefined;
+        // Admission survives an interrupted wait or log request. A fresh CLI
+        // process can resolve this local receipt to the already admitted run.
+        updateSkillRun(runContext, {
+          status: normalizeRemoteStatus(run.status),
+          remoteRunId,
+        });
         const nextActions = remoteRunNextActions(remoteRunId);
         const polling = parsePollingOptions(options);
         const polled: PollRemoteRunResult = options.wait && remoteRunId && !isTerminalRemoteStatus(run.status)
@@ -584,7 +708,7 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
   });
   if (options.json) console.log(JSON.stringify({ skill: skill.name, args, ...result, run: completed }, null, 2));
   else {
-    if (result.stdout) process.stdout.write(result.stdout);
+    if (result.stdout) await writeCliOutput(result.stdout, false);
     if (result.stderr) process.stderr.write(result.stderr);
     if (result.error) console.error(result.error);
     console.log(chalk.dim(`Run metadata: ${completed.paths.runDir}/run.json`));
@@ -863,14 +987,18 @@ interface PollRemoteRunResult {
 
 function parsePollingOptions(options: RunCommandOptions): PollingOptions {
   return {
-    intervalMs: parsePositiveInt(options.pollIntervalMs, 1000),
-    timeoutMs: parsePositiveInt(options.pollTimeoutMs, 300_000),
+    intervalMs: parsePollingMilliseconds(options.pollIntervalMs, 1000, "--poll-interval-ms"),
+    timeoutMs: parsePollingMilliseconds(options.pollTimeoutMs, 300_000, "--poll-timeout-ms"),
   };
 }
 
-function parsePositiveInt(value: string | undefined, fallback: number): number {
-  const parsed = Number.parseInt(value ?? "", 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+function parsePollingMilliseconds(value: string | undefined, fallback: number, flag: string): number {
+  if (value === undefined) return fallback;
+  const parsed = Number(value);
+  if (!/^[0-9]+$/.test(value) || !Number.isSafeInteger(parsed) || parsed <= 0 || parsed > 2_147_483_647) {
+    throw new Error(`${flag} must be an integer from 1 to 2147483647 milliseconds`);
+  }
+  return parsed;
 }
 
 async function pollRemoteRun(

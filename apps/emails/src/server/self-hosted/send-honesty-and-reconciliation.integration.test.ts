@@ -342,6 +342,47 @@ describe.skipIf(!pgClient)("A: a message the provider ACCEPTED never reads as a 
     expect(row?.send_state).toBe("sent");
   });
 
+  it("resolves a sent lookup while cancellation still refuses to claim it was stopped", async () => {
+    let sends = 0;
+    const deps = makeDeps({ provider: "ses", send: async () => { sends++; return "ses-lookup-receipt"; } });
+    const { token } = await makeTenant("honesty-sent-lookup");
+    await registerSender(deps, token, "lookup.example", "sender@lookup.example");
+    const key = `sent-lookup-${crypto.randomUUID()}`;
+    const accepted = await call(deps, "POST", "/v1/messages/send", {
+      token,
+      body: { from: "sender@lookup.example", to: ["target@external.example"], subject: "lookup", text: "private fixture body", idempotency_key: key },
+    });
+    expect(accepted.status).toBe(202);
+    expect(accepted.body.sent).toBe(true);
+    const row = await ledgerRow(key);
+    expect(row?.provider_message_id).toBe("ses-lookup-receipt");
+
+    const lookup = await call(deps, "POST", "/v1/messages/send-intents/lookup", {
+      token, body: { idempotency_key: key },
+    });
+    expect(lookup).toEqual({ status: 200, body: { send_intent: {
+      found: true, tombstoned: false, reconciliation_required: false,
+      message: { id: row!.id, send_state: "sent" },
+    } } });
+    expect(await ledgerRow(key)).toEqual(row);
+    expect(sends).toBe(1);
+
+    const cancelled = await call(deps, "POST", "/v1/messages/send-intents/cancel", {
+      token, body: { idempotency_key: key },
+    });
+    expect(cancelled.status).toBe(200);
+    expect(cancelled.body.cancellation).toMatchObject({
+      outcome: "reconciliation_required", tombstoned: true, reconciliation_required: true,
+      message: { id: row!.id, send_state: "sent" },
+    });
+    const afterCancellation = await call(deps, "POST", "/v1/messages/send-intents/lookup", {
+      token, body: { idempotency_key: key },
+    });
+    expect(afterCancellation.body.send_intent.tombstoned).toBe(true);
+    expect(await ledgerRow(key)).toEqual(row);
+    expect(sends).toBe(1);
+  });
+
   it("provider accepted but the ledger write failed afterwards", async () => {
     const deps = makeDeps({ provider: "ses", send: async () => "ses-accept-broken-ledger" });
     withBrokenFinalization(deps);

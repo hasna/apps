@@ -130,7 +130,7 @@ export interface UpdateConfigInput {
   outputs?: ConfigOutput[];
   format?: ConfigFormat;
   content?: string;
-  description?: string;
+  description?: string | null;
   tags?: string[];
   is_template?: boolean;
   synced_at?: string | null;
@@ -194,7 +194,7 @@ export interface CreateProfileInput {
 
 export interface UpdateProfileInput {
   name?: string;
-  description?: string;
+  description?: string | null;
   selectors?: ProfileSelector;
   variables?: ProfileVariables;
 }
@@ -385,11 +385,86 @@ export interface SyncResult {
 }
 
 // Export/import
-export interface ExportManifest {
+export interface ExportManifestV1 {
   version: string;
   exported_at: string;
   configs: Array<Omit<Config, "content">>;
 }
+
+export const INSTRUCTIONS_DOMAIN_ARCHIVE_SCHEMA = "hasna.instructions.domain-archive/v2" as const;
+
+export interface InstructionsDomainArchiveCounts {
+  configs: number;
+  config_snapshots: number;
+  profiles: number;
+  profile_config_bindings: number;
+  profile_asset_bindings: number;
+  machines: number;
+}
+
+export interface InstructionsDomainArchiveHashes {
+  configs: string;
+  config_snapshots: string;
+  profiles: string;
+  profile_config_bindings: string;
+  profile_asset_bindings: string;
+  machines: string;
+}
+
+export interface InstructionsDomainArchiveIntegrity {
+  algorithm: "sha256";
+  canonicalization:
+    | "hasna.instructions.logical-json/v1"
+    | "hasna.instructions.restorable-logical-json/v1";
+  counts: InstructionsDomainArchiveCounts;
+  hashes: InstructionsDomainArchiveHashes;
+  domain_sha256: string;
+}
+
+export interface InstructionsDomainArchiveExclusion {
+  entity: "api_keys" | "idempotency_receipts" | "feedback";
+  classification: "security_state" | "transport_state" | "out_of_domain";
+  reason: string;
+}
+
+export interface InstructionsDomainArchiveManifestV2 {
+  schema: typeof INSTRUCTIONS_DOMAIN_ARCHIVE_SCHEMA;
+  version: "2.0.0";
+  exported_at: string;
+  payload: {
+    path: "domain.json";
+    sha256: string;
+    size_bytes: number;
+  };
+  integrity: InstructionsDomainArchiveIntegrity;
+  exclusions: InstructionsDomainArchiveExclusion[];
+}
+
+export interface ArchivedConfigSnapshot extends Omit<ConfigSnapshot, "config_id"> {
+  config_slug: string;
+}
+
+export interface ArchivedProfileConfigBinding extends Omit<ProfileConfigBinding, "profile_id" | "config_id"> {
+  profile_slug: string;
+  config_slug: string;
+}
+
+export interface ArchivedProfileAssetBinding extends Omit<ProfileAssetBinding, "profile_id" | "source_config_id"> {
+  profile_slug: string;
+  source_config_slug: string;
+}
+
+export interface InstructionsDomainArchiveV2 {
+  schema: typeof INSTRUCTIONS_DOMAIN_ARCHIVE_SCHEMA;
+  configs: Config[];
+  config_snapshots: ArchivedConfigSnapshot[];
+  profiles: Profile[];
+  profile_config_bindings: ArchivedProfileConfigBinding[];
+  profile_asset_bindings: ArchivedProfileAssetBinding[];
+  machines: Machine[];
+}
+
+export type ExportManifest = ExportManifestV1 | InstructionsDomainArchiveManifestV2;
 
 // Error types
 export class ConfigNotFoundError extends Error {

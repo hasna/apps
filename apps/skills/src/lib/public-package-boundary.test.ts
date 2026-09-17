@@ -120,12 +120,11 @@ describe("public package boundary", () => {
 
 
   test("ships zero skill corpus in the packed public package", () => {
-    // The npm tarball carries no bundled corpus: distribution is CI-built signed
-    // bundles + `skills pull`, and the corpus in the repo is the canonical git source,
-    // not a package deliverable. (catalog-runnable.test.ts covers every skill against
-    // the TREE; this pins one against the PACKAGE file list.)
+    // Public packages contain software; all operational documents belong to
+    // user-owned storage. Check the complete packlist, not one historical name.
     const files = readPackedFiles();
-    expect(files).not.toContain("skills/brand-kit/SKILL.md");
+    expect(files.length).toBeGreaterThan(0);
+    expect(files.filter(path => /(^|\/)SKILL\.md$/i.test(path) || /^(?:skills|agent-skills)\//i.test(path))).toEqual([]);
   });
 
   test("keeps legacy service server and cloud scaffolds out of the public package", () => {
@@ -307,7 +306,7 @@ describe("public package boundary", () => {
     // that cannot fail.
     expect(files.some((file) => file.endsWith("src/cli/commands/auth.ts"))).toBe(true);
     expect(files.some((file) => file.endsWith("src/lib/mcp-contracts.ts"))).toBe(true);
-    expect(files.some((file) => file.endsWith("src/lib/registry-data/media-processing.ts"))).toBe(true);
+    expect(files.some((file) => file.endsWith("src/lib/registry-data/index.ts"))).toBe(true);
     expect(files.some((file) => file.endsWith("docs/architecture/upstream-boundary.md"))).toBe(true);
     expect(files.some((file) => file.endsWith("docs/product/product-brief.md"))).toBe(true);
     expect(files.some((file) => file.endsWith("docs/release/v1-acceptance.md"))).toBe(true);

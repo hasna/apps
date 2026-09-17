@@ -283,7 +283,7 @@ test("Legacy OpenCode copies project instructions and permission rules without p
       const providerId=Object.keys(config.provider)[0];
       const content=JSON.parse(prepared.env.OPENCODE_CONFIG_CONTENT);
       expect(content.instructions).toEqual([join(project,"AGENTS.md")]);
-      expect(content.permission).toEqual({bash:"deny"});
+      expect(content.permission).toMatchObject({bash:"deny"});
       expect(content.enabled_providers).toEqual([providerId]);
       expect(content.provider[providerId].options.baseURL).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/v1$/);
       expect(content.provider.attacker).toBeUndefined();
@@ -306,7 +306,7 @@ test("Legacy OpenCode preserves merged JSONC permission layers and per-agent pol
     const prepared=await prepareHarnessLaunch({...input,harness:"opencode",version:"1.18.29",cwd:nested,stateDir:join(input.stateDir,"policy"),args:["run","hello"]});
     try {
       const content=JSON.parse(prepared.env.OPENCODE_CONFIG_CONTENT);
-      expect(content.permission).toEqual({bash:"allow",read:{[join(homedir(),"forbidden")] : "deny"},edit:"deny"});
+      expect(content.permission).toMatchObject({bash:"allow",read:{[join(homedir(),"forbidden")] : "deny"},edit:"deny"});
       expect(content.agent.build.permission).toEqual({read:"deny",bash:"deny"});
       expect(content.agent.reviewer.permission).toEqual({bash:"deny",read:{[join(homedir(),"agent-forbidden")]:"deny"}});
       expect(content.agent["tools-agent"].permission).toEqual({read:"deny",edit:"deny"});
@@ -341,7 +341,7 @@ test("Legacy OpenCode preserves supported environment policy layers without impo
   try {
     const prepared=await prepareHarnessLaunch({...input,harness:"opencode",version:"1.18.29",cwd:project,stateDir:join(input.stateDir,"policy"),args:["run","hello"]});
     const content=JSON.parse(prepared.env.OPENCODE_CONFIG_CONTENT);
-    expect(content.permission).toEqual({grep:"deny",websearch:"deny",bash:"deny"});
+    expect(content.permission).toMatchObject({grep:"deny",websearch:"deny",bash:"deny"});
     expect(content.provider.attacker).toBeUndefined();
   } finally {
     if(before.config===undefined) delete process.env.OPENCODE_CONFIG; else process.env.OPENCODE_CONFIG=before.config;

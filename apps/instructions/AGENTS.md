@@ -85,6 +85,10 @@ keeps the token value in the runtime environment or secret manager.
 | `HASNA_INSTRUCTIONS_API_URL` | unset | Client `/v1` base URL — tier above the Keychain `api-url` item and the credentials file; defaults to the fleet gateway `https://api.hasna.com/instructions` once a credential resolves |
 | `HASNA_INSTRUCTIONS_LOCAL` | unset | Explicit opt-in for the on-box SQLite store (`1`); honoured only when no authority/credential is configured, and every local run says `local mode` on stderr |
 | `HASNA_INSTRUCTIONS_DB_PATH` | `~/.hasna/instructions/instructions.db` | Local SQLite location (explicit override) |
+| `HASNA_INSTRUCTIONS_S3_BUCKET` | unset | Optional private bucket for immutable export backups; never selects a DB or client transport |
+| `HASNA_INSTRUCTIONS_S3_PREFIX` | `instructions/` | Traversal-safe object prefix |
+| `HASNA_INSTRUCTIONS_AWS_REGION` | `us-east-1` | S3 region |
+| `HASNA_INSTRUCTIONS_S3_ENDPOINT` | unset | Optional HTTPS S3-compatible origin (HTTP loopback only) |
 | `INSTRUCTIONS_PROFILE` | `full` | MCP tool profile (minimal/standard/full) |
 | `MCP_HTTP_PORT` | `8853` | Loopback MCP HTTP port |
 | `INSTRUCTIONS_PORT` | `3457` | HTTP API server port (`PORT` takes priority) |
@@ -120,5 +124,10 @@ third-party excludes.
 - MCP HTTP binds to `127.0.0.1`; `instructions-serve` binds to localhost unless
   configured otherwise.
 - `instructions-serve` exposes authenticated `/v1`, not the removed `/api`
-  surface, and does not mount MCP.
+  surface, and does not mount MCP. Without PostgreSQL it reports an
+  unconfigured backend and `/ready` returns 503; it never serves local SQLite.
+- S3 is an adjunct immutable backup plane. `instructions storage ...` never
+  changes SQLite/PostgreSQL/HTTP authority selection.
+- `instructions migrate-legacy --confirm-local` is a dry-run by default;
+  `--apply` creates an owner-only destination backup and migrates transactionally.
 - Session/project renderers reject path escapes and symlinked managed paths.

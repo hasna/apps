@@ -20,9 +20,12 @@
 // Additive SaaS interface; the generated legacy client below retains its contract.
 export { HostedRecordingsClient, HostedLibrary, HostedPasteHistory, recordingCursor, pasteCursor, RecordingsSDKError } from "../hosted/index.js";
 export type { ClientOptions as HostedClientOptions, CredentialProvider as HostedCredentialProvider,
-  HostedLibraryOptions, HostedLibraryRecording, HostedLibraryPage,
+  HostedLibraryOptions, HostedLibraryRecording, HostedLibraryPage, HostedTranscriptExport,
   HostedPasteHistoryOptions, HostedPasteHistoryReceipt, HostedPasteHistoryPage, Cursor as HostedCursor,
-  HostedProvidersResponse, HostedTranscriptionProvider, HostedTranscriptionModel } from "../hosted/index.js";
+  HostedProvidersResponse, HostedTranscriptionProvider, HostedTranscriptionModel,
+  HostedAudioFormat, HostedAudioDescriptor, HostedAudioAvailable, HostedAudioUnavailable, HostedAudioMetadata,
+  AudioBody, HostedAudioUploadInput, HostedAudioDownloadOptions, HostedAudioDownloadResponse, HostedAudioRange,
+  AudioUploadInput, AudioDownloadOptions, AudioDownloadResponse, AudioRange } from "../hosted/index.js";
 
 export {
   createRecordingsV1Client,

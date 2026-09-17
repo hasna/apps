@@ -15,15 +15,22 @@ import {
 } from "../../lib/installer.js";
 import { getProjectConfigPath, listPinnedSkills, pinProjectSkill } from "../../lib/project-state.js";
 import { normalizeSkillName } from "../../lib/utils.js";
-import { pullSkills, splitNameVersion } from "../../lib/pull.js";
+import { splitNameVersion } from "../../lib/pull.js";
+import { loadSelectedSkill, pinSelectedSkillVersion } from "../../lib/selection-resolver.js";
+import { SkillSelectionError } from "../../lib/selection-cache.js";
+import { selectedProfileId, reportContextError } from "./context.js";
+import { handleProfileSync } from "./profile-sync.js";
+import { requireSkillsReadAccess } from "../../lib/read-access.js";
 
 export function registerInstall(parent: Command) {
   parent
     .command("install")
-    .argument("[args...]", "Deprecated. Use 'skills pin <name>' for project skill pins.")
+    .argument("[skills...]", "Exact selected skill references (default: synchronize the selected profile)")
+    .option("--selection-profile <id>", "Authoritative selection profile")
+    .option("--project", "Also pin the selection metadata in this project", false)
     .option("--json", "Output result as JSON", false)
-    .description("Deprecated. Render skills into native agent folders with 'skills render'.")
-    .action((args: string[], options: { json: boolean }) => handleDeprecatedInstall(args, options));
+    .description("Install verified API-selected bundles into the Skills CLI cache")
+    .action((args: string[], options: { json: boolean; selectionProfile?: string; project: boolean }) => handleSelectedInstall(args, options));
 
   parent
     .command("pin")
@@ -33,6 +40,7 @@ export function registerInstall(parent: Command) {
     .option("--dry-run", "Print what would happen without actually pinning", false)
     .option("--category <category>", "Pin all skills in a category (case-insensitive)")
     .option("--remote", "Pin skills from the remote registry (the resolved Skills credential; HASNA_SKILLS_API_URL for your own instance). Implied for name@version pins", false)
+    .option("--selection-profile <id>", "Authoritative selection profile for exact version pins")
     .description("Pin skills in .skills/project.json without copying source")
     .action((skills: string[], options) => {
       void handlePin(skills, options).catch(handlePinError);
@@ -71,13 +79,20 @@ export function registerInstall(parent: Command) {
     .action((skills: string[], options) => handleUpdate(skills, options));
 }
 
-function handleDeprecatedInstall(args: string[], options: { json: boolean }) {
-  const error = args.length > 0
-    ? "skills install no longer pins or copies skills. Use: skills pin <name>"
-    : "Use: skills render";
-  if (options.json) console.log(JSON.stringify({ success: false, error }));
-  else console.error(chalk.red(error));
-  process.exitCode = 1;
+async function handleSelectedInstall(args: string[], options: { json: boolean; selectionProfile?: string; project: boolean }) {
+  if (!args.length) return handleProfileSync(options);
+  try {
+    const results = [];
+    for (const spec of args) {
+      const profileId = selectedProfileId(options.selectionProfile);
+      const result = options.project
+        ? await pinSelectedSkillVersion(spec, profileId, { projectDir: process.cwd() })
+        : await loadSelectedSkill(spec, profileId);
+      results.push({ success: true, selection: result.selection });
+    }
+    if (options.json) console.log(JSON.stringify({ results }));
+    else for (const result of results) console.log(`Installed ${result.selection.slug}@${result.selection.version} (${result.selection.bundleDigest}).`);
+  } catch (error) { reportContextError(error, options.json); }
 }
 
 function handleDeprecatedRemove(skill: string | undefined, options: { json: boolean }) {
@@ -104,7 +119,8 @@ async function handlePin(skills: string[], options: any) {
   }
 
   let remoteRegistry: SkillMeta[] | null = null;
-  const useRemote = Boolean(options.remote);
+  const access = await requireSkillsReadAccess();
+  const useRemote = Boolean(options.remote) || access.mode === "hosted";
   if (options.category) {
     remoteRegistry = useRemote ? await loadRemoteRegistry() : null;
     const remoteSkills = remoteRegistry ?? [];
@@ -139,7 +155,7 @@ async function handlePin(skills: string[], options: any) {
   const results: InstallResult[] = [];
   const total = skills.length;
   const startTime = Date.now();
-  if (useRemote && !remoteRegistry) remoteRegistry = await loadRemoteRegistry();
+  if (useRemote && !remoteRegistry && skills.some((spec) => !splitNameVersion(spec).version)) remoteRegistry = await loadRemoteRegistry();
   const remoteByName = new Map((remoteRegistry ?? []).map((skill) => [skill.name, skill]));
   for (let i = 0; i < total; i++) {
     // `name@version` pins an exact published version (hasna/apps#1630); the pin record keeps it.
@@ -151,6 +167,7 @@ async function handlePin(skills: string[], options: any) {
           // fetch, so --remote is not required for it (hasna/apps#1671).
           useRemote: true,
           overwrite: options.overwrite,
+          selectionProfile: options.selectionProfile,
         })
       : useRemote
         ? pinRemoteSkill(pinName, remoteByName, options.overwrite)
@@ -256,7 +273,7 @@ function handlePinsList(options: { json: boolean }) {
 export async function pinExactVersion(
   name: string,
   version: string,
-  options: { useRemote: boolean; overwrite: boolean; pull?: (spec: string) => Promise<{ success: boolean; version?: string; error?: string }> },
+  options: { useRemote: boolean; overwrite: boolean; selectionProfile?: string; pull?: (spec: string) => Promise<{ success: boolean; version?: string; error?: string }> },
 ): Promise<InstallResult> {
   if (!options.useRemote) {
     return {
@@ -266,7 +283,14 @@ export async function pinExactVersion(
       mode: "pin",
     };
   }
-  const pull = options.pull ?? (async (spec: string) => (await pullSkills({ names: [spec] })).results[0] ?? { success: false, error: "pull returned no result" });
+  const pull = options.pull ?? (async (spec: string) => {
+    try {
+      const result = await pinSelectedSkillVersion(spec, selectedProfileId(options.selectionProfile), { projectDir: process.cwd() });
+      return { success: true, version: result.selection.version };
+    } catch (error) {
+      return { success: false, error: error instanceof SkillSelectionError ? error.message : "The exact skill selection could not be verified. Check authentication and the selected profile." };
+    }
+  });
   const pulled = await pull(`${name}@${version}`);
   if (!pulled.success) {
     return { skill: name, success: false, error: pulled.error ?? `could not fetch '${name}@${version}'`, mode: "pin", source: "remote" };

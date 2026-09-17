@@ -19,6 +19,7 @@
 
 import { openStorage } from './storage.mjs';
 import { createApp, resolveConfig, SERVICE, VERSION } from './app.mjs';
+import { NoteWriteRateLimitConfigurationError } from './write-rate-config.mjs';
 
 // Binds-before-version class (todos row 7e5f8f3d): --version must answer
 // BEFORE resolveConfig()/Bun.serve. It previously fell through and bound the
@@ -64,9 +65,11 @@ try {
   if (config.host !== '127.0.0.1' && config.host !== 'localhost') {
     console.log(`[${SERVICE}] WARNING: bound to ${config.host} — put a TLS reverse proxy in front before exposing beyond your LAN`);
   }
-} catch {
+} catch (error) {
   // Driver errors can contain connection details. Never print the error/DSN.
-  console.error('notes-server: startup failed; verify server-only HASNA_NOTES_DATABASE_URL, signing key, schema and connectivity. PostgreSQL is mandatory; no local fallback.');
+  console.error(error instanceof NoteWriteRateLimitConfigurationError
+    ? `notes-server: ${error.message}`
+    : 'notes-server: startup failed; verify server-only HASNA_NOTES_DATABASE_URL, signing key, schema and connectivity. PostgreSQL is mandatory; no local fallback.');
   if (store) await store.close().catch(() => {});
   process.exit(1);
 }

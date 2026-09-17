@@ -3622,3 +3622,47 @@ it("scheduled sends use enqueue and preserve payload without claiming delivery",
  expect(result.messageId).toBe("");expect(result.scheduled?.id).toBe("job-fixture");expect(calls).toHaveLength(1);
  expect(calls[0]).toMatchObject({path:"/v1/scheduled/enqueue",body:{headers:{"x-campaign":"spring"},tags:{campaign:"spring"},track_opens:true,track_clicks:true,tracking_url:"https://track.example",scheduled_at:"2030-01-01T00:00:00.000Z",idempotency_key:"stable-fixture",provider_id:"provider-fixture",cc:["copy@example.com"],bcc:["blind@example.com"],reply_to:"reply@example.com",unsubscribe_url:"https://example.com/unsubscribe",allow_suppressed_recipients:true,attachments:[{filename:"a.txt",content:"YQ==",content_type:"text/plain"}]}});
 });
+
+
+describe("SDK send URL boundary validation", () => {
+  for (const scheduledAt of [undefined, "2030-01-01T00:00:00Z"]) {
+    it(`rejects malformed plain or HTML body before any transport: ${scheduledAt ?? "immediate"}`, async () => {
+      let calls = 0;
+      const ds = new SelfHostedMailDataSource({
+        baseUrl: "http://127.0.0.1:1/v1", apiKey: "fixture-only",
+        fetchImpl: async () => { calls++; throw new Error("unexpected fixture transport"); },
+      });
+      for (const content of [
+        { body: String.raw`https://example.test/a\nRegards` },
+        { body: "Plain", html: String.raw`<a href="HTTPS://example.test/a\r">Download</a>` },
+      ]) {
+        await expect(ds.send({ from: "sender@example.com", to: "recipient@example.com", subject: "Fixture", ...content, scheduledAt })).rejects.toThrow("invalid_body_url_boundary");
+      }
+      expect(calls).toBe(0);
+    });
+  }
+});
+
+
+describe("typed remote replies", () => {
+  it("forwards the parent record through the advertised send contract", async () => {
+    const { serve } = make([]);
+    const ds = new SelfHostedMailDataSource({baseUrl:"https://emails.example/v1",apiKey:crypto.randomUUID(),fetchImpl:async (url, init) => url.endsWith("openapi.json") ? {status:200,text:async () => JSON.stringify(emailsSelfHostedOpenApi)} : serve.fetchImpl(url, init)});
+    await ds.send({from:"me@example.com",to:"other@example.com",subject:"Re: Topic",body:"Reply",markdown:false,replyToId:"parent-record"});
+    expect(serve.posted[0]).toMatchObject({reply_to_message_id:"parent-record"});
+  });
+  it("refuses an old server before posting a reply", async () => {
+    const methods: string[] = [];
+    const ds = new SelfHostedMailDataSource({baseUrl:"https://emails.example/v1",apiKey:crypto.randomUUID(),fetchImpl:async (_url, init) => {
+      methods.push(init?.method ?? "GET");
+      return {status:200,text:async () => JSON.stringify({...emailsSelfHostedOpenApi,paths:{}})};
+    }});
+    await expect(ds.send({from:"me@example.com",to:"other@example.com",subject:"Re: Topic",body:"Reply",replyToId:"parent-record"})).rejects.toThrow("API needs an update");
+    expect(methods).toEqual(["GET"]);
+  });
+  it("projects inbound Reply-To for reply defaults", async () => {
+    const {ds} = make([v1("5", {headers:{"Reply-To":"Reply Desk <reply@example.com>"}})]);
+    const {replyDefaults} = await import("./mail-types.js");
+    expect(replyDefaults((await ds.getMessage("5"))!).to).toBe("reply@example.com");
+  });
+});

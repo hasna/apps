@@ -2,6 +2,8 @@ import chalk from "chalk";
 import type { Command } from "commander";
 
 import { clearRegistryCache } from "../../lib/registry.js";
+import { prepareSkill } from "../../lib/prepare-skill.js";
+import { writeCliOutput } from "../output.js";
 import {
   portPortableSkill,
   portPortableSkillDirectory,
@@ -11,6 +13,32 @@ import {
 } from "../../lib/portable-skills.js";
 
 export function registerPortableSkillCommands(parent: Command) {
+  parent
+    .command("prepare")
+    .argument("<name>", "Name of a skill in the local corpus")
+    .requiredOption("--version <version>", "Reviewed semantic version for this draft")
+    .option("--kind <kind>", "Explicit instruction or executable kind; required for legacy kind-less manifests")
+    .option("--dry-run", "Validate the candidate and report its hash without changing the draft", false)
+    .option("--json", "Output result as JSON", false)
+    .description("Validate a reviewed draft and update its manifest version and content hash")
+    .action(async (name: string, options: { version: string; kind?: string; dryRun: boolean; json: boolean }) => {
+      try {
+        const result = prepareSkill(name, { ...options, kind: options.kind === undefined ? undefined : parseSkillKind(options.kind) });
+        if (result.written) clearRegistryCache();
+        if (options.json) await writeCliOutput(JSON.stringify(result, null, 2));
+        else {
+          console.log(chalk.green(`${result.written ? "Prepared" : options.dryRun ? "Previewed" : "Already prepared"} ${result.name}@${result.version} (${result.kind})`));
+          console.log(chalk.dim(`  Content hash: ${result.contentHash}`));
+          console.log(chalk.dim(`  Manifest: ${result.path}/skill.json`));
+          if (result.written) console.log(chalk.dim(`  Publish: skills push ${result.name}`));
+        }
+      } catch (error) {
+        if (options.json) await writeCliOutput(JSON.stringify({ error: (error as Error).message }, null, 2));
+        else console.error(chalk.red((error as Error).message));
+        process.exitCode = 1;
+      }
+    });
+
   parent
     .command("new")
     .alias("scaffold")
@@ -91,13 +119,13 @@ export function registerPortableSkillCommands(parent: Command) {
     });
 }
 
-function handleBulkPort(path: string, options: { name?: string; overwrite: boolean; json: boolean }): void {
+function handleBulkPort(path: string, options: { name?: string; overwrite: boolean; allowShadow: boolean; json: boolean }): void {
   if (options.name) {
     writePortableError(new Error("--name cannot be used with --all"), options.json);
     return;
   }
   try {
-    const summary = portPortableSkillDirectory(path, { overwrite: options.overwrite });
+    const summary = portPortableSkillDirectory(path, { overwrite: options.overwrite, allowShadow: options.allowShadow });
     clearRegistryCache();
     if (options.json) {
       console.log(JSON.stringify(summary, null, 2));

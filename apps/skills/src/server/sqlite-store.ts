@@ -1,3 +1,4 @@
+import { SqliteExecutionGrantStore } from "./execution-grant-store.js";
 /**
  * SQLite implementation of SkillsProductStore.
  *
@@ -13,6 +14,7 @@
  * requirement; changing Postgres behaviour is not this module's job.
  */
 import { Database } from "bun:sqlite";
+import { SqliteSkillSelectionStore } from "./selection-store.js";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -85,6 +87,8 @@ const NO_REVISION_SENTINEL = "00000000000000000000000000000000000000000000000000
 const LAST_USED_RESOLUTION_MS = 60_000;
 
 export class SqliteSkillsStore implements SkillsProductStore {
+  get selectionStore() { return new SqliteSkillSelectionStore(this.db); }
+  get executionGrantStore() { return new SqliteExecutionGrantStore(this.db); }
   readonly backend: StoreBackendInfo;
   private db: Database;
   private closed = false;

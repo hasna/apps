@@ -35,7 +35,8 @@ if (import.meta.main) {
   if (EARLY_ARGV.includes("--help") || EARLY_ARGV.includes("-h")) {
     console.log(`Usage: skills-worker [options]
 
-Drains @hasna/skills runs from the store.
+Marks queued legacy unversioned runs as retired. Published executable bundles
+run through the managed runtime.
 
 Options:
   -V, --version  output the version number
@@ -54,7 +55,7 @@ Environment:
   // server on one: it claims runs out of a queue nobody else can see, so the API's runs
   // stay queued forever with nothing logged anywhere.
   assertDurableStore(store, config);
-  const storage = new ArtifactStorage({ bucket: config.artifactBucket, prefix: config.artifactPrefix });
+  const storage = new ArtifactStorage({ bucket: config.artifactBucket, prefix: config.artifactPrefix, runPrefix: config.runArtifactPrefix });
   // Name the database for the same reason the server does. An API container and a
   // worker container that each defaulted to their own local SQLite file would otherwise
   // present as a queue that never drains, with no error on either side; two different

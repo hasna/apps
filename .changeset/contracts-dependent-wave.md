@@ -1,6 +1,5 @@
 ---
 "@hasna/knowledge": patch
-"@hasna/projects": patch
 "@hasna/secrets": patch
 ---
 

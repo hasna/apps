@@ -1,3 +1,4 @@
+import { assertSendBodyUrlBoundary } from "../../lib/send-body-boundary.js";
 import type { Command } from "commander";
 import chalk from "../../lib/chalk-lite.js";
 import { readFileSync, statSync } from "node:fs";
@@ -238,6 +239,9 @@ export function registerSendCommands(program: Command, output: (data: unknown, f
         }
 
         if (!subject) handleError(new Error("Subject is required (use --subject or --template)"));
+
+        // Validate before dry-run prints any body content and before sending.
+        assertSendBodyUrlBoundary(textBody, htmlBody);
 
         // Send through the server API via the seam. Local-only concerns (provider
         // creds/warming/tracking/scheduling/threading tables, local ledger) do not

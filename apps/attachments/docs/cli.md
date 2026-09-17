@@ -1,7 +1,7 @@
 # CLI reference
 
 Credentials and the service authority resolve through the ONE shared
-`@hasna/contracts` client chain (pinned exact `1.0.2`), fresh per invocation:
+`@hasna/contracts` client chain (pinned exact `1.1.0`), fresh per invocation:
 `HASNA_ATTACHMENTS_API_KEY_OVERRIDE` / `HASNA_PROFILE` /
 `HASNA_ATTACHMENTS_API_KEY_REF`, the macOS Keychain item
 `hasna.credentials.attachments.api-key`, `~/.hasna/attachments/config/credentials`
@@ -36,12 +36,36 @@ endpoint, no local database, no client DSN and no fallback. Run
   They return BLOCKED on configuration, authentication or transport failure, and
   report the credential tier and source that resolved (never the value).
   whoami does not invent an identity from local files.
+- health-check assesses links returned by the service. Signed S3 download links
+  use a one-byte ranged GET because their signatures reject HEAD; response bodies
+  are cancelled without buffering the object and the request is aborted after
+  the check. An unsatisfiable range is checked
+  once without Range under the same deadline to support empty files.
+  Ordinary share pages retain HEAD
+  so a diagnostic does not consume a constrained download. Expired or failed
+  links still produce exit 1; this is separate from authenticated API health.
 - config show redacts credentials. config set accepts only --expiry and --link-type.
   config test checks authenticated service access.
 - link-task, complete-task, task-journal and watch require authenticated
   Todos HTTPS configuration resolved through the shared seam; snapshot-session
   requires the Sessions equivalent. URL overrides must match the configured
   authority and prefix.
+- Todos task commands use `/v1/tasks` and the current `{task}` and
+  `{history, count}` responses. A failed or malformed task/history read exits
+  nonzero; journals never silently omit unavailable history. Journal attachment
+  discovery uses the canonical task ID's `task:<id>` tag.
+- link-task preserves unrelated metadata and previously linked attachments.
+  complete-task checks the task before uploading, then merges evidence using the
+  observed task version and verifies the completion acknowledgement. These are
+  separate service operations. On a conflict, interruption or partial failure,
+  inspect the task and any reported uploaded attachment IDs before retrying.
+  No write is automatically retried.
+- resolve-evidence resolves each evidence attachment on the configured service.
+  A missing attachment is an error; stale links stored in task metadata are not
+  used as a fallback.
+- watch requires a server exposing `/v1/tasks/stream`. The current Todos v1 server
+  does not expose this stream. Unsupported-route and authentication responses
+  terminate the command; it never falls back to legacy `/api/tasks` routes.
 
 ### Diagnostic transport contract
 

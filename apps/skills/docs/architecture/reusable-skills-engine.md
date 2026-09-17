@@ -40,7 +40,7 @@ registry, with the bundled OSS registry as the offline fallback.
 - `installSkill` writes a project pin to `.skills/project.json`.
 - `installSkillSource` is a disabled compatibility boundary and must return an
   error instead of copying source.
-- `createLocalSkillManifest` derives a manifest from a local bundled skill.
+- `createLocalSkillManifest` derives a manifest from an owned local skill.
 - `installSkillManifest` is disabled for project writes; docs are served by the
   registry/API/MCP instead of being copied into `.skills`.
 

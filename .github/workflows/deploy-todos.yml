@@ -314,6 +314,12 @@ jobs:
           ecr_url="$(get_string '.ecr_repository_url')"
           assign_public_ip="$(get_string '.assign_public_ip')"
           health_url="$(get_string '.health_url')"
+          # This lane owns the fleet runtime policy. The SSM manifest may
+          # explicitly override it with an integer; malformed values refuse.
+          api_rate_limit_max="$(jq -er '
+            if has("api_rate_limit_max") then .api_rate_limit_max else 60000 end
+            | numbers | select(. == floor and . >= 1 and . <= 1000000)
+          ' <<<"${manifest}")"
           subnets="$(jq -er '.subnets | arrays | select(length > 0) | join(",")' <<<"${manifest}")"
           security_groups="$(jq -er '.security_groups | arrays | select(length > 0) | join(",")' <<<"${manifest}")"
 
@@ -343,6 +349,7 @@ jobs:
             printf 'subnets=%s\n' "${subnets}"
             printf 'security_groups=%s\n' "${security_groups}"
             printf 'health_url=%s\n' "${health_url}"
+            printf 'api_rate_limit_max=%s\n' "${api_rate_limit_max}"
           } >> "${GITHUB_OUTPUT}"
 
       - name: Capture rollback anchor and verify live service authority
@@ -505,12 +512,26 @@ jobs:
           SERVICE: ${{ steps.manifest.outputs.service }}
           WEB_FAMILY: ${{ steps.manifest.outputs.web_family }}
           WEB_CONTAINER: ${{ steps.manifest.outputs.web_container }}
+          PREVIOUS_TASK_DEFINITION: ${{ steps.before.outputs.previous_task_definition }}
+          API_RATE_LIMIT_MAX: ${{ steps.manifest.outputs.api_rate_limit_max }}
         run: |
           set -Eeuo pipefail
-          task_definition="$(aws ecs describe-task-definition --task-definition "${WEB_FAMILY}" --query taskDefinition --output json)"
+          [[ "${API_RATE_LIMIT_MAX}" =~ ^[1-9][0-9]{0,6}$ ]] && (( API_RATE_LIMIT_MAX <= 1000000 )) || { echo "invalid API rate limit" >&2; exit 1; }
+          live_task_definition="$(aws ecs describe-services --cluster "${CLUSTER}" --services "${SERVICE}" --query 'services[0].taskDefinition' --output text)"
+          [[ "${live_task_definition}" == "${PREVIOUS_TASK_DEFINITION}" ]] || { echo "service changed after rollback anchor capture" >&2; exit 1; }
+          # Clone the captured running revision, not a newer unused family revision.
+          task_definition="$(aws ecs describe-task-definition --task-definition "${PREVIOUS_TASK_DEFINITION}" --query taskDefinition --output json)"
           [[ "$(jq --arg c "${WEB_CONTAINER}" '[.containerDefinitions[] | select(.name == $c)] | length' <<<"${task_definition}")" == "1" ]]
-          replacement="$(jq --arg image "${IMAGE}" --arg c "${WEB_CONTAINER}" '
-            .containerDefinitions |= map(if .name == $c then .image = $image else . end)
+          jq -e --arg c "${WEB_CONTAINER}" '
+            [.containerDefinitions[] | select(.name == $c) | .secrets[]?
+             | select(.name == "HASNA_TODOS_RATE_LIMIT_MAX" or .name == "TODOS_RATE_LIMIT_MAX")] | length == 0
+          ' <<<"${task_definition}" >/dev/null
+          replacement="$(jq --arg image "${IMAGE}" --arg c "${WEB_CONTAINER}" --arg limit "${API_RATE_LIMIT_MAX}" '
+            .containerDefinitions |= map(if .name == $c then
+              .image = $image
+              | .environment = ((.environment // [] | map(select(.name != "HASNA_TODOS_RATE_LIMIT_MAX" and .name != "TODOS_RATE_LIMIT_MAX")))
+                + [{name: "HASNA_TODOS_RATE_LIMIT_MAX", value: $limit}])
+              else . end)
             | del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy,.deregisteredAt)
           ' <<<"${task_definition}")"
           deployed_task_definition="$(aws ecs register-task-definition --cli-input-json "${replacement}" --query taskDefinition.taskDefinitionArn --output text)"
@@ -532,6 +553,7 @@ jobs:
           WEB_CONTAINER: ${{ steps.manifest.outputs.web_container }}
           HEALTH_URL: ${{ steps.manifest.outputs.health_url }}
           DEPLOYED_TASK_DEFINITION: ${{ steps.deploy.outputs.deployed_task_definition }}
+          API_RATE_LIMIT_MAX: ${{ steps.manifest.outputs.api_rate_limit_max }}
         run: |
           set -Eeuo pipefail
           verified=false
@@ -553,6 +575,11 @@ jobs:
           deployed_definition="$(aws ecs describe-task-definition --task-definition "${DEPLOYED_TASK_DEFINITION}" --output json)"
           deployed_image="$(jq -er --arg c "${WEB_CONTAINER}" '.taskDefinition.containerDefinitions[] | select(.name == $c) | .image' <<<"${deployed_definition}")"
           [[ "${deployed_image}" == "${IMAGE}" ]] || { echo "live task definition image digest mismatch" >&2; exit 1; }
+          jq -e --arg c "${WEB_CONTAINER}" --arg limit "${API_RATE_LIMIT_MAX}" '
+            [.taskDefinition.containerDefinitions[] | select(.name == $c) | .environment[]?
+             | select(.name == "HASNA_TODOS_RATE_LIMIT_MAX" or .name == "TODOS_RATE_LIMIT_MAX")]
+            == [{name: "HASNA_TODOS_RATE_LIMIT_MAX", value: $limit}]
+          ' <<<"${deployed_definition}" >/dev/null
           curl --fail --silent --show-error --retry 5 --retry-all-errors --max-time 15 "${HEALTH_URL}" >/dev/null
 
           jq -n \
@@ -563,6 +590,7 @@ jobs:
             --arg account "${{ steps.manifest.outputs.account }}" \
             --arg cluster "${CLUSTER}" \
             --arg service "${SERVICE}" \
+            --argjson api_rate_limit_max "${API_RATE_LIMIT_MAX}" \
             --arg previous_task_definition "${{ steps.before.outputs.previous_task_definition }}" \
             --arg previous_image "${{ steps.before.outputs.previous_image }}" \
             --arg migration_task_definition "${{ steps.migration.outputs.task_definition }}" \
@@ -571,7 +599,7 @@ jobs:
             --arg deployed_image "${deployed_image}" \
             --arg health_url "${HEALTH_URL}" \
             --arg run_id "${GITHUB_RUN_ID}" \
-            '{schema:"hasna.todos.production_deploy.v1",source_sha:$source_sha,image_tag:$image_tag,image_digest:$image_digest,image:$image,account:$account,cluster:$cluster,service:$service,rollback:{task_definition:$previous_task_definition,image:$previous_image},migration:{task_definition:$migration_task_definition,task:$migration_task,exit_code:0},deployed:{task_definition:$deployed_task_definition,image:$deployed_image,health_url:$health_url},github_run_id:$run_id}' \
+            '{schema:"hasna.todos.production_deploy.v1",source_sha:$source_sha,image_tag:$image_tag,image_digest:$image_digest,image:$image,account:$account,cluster:$cluster,service:$service,rollback:{task_definition:$previous_task_definition,image:$previous_image},migration:{task_definition:$migration_task_definition,task:$migration_task,exit_code:0},deployed:{task_definition:$deployed_task_definition,image:$deployed_image,health_url:$health_url,api_rate_limit_max:$api_rate_limit_max},github_run_id:$run_id}' \
             > deploy-evidence.json
 
       - name: Restore rollback anchor after a failed service rollout

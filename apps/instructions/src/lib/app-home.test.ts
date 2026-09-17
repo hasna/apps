@@ -84,7 +84,9 @@ describe("resolver (XDG) config home adoption — legacy default must never beco
 
   it("resolverStoreHome resolves the XDG config home under the redirected HOME", () => {
     process.env["HOME"] = tempHome;
-    expect(resolverStoreHome()).toBe(join(tempHome, ".config", "hasna", "configs"));
+    expect(resolverStoreHome()).toBe(process.platform === "darwin"
+      ? join(tempHome, "Library", "Application Support", "Hasna", "configs")
+      : join(tempHome, ".config", "hasna", "configs"));
   });
 
   it("adopts the resolver home on the HASNA_CONFIG_HOME config-kind override", () => {
@@ -103,7 +105,9 @@ describe("resolver (XDG) config home adoption — legacy default must never beco
     process.env["HOME"] = tempHome;
     expect(getConfigsStoreHome()).toBe(join(tempHome, ".hasna", "instructions"));
     // A migrated store at the resolver home flips the effective home to XDG.
-    const resolved = join(tempHome, ".config", "hasna", "configs");
+    const resolved = process.platform === "darwin"
+      ? join(tempHome, "Library", "Application Support", "Hasna", "configs")
+      : join(tempHome, ".config", "hasna", "configs");
     mkdirSync(resolved, { recursive: true });
     writeFileSync(join(resolved, "instructions.db"), "");
     expect(getConfigsStoreHome()).toBe(resolved);
@@ -132,7 +136,9 @@ describe("getReportedDbPath — server status surfaces must never hardcode the l
 
   it("reports the resolver home once the XDG store is adopted — not the legacy literal", () => {
     process.env["HOME"] = tempHome;
-    const resolved = join(tempHome, ".config", "hasna", "configs");
+    const resolved = process.platform === "darwin"
+      ? join(tempHome, "Library", "Application Support", "Hasna", "configs")
+      : join(tempHome, ".config", "hasna", "configs");
     mkdirSync(resolved, { recursive: true });
     writeFileSync(join(resolved, "instructions.db"), "");
     const reported = getReportedDbPath();

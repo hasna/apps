@@ -15,6 +15,12 @@
  * — the shared @hasna/contracts ladder — instead of reading an environment
  * variable of its own. See lib/fleet-credentials.ts.
  */
+export { readExecutionGrantPolicy, saveExecutionGrantPolicy, resolveExecutionGrant } from "../lib/execution-grant-client.js";
+export type { ExecutionGrant, ExecutionGrantPolicy, ExecutionGrantRequest, ResolvedExecutionGrant } from "../lib/execution-grants.js";
+export { HttpProfileClient, createProfileClient, type ProfileClient } from "../lib/profile-client.js";
+export { resolveSelectedRun, executeSelectedLocal, prepareSelectedSecretBindings, type ResolvedSelectedRun, type SelectedLocalRunOptions } from "../lib/selected-run.js";
+export { readSelectedSecretBindings, type SelectedSecretBindings, type SelectedSecretsClient } from "../lib/execution-secrets.js";
+export type { SkillSelection, SkillProfile, ResolvedSkillSelection, ResolvedSkillProfile, StationSkillStateInput, StationSkillState } from "../types/skill-selection.js";
 export {
   MissingSkillsFleetError,
   SkillsFleetCredentialError,
@@ -55,6 +61,10 @@ export * from "./spend.js";
 export * from "./offline.js";
 export * from "./execution/index.js";
 export { RemoteSkillsClient, createRemoteSkillsClient, RemoteRequestError, RemoteRouteUnsupportedError, RemoteCapabilityUnavailableError, RemoteQuoteUnavailableError, RemoteWorkspaceMemberError } from "../lib/remote-client.js";
+export * from "../lib/remote-recurring-contract.js";
+export { RecurringInputError, RemoteRecurringError, RemoteRecurringUnavailableError, RemoteRecurringReadError, RemoteRecurringUnconfirmedError } from "../lib/remote-recurring.js";
+export type { RecurringCapability, RecurringListOptions, RemoteRecurringErrorCode } from "../lib/remote-recurring.js";
+export { canonicalJson, canonicalJsonSha256 } from "../lib/canonical-json.js";
 export type { RemoteQuoteUnavailableCode } from "../lib/remote-client.js";
 export { RemoteCreditApprovalError, type RemoteRunApproval, type RemoteRunQuote, type RemoteCreditPack } from "../lib/remote-account.js";
 export { type RemoteInputFile, type RemoteInputFileDescriptor } from "../lib/remote-files.js";

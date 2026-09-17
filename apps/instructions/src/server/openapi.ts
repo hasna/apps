@@ -42,6 +42,93 @@ const profileSchema = {
   },
 } as const;
 
+const configIdentitySchema = {
+  type: "object",
+  required: ["id", "name", "slug", "kind", "category", "agent", "format", "is_template", "version", "created_at", "updated_at", "synced_at"],
+  properties: {
+    id: { type: "string" },
+    name: { type: "string" },
+    slug: { type: "string" },
+    kind: { type: "string" },
+    category: { type: "string" },
+    agent: { type: "string" },
+    format: { type: "string" },
+    is_template: { type: "boolean" },
+    version: { type: "number" },
+    created_at: { type: "string" },
+    updated_at: { type: "string" },
+    synced_at: { type: "string", nullable: true },
+  },
+} as const;
+
+const profileIdentitySchema = {
+  type: "object",
+  required: ["id", "name", "slug", "created_at", "updated_at"],
+  properties: {
+    id: { type: "string" },
+    name: { type: "string" },
+    slug: { type: "string" },
+    created_at: { type: "string" },
+    updated_at: { type: "string" },
+  },
+} as const;
+
+const machineSchema = {
+  type: "object",
+  required: ["id", "hostname", "os", "arch", "last_applied_at", "created_at"],
+  properties: {
+    id: { type: "string" },
+    hostname: { type: "string" },
+    os: { type: "string", nullable: true },
+    arch: { type: "string", nullable: true },
+    last_applied_at: { type: "string", nullable: true },
+    created_at: { type: "string" },
+  },
+} as const;
+
+const snapshotSchema = {
+  type: "object",
+  required: ["id", "config_id", "content", "version", "created_at"],
+  properties: {
+    id: { type: "string" },
+    config_id: { type: "string" },
+    content: { type: "string" },
+    version: { type: "number" },
+    created_at: { type: "string" },
+  },
+} as const;
+
+const limitParameter = { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 100 } } as const;
+const cursorParameter = { name: "cursor", in: "query", schema: { type: "integer", minimum: 0, maximum: 100_000 } } as const;
+const identityViewParameter = {
+  name: "view",
+  in: "query",
+  description: "Use identity for a metadata-only projection that omits instruction content, paths, outputs, and private profile fields.",
+  schema: { type: "string", enum: ["identity"] },
+} as const;
+const idempotencyKeyParameter = {
+  name: "Idempotency-Key",
+  in: "header",
+  required: false,
+  description: "Optional visible-ASCII request key (1-255 characters). Replays the first committed response for the same authenticated principal, operation, and canonical JSON body; reuse with a different body returns 409.",
+  schema: { type: "string", minLength: 1, maxLength: 255, pattern: "^[!-~]+$" },
+} as const;
+const idempotencyConflictResponse = {
+  description: "The Idempotency-Key was already used for a different request body.",
+  content: {
+    "application/json": {
+      schema: {
+        type: "object",
+        required: ["error", "code"],
+        properties: {
+          error: { type: "string" },
+          code: { type: "string", const: "IDEMPOTENCY_KEY_REUSED" },
+        },
+      },
+    },
+  },
+} as const;
+
 export function buildV1OpenApiDocument(version = getPackageVersion()) {
   return {
     openapi: "3.1.0",
@@ -58,7 +145,11 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
       },
       schemas: {
         Config: configSchema,
+        ConfigIdentity: configIdentitySchema,
         Profile: profileSchema,
+        ProfileIdentity: profileIdentitySchema,
+        Machine: machineSchema,
+        ConfigSnapshot: snapshotSchema,
         CreateConfigInput: {
           type: "object",
           required: ["name", "category", "content"],
@@ -79,12 +170,17 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           type: "object",
           properties: {
             name: { type: "string" },
+            kind: { type: "string" },
             category: { type: "string" },
             agent: { type: "string" },
+            target_path: { type: "string", nullable: true },
+            outputs: { type: "array", items: { type: "object" } },
+            format: { type: "string" },
             content: { type: "string" },
-            description: { type: "string" },
+            description: { type: "string", nullable: true },
             tags: { type: "array", items: { type: "string" } },
             is_template: { type: "boolean" },
+            synced_at: { type: "string", nullable: true },
           },
         },
         CreateProfileInput: {
@@ -95,6 +191,38 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
             description: { type: "string" },
             selectors: { type: "object" },
             variables: { type: "object" },
+          },
+        },
+        UpdateProfileInput: {
+          type: "object",
+          properties: {
+            name: { type: "string" },
+            description: { type: "string", nullable: true },
+            selectors: { type: "object" },
+            variables: { type: "object" },
+          },
+        },
+        PruneSnapshotsInput: {
+          type: "object",
+          properties: {
+            keep: { type: "integer", minimum: 0, default: 10 },
+          },
+        },
+        MachineAppliedInput: {
+          type: "object",
+          required: ["hostname"],
+          properties: {
+            hostname: { type: "string" },
+          },
+        },
+        FeedbackInput: {
+          type: "object",
+          required: ["message"],
+          properties: {
+            message: { type: "string" },
+            email: { type: "string" },
+            category: { type: "string" },
+            version: { type: "string" },
           },
         },
         AddProfileConfigInput: {
@@ -231,7 +359,111 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           type: "object",
           required: ["items", "total", "limit", "cursor", "next_cursor", "has_more", "complete", "truncated", "source_bounded"],
           properties: {
+            configs: { type: "array", items: { $ref: "#/components/schemas/Config" } },
             items: { type: "array", items: { $ref: "#/components/schemas/Config" } },
+            count: { type: "number" },
+            total: { type: "number" },
+            limit: { type: "number" },
+            cursor: { type: "number" },
+            next_cursor: { type: "number", nullable: true },
+            has_more: { type: "boolean" },
+            complete: { type: "boolean" },
+            truncated: { type: "boolean", const: false },
+            source_bounded: { type: "boolean" },
+          },
+        },
+        BoundedConfigIdentityPage: {
+          type: "object",
+          required: ["items", "total", "limit", "cursor", "next_cursor", "has_more", "complete", "truncated", "source_bounded"],
+          properties: {
+            configs: { type: "array", items: { $ref: "#/components/schemas/ConfigIdentity" } },
+            items: { type: "array", items: { $ref: "#/components/schemas/ConfigIdentity" } },
+            count: { type: "number" },
+            total: { type: "number" },
+            limit: { type: "number" },
+            cursor: { type: "number" },
+            next_cursor: { type: "number", nullable: true },
+            has_more: { type: "boolean" },
+            complete: { type: "boolean" },
+            truncated: { type: "boolean", const: false },
+            source_bounded: { type: "boolean" },
+          },
+        },
+        BoundedProfileIdentityPage: {
+          type: "object",
+          required: ["items", "total", "limit", "cursor", "next_cursor", "has_more", "complete", "truncated", "source_bounded"],
+          properties: {
+            profiles: { type: "array", items: { $ref: "#/components/schemas/ProfileIdentity" } },
+            items: { type: "array", items: { $ref: "#/components/schemas/ProfileIdentity" } },
+            count: { type: "number" },
+            total: { type: "number" },
+            limit: { type: "number" },
+            cursor: { type: "number" },
+            next_cursor: { type: "number", nullable: true },
+            has_more: { type: "boolean" },
+            complete: { type: "boolean" },
+            truncated: { type: "boolean", const: false },
+            source_bounded: { type: "boolean" },
+          },
+        },
+        BoundedSnapshotPage: {
+          type: "object",
+          required: ["items", "total", "limit", "cursor", "next_cursor", "has_more", "complete", "truncated", "source_bounded"],
+          properties: {
+            snapshots: { type: "array", items: { $ref: "#/components/schemas/ConfigSnapshot" } },
+            items: { type: "array", items: { $ref: "#/components/schemas/ConfigSnapshot" } },
+            count: { type: "number" },
+            total: { type: "number" },
+            limit: { type: "number" },
+            cursor: { type: "number" },
+            next_cursor: { type: "number", nullable: true },
+            has_more: { type: "boolean" },
+            complete: { type: "boolean" },
+            truncated: { type: "boolean", const: false },
+            source_bounded: { type: "boolean" },
+          },
+        },
+        BoundedMachinePage: {
+          type: "object",
+          required: ["items", "total", "limit", "cursor", "next_cursor", "has_more", "complete", "truncated", "source_bounded"],
+          properties: {
+            machines: { type: "array", items: { $ref: "#/components/schemas/Machine" } },
+            items: { type: "array", items: { $ref: "#/components/schemas/Machine" } },
+            count: { type: "number" },
+            total: { type: "number" },
+            limit: { type: "number" },
+            cursor: { type: "number" },
+            next_cursor: { type: "number", nullable: true },
+            has_more: { type: "boolean" },
+            complete: { type: "boolean" },
+            truncated: { type: "boolean", const: false },
+            source_bounded: { type: "boolean" },
+          },
+        },
+        BoundedProfileConfigBindingPage: {
+          type: "object",
+          required: ["items", "total", "limit", "cursor", "next_cursor", "has_more", "complete", "truncated", "source_bounded"],
+          properties: {
+            bindings: { type: "array", items: { $ref: "#/components/schemas/ProfileConfigBinding" } },
+            items: { type: "array", items: { $ref: "#/components/schemas/ProfileConfigBinding" } },
+            count: { type: "number" },
+            total: { type: "number" },
+            limit: { type: "number" },
+            cursor: { type: "number" },
+            next_cursor: { type: "number", nullable: true },
+            has_more: { type: "boolean" },
+            complete: { type: "boolean" },
+            truncated: { type: "boolean", const: false },
+            source_bounded: { type: "boolean" },
+          },
+        },
+        BoundedProfileAssetBindingPage: {
+          type: "object",
+          required: ["items", "total", "limit", "cursor", "next_cursor", "has_more", "complete", "truncated", "source_bounded"],
+          properties: {
+            assets: { type: "array", items: { $ref: "#/components/schemas/ProfileAssetBinding" } },
+            items: { type: "array", items: { $ref: "#/components/schemas/ProfileAssetBinding" } },
+            count: { type: "number" },
             total: { type: "number" },
             limit: { type: "number" },
             cursor: { type: "number" },
@@ -275,18 +507,20 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
             { name: "category", in: "query", schema: { type: "string" } },
             { name: "agent", in: "query", schema: { type: "string" } },
             { name: "kind", in: "query", schema: { type: "string" } },
-            { name: "search", in: "query", schema: { type: "string" } },
+            { name: "search", in: "query", schema: { type: "string", maxLength: 512 } },
+            limitParameter,
+            cursorParameter,
+            identityViewParameter,
           ],
           responses: {
             "200": {
               content: {
                 "application/json": {
                   schema: {
-                    type: "object",
-                    properties: {
-                      configs: { type: "array", items: { $ref: "#/components/schemas/Config" } },
-                      count: { type: "number" },
-                    },
+                    oneOf: [
+                      { $ref: "#/components/schemas/BoundedConfigPage" },
+                      { $ref: "#/components/schemas/BoundedConfigIdentityPage" },
+                    ],
                   },
                 },
               },
@@ -296,6 +530,7 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
         post: {
           operationId: "createConfig",
           summary: "Create a config",
+          parameters: [idempotencyKeyParameter],
           requestBody: {
             required: true,
             content: { "application/json": { schema: { $ref: "#/components/schemas/CreateConfigInput" } } },
@@ -308,6 +543,7 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
                 },
               },
             },
+            "409": idempotencyConflictResponse,
           },
         },
       },
@@ -344,6 +580,24 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
             },
           },
         },
+        put: {
+          operationId: "putConfig",
+          summary: "Update a config via PUT",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { $ref: "#/components/schemas/UpdateConfigInput" } } },
+          },
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: { type: "object", properties: { config: { $ref: "#/components/schemas/Config" } } },
+                },
+              },
+            },
+          },
+        },
         delete: {
           operationId: "deleteConfig",
           summary: "Delete a config",
@@ -363,29 +617,72 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
         get: {
           operationId: "listSnapshots",
           summary: "List a config's version snapshots",
-          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
-          responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { snapshots: { type: "array", items: { type: "object" } }, count: { type: "number" } } } } } } },
+          parameters: [
+            { name: "id", in: "path", required: true, schema: { type: "string" } },
+            limitParameter,
+            cursorParameter,
+          ],
+          responses: { "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/BoundedSnapshotPage" } } } } },
         },
         post: {
           operationId: "createSnapshot",
           summary: "Snapshot a config's current content",
+          parameters: [
+            { name: "id", in: "path", required: true, schema: { type: "string" } },
+            idempotencyKeyParameter,
+          ],
+          requestBody: {
+            required: false,
+            content: { "application/json": { schema: { type: "object", properties: { content: { type: "string" }, version: { type: "integer" } } } } },
+          },
+          responses: {
+            "201": { content: { "application/json": { schema: { type: "object", properties: { snapshot: { $ref: "#/components/schemas/ConfigSnapshot" } } } } } },
+            "409": idempotencyConflictResponse,
+          },
+        },
+      },
+      "/v1/configs/{id}/snapshots/prune": {
+        post: {
+          operationId: "pruneSnapshots",
+          summary: "Prune older snapshots for a config",
           parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
-          responses: { "201": { content: { "application/json": { schema: { type: "object", properties: { snapshot: { type: "object" } } } } } } },
+          requestBody: {
+            required: false,
+            content: { "application/json": { schema: { $ref: "#/components/schemas/PruneSnapshotsInput" } } },
+          },
+          responses: {
+            "200": { content: { "application/json": { schema: { type: "object", required: ["pruned"], properties: { pruned: { type: "integer" } } } } } },
+          },
+        },
+      },
+      "/v1/configs/{id}/snapshots/{version}": {
+        get: {
+          operationId: "getSnapshotByVersion",
+          summary: "Get one config snapshot by version",
+          parameters: [
+            { name: "id", in: "path", required: true, schema: { type: "string" } },
+            { name: "version", in: "path", required: true, schema: { type: "integer" } },
+          ],
+          responses: {
+            "200": { content: { "application/json": { schema: { type: "object", properties: { snapshot: { $ref: "#/components/schemas/ConfigSnapshot" } } } } } },
+          },
         },
       },
       "/v1/profiles": {
         get: {
           operationId: "listProfiles",
           summary: "List profiles with producer-side bounds",
-          parameters: [
-            { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 100 } },
-            { name: "cursor", in: "query", schema: { type: "integer", minimum: 0 } },
-          ],
+          parameters: [limitParameter, cursorParameter, identityViewParameter],
           responses: {
             "200": {
               content: {
                 "application/json": {
-                  schema: { $ref: "#/components/schemas/BoundedProfilePage" },
+                  schema: {
+                    oneOf: [
+                      { $ref: "#/components/schemas/BoundedProfilePage" },
+                      { $ref: "#/components/schemas/BoundedProfileIdentityPage" },
+                    ],
+                  },
                 },
               },
             },
@@ -394,11 +691,15 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
         post: {
           operationId: "createProfile",
           summary: "Create a profile",
+          parameters: [idempotencyKeyParameter],
           requestBody: {
             required: true,
             content: { "application/json": { schema: { $ref: "#/components/schemas/CreateProfileInput" } } },
           },
-          responses: { "201": { content: { "application/json": { schema: { type: "object", properties: { profile: { $ref: "#/components/schemas/Profile" } } } } } } },
+          responses: {
+            "201": { content: { "application/json": { schema: { type: "object", properties: { profile: { $ref: "#/components/schemas/Profile" } } } } } },
+            "409": idempotencyConflictResponse,
+          },
         },
       },
       "/v1/profiles/resolve": {
@@ -433,6 +734,31 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           ],
           responses: { "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/ProfileShowResponse" } } } } },
         },
+        patch: {
+          operationId: "updateProfile",
+          summary: "Update a profile",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { $ref: "#/components/schemas/UpdateProfileInput" } } },
+          },
+          responses: {
+            "200": { content: { "application/json": { schema: { type: "object", properties: { profile: { $ref: "#/components/schemas/Profile" } } } } } },
+          },
+        },
+        put: {
+          operationId: "putProfile",
+          summary: "Update a profile via PUT",
+          description: "Compatibility update route. Like PATCH, omitted properties remain unchanged.",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { $ref: "#/components/schemas/UpdateProfileInput" } } },
+          },
+          responses: {
+            "200": { content: { "application/json": { schema: { type: "object", properties: { profile: { $ref: "#/components/schemas/Profile" } } } } } },
+          },
+        },
         delete: {
           operationId: "deleteProfile",
           summary: "Delete a profile",
@@ -448,6 +774,7 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           security: [{ apiKey: [] }],
           parameters: [
             { name: "id", in: "path", required: true, schema: { type: "string" } },
+            idempotencyKeyParameter,
           ],
           requestBody: {
             required: true,
@@ -465,6 +792,7 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
                 },
               },
             },
+            "409": idempotencyConflictResponse,
           },
         },
       },
@@ -476,12 +804,16 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           parameters: [
             { name: "id", in: "path", required: true, schema: { type: "string" } },
             { name: "configId", in: "path", required: true, schema: { type: "string" } },
+            idempotencyKeyParameter,
           ],
           requestBody: {
             required: true,
             content: { "application/json": { schema: { type: "object", required: ["binding"], properties: { binding: { $ref: "#/components/schemas/ProfileConfigBindingSpec" } } } } },
           },
-          responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { binding: { $ref: "#/components/schemas/ProfileConfigBinding" } } } } } } },
+          responses: {
+            "200": { content: { "application/json": { schema: { type: "object", properties: { binding: { $ref: "#/components/schemas/ProfileConfigBinding" } } } } } },
+            "409": idempotencyConflictResponse,
+          },
         },
         delete: {
           operationId: "removeConfigFromProfile",
@@ -507,24 +839,38 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
         get: {
           operationId: "getProfileConfigBindings",
           summary: "List schema-versioned config bindings for a profile",
-          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
-          responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { bindings: { type: "array", items: { $ref: "#/components/schemas/ProfileConfigBinding" } } } } } } } },
+          parameters: [
+            { name: "id", in: "path", required: true, schema: { type: "string" } },
+            limitParameter,
+            cursorParameter,
+          ],
+          responses: { "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/BoundedProfileConfigBindingPage" } } } } },
         },
       },
       "/v1/profiles/{id}/assets": {
         get: {
           operationId: "getProfileAssetBindings",
           summary: "List typed asset bindings for a profile",
-          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
-          responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { assets: { type: "array", items: { $ref: "#/components/schemas/ProfileAssetBinding" } } } } } } } },
+          parameters: [
+            { name: "id", in: "path", required: true, schema: { type: "string" } },
+            limitParameter,
+            cursorParameter,
+          ],
+          responses: { "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/BoundedProfileAssetBindingPage" } } } } },
         },
         post: {
           operationId: "addAssetToProfile",
           summary: "Add a content-addressed asset binding to a profile",
           security: [{ apiKey: [] }],
-          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          parameters: [
+            { name: "id", in: "path", required: true, schema: { type: "string" } },
+            idempotencyKeyParameter,
+          ],
           requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/AddProfileAssetInput" } } } },
-          responses: { "201": { content: { "application/json": { schema: { type: "object", properties: { asset: { $ref: "#/components/schemas/ProfileAssetBinding" } } } } } } },
+          responses: {
+            "201": { content: { "application/json": { schema: { type: "object", properties: { asset: { $ref: "#/components/schemas/ProfileAssetBinding" } } } } } },
+            "409": idempotencyConflictResponse,
+          },
         },
       },
       "/v1/profiles/{id}/assets/{assetKey}": {
@@ -535,9 +881,13 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           parameters: [
             { name: "id", in: "path", required: true, schema: { type: "string" } },
             { name: "assetKey", in: "path", required: true, schema: { type: "string" } },
+            idempotencyKeyParameter,
           ],
           requestBody: { required: true, content: { "application/json": { schema: { type: "object", required: ["binding"], properties: { binding: { $ref: "#/components/schemas/ProfileAssetBindingSpec" } } } } } },
-          responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { asset: { $ref: "#/components/schemas/ProfileAssetBinding" } } } } } } },
+          responses: {
+            "200": { content: { "application/json": { schema: { type: "object", properties: { asset: { $ref: "#/components/schemas/ProfileAssetBinding" } } } } } },
+            "409": idempotencyConflictResponse,
+          },
         },
         delete: {
           operationId: "removeAssetFromProfile",
@@ -548,6 +898,77 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
             { name: "assetKey", in: "path", required: true, schema: { type: "string" } },
           ],
           responses: { "200": { content: { "application/json": { schema: { type: "object", properties: { removed: { type: "boolean", const: true } } } } } } },
+        },
+      },
+      "/v1/snapshots/{id}": {
+        get: {
+          operationId: "getSnapshot",
+          summary: "Get a snapshot by id",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          responses: {
+            "200": { content: { "application/json": { schema: { type: "object", properties: { snapshot: { $ref: "#/components/schemas/ConfigSnapshot" } } } } } },
+          },
+        },
+      },
+      "/v1/machines/applied": {
+        post: {
+          operationId: "markMachineApplied",
+          summary: "Mark a machine as having applied its resolved instructions",
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { $ref: "#/components/schemas/MachineAppliedInput" } } },
+          },
+          responses: {
+            "200": { content: { "application/json": { schema: { type: "object", required: ["updated"], properties: { updated: { type: "boolean", const: true } } } } } },
+          },
+        },
+      },
+      "/v1/machines": {
+        get: {
+          operationId: "listMachines",
+          summary: "List registered machines with producer-side bounds",
+          parameters: [limitParameter, cursorParameter, identityViewParameter],
+          responses: {
+            "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/BoundedMachinePage" } } } },
+          },
+        },
+        post: {
+          operationId: "registerMachine",
+          summary: "Register or refresh a machine",
+          parameters: [idempotencyKeyParameter],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["hostname"],
+                  properties: {
+                    hostname: { type: "string" },
+                    os: { type: "string", nullable: true },
+                    arch: { type: "string", nullable: true },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            "201": { content: { "application/json": { schema: { type: "object", properties: { machine: { $ref: "#/components/schemas/Machine" } } } } } },
+            "409": idempotencyConflictResponse,
+          },
+        },
+      },
+      "/v1/feedback": {
+        post: {
+          operationId: "createFeedback",
+          summary: "Submit Instructions feedback",
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { $ref: "#/components/schemas/FeedbackInput" } } },
+          },
+          responses: {
+            "201": { content: { "application/json": { schema: { type: "object", required: ["ok"], properties: { ok: { type: "boolean", const: true } } } } } },
+          },
         },
       },
       "/v1/stats": {

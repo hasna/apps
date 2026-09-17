@@ -1,3 +1,4 @@
+import { replyMailboxes } from "../../lib/reply-headers.js";
 /**
  * Data layer for the Emails UI (`emails ui`).
  *
@@ -109,6 +110,8 @@ export interface TuiMessage {
   id: string;
   from: string;
   to: string;
+  /** Validated inbound Reply-To mailbox list, when available. */
+  reply_to?: string;
   subject: string;
   date: string;
   is_read: boolean;
@@ -1419,8 +1422,8 @@ export function providerIdForSender(address: string, db?: Database): string | nu
 /** Pre-fill values for replying to a message. */
 export function replyDefaults(msg: TuiMessage): { from: string; to: string; subject: string } {
   const subject = /^re:/i.test(msg.subject) ? msg.subject : `Re: ${msg.subject}`;
-  const to = msg.sentByMe ? msg.to : msg.from;
-  const from = msg.sentByMe ? msg.from : (msg.to.split(",")[0]?.trim() ?? "");
+  const to = msg.sentByMe ? msg.to : (msg.reply_to || msg.from);
+  const from = msg.sentByMe ? msg.from : (replyMailboxes(msg.to)?.[0] ?? "");
   return { from, to, subject };
 }
 

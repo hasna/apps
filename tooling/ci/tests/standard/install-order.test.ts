@@ -12,34 +12,32 @@
  *
  * The task-graph edge cannot be expressed to bun's install runner, so it is
  * declared in the root package.json `prepare:ordered` chain — a deterministic
- * topological order of the members whose prepare emits dist, with
- * @hasna/contracts first — and every CI `Install` step runs the build phase
- * through that chain (after a scriptless `bun install --frozen-lockfile
+ * topological order of prepare members and their workspace build dependencies.
+ * Every CI `Install` step runs the build phase through that chain (after a scriptless `bun install --frozen-lockfile
  * --ignore-scripts`), never through a bare scriptful install that bun
  * schedules unordered.
  *
  * Three assertions:
- *   CENSUS   — `prepare:ordered` names EXACTLY the members that declare a
- *              prepare script. A new prepare member fails the suite until the
- *              chain gains it (and a stale chain entry is equally a failure).
- *   ORDER    — @hasna/contracts precedes every prepare member that depends on
- *              @hasna/contracts (the measured TS7016 edge: machines, mementos,
- *              attachments, and loops all consume contracts types at
- *              prepare/build time).
+ *   CENSUS   — `prepare:ordered` names EXACTLY the prepare members and their
+ *              transitive workspace build dependencies. A dependency without
+ *              prepare still needs its dist on a clean checkout (Skills now
+ *              bundles the Secrets SDK, which has no prepare script).
+ *   ORDER    — every workspace build dependency precedes its consumer.
  *   CI SHAPE — every `Install` step in .github/workflows/ci.yml runs
  *              `bun install --frozen-lockfile --ignore-scripts` and
  *              `bun run prepare:ordered`; a bare scriptful
  *              `bun install --frozen-lockfile` anywhere in an Install step is
  *              a violation.
  *
- * Plus the suite's two-sided self-test (prove-it-can-fail): a chain missing
- * the contracts-first edge must FIRE, a bare scriptful install step must
- * FIRE, and the compliant shapes must stay SILENT.
+ * The two-sided self-tests reject missing prerequisite SDKs, reversed edges,
+ * unrelated build members, duplicate entries and bare scriptful installs,
+ * while accepting the complete ordered chain.
  */
 import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { REPO_ROOT, members } from "./census";
+import { tmpdir } from "node:os";
+import { REPO_ROOT } from "./census";
 
 const ROOT_PKG_PATH = path.join(REPO_ROOT, "package.json");
 const CI_YML_PATH = path.join(REPO_ROOT, ".github", "workflows", "ci.yml");
@@ -74,6 +72,66 @@ export function prepareScriptMembers(appsDir: string): string[] {
     if (pkg.scripts?.prepare !== undefined) out.push(dir.name);
   }
   return out;
+}
+
+/** Workspace build dependency closure, rooted only at prepare members. */
+export function prepareBuildGraph(appsDir: string): Map<string, string[]> {
+  type Package = {
+    name: string;
+    version: string;
+    scripts?: Record<string, string>;
+    dependencies?: Record<string, string>;
+    devDependencies?: Record<string, string>;
+    optionalDependencies?: Record<string, string>;
+  };
+  const packages = new Map<string, Package>();
+  for (const dir of fs.readdirSync(appsDir, { withFileTypes: true })) {
+    if (!dir.isDirectory()) continue;
+    const file = path.join(appsDir, dir.name, "package.json");
+    if (!fs.existsSync(file)) continue;
+    const pkg = JSON.parse(fs.readFileSync(file, "utf8")) as Package;
+    packages.set(pkg.name, pkg);
+  }
+  const graph = new Map<string, string[]>();
+  function visit(name: string): void {
+    if (graph.has(name)) return;
+    const pkg = packages.get(name)!;
+    const deps = Object.entries({ ...pkg.dependencies, ...pkg.devDependencies, ...pkg.optionalDependencies })
+      .filter(([dep, spec]) => {
+        const target = packages.get(dep);
+        if (target?.scripts?.build === undefined) return false;
+        // URL/tarball pins and nonmatching registry versions are not workspace
+        // edges. Contracts deliberately consumes the published Secrets archive.
+        if (["workspace:*", "workspace:^", "workspace:~"].includes(spec)) return true;
+        const range = spec.replace(/^workspace:/, "").trim();
+        if (/[:/\\]/.test(range) || !/^(?:[0-9*^~<>=xX]|v[0-9])/.test(range)) return false;
+        return Bun.semver.satisfies(target.version, range);
+      })
+      .map(([dep]) => dep);
+    graph.set(name, deps);
+    for (const dep of deps) visit(dep);
+  }
+  for (const [name, pkg] of packages) {
+    if (pkg.scripts?.prepare !== undefined) visit(name);
+  }
+  return graph;
+}
+
+export function prepareBuildViolations(chain: string[], graph: Map<string, string[]>): string[] {
+  const problems: string[] = [];
+  for (const [name, deps] of graph) {
+    if (!chain.includes(name)) problems.push(`${name} is required by prepare but missing from the build chain`);
+    for (const dep of deps) {
+      if (chain.includes(name) && chain.includes(dep) && chain.indexOf(dep) >= chain.indexOf(name)) {
+        problems.push(`${dep} must build before ${name}`);
+      }
+    }
+  }
+  for (const [i, name] of chain.entries()) {
+    if (!graph.has(name)) problems.push(`${name} is not a prepare member or a required workspace build dependency`);
+    if (chain.indexOf(name) !== i) problems.push(`${name} appears more than once in the build chain`);
+  }
+  return problems;
 }
 
 /**
@@ -144,42 +202,40 @@ export function ciInstallViolations(ciYml: string): string[] {
 }
 
 describe("standard-adherence: install ordering", () => {
-  test("prepare:ordered names exactly the members with a prepare script (census)", () => {
+  test("prepare:ordered builds the complete workspace dependency closure before its consumers", () => {
     const rootPkg = JSON.parse(fs.readFileSync(ROOT_PKG_PATH, "utf8"));
     const chain = orderedPrepareMembers(rootPkg);
-    const withPrepare = prepareScriptMembers(path.join(REPO_ROOT, "apps")).map((n) => `@hasna/${n}`);
-    const chainSet = new Set(chain);
-    const missing = withPrepare.filter((p) => !chainSet.has(p));
-    const extra = chain.filter((p) => !withPrepare.includes(p));
-    const dupes = chain.filter((p, i) => chain.indexOf(p) !== i);
-    const problems = [
-      ...missing.map((p) => `${p} has a prepare script but is not in the root prepare:ordered chain`),
-      ...extra.map((p) => `${p} is in the root prepare:ordered chain but has no prepare script`),
-      ...dupes.map((p) => `${p} appears more than once in the root prepare:ordered chain`),
-    ];
-    expect(problems, `install-ordering violations:\n${problems.join("\n")}`).toEqual([]);
-  });
-
-  test("the chain orders @hasna/contracts before every prepare member that depends on it (the TS7016 edge)", () => {
-    const rootPkg = JSON.parse(fs.readFileSync(ROOT_PKG_PATH, "utf8"));
-    const chain = orderedPrepareMembers(rootPkg);
-    const contractsIndex = chain.indexOf("@hasna/contracts");
-    const problems: string[] = [];
-    for (const m of members()) {
-      const pkg = JSON.parse(
-        fs.readFileSync(path.join(REPO_ROOT, "apps", m.name, "package.json"), "utf8"),
-      ) as { scripts?: Record<string, string>; dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
-      if (pkg.scripts?.prepare === undefined) continue;
-      const deps = { ...(pkg.dependencies ?? {}), ...(pkg.devDependencies ?? {}) };
-      const pkgName = `@hasna/${m.name}`;
-      if (deps["@hasna/contracts"] !== undefined && chain.indexOf(pkgName) < contractsIndex) {
-        problems.push(
-          `${pkgName} consumes @hasna/contracts types at prepare/build time but appears before it in the prepare:ordered chain`,
-        );
-      }
-    }
+    const graph = prepareBuildGraph(path.join(REPO_ROOT, "apps"));
+    const problems = prepareBuildViolations(chain, graph);
     expect(problems, `install-ordering violations:\n${problems.join("\n")}`).toEqual([]);
     expect(chain.length, "prepare:ordered chain must not be empty").toBeGreaterThan(0);
+  });
+
+  test("dependency census includes SDKs without prepare, recursively, and rejects omissions, inversions and extras", () => {
+    const appsDir = fs.mkdtempSync(path.join(tmpdir(), "prepare-order-"));
+    try {
+      for (const [name, extra] of Object.entries({
+        skills: { scripts: { prepare: "bun run build", build: "build" }, devDependencies: { "@hasna/secrets": "1.0.0" } },
+        secrets: { dependencies: { "@hasna/contracts": "1.0.0", "external-package": "1.0.0" } },
+        contracts: { devDependencies: { "@hasna/secrets": "https://registry.npmjs.org/@hasna/secrets/-/secrets-1.0.0.tgz", "@hasna/unrelated": "^2.0.0" } },
+        unrelated: {},
+      })) {
+        const dir = path.join(appsDir, name);
+        fs.mkdirSync(dir);
+        fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name: `@hasna/${name}`, version: "1.0.0", scripts: { build: "build" }, ...extra }));
+      }
+      const graph = prepareBuildGraph(appsDir);
+      expect([...graph.keys()].sort()).toEqual(["@hasna/contracts", "@hasna/secrets", "@hasna/skills"]);
+      expect(prepareScriptMembers(appsDir)).toEqual(["skills"]);
+      const good = ["@hasna/contracts", "@hasna/secrets", "@hasna/skills"];
+      expect(prepareBuildViolations(good, graph)).toEqual([]);
+      expect(prepareBuildViolations(["@hasna/skills"], graph)).toContain("@hasna/secrets is required by prepare but missing from the build chain");
+      expect(prepareBuildViolations([...good].reverse(), graph)).toContain("@hasna/secrets must build before @hasna/skills");
+      expect(prepareBuildViolations([...good, "@hasna/unrelated"], graph)).toHaveLength(1);
+      expect(prepareBuildViolations([...good, "@hasna/skills"], graph)).toHaveLength(1);
+    } finally {
+      fs.rmSync(appsDir, { recursive: true, force: true });
+    }
   });
 
   test("every CI Install step runs the scriptless install then the ordered chain", () => {

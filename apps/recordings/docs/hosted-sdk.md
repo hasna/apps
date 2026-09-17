@@ -68,14 +68,16 @@ growing buffer, not total process memory. Error bodies are cancelled unread.
 validated UUID request ID. It retains no body, endpoint, token, server message or
 original cause. A timed-out mutation may already have committed: reconcile using
 the known recording or receipt ID instead of blindly retrying. This JSON client
-does not implement audio upload/download, WebSocket sessions, native app control,
-tenant storage, usage admission or provider execution.
+does not implement WebSocket sessions, native app control, tenant storage,
+usage admission or provider execution. Audio metadata and raw transfer are
+[documented here](hosted-audio.md).
 
 ## Hosted Library across interfaces
 
-The additive `HostedLibrary` adapter provides read-only `list` and `get`
+The additive `HostedLibrary` adapter provides `list`, `get`, `export`, `save`, `rename` and `delete`
 operations through CLI, MCP, serve and SDK. `HostedPasteHistory` provides a
-read-only receipt page across the same interfaces. Library output includes only `id`, `title`,
+receipt page and an explicit paste-save operation across the same interfaces.
+Library output includes only `id`, `title`,
 `createdAt` and `durationMs`; `transcript` requires an explicit option. Unknown
 upstream fields are omitted. Metadata can itself be private. The upstream
 currently returns transcript text before projection, so this minimizes output
@@ -87,12 +89,38 @@ environment variable containing that API's existing bearer session:
 ```sh
 recordings --json hosted --api-base "$MY_RECORDINGS_API_BASE" --credential-env MY_RECORDINGS_SESSION list --limit 25
 recordings hosted --api-base "$MY_RECORDINGS_API_BASE" --credential-env MY_RECORDINGS_SESSION get <recording-id> --include-text
+recordings hosted --api-base "$MY_RECORDINGS_API_BASE" --credential-env MY_RECORDINGS_SESSION save <recording-id> "New title" --transcript "Fictional transcript" --duration-ms 1000
+printf '%s' 'Fictional transcript' | recordings hosted --api-base "$MY_RECORDINGS_API_BASE" --credential-env MY_RECORDINGS_SESSION save <recording-id> "New title" --transcript-stdin --duration-ms 1000
+recordings hosted --api-base "$MY_RECORDINGS_API_BASE" --credential-env MY_RECORDINGS_SESSION rename <recording-id> "New title"
+recordings hosted --api-base "$MY_RECORDINGS_API_BASE" --credential-env MY_RECORDINGS_SESSION delete <recording-id>
+printf '%s' 'Fictional pasted text' | recordings hosted --api-base "$MY_RECORDINGS_API_BASE" --credential-env MY_RECORDINGS_SESSION paste-save <receipt-id> --text-stdin --status confirmed --recording-id <recording-id> --destination-app-name "Fictional editor"
 ```
 
 The named variable is read fresh per request. No token argument, implicit API
 base, local-store fallback, provider-key lookup, Keychain lookup or credential
 persistence is added. The caller supplies the existing session. Legacy commands
 and their transport configuration are unchanged.
+
+Rename trims the title and requires 1–200 characters. Its response contains
+recording metadata without transcript text. Delete is an explicit permanent
+mutation, following the existing CLI's direct `delete <id>` convention.
+It returns `{state: "pending"}` when durable deletion was accepted but audio
+cleanup is unfinished, or `{state: "removed"}` when cleanup completed.
+Neither state triggers another request. A pending result is not proof of a
+completed audio purge; the caller may explicitly repeat the deletion later.
+
+Save validates the recording ID, title, transcript and duration through the
+same hosted contract before requesting credentials or making the single POST.
+Its response contains recording metadata without transcript text. The transcript
+is supplied explicitly with exactly one of `--transcript` or
+`--transcript-stdin`; stdin is bounded to 1 MiB, decoded as fatal UTF-8 and
+rejects empty text. The optional session ID uses `--session-id`.
+
+Paste-save accepts exactly one explicit text source, plus status and optional
+recording, destination and UTC occurrence fields. Empty pasted text is valid
+for metadata-only retention. Its response omits private pasted text. Stdin is
+bounded to 1 MiB, decoded as fatal UTF-8, and the hosted contract caps text at
+256,000 characters.
 
 A full page returns `nextCursor: {before, beforeId}`; supply both with `--before`
 and `--before-id`. A cursor permits another request without promising another
@@ -101,26 +129,54 @@ pagination. Limits are 1–100, default 25.
 
 ```sh
 recordings-mcp --hosted --stdio --api-base "$MY_RECORDINGS_API_BASE" --credential-env MY_RECORDINGS_SESSION
+# Explicit startup opt-in for recording and paste-save writes:
+recordings-mcp --hosted --allow-writes --stdio --api-base "$MY_RECORDINGS_API_BASE" --credential-env MY_RECORDINGS_SESSION
 ```
 
 This explicit mode exposes `recordings_hosted_list`, `recordings_hosted_get` and
 `recordings_hosted_paste_history` for these reads; each accepts `includeText: true`.
 The read-only `recordings_hosted_providers` tool accepts no arguments.
+The read-only `recordings_hosted_export` tool accepts `{id}` and explicitly returns
+private transcript text and a safe filename. Without `--allow-writes`, the MCP
+server registers only these five read tools.
+When started with `--allow-writes`, `recordings_hosted_save` accepts `{id, sessionId?, title, transcript, durationMs}`,
+`recordings_hosted_rename` accepts `{id, title}` and `recordings_hosted_delete` accepts `{id}`.
+`recordings_hosted_paste_save` accepts the hosted paste input.
+Save, rename and paste-save return metadata without private text. Save is marked as a non-destructive
+mutation; rename and delete are marked as destructive mutations
+because rename replaces metadata and delete removes data. Rename is not marked
+idempotent because the service can update its modification timestamp on each
+request. Save is not marked idempotent because an explicit ID can conflict. Delete is resumable and marked idempotent. Their results match the CLI and SDK.
 Stdio is required so the selected session cannot be shared through the legacy
 MCP HTTP listener. Legacy MCP mode is unchanged.
 
 ```sh
 recordings-serve --hosted --api-base "$MY_RECORDINGS_API_BASE" --port 8874
+# Explicit startup opt-in for recording and paste-save mutations:
+recordings-serve --hosted --allow-writes --api-base "$MY_RECORDINGS_API_BASE" --port 8874
 ```
 
-The read-only proxy binds to `127.0.0.1` by default; only `127.0.0.1` and `::1`
+The proxy remains read-only by default and binds to `127.0.0.1`; only `127.0.0.1` and `::1`
 are accepted. It supports `GET /v1/recordings`, `GET /v1/recordings/<id>` and
-`GET /v1/paste-history` and `GET /v1/providers`.
+`GET /v1/paste-history`, `GET /v1/providers` and `GET /v1/recordings/<id>/export`.
 Both list routes accept `limit`, `before`, `beforeId` and `includeText=true|false`; get
-accepts only `includeText`. The providers route accepts no query parameters. Every request supplies its own
+accepts only `includeText`. The providers and export routes accept no query parameters.
+With `--allow-writes`, `POST /v1/recordings` accepts only a validated JSON
+`{id, sessionId?, title, transcript, durationMs}` body and returns metadata.
+The body has a 1 MiB limit and a five-second read deadline. POST
+/v1/paste-history accepts the validated hosted paste input and returns a
+receipt with private text omitted; its body has the same 1 MiB limit and
+five-second read deadline. `PATCH /v1/recordings/<id>`
+accepts only a JSON `{title}` body and returns metadata; its body has an 8 KiB limit.
+`DELETE /v1/recordings/<id>` accepts no body. It preserves the hosted service's
+`202 {audioCleanup: {state: "pending"}}` or empty `204` response. Both mutation
+routes reject query parameters and remain refused with 405 when the startup
+flag is absent. `--allow-writes` is valid only with `--hosted`; it never changes
+legacy MCP or serve mode. This startup option adds no confirmation prompt and
+does not change direct CLI or SDK mutations. Every request supplies its own
 `Authorization: Bearer <session>` header. Process credentials are never used,
 and a request cannot choose the upstream authority. Cookies, browser Origin
-headers, mutation methods and unknown query fields are refused. Responses are
+headers, other mutation routes and unknown query fields are refused. Responses are
 not cached. `/health` describes the proxy process only. Legacy serve mode and
 its database/auth configuration are unchanged.
 
@@ -135,15 +191,48 @@ const library = new HostedLibrary(new HostedRecordingsClient({
 }));
 const page = await library.list({ limit: 25 });
 const detail = await library.get(recordingId, { includeText: true });
+const saved = await library.save({ id: crypto.randomUUID(), title: "New title", transcript: "Fictional transcript", durationMs: 1000 });
+const renamed = await library.rename(recordingId, "New title");
+const deletion = await library.delete(recordingId); // pending or removed, never retried automatically
 ```
 
 The existing hosted transport supplies validation, prefix preservation,
 credential/origin isolation, redirect refusal, cancellation, deadlines and
 response-size bounds. SDK callers can configure those bounds. Wrapper failures
 expose fixed codes/messages without response bodies, credentials or arbitrary
-causes. This addition does not implement sign-in, refresh, writes, microphone
+causes. This addition does not implement sign-in, refresh, recording uploads, microphone
 control, audio transfer or transcription; those hosted parity gates remain
 separate.
+
+### Plain-text transcript export
+
+`HostedLibrary.export(id, {signal})` explicitly returns
+`{recordingId, fileName, mediaType, text}`. It fetches the existing hosted recording
+once, preserves the transcript's UTF-8 text and line endings, and uses the
+validated recording UUID plus `.txt` for the filename. It does not add a title,
+timestamps, a BOM or a trailing newline. Future upstream fields are omitted.
+This matches the native app's plain-text export and does not invoke transcription.
+
+```sh
+recordings hosted --api-base "$MY_RECORDINGS_API_BASE" --credential-env MY_RECORDINGS_SESSION export <recording-id> --output ./transcript.txt
+```
+
+CLI export requires a new destination in an existing directory. It refuses an
+existing file or symlink before fetching, and publishes the complete file
+exclusively so a destination created during the request is never replaced.
+The file has mode `0600`; stdout contains only recording ID, format, byte length,
+SHA-256 and `saved: true`. A failed fetch creates no file. Private text is never
+printed by this command. The caller chooses the destination; it is not inferred
+from a server-provided title or path.
+
+MCP `recordings_hosted_export` returns the private text as tool output without
+writing any local file. The hosted proxy's `GET /v1/recordings/<id>/export` returns
+a UTF-8 plain-text attachment with the safe UUID filename and `no-store` caching.
+Both are available in read-only mode because they do not mutate hosted data.
+They preserve cancellation, per-request credentials and the existing bounded
+JSON transport. Export is a shared client operation over the service's existing
+recording read route, not an additional service API requirement. Ordinary
+Library reads still omit transcript text unless explicitly requested.
 
 ### Hosted paste history
 
@@ -157,6 +246,10 @@ recordings hosted --api-base "$MY_RECORDINGS_API_BASE" --credential-env MY_RECOR
 `evidenceSource`. Status remains `attempted`, `confirmed` or `failed`; evidence
 remains `client_reported`. A confirmed client report does not mean the server
 observed delivery to the target app.
+
+The save operation makes one explicit client-reported write, never attempts a
+paste and never upgrades delivery evidence. Receipt deletion and history
+clearing remain separate operations.
 
 Private pasted text is omitted unless `--include-text`, MCP `includeText: true`,
 or HTTP `includeText=true` is supplied. Explicit inclusion preserves an empty
@@ -179,11 +272,17 @@ const history = new HostedPasteHistory(new HostedRecordingsClient({
   credentialProvider: ({ apiBase, signal }) => session.accessTokenFor(apiBase, signal),
 }));
 const page = await history.list({ limit: 25 });
+const saved = await history.save({
+  id: crypto.randomUUID(), text: "", status: "confirmed",
+  destinationAppName: "Fictional editor",
+});
 ```
 
 The same class and its option, receipt and page types are exported from
-`@hasna/recordings/hosted`. This read operation neither creates/deletes receipts
-nor controls an app or attempts a paste.
+`@hasna/recordings/hosted`. The list operation neither creates/deletes receipts
+nor controls an app or attempts a paste. The save method validates text before
+credentials or network access; empty text remains valid for metadata-only
+retention. It never controls an app or attempts a paste.
 
 ### Transcription provider catalog
 

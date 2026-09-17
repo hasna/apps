@@ -81,23 +81,4 @@ describe("reusable skills engine contract", () => {
     expect(content).toContain("There is no\n`.skills/skills` directory");
   });
 
-  test("points bundled per-skill install surfaces to skills render", () => {
-    // The shared install surface lives in skills/_common. (The declarative-only
-    // catalog ships no per-skill executable install scripts — those were archived
-    // with the executable skills — so _common is the whole surface to police.)
-    const files = [
-      "skills/_common/installer.ts",
-      "skills/_common/skill-install.ts",
-      "skills/_common/install.sh",
-    ];
-
-    for (const file of files) {
-      const source = readFileSync(join(process.cwd(), file), "utf8");
-      expect(source, file).toContain("skills render");
-      expect(source, file).not.toContain("skills mcp --register");
-      expect(source, file).not.toMatch(/\.claude\/skills|\.codex\/skills|\.gemini\/skills/);
-      expect(source, file).not.toMatch(/writeFile(?:Sync)?\([^)]*SKILL\.md/);
-      expect(source, file).not.toMatch(/mkdir(?:Sync)?\([^)]*skillDir/);
-    }
-  });
 });

@@ -5,11 +5,13 @@ import { createCancelService } from "../sdk/cancel.js";
 import { GOVERNANCE_ERROR_CODES, GovernanceError } from "../sdk/governance.js";
 import { createGovernanceStore, type GovernanceStore } from "../sdk/governance-store.js";
 import { ArtifactStorage } from "./artifact-storage.js";
-import { seedBundledCorpus } from "./seed-bundled.js";
-import { authenticateRequest, publicPrincipal } from "./auth.js";
+import { authenticateRequest, permitsSkillsRoute } from "./auth.js";
+import { handleExecutionGrantApi } from "./execution-grants-api.js";
+import { handleProfileApi } from "./profile-api.js";
+import { createRuntimeService, handleRuntimeApiRequest, handleRuntimeWorkerRequest, type RuntimeService } from "./runtime-api.js";
 import { resolveServerConfig, type SkillsServerConfig } from "./config.js";
 import { resolveDatabaseTarget } from "./database-url.js";
-import { executeRun } from "./handlers.js";
+import { LEGACY_EXECUTION_GUIDANCE, LEGACY_EXECUTION_RETIRED } from "./handlers.js";
 import {
   SkillRequestError,
   assertPublishableSlug,
@@ -45,7 +47,11 @@ export interface SkillsServerOptions {
   store?: SkillsProductStore;
   /** Lifecycle ledger and ceiling reads for governance surfaces (cancellation). Defaults to the store's database. */
   governanceStore?: GovernanceStore;
+  /** Inject a configured cloud runtime, or null to explicitly disable cloud execution. */
+  runtime?: RuntimeService | null;
 }
+
+export type SkillsFetchHandler = ((request: Request) => Promise<Response>) & { close(): Promise<void> };
 
 /**
  * Refuse to serve traffic from storage that will not survive a restart.
@@ -78,7 +84,7 @@ export function assertDurableTarget(
   );
 }
 
-export async function createSkillsFetchHandler(options: SkillsServerOptions = {}): Promise<(request: Request) => Promise<Response>> {
+export async function createSkillsFetchHandler(options: SkillsServerOptions = {}): Promise<SkillsFetchHandler> {
   const config = { ...resolveServerConfig(), ...options.config };
   // Refuse before opening anything. Resolving the target is pure, so a configuration we
   // are going to reject never gets as far as creating a database file or a connection
@@ -97,15 +103,13 @@ export async function createSkillsFetchHandler(options: SkillsServerOptions = {}
   const artifactStorage = options.artifactStorage ?? new ArtifactStorage({
     bucket: config.artifactBucket,
     prefix: config.artifactPrefix,
+    runPrefix: config.runArtifactPrefix,
   });
-  // Seed the registry from the bundled corpus once per package version (hasna/apps#1630).
-  // Only on a real boot with a durable store and a bootstrap key: injected test stores skip it.
-  if (!options.store && config.bootstrapApiKey && config.seedBundledCorpus) {
-    void seedBundledCorpus({ store, artifactStorage, principal: publicPrincipal(), log: (line) => console.log(line) })
-      .catch((error) => console.error(`skills: bundled corpus seed failed: ${(error as Error).message}`));
-  }
+  const runtime = options.runtime !== undefined ? options.runtime : await createRuntimeService({ databaseUrl: config.databaseUrl, productStore: store, artifacts: artifactStorage });
+  // Startup creates authentication and storage only. Skill content enters an
+  // organization through its authenticated publish API, never the server's home.
 
-  return async function fetch(request: Request): Promise<Response> {
+  const fetch = async function fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     // API-FIRST aliases delegate to the existing handlers and credential gate.
     // The fleet gateway strips only /skills; standalone /api routes stay valid.
@@ -122,6 +126,8 @@ export async function createSkillsFetchHandler(options: SkillsServerOptions = {}
     const segments = pathSegments(url.pathname);
 
     try {
+      const callback = await handleRuntimeWorkerRequest(request, runtime);
+      if (callback) return callback;
       if (request.method === "GET" && url.pathname === "/health") {
         return json({ ok: true, service: "skills", time: new Date().toISOString() });
       }
@@ -141,6 +147,15 @@ export async function createSkillsFetchHandler(options: SkillsServerOptions = {}
       if (url.pathname.startsWith("/api/")) {
         const principal = await authenticateRequest(store, request);
         if (!principal) return json({ error: "authentication required", code: "AUTH_REQUIRED" }, { status: 401 });
+
+        const execution = await handleRuntimeApiRequest(request, principal, runtime);
+        if (execution) return execution;
+
+        if (request.method === "GET" && url.pathname === "/api/v1/capabilities") {
+          const response = await handleProfileApi(store, principal, request, ["capabilities"], config);
+          const payload = await response!.json() as Record<string, any>;
+          return json({ ...payload, cloudExecution: Boolean(runtime), capabilities: [...payload.capabilities, ...(runtime ? ["skills.cloud-execution"] : [])] });
+        }
 
         if (request.method === "GET" && url.pathname === "/api/auth/whoami") {
           return json(identityPayload(principal));
@@ -190,6 +205,14 @@ export async function createSkillsFetchHandler(options: SkillsServerOptions = {}
       return json({ error: "internal server error", detail: (error as Error).message }, { status: 500 });
     }
   };
+  let closed = false;
+  return Object.assign(fetch, { async close() {
+    if (closed) return;
+    closed = true;
+    if (options.runtime === undefined) await runtime?.close?.();
+    if (!options.governanceStore) await governanceStore.close?.();
+    if (!options.store) await store.close?.();
+  } });
 }
 
 export async function startSkillsServer(options: SkillsServerOptions = {}): Promise<Bun.Server<undefined>> {
@@ -242,6 +265,14 @@ async function handleApiV1(
     return json({ error: "invalid path segment", code: "INVALID_PATH" }, { status: 400 });
   }
 
+  if (!permitsSkillsRoute(principal, request.method, resource ?? "")) {
+    return json({error:"The API key does not allow this operation",code:"INSUFFICIENT_SCOPE"}, {status:403});
+  }
+  const grantResponse = await handleExecutionGrantApi(store, principal, request, parts, config, artifactStorage);
+  if (grantResponse) return grantResponse;
+  const profileResponse = await handleProfileApi(store, principal, request, parts, config);
+  if (profileResponse) return profileResponse;
+
   if (resource === "skills") {
     if (request.method === "GET" && !id) {
       const tag = new URL(request.url).searchParams.get("tag");
@@ -261,9 +292,8 @@ async function handleApiV1(
     }
 
     if (request.method === "GET" && id && subresource === "skill.md") {
-      // Traversal defence for this route lives at the router boundary (segmentEscapesPath,
-      // #65) and inside the getServerSkillMd() fallback getMergedSkillMd() delegates to;
-      // no per-route slug assertion is re-applied here.
+      // The router rejects path escapes; document reads resolve only through the
+      // authenticated organization's store and never construct filesystem paths.
       const resolved = await resolvePublishedSkill(store, artifactStorage, principal, id);
       if (resolved.kind === "tombstone") {
         return json({ error: "skill was deleted", ...resolved.payload }, { status: 410 });
@@ -337,7 +367,7 @@ async function handleApiV1(
       if (resolved.kind === "published") {
         return json(publishedPayload(resolved.record), { headers: { ETag: revisionEtag(resolved.record.revisionId) } });
       }
-      // Absent from this org's registry: the bundled corpus may still serve the slug.
+      // Resolve only the authenticated organization's published catalog.
       const skill = await getMergedSkill(store, artifactStorage, principal, id);
       return skill ? json(skill) : json({ error: "skill not found", code: "SKILL_NOT_FOUND" }, { status: 404 });
     }
@@ -412,18 +442,7 @@ async function handleApiV1(
     }
 
     if (request.method === "POST" && id && !subresource) {
-      const body = await readJson(request, config.requestBodyLimitBytes);
-      const input = isRecord(body.input) ? body.input : {};
-      const args = Array.isArray(body.args) ? body.args.map(String) : [];
-      const run = await store.createRun({
-        principal,
-        slug: id,
-        input,
-        args,
-        idempotencyKey: request.headers.get("idempotency-key") || stringField(body.idempotencyKey),
-      });
-      if (config.inlineWorker) void executeRun(store, run, artifactStorage);
-      return json(runPayload(run), { status: 202 });
+      return json({ error: LEGACY_EXECUTION_GUIDANCE, code: LEGACY_EXECUTION_RETIRED }, { status: 410 });
     }
 
     if (request.method === "GET" && id && !subresource) {

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { getDatabase, resetDatabase } from "../db/database";
 import { createConfig, listConfigs } from "../db/configs";
 import { syncFromDir, syncToDir } from "./sync-dir";
+import { normalizeTargetPath } from "./apply";
 import { tempRootPath } from "./test-temp-root";
 
 let tmpDir: string;
@@ -96,7 +97,7 @@ describe("syncFromDir redacts before storing", () => {
     writeFileSync(join(tmpDir, ".env"), `ANTHROPIC_API_KEY${"="}${SYNTHETIC_VALUE}\n`);
     const result = await syncFromDir(tmpDir, { store: new LocalConfigStore(db) });
     expect(result.added).toBe(1);
-    const stored = listConfigs(undefined, db).find((c) => c.target_path === join(tmpDir, ".env"));
+    const stored = listConfigs(undefined, db).find((c) => c.target_path && normalizeTargetPath(c.target_path) === normalizeTargetPath(join(tmpDir, ".env")));
     expect(stored).toBeDefined();
     expect(stored!.content).toContain("{{ANTHROPIC_API_KEY}}");
     expect(stored!.content).not.toContain(SYNTHETIC_VALUE);
@@ -110,7 +111,7 @@ describe("syncFromDir redacts before storing", () => {
     writeFileSync(join(tmpDir, ".env"), `ANTHROPIC_API_KEY${"="}${secondValue}\nSOME_NEW_SETTING=hello\n`);
     const result = await syncFromDir(tmpDir, { store: new LocalConfigStore(db) });
     expect(result.updated).toBe(1);
-    const stored = listConfigs(undefined, db).find((c) => c.target_path === join(tmpDir, ".env"));
+    const stored = listConfigs(undefined, db).find((c) => c.target_path && normalizeTargetPath(c.target_path) === normalizeTargetPath(join(tmpDir, ".env")));
     expect(stored).toBeDefined();
     expect(stored!.content).toContain("{{ANTHROPIC_API_KEY}}");
     expect(stored!.content).toContain("SOME_NEW_SETTING=hello");

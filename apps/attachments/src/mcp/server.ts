@@ -236,7 +236,7 @@ const FULL_SCHEMAS: Record<string, object> = {
   },
   complete_task_with_files: {
     name: "complete_task_with_files",
-    description: "Upload one or more local files to S3 and complete a todos task with those attachment IDs as evidence. Calls POST /api/tasks/:id/complete with attachment_ids.",
+    description: "Upload files through Attachments, merge evidence into the hosted Todos task with an observed write version, and complete it. Partial failures require reconciliation before retrying.",
     inputSchema: {
       type: "object",
       properties: {
@@ -829,7 +829,7 @@ async function handleLinkToTask(args: {
   task_id: string;
   todos_url?: string;
 }) {
-  const todosUrl = args.todos_url ?? serviceConfig("TODOS").url;
+  const todosUrl = args.todos_url ?? (await serviceConfig("TODOS")).url;
   await linkAttachmentToTask(args.attachment_id, args.task_id, todosUrl);
 
   return `Linked ${args.attachment_id} → task ${args.task_id}`;
@@ -863,13 +863,13 @@ async function handleSaveSession(args: {
   expiry?: string;
   tag?: string;
 }) {
-  const sessionsUrl = args.sessions_url ?? serviceConfig("SESSIONS").url;
+  const sessionsUrl = args.sessions_url ?? (await serviceConfig("SESSIONS")).url;
   const fmt = args.format === "html" ? "html" : "markdown";
 
   // Fetch messages from sessions API
   async function fetchMessages(): Promise<Array<Record<string, unknown>>> {
     const messagesUrl = `${sessionsUrl}/api/sessions/${encodeURIComponent(args.session_id)}/messages`;
-    const res = await fetch(messagesUrl, withServiceAuth("SESSIONS", messagesUrl));
+    const res = await fetch(messagesUrl, await withServiceAuth("SESSIONS", messagesUrl));
     if (res.ok) {
       const data = await res.json() as unknown;
       if (Array.isArray(data)) return data as Array<Record<string, unknown>>;
@@ -880,7 +880,7 @@ async function handleSaveSession(args: {
     }
     if (res.status !== 404) throw new Error(`Sessions request failed: HTTP ${res.status}`);
     const sessionUrl = `${sessionsUrl}/api/sessions/${encodeURIComponent(args.session_id)}`;
-    const res2 = await fetch(sessionUrl, withServiceAuth("SESSIONS", sessionUrl));
+    const res2 = await fetch(sessionUrl, await withServiceAuth("SESSIONS", sessionUrl));
     if (!res2.ok) {
       throw new Error(`Failed to fetch session ${args.session_id}: HTTP ${res2.status}`);
     }

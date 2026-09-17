@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { pagedPayload, paginate, summarizeApplyResult, summarizeConfig } from "./compact-output";
+import { MAX_LIST_CURSOR, pagedPayload, paginate, parseCursor, summarizeApplyResult, summarizeConfig } from "./compact-output";
 import type { ApplyResult, Config } from "../types";
 
 const config: Config = {
@@ -30,6 +30,13 @@ describe("compact output helpers", () => {
     expect(page.total).toBe(25);
     expect(page.next_cursor).toBe(20);
     expect(page.has_more).toBe(true);
+  });
+
+  test("numeric cursors fail closed at the maximum defensible offset", () => {
+    expect(parseCursor(MAX_LIST_CURSOR)).toBe(MAX_LIST_CURSOR);
+    expect(parseCursor(MAX_LIST_CURSOR + 1)).toBe(MAX_LIST_CURSOR);
+    expect(parseCursor(Number.MAX_SAFE_INTEGER)).toBe(MAX_LIST_CURSOR);
+    expect(parseCursor("999999999999999999999999")).toBe(MAX_LIST_CURSOR);
   });
 
   test("pagedPayload includes compact pagination metadata", () => {

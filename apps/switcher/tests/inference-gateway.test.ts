@@ -1,7 +1,7 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { compileModelPolicy } from "../src/model-policy";
 import { createInferenceGateway } from "../src/inference-gateway";
-import { createServer } from "node:http";
+import { createServer, request as httpRequest } from "node:http";
 
 const models = [
   { id: "main", name: "Main", supportedParameters: ["tools"] },
@@ -14,6 +14,147 @@ const input = (protocol: any, baseUrl: string, events: any[]) => {
   return { harness: protocol === "gemini-generate-content" ? "gemini" : "pi", protocol, authStyle: protocol === "gemini-generate-content" ? "x-api-key" : "bearer", baseUrl, providerId: "fixture-provider", model: "main", models, credential, stateDir: "/Users/hasna/Workspace/scratch/universal-harness-switcher/model-routing-test-state", cwd: "/Users/hasna/Workspace/scratch/universal-harness-switcher", compiledPolicy, catalogPath: "/Users/hasna/Workspace/scratch/universal-harness-switcher/model-routing-test-catalog.json", onRoutingEvent: (event: any) => events.push(event) };
 };
 const auth = (protocol: string, token: string) => protocol === "gemini-generate-content" ? { "x-goog-api-key": token } : { authorization: `Bearer ${token}` };
+
+test("a million-token catalog route accepts inference bodies beyond the legacy 4 MiB ceiling", async () => {
+  let bytes = 0;
+  const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+    bytes = Number(request.headers.get("content-length"));
+    const body = await request.json() as any;
+    return Response.json({ model: body.model });
+  } });
+  const events: any[] = [];
+  const launch = { ...input("openai-responses", upstream.url.origin + "/v1", events), models: structuredClone(models) };
+  launch.models[0].contextWindow = 1_050_000;
+  const gateway = createInferenceGateway(launch as any);
+  try {
+    const response = await fetch(gateway.baseUrl + "/responses", { method: "POST", headers: { ...auth("openai-responses", gateway.token), "content-type": "application/json" }, body: JSON.stringify({ model: "main", input: "x".repeat(5 * 1024 * 1024) }) });
+    expect(response.status).toBe(200);
+    await response.text();
+    expect(bytes).toBeGreaterThan(4 * 1024 * 1024);
+    expect(events).toHaveLength(1);
+  } finally { await gateway.cleanup(); await upstream.stop(true); }
+});
+
+test("routes without large-context metadata retain the bounded legacy request ceiling", async () => {
+  let calls = 0;
+  const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() { calls++; return Response.json({ model: "main" }); } });
+  const gateway = createInferenceGateway(input("openai-responses", upstream.url.origin + "/v1", []) as any);
+  try {
+    const response = await fetch(gateway.baseUrl + "/responses", { method: "POST", headers: { ...auth("openai-responses", gateway.token), "content-type": "application/json" }, body: JSON.stringify({ model: "main", input: "x".repeat(5 * 1024 * 1024) }) });
+    expect(response.status).toBe(413);
+    expect(calls).toBe(0);
+  } finally { await gateway.cleanup(); await upstream.stop(true); }
+});
+
+for (const [largeModel, expectedStatus] of [["catalog-only", 413], ["fallback", 200]] as const) test(`large context on ${largeModel} ${expectedStatus === 200 ? "enlarges" : "does not enlarge"} the launch request ceiling`, async () => {
+  const accepted: string[] = [];
+  const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+    const body = await request.json() as any;
+    accepted.push(body.model);
+    return Response.json({ model: body.model });
+  } });
+  const launch = { ...input("openai-responses", upstream.url.origin + "/v1", []), models: structuredClone(models) };
+  launch.models.find((model: any) => model.id === largeModel).contextWindow = 1_050_000;
+  const gateway = createInferenceGateway(launch as any);
+  try {
+    const response = await fetch(gateway.baseUrl + "/responses", { method: "POST", headers: { ...auth("openai-responses", gateway.token), "content-type": "application/json" }, body: JSON.stringify({ model: "main", input: "x".repeat(5 * 1024 * 1024) }) });
+    expect(response.status).toBe(expectedStatus);
+    await response.text();
+    expect(accepted).toEqual(expectedStatus === 200 ? ["main"] : []);
+  } finally { await gateway.cleanup(); await upstream.stop(true); }
+});
+
+test("the inference body ceiling stays at 64 MiB even for the largest valid context metadata", async () => {
+  let calls = 0;
+  const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() { calls++; return Response.json({ model: "main" }); } });
+  const launch = { ...input("openai-responses", upstream.url.origin + "/v1", []), models: structuredClone(models) };
+  launch.models[0].contextWindow = Number.MAX_SAFE_INTEGER;
+  const gateway = createInferenceGateway(launch as any);
+  try {
+    const response = await fetch(gateway.baseUrl + "/responses", { method: "POST", headers: { ...auth("openai-responses", gateway.token), "content-type": "application/json" }, body: JSON.stringify({ model: "main", input: "x".repeat(64 * 1024 * 1024) }) });
+    expect(response.status).toBe(413);
+    await response.text();
+    expect(calls).toBe(0);
+  } finally { await gateway.cleanup(); await upstream.stop(true); }
+});
+
+test("chunked inference bodies cannot bypass the request ceiling without a content length", async () => {
+  let calls = 0;
+  const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() { calls++; return Response.json({ model: "main" }); } });
+  const gateway = createInferenceGateway(input("openai-responses", upstream.url.origin + "/v1", []) as any);
+  try {
+    const status = await new Promise<number>((resolve, reject) => {
+      const request = httpRequest(gateway.baseUrl + "/responses", {
+        method: "POST", headers: { ...auth("openai-responses", gateway.token), "content-type": "application/json", "transfer-encoding": "chunked" },
+      }, response => {
+        response.resume();
+        response.once("end", () => resolve(response.statusCode!));
+        response.once("error", reject);
+      });
+      request.once("error", reject);
+      request.setTimeout(2000, () => request.destroy(new Error("Chunked fixture request timed out")));
+      request.write('{"model":"main","input":"');
+      const chunk = "x".repeat(1024 * 1024);
+      for (let i = 0; i < 5; i++) request.write(chunk);
+      request.end('"}');
+    });
+    expect(status).toBe(413);
+    expect(calls).toBe(0);
+  } finally { await gateway.cleanup(); await upstream.stop(true); }
+});
+
+test("a provider closing its socket after accepting the POST does not trigger a gateway fallback", async () => {
+  const accepted: any[] = [];
+  const upstream = createServer((request, response) => {
+    let body = "";
+    request.setEncoding("utf8");
+    request.on("data", chunk => { body += chunk; });
+    request.once("end", () => {
+      accepted.push(JSON.parse(body));
+      response.destroy();
+    });
+  });
+  await new Promise<void>(resolve => upstream.listen(0, "127.0.0.1", resolve));
+  const events: any[] = [];
+  const gateway = createInferenceGateway(input("openai-responses", `http://127.0.0.1:${(upstream.address() as any).port}/v1`, events) as any);
+  try {
+    // Two caller-initiated requests remain two accepted provider POSTs, with no implicit fallback.
+    for (let invocation = 1; invocation <= 2; invocation++) {
+      const response = await fetch(gateway.baseUrl + "/responses", { method: "POST", headers: { ...auth("openai-responses", gateway.token), "content-type": "application/json" }, body: JSON.stringify({ model: "main", input: "private-request-fixture" }) });
+      expect(response.status).toBe(502);
+      const body = await response.json();
+      expect(body.error.code).toBe("provider_network_error");
+      expect(body.error.message).toBe("The upstream provider connection ended before response headers. Switcher did not attempt a fallback because delivery is uncertain.");
+      expect(JSON.stringify(body)).not.toContain(credential);
+      expect(JSON.stringify(body)).not.toContain("private-request-fixture");
+      expect(accepted).toHaveLength(invocation);
+      expect(accepted.at(-1)).toMatchObject({ model: "main", input: "private-request-fixture" });
+    }
+    expect(events.map(event => event.reason)).toEqual(["network_error", "network_error"]);
+    expect(events.some(event => event.decision === "fallback")).toBe(false);
+  } finally { await gateway.cleanup(); upstream.closeAllConnections(); await new Promise<void>(resolve => upstream.close(() => resolve())); }
+});
+
+test("an ambiguous provider transport failure is not replayed and retains a safe distinct code", async () => {
+  const nativeFetch = globalThis.fetch;
+  let calls = 0;
+  const fetchMock = spyOn(globalThis, "fetch").mockImplementation((url, init) => {
+    if (!String(url).startsWith("https://provider.invalid/")) return nativeFetch(url, init);
+    calls++;
+    return Promise.reject(new TypeError("private provider transport diagnostic"));
+  });
+  const events: any[] = [];
+  const gateway = createInferenceGateway(input("openai-responses", "https://provider.invalid/v1", events) as any);
+  try {
+    const response = await nativeFetch(gateway.baseUrl + "/responses", { method: "POST", headers: { ...auth("openai-responses", gateway.token), "content-type": "application/json" }, body: JSON.stringify({ model: "main", input: "fixture" }) });
+    expect(response.status).toBe(502);
+    const body = await response.json();
+    expect(body.error.code).toBe("provider_network_error");
+    expect(JSON.stringify(body)).not.toContain("private provider transport diagnostic");
+    expect(calls).toBe(1);
+    expect(events.map(event => event.reason)).toEqual(["network_error"]);
+  } finally { fetchMock.mockRestore(); await gateway.cleanup(); }
+});
 
 test("provider throttling keeps Retry-After without exposing its response body",async()=>{
   const upstream=Bun.serve({hostname:"127.0.0.1",port:0,fetch(){return Response.json({error:"private provider detail"},{status:429,headers:{"retry-after":"120"}});}});

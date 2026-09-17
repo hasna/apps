@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { beforeEach, afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync as mkdtempSyncTop, mkdirSync, rmSync as rmSyncTop, writeFileSync as writeFileSyncTop } from "fs";
 import { join as joinTop } from "path";
 import { tmpdir as tmpdirTop } from "os";
@@ -12,15 +12,18 @@ import {
   runCliInCwd,
 } from "./cli.test-utils";
 
+import { writeTestCatalog } from "../lib/private-corpus-test-utils.js";
+import { getPortableSkillsRoot } from "../lib/portable-skills.js";
 import { useDefaultTestTimeout } from "../test-preload.js";
 
 useDefaultTestTimeout();
+beforeEach(() => writeTestCatalog(getPortableSkillsRoot()));
 
 // Declarative-only catalog ships no BYO-key skill; env-check is exercised against
 // a fixture in a throwaway corpus the CLI resolves via $HASNA_SKILLS_DIR.
 const FIXTURE_HOME = mkdtempSyncTop(joinTop(tmpdirTop(), "cli-envcheck-fixtures-"));
 {
-  const dir = joinTop(FIXTURE_HOME, "custom", "byo-fixture");
+  const dir = joinTop(FIXTURE_HOME, "installed", "byo-fixture");
   mkdirSync(dir, { recursive: true });
   writeFileSyncTop(joinTop(dir, "package.json"), JSON.stringify({ name: "byo-fixture", version: "0.1.0" }));
   writeFileSyncTop(joinTop(dir, "SKILL.md"), "---\nname: byo-fixture\ndescription: BYO-key fixture.\n---\n# BYO\n\nSet `OPENAI_API_KEY`.\n");
@@ -65,8 +68,8 @@ describe("CLI import export and env checks", () => {
         expect(stdout).toContain("react");
         expect(stdout).toContain("typescript");
         expect(stdout).toContain("Recommended skills");
-        expect(stdout).toContain("landing-page-pack");
-        expect(stdout).toContain("market-research-report");
+        expect(stdout).toContain("repo-onboarding-report");
+        expect(stdout).toContain("seo-content-pack");
         expect(stdout).toContain("skills render");
         expect(stdout).not.toContain("skills mcp --register");
       } finally {
@@ -91,8 +94,7 @@ describe("CLI import export and env checks", () => {
         expect(Array.isArray(data.detected)).toBe(true);
         expect(Array.isArray(data.recommended)).toBe(true);
         expect(data.detected).toContain("express");
-        expect(data.recommended).toContain("test-suite-generator");
-        expect(data.recommended).toContain("market-research-report");
+        expect(data.recommended).toEqual(["test-suite-generator"]);
         expect(data.agents).toEqual(["claude"]);
         expect(data.mcpRegister).toBe("skills render");
       } finally {

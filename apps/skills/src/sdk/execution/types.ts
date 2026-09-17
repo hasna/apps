@@ -8,10 +8,10 @@
  * and increment the attempt_id and lease_generation.
  */
 
-import { RUN_PROTOCOL_VERSION } from "../runs.js";
+import { REMOTE_SKILL_RUN_CONTRACT_VERSION } from "../../lib/remote-run-contract.js";
 
 /** Protocol version shared with the sibling sdk run protocol. */
-export const EXECUTION_PROTOCOL_VERSION = RUN_PROTOCOL_VERSION;
+export const EXECUTION_PROTOCOL_VERSION = REMOTE_SKILL_RUN_CONTRACT_VERSION;
 
 /** Lifecycle states of the execution state machine. */
 export type ExecutionRunStatus = "admitted" | "leased" | "running" | "succeeded" | "failed" | "cancelled";

@@ -3,3 +3,5 @@ minimumReleaseAgeExclude:
   - '@hasna/contracts@0.5.2'
   - '@hasna/contracts@0.8.2'
   - '@hasna/contracts@1.0.2'
+  - '@hasna/contracts@1.1.0'
+  - '@hasna/secrets@0.4.2'

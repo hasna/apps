@@ -189,6 +189,24 @@ describe("bundle exclusions", () => {
     });
   });
 
+  test.each(["failed", "pending"])("local %s dependency preparation state never changes bundle identity", status => {
+    const nested = "references/.skills-dependency-preparation/state.json";
+    withSkillDir({ ...MINIMAL, [nested]: "authored nested reference\n" }, dir => {
+      const before = packSkillBundle(dir);
+      const marker = join(dir, ".skills-dependency-preparation");
+      mkdirSync(marker);
+      writeFileSync(join(marker, "state.json"), JSON.stringify({ version: 1, status }));
+      if (status === "pending") mkdirSync(join(marker, "active"));
+      const after = packSkillBundle(dir);
+      expect(after.paths).toEqual(before.paths);
+      expect(after.sha256).toBe(before.sha256);
+      expect(after.bytes).toEqual(before.bytes);
+      expect(after.paths).toContain(nested);
+      expect(unpackSkillBundle(after.bytes).find(entry => entry.path === nested)?.bytes)
+        .toEqual(new TextEncoder().encode("authored nested reference\n"));
+    });
+  });
+
   test("drops the pull provenance marker at the root, keeping the digest stable across a pull", () => {
     // The sync provenance marker lives inside the corpus skill directory. Packing it
     // would (a) change the bundle digest the moment a skill is pulled, so a pulled skill

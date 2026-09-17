@@ -4,8 +4,9 @@ import { assertHarnessArguments } from "./harness-arguments";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { SwitcherClient } from "./sdk";
-import { CommandInterrupted, codingEligible, harnessEligible, modelExpired, validateHarnessProvider, type LaunchPlan, type ProviderInput } from "./domain";
+import { CommandInterrupted, Fault, codingEligible, harnessEligible, modelExpired, validateHarnessProvider, type LaunchPlan, type ProviderInput } from "./domain";
 import { providerCredential } from "./presets";
+import { providerCredentialFingerprint, providerCredentialSetupCommand } from "./provider-credential-onboarding";
 import { privateDirectory, switcherHome } from "./runtime";
 import { prepareHarnessLaunch, detectHarness, codexModel, validateHarnessVersion, validateHarnessConfiguration } from "./harnesses";
 import { harnessInstallationMessage } from "./harness-installation";
@@ -20,7 +21,7 @@ import { childEnvironment } from "./harness-environment";
 import type { RoutingEvent } from "./inference-gateway";
 export { childEnvironment } from "./harness-environment";
 export type LaunchBackend = "direct" | "ori";
-export type LaunchOptions = {desktop?: ChatGPTInstallation; claudeDesktop?:ClaudeDesktopInstallation; reasoning?:ReasoningEffort; dangerouslyBypassApprovalsAndSandbox?:boolean; backend?: LaunchBackend; oriExecutable?: string; cwd?: string; executable?: string; stateDir?: string; args?: string[]; timeoutMs?: number; refresh?: boolean; credentialEnv?: NodeJS.ProcessEnv; resolveCredential?: (provider: ProviderInput)=>Promise<string | undefined>};
+export type LaunchOptions = {desktop?: ChatGPTInstallation; claudeDesktop?:ClaudeDesktopInstallation; reasoning?:ReasoningEffort; dangerouslyBypassApprovalsAndSandbox?:boolean; backend?: LaunchBackend; oriExecutable?: string; cwd?: string; executable?: string; stateDir?: string; args?: string[]; timeoutMs?: number; refresh?: boolean; credentialEnv?: NodeJS.ProcessEnv; credentialPreflight?:string; resolveCredential?: (provider: ProviderInput)=>Promise<string | undefined>};
 const LATE_RUN_FINALIZATION_TIMEOUT_MS = 5_000;
 
 async function writeOriCodexCatalog(stateDir: string, models: LaunchPlan["catalog"]["models"]): Promise<string> {
@@ -84,7 +85,7 @@ function buildOriRequest(plan: LaunchPlan, target: OriSupportedHarness, catalogP
 export async function prepareOriForPlan(plan: LaunchPlan, options: OriPreparationOptions & {stateDir:string}): Promise<{contract: OriContract; prepared: PreparedLaunch}> {
   const {contract, request,detection} = await oriRequestForPlan(plan, options);
   const credential = options.resolveCredential ? await options.resolveCredential(plan.provider) : providerCredential(plan.provider, options.credentialEnv);
-  if (!credential) throw new Error("OpenRouter credential is required for an Ori launch; configure a Switcher credential binding.");
+  if (!credential) throw new Fault(400,"credential_setup_required",`OpenRouter credential setup is required. Run: ${providerCredentialSetupCommand(plan.provider)}.`);
   const ori = prepareOriLaunch({...request, executable: contract.executable, environment: {...process.env, ...options.credentialEnv, OPENROUTER_API_KEY: credential}});
   const native=await prepareHarnessLaunch({harness:plan.profile.harness,baseUrl:plan.provider.baseUrl,protocol:plan.provider.protocol,authStyle:plan.provider.authStyle,
     model:plan.profile.model,models:plan.catalog.models.filter(m=>modelExpired(m)||harnessEligible(m,plan.profile.harness)),modelPolicy:plan.profile.modelPolicy,
@@ -117,6 +118,8 @@ export async function launch(client: SwitcherClient, profileId: string, options:
   const plan = await client.launchPlan(profileId);
   assertHarnessArguments(plan.profile.harness,options.args ?? []);
   await validateHarnessConfiguration(plan.profile.harness,resolve(options.cwd??process.cwd()),options.args);
+  if(options.credentialPreflight&&providerCredentialFingerprint(plan.provider)!==options.credentialPreflight)
+    throw new Fault(409,"credential_preflight_changed","The provider authority or credential contract changed after authentication. Retry the launch; no credential was sent.");
   const backend = options.backend ?? "direct";
   if (backend !== "direct" && backend !== "ori") throw new Error("Unknown launch backend; use direct or ori.");
   if (backend === "ori" && options.executable) throw new Error("--executable is ambiguous with --backend ori; use --ori-executable PATH.");
@@ -135,7 +138,7 @@ export async function launch(client: SwitcherClient, profileId: string, options:
   if (backend === "direct") {
     try {
       credential = options.resolveCredential ? await options.resolveCredential(plan.provider) : providerCredential(plan.provider, options.credentialEnv);
-      if (plan.provider.credentialEnv && !credential) throw new Error("Provider credential environment reference is not available in this local launcher process.");
+      if (plan.provider.credentialEnv && !credential) throw new Fault(400,"credential_setup_required",`Provider credential setup is required. Run: ${providerCredentialSetupCommand(plan.provider)}. Or provide ${plan.provider.credentialEnv} in this launch process.`);
     } catch (error) { await rm(stateDir, {recursive: true, force: true}); throw error; }
   }
   let run: Awaited<ReturnType<SwitcherClient["createRun"]>> | undefined;

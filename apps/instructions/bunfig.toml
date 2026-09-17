@@ -18,3 +18,9 @@
 
 [test]
 preload = ["./src/test-support/preload-state-home.ts"]
+
+# Package-cwd installs keep the same seven-day supply-chain quarantine as the
+# repository root. Exact reviewed releases are pinned in package.json/lockfile;
+# do not weaken this window to admit a newer transitive version.
+[install]
+minimumReleaseAge = 604800
