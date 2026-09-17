@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.2
+
+### Patch Changes
+
+- e923c48: Use current Todos v1 task and history envelopes for task linking, completion, journals and evidence resolution. Preserve existing metadata with explicit write versions, refuse incomplete or stale results, and stop the watcher on authentication or unsupported-route errors without legacy fallback.
+
 ## 1.2.1
 
 ### Patch Changes
