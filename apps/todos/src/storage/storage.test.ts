@@ -123,6 +123,7 @@ describe("storage adapter contracts", () => {
       "getActiveWork",
       "getChangedSince",
     ]);
+    expectStore(adapter, "dependencies", ["add", "remove", "list", "listPage", "listAll"]);
     expectStore(adapter, "projects", ["create", "get", "getByPath", "list", "update", "delete"]);
     expectStore(adapter, "plans", ["create", "get", "list", "update", "delete"]);
     expectStore(adapter, "agents", ["register", "get", "getByName", "list", "update"]);
@@ -131,6 +132,53 @@ describe("storage adapter contracts", () => {
     expectStore(adapter, "audit", ["logTaskChange", "addComment", "getTaskHistory", "getRecentActivity"]);
     expectStore(adapter, "sync", ["getTasksChangedSince", "exportSnapshot", "importSnapshot"]);
     expectStore(adapter, "integrity", ["report"]);
+  });
+
+  test("SQLite dependency pages apply the requested limit and return an authoritative total", async () => {
+    const adapter = createLocalSqliteTodosStorageAdapter({ db });
+    const tasks = await Promise.all(
+      Array.from({ length: 5 }, (_, index) => adapter.tasks.create({ title: `dependency page ${index}` })),
+    );
+    await adapter.dependencies!.add(tasks[1]!.id, tasks[0]!.id);
+    await adapter.dependencies!.add(tasks[2]!.id, tasks[1]!.id);
+    await adapter.dependencies!.add(tasks[3]!.id, tasks[2]!.id);
+    await adapter.dependencies!.add(tasks[4]!.id, tasks[3]!.id);
+
+    const page = await adapter.dependencies!.listPage!({ limit: 2, offset: 1 });
+    expect(page.total).toBe(4);
+    expect(page.dependencies).toHaveLength(2);
+    expect(await adapter.dependencies!.listAll!()).toHaveLength(4);
+    expect(() => adapter.dependencies!.listPage!({ limit: 501, offset: 0 }))
+      .toThrow("limit");
+  });
+
+  test("Postgres dependency pages count in storage and materialize only LIMIT/OFFSET rows", async () => {
+    const calls: Array<{ sql: string; values: readonly unknown[] }> = [];
+    const pageRows = Array.from({ length: 500 }, (_, index) => ({
+      task_id: `task-${10_001 + index}`,
+      depends_on: `dependency-${10_001 + index}`,
+    }));
+    const client: TodosPostgresQueryClient = {
+      async query<T = Record<string, unknown>>(sql: string, values: readonly unknown[] = []) {
+        calls.push({ sql, values });
+        if (sql.includes("todos:list-dependencies-page")) {
+          return { rows: [{ total: "25000", dependencies: pageRows }] as T[] };
+        }
+        return { rows: [] as T[] };
+      },
+    };
+    const adapter = createPostgresTodosStorageAdapter({ client });
+    const page = await adapter.dependencies!.listPage!({ limit: 500, offset: 10_000 });
+
+    expect(page).toEqual({ dependencies: pageRows, total: 25_000 });
+    const bounded = calls.filter((call) => call.sql.includes("todos:list-dependencies-page"));
+    expect(bounded).toHaveLength(1);
+    expect(bounded[0]!.sql).toContain("COUNT(*)::text");
+    expect(bounded[0]!.sql).toContain("LIMIT $2 OFFSET $3");
+    expect(bounded[0]!.values).toEqual(["todos", 500, 10_000]);
+    expect(calls.some((call) =>
+      call.sql.includes("SELECT object_type, object_id, payload") && call.values[1] === "dependencies"
+    )).toBe(false);
   });
 
   test("exposes the referential-integrity store on BOTH storage engines", async () => {

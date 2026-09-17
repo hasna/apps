@@ -102,6 +102,17 @@ export interface RemoteTemplateOverrides {
   priority?: TemplateWithTasks["priority"];
 }
 
+export interface RemoteTemplateApplicationOptions {
+  /** Actor recorded by the hosted authority for task creation. */
+  actorAgentId?: string;
+  /** Assignee that must survive the authoritative create/readback cycle. */
+  assignedTo?: string;
+  /** Canonical task-list ID applied to every task created from the template. */
+  taskListId?: string;
+  /** Top-level single-task overrides; not propagated into included templates. */
+  overrides?: RemoteTemplateOverrides;
+}
+
 export function normalizeTemplateDescription(
   value: string | null | undefined,
 ): string | null {
@@ -213,8 +224,7 @@ export async function createRemoteTemplateTasks(
   template: TemplateWithTasks,
   projectId: string | undefined,
   variables: Record<string, string>,
-  agentId: string | undefined,
-  overrides?: RemoteTemplateOverrides,
+  options: RemoteTemplateApplicationOptions = {},
   visited = new Set<string>(),
   progress: TemplateApplyProgress = {
     tasks: [],
@@ -223,6 +233,7 @@ export async function createRemoteTemplateTasks(
   },
 ): Promise<RemoteTemplateApplication> {
   if (visited.size === 0) await preflightTemplate(cloud, template, variables);
+  const { actorAgentId, assignedTo, taskListId, overrides } = options;
   if (visited.has(template.id)) {
     throw new Error(`Circular template reference detected: ${template.id}`);
   }
@@ -251,8 +262,10 @@ export async function createRemoteTemplateTasks(
         priority: overrides?.priority ?? template.priority,
         tags: template.tags,
         ...(projectId ? { project_id: projectId } : {}),
+        ...(taskListId ? { task_list_id: taskListId } : {}),
         ...(template.plan_id ? { plan_id: template.plan_id } : {}),
-        ...(agentId ? { agent_id: agentId } : {}),
+        ...(actorAgentId ? { agent_id: actorAgentId } : {}),
+        ...(assignedTo ? { assigned_to: assignedTo } : {}),
         ...(Object.keys(template.metadata ?? {}).length > 0
           ? { metadata: template.metadata }
           : {}),
@@ -282,8 +295,7 @@ export async function createRemoteTemplateTasks(
           included,
           projectId,
           resolved,
-          agentId,
-          undefined,
+          { ...options, overrides: undefined },
           visited,
           progress,
         );
@@ -310,8 +322,10 @@ export async function createRemoteTemplateTasks(
         tags: step.tags,
         ...(step.task_type ? { task_type: step.task_type } : {}),
         ...(projectId ? { project_id: projectId } : {}),
+        ...(taskListId ? { task_list_id: taskListId } : {}),
         ...(template.plan_id ? { plan_id: template.plan_id } : {}),
-        ...(agentId ? { agent_id: agentId } : {}),
+        ...(actorAgentId ? { agent_id: actorAgentId } : {}),
+        ...(assignedTo ? { assigned_to: assignedTo } : {}),
         ...(Object.keys(step.metadata ?? {}).length > 0
           ? { metadata: step.metadata }
           : {}),

@@ -1151,6 +1151,11 @@ export function registerTaskResources(server: McpServer, ctx: TaskResourcesConte
           // shared store, so the audit trail was invisible to every other agent.
           const cloud = getTodosCloudClient();
           if (cloud) {
+            if (committed_at !== undefined) {
+              throw new Error(
+                "HOSTED_FIELD_UNSUPPORTED: committed_at is not accepted by the current Todos /v1 commit contract; omit it rather than recording the wrong timestamp",
+              );
+            }
             const linked = await cloudLinkCommit(cloud, task_id, { sha, message, author, files_changed });
             return { content: [{ type: "text" as const, text: JSON.stringify(linked, null, 2) }] };
           }
@@ -1293,6 +1298,11 @@ export function registerTaskResources(server: McpServer, ctx: TaskResourcesConte
           // write hit a FOREIGN KEY failure for cloud-only tasks.
           const cloud = getTodosCloudClient();
           if (cloud) {
+            if (run_at !== undefined) {
+              throw new Error(
+                "HOSTED_FIELD_UNSUPPORTED: run_at is not accepted by the current Todos /v1 verification contract; omit it rather than recording the wrong timestamp",
+              );
+            }
             const recorded = await cloudRecordVerification(cloud, task_id, { command, status, output_summary, artifact_path, agent_id });
             return { content: [{ type: "text" as const, text: JSON.stringify(recorded, null, 2) }] };
           }

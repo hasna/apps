@@ -183,14 +183,31 @@ export interface TodosTaskDependencies {
   blocked_by: TaskDependency[];
 }
 
+export interface TodosDependencyPageOptions {
+  limit: number;
+  offset: number;
+}
+
+export interface TodosDependencyPage {
+  dependencies: TaskDependency[];
+  total: number;
+}
+
 export interface TodosDependencyStore {
   add(taskId: string, dependsOn: string, context?: TodosStorageContext): MaybePromise<TaskDependency>;
   remove(taskId: string, dependsOn: string, context?: TodosStorageContext): MaybePromise<boolean>;
   list(taskId: string, context?: TodosStorageContext): MaybePromise<TodosTaskDependencies>;
   /**
-   * Every dependency edge in the dataset. Optional — present on the Postgres
-   * adapter so the CLI can derive blocked/ready/sprint/recap
-   * dependency analytics over the shared cloud set in one round trip.
+   * Storage-bounded page for dependency analytics. Implementations must apply
+   * the limit/offset before materializing rows and return an authoritative total.
+   * Optional only for third-party adapter compatibility; paginated HTTP reads
+   * fail closed when the backend has not implemented it.
+   */
+  listPage?(options: TodosDependencyPageOptions, context?: TodosStorageContext): MaybePromise<TodosDependencyPage>;
+  /**
+   * Complete legacy read used only by the no-query `/v1/dependencies` contract.
+   * New clients must use listPage so the backing store, not the router, bounds
+   * materialization.
    */
   listAll?(context?: TodosStorageContext): MaybePromise<TaskDependency[]>;
 }
