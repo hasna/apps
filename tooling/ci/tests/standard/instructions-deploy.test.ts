@@ -195,6 +195,12 @@ describe("standard-adherence: protected Instructions deployment lane", () => {
     );
     expect(backup).toContain("payloadVersionId");
     expect(backup).toContain("manifestVersionId");
+    expect(backup.match(/--entrypoint bun/g)).toHaveLength(2);
+    expect(backup).not.toContain("--entrypoint sh");
+    expect(backup).toContain('payload_version_id="$(jq -er');
+    expect(backup).toContain('manifest_version_id="$(jq -er');
+    expect(backup).toContain('chmod 600 "${backup_json}"');
+    expect(backup).toContain('chmod 600 "${verify_json}"');
     expect(backup).toContain("--payload-version-id");
     expect(backup).toContain("--manifest-version-id");
     expect(backup).toContain('--version-id "${object_version_id}"');
