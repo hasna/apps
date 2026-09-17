@@ -24,6 +24,20 @@ import { doctorKnowledgeSources } from "../lib/knowledge-doctor.js";
 import { exportKnowledgeSourceManifest, formatKnowledgeSourceManifest } from "../lib/knowledge-manifest.js";
 import { resolveKnowledgeSourceRef } from "../lib/knowledge-resolver.js";
 import { buildFilesContextPack, buildFilesSearchPack } from "../lib/context-pack.js";
+import { FILES_API_MAX_PAGE_SIZE } from "../lib/api-pagination.js";
+import {
+  DEFAULT_ALL_FILE_MAX_BYTES,
+  DEFAULT_COMPACT_FILE_MAX_BYTES,
+  MAX_ALL_FILE_ROWS,
+  buildFilePage,
+  fetchAllFileRows,
+  fetchFilePageRows,
+  filePageJson,
+  normalizeFileOutputMaxBytes,
+  parseFileDetail,
+  validateFileProjection,
+  type FileOutputField,
+} from "../lib/compact-output.js";
 import { openSecureOutput } from "../lib/secure-output.js";
 import { buildOpenFilesFileRef, buildOpenFilesFileRevisionRef } from "../lib/source-ref.js";
 import { acknowledgeKnowledgeSourceOutbox, pollKnowledgeSourceOutbox } from "../db/knowledge-outbox.js";
@@ -74,6 +88,15 @@ const DEFAULT_PROD_FILES_AWS_PROFILE = process.env.HASNA_FILES_AWS_PROFILE ?? "d
 function requireLocalTransport(command: string): void {
   if (store().transport !== "local") {
     console.error(chalk.red(`${command} runs on-box only and is unavailable on the hosted transport; the files service owns ingestion.`));
+    process.exit(1);
+  }
+}
+
+function requireHostedContextPackContract(command: "context-pack" | "search-pack"): void {
+  if (store().transport !== "local") {
+    console.error(chalk.red(
+      `REMOTE_COMMAND_UNSUPPORTED: ${command} requires a tenant-scoped, revision-aware bounded-pack /v1 contract; no local SQLite fallback was attempted.`,
+    ));
     process.exit(1);
   }
 }
@@ -760,7 +783,13 @@ program
   .option("--scope <scope>", "Search scope: all, metadata, content", "all")
   .option("-l, --limit <n>", "Max results", "20")
   .option("--offset <n>", "Offset", "0")
-  .option("--json", "Output as JSON")
+  .option("--json", "Output the backward-compatible full JSON array")
+  .option("--agent-json", "Output a token-bounded receipt-bearing JSON page")
+  .option("--all", "With --agent-json, exhaust the whole query within hard safety bounds")
+  .option("--detail <detail>", "With --agent-json, row detail: compact or full")
+  .option("--fields <fields>", "With --agent-json, comma-separated fields (id is always included)")
+  .option("--pretty", "With --agent-json, pretty-print output (one line by default)")
+  .option("--max-bytes <n>", "With compact agent JSON, maximum response bytes (default 32768)")
   .action(async (query: string, opts: {
     source?: string;
     machine?: string;
@@ -770,7 +799,21 @@ program
     limit: string;
     offset: string;
     json?: boolean;
+    agentJson?: boolean;
+    all?: boolean;
+    detail?: string;
+    fields?: string;
+    pretty?: boolean;
+    maxBytes?: string;
   }) => {
+    if (opts.json && opts.agentJson) {
+      console.error(chalk.red("--json and --agent-json are mutually exclusive"));
+      process.exit(1);
+    }
+    if (!opts.agentJson && (opts.all || opts.detail !== undefined || opts.fields !== undefined || opts.pretty || opts.maxBytes !== undefined)) {
+      console.error(chalk.red("--all, --detail, --fields, --pretty, and --max-bytes require --agent-json"));
+      process.exit(1);
+    }
     let limit: number;
     let offset: number;
     let scope: SearchScope;
@@ -783,16 +826,63 @@ program
       process.exit(1);
     }
 
-    const results = await store().searchFiles(query, {
+    let detail;
+    let fields: FileOutputField[] | undefined;
+    let maxBytes: number | undefined;
+    try {
+      detail = opts.agentJson ? parseFileDetail(opts.detail) : "full";
+      fields = opts.agentJson ? validateFileProjection(detail, opts.fields, "search") : undefined;
+      if (opts.agentJson && !opts.all && limit > FILES_API_MAX_PAGE_SIZE) {
+        throw new Error(`JSON page limit must be <= ${FILES_API_MAX_PAGE_SIZE}; paginate with --offset`);
+      }
+      if (opts.all && offset !== 0) throw new Error("--all requires --offset 0 so completeness covers the whole query");
+      if (opts.all && detail !== "compact") throw new Error("--all requires compact detail for bounded exhaustive output");
+      if (detail === "full" && opts.maxBytes !== undefined) {
+        throw new Error("--max-bytes cannot be combined with --detail full");
+      }
+      maxBytes = opts.maxBytes
+        ? normalizeFileOutputMaxBytes(parseIntFlag(opts.maxBytes, "max-bytes", { min: 1024 }))
+        : opts.all ? DEFAULT_ALL_FILE_MAX_BYTES
+          : detail === "compact" ? DEFAULT_COMPACT_FILE_MAX_BYTES : undefined;
+    } catch (e) {
+      console.error(chalk.red((e as Error).message));
+      process.exit(1);
+    }
+    const readSearchPage = (pageLimit: number, pageOffset: number) => store().searchFiles(query, {
       source_id: opts.source,
       machine_id: opts.machine,
       tag: opts.tag,
       ext: opts.ext,
-      limit,
-      offset,
+      limit: pageLimit,
+      offset: pageOffset,
       search_scope: scope,
     });
-    if (opts.json) { console.log(JSON.stringify(results, null, 2)); return; }
+    const results = opts.agentJson
+      ? opts.all
+        ? await fetchAllFileRows(readSearchPage)
+        : await fetchFilePageRows(readSearchPage, limit, offset)
+      : await readSearchPage(limit, offset);
+    if (opts.agentJson) {
+      const page = buildFilePage(results, {
+        limit: opts.all ? MAX_ALL_FILE_ROWS : limit,
+        offset,
+        detail,
+        fields,
+        maxBytes,
+        pretty: opts.pretty,
+        trailingNewline: true,
+        all: opts.all,
+      });
+      if (opts.all && page._meta.byte_limited) {
+        throw new Error(`Exhaustive search output exceeds max_bytes=${maxBytes}; use paginated --agent-json output`);
+      }
+      await writeStdoutLine(filePageJson(page, opts.pretty));
+      return;
+    }
+    if (opts.json) {
+      await writeStdoutLine(JSON.stringify(results, null, 2));
+      return;
+    }
     if (!results.length) { console.log(chalk.dim("No results.")); return; }
     for (const f of results) {
       const tags = f.tags.length ? chalk.yellow(` [${f.tags.join(", ")}]`) : "";
@@ -818,7 +908,7 @@ program
   .option("--dry-run", "With --out, preview the artifact pointer without writing the file")
   .action(async (fileIds: string[], opts: ContextPackCliOptions) => {
     try {
-      requireLocalTransport("context-pack");
+      requireHostedContextPackContract("context-pack");
       const positionalRefs = fileIds.filter((value) => value.startsWith("open-files://"));
       const positionalFileIds = fileIds.filter((value) => !value.startsWith("open-files://"));
       const pack = await buildFilesContextPack({
@@ -853,7 +943,7 @@ program
   .option("--dry-run", "With --out, preview the artifact pointer without writing the file")
   .action(async (query: string, opts: SearchPackCliOptions) => {
     try {
-      requireLocalTransport("search-pack");
+      requireHostedContextPackContract("search-pack");
       const pack = await buildFilesSearchPack({
         query,
         source_id: opts.source,
@@ -1053,13 +1143,28 @@ program
   .option("--max-size <size>", "Maximum size (e.g. 100mb)")
   .option("--sort <field>", "Sort by: name, size, date (default: date)")
   .option("--asc", "Sort ascending (default: descending)")
-  .option("--json", "Output as JSON")
+  .option("--json", "Output the backward-compatible full JSON array")
+  .option("--agent-json", "Output a token-bounded receipt-bearing JSON page")
+  .option("--all", "With --agent-json, exhaust the whole query within hard safety bounds")
+  .option("--detail <detail>", "With --agent-json, row detail: compact or full")
+  .option("--fields <fields>", "With --agent-json, comma-separated fields (id is always included)")
+  .option("--pretty", "With --agent-json, pretty-print output (one line by default)")
+  .option("--max-bytes <n>", "With compact agent JSON, maximum response bytes (default 32768)")
   .action(async (opts: {
     source?: string; machine?: string; tag?: string; ext?: string;
     collection?: string; project?: string; limit: string; offset: string;
     after?: string; before?: string; minSize?: string; maxSize?: string;
-    sort?: string; asc?: boolean; json?: boolean;
+    sort?: string; asc?: boolean; json?: boolean; agentJson?: boolean; all?: boolean; detail?: string;
+    fields?: string; pretty?: boolean; maxBytes?: string;
   }) => {
+    if (opts.json && opts.agentJson) {
+      console.error(chalk.red("--json and --agent-json are mutually exclusive"));
+      process.exit(1);
+    }
+    if (!opts.agentJson && (opts.all || opts.detail !== undefined || opts.fields !== undefined || opts.pretty || opts.maxBytes !== undefined)) {
+      console.error(chalk.red("--all, --detail, --fields, --pretty, and --max-bytes require --agent-json"));
+      process.exit(1);
+    }
     let limit: number;
     let offset: number;
     try {
@@ -1070,17 +1175,41 @@ program
       process.exit(1);
     }
 
-    // The Store routes to the on-box db (rich filters) or the cloud /v1/files
-    // endpoint (which honors the source_id/machine_id/ext/limit/offset subset).
-    const files = await store().listFiles({
+    let detail;
+    let fields: FileOutputField[] | undefined;
+    let maxBytes: number | undefined;
+    try {
+      detail = opts.agentJson ? parseFileDetail(opts.detail) : "full";
+      fields = opts.agentJson ? validateFileProjection(detail, opts.fields, "list") : undefined;
+      if (opts.agentJson && !opts.all && limit > FILES_API_MAX_PAGE_SIZE) {
+        throw new Error(`JSON page limit must be <= ${FILES_API_MAX_PAGE_SIZE}; paginate with --offset`);
+      }
+      if (opts.all && offset !== 0) throw new Error("--all requires --offset 0 so completeness covers the whole query");
+      if (opts.all && detail !== "compact") throw new Error("--all requires compact detail for bounded exhaustive output");
+      if (detail === "full" && opts.maxBytes !== undefined) {
+        throw new Error("--max-bytes cannot be combined with --detail full");
+      }
+      maxBytes = opts.maxBytes
+        ? normalizeFileOutputMaxBytes(parseIntFlag(opts.maxBytes, "max-bytes", { min: 1024 }))
+        : opts.all ? DEFAULT_ALL_FILE_MAX_BYTES
+          : detail === "compact" ? DEFAULT_COMPACT_FILE_MAX_BYTES : undefined;
+    } catch (e) {
+      console.error(chalk.red((e as Error).message));
+      process.exit(1);
+    }
+
+    // The Store routes to the on-box db or the authoritative cloud /v1/files
+    // endpoint. JSON reads one continuation row so has_more is evidence, not a
+    // guess; the probe row is never emitted.
+    const readListPage = (pageLimit: number, pageOffset: number) => store().listFiles({
       source_id: opts.source,
       machine_id: opts.machine,
       tag: opts.tag,
       ext: opts.ext,
       collection_id: opts.collection,
       project_id: opts.project,
-      limit,
-      offset,
+      limit: pageLimit,
+      offset: pageOffset,
       after: opts.after,
       before: opts.before,
       min_size: opts.minSize ? parseSize(opts.minSize) : undefined,
@@ -1088,7 +1217,32 @@ program
       sort: (opts.sort as "name" | "size" | "date") ?? "date",
       sort_dir: opts.asc ? "asc" : "desc",
     });
-    if (opts.json) { console.log(JSON.stringify(files, null, 2)); return; }
+    const files = opts.agentJson
+      ? opts.all
+        ? await fetchAllFileRows(readListPage)
+        : await fetchFilePageRows(readListPage, limit, offset)
+      : await readListPage(limit, offset);
+    if (opts.agentJson) {
+      const page = buildFilePage(files, {
+        limit: opts.all ? MAX_ALL_FILE_ROWS : limit,
+        offset,
+        detail,
+        fields,
+        maxBytes,
+        pretty: opts.pretty,
+        trailingNewline: true,
+        all: opts.all,
+      });
+      if (opts.all && page._meta.byte_limited) {
+        throw new Error(`Exhaustive list output exceeds max_bytes=${maxBytes}; use paginated --agent-json output`);
+      }
+      await writeStdoutLine(filePageJson(page, opts.pretty));
+      return;
+    }
+    if (opts.json) {
+      await writeStdoutLine(JSON.stringify(files, null, 2));
+      return;
+    }
     if (!files.length) { console.log(chalk.dim("No files found.")); return; }
     for (const f of files) {
       const tags = f.tags.length ? chalk.yellow(` [${f.tags.join(", ")}]`) : "";

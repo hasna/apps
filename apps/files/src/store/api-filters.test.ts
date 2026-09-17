@@ -84,17 +84,50 @@ describe("ApiStore listFiles — every filter the CLI accepts reaches /v1/files"
     ]);
   });
 
-  it("forwards search_scope on searchFiles together with the term and the tag filter", async () => {
+  it("forwards every hosted search filter together with the term and scope", async () => {
     const { transport, queries } = transportRecordingQueries();
     const store = new ApiStore(createHasnaStorageClient("files", transport));
 
-    await store.searchFiles("warehouse", { tag: "legal", search_scope: "content", limit: 10 });
+    await store.searchFiles("warehouse", {
+      source_id: "src_1",
+      machine_id: "m_1",
+      project_id: "prj_1",
+      collection_id: "col_1",
+      tag: "legal",
+      ext: "pdf",
+      status: "active",
+      after: "2026-01-01",
+      before: "2026-12-31",
+      min_size: 100,
+      max_size: 10_000,
+      sort: "size",
+      sort_dir: "asc",
+      search_scope: "content",
+      limit: 10,
+      offset: 5,
+    });
 
     expect(queries).toHaveLength(1);
     const forwarded = queries[0]!;
     expect(forwarded.q).toBe("warehouse");
     expect(forwarded.search_scope).toBe("content");
     expect(forwarded.tag).toBe("legal");
+    expect(forwarded).toMatchObject({
+      source_id: "src_1",
+      machine_id: "m_1",
+      project_id: "prj_1",
+      collection_id: "col_1",
+      ext: "pdf",
+      status: "active",
+      after: "2026-01-01",
+      before: "2026-12-31",
+      min_size: 100,
+      max_size: 10_000,
+      sort: "size",
+      sort_dir: "asc",
+      limit: 10,
+      offset: 5,
+    });
   });
 });
 

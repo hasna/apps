@@ -28,6 +28,63 @@ afterEach(async () => {
 });
 
 describe("searchFiles", () => {
+  test("scans past the first 100 ranked candidates and pages equal ranks deterministically", async () => {
+    const { getCurrentMachine } = await import("./machines.js");
+    const { createSource } = await import("./sources.js");
+    const { upsertFile } = await import("./files.js");
+    const { searchFiles } = await import("./search.js");
+
+    const machine = getCurrentMachine();
+    const crowded = createSource({
+      name: "Crowded search source",
+      type: "local",
+      path: "/tmp/crowded-search-source",
+      machine_id: machine.id,
+    });
+    const selected = createSource({
+      name: "Selected search source",
+      type: "local",
+      path: "/tmp/selected-search-source",
+      machine_id: machine.id,
+    });
+    for (let index = 0; index < 120; index++) {
+      upsertFile({
+        id: `f_equal_${String(index).padStart(3, "0")}`,
+        source_id: crowded.id,
+        machine_id: machine.id,
+        path: `equal-${index}.txt`,
+        name: `equal ledger ${index}.txt`,
+        ext: ".txt",
+        size: index + 1,
+        mime: "text/plain",
+        hash: `equal-${index}`,
+        status: "active",
+      });
+    }
+    const lateMatch = upsertFile({
+      id: "z_equal_selected",
+      source_id: selected.id,
+      machine_id: machine.id,
+      path: "selected.txt",
+      name: "equal ledger selected.txt",
+      ext: ".txt",
+      size: 1,
+      mime: "text/plain",
+      hash: "selected",
+      status: "active",
+    });
+
+    expect(searchFiles("equal ledger", { source_id: selected.id, limit: 1 }).map((file) => file.id))
+      .toEqual([lateMatch.id]);
+
+    const first = searchFiles("equal ledger", { source_id: crowded.id, limit: 10, offset: 0 });
+    const second = searchFiles("equal ledger", { source_id: crowded.id, limit: 10, offset: 10 });
+    expect(first).toHaveLength(10);
+    expect(second).toHaveLength(10);
+    expect(first.map((file) => file.id)).toEqual([...first.map((file) => file.id)].sort());
+    expect(new Set([...first, ...second].map((file) => file.id)).size).toBe(20);
+  });
+
   test("indexes organization target paths and returns them in results", async () => {
     const { getDb } = await import("./database.js");
     const { getCurrentMachine } = await import("./machines.js");

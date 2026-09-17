@@ -85,7 +85,8 @@ describe("context-pack CLI", () => {
     for (const args of [["context-pack", "open-files://file/f_missing"], ["search-pack", "anything"]]) {
       const result = run(args, env);
       expect(result.exitCode).toBe(1);
-      expect(new TextDecoder().decode(result.stderr)).toContain("on-box only");
+      expect(new TextDecoder().decode(result.stderr)).toContain("REMOTE_COMMAND_UNSUPPORTED");
+      expect(new TextDecoder().decode(result.stderr)).toContain("no local SQLite fallback was attempted");
       expect(stdout(result).trim()).toBe("");
     }
   });

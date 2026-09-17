@@ -25,6 +25,7 @@ const ENV_KEYS = [
   "HASNA_FILES_DB_PATH",
   "HASNA_FILES_API_URL",
   "HASNA_FILES_API_KEY",
+  "HASNA_FILES_MCP_PROFILE",
   "OPEN_FILES_MCP_ALLOW_DOWNLOADS",
   "OPEN_FILES_MCP_ALLOW_SIGNED_URLS",
   "OPEN_FILES_MCP_ALLOW_ALL",
@@ -66,6 +67,7 @@ function setLocalMode() {
   process.env.HASNA_STATION = "files-hermetic-no-such-station";
   delete process.env.HASNA_FILES_API_URL;
   delete process.env.HASNA_FILES_API_KEY;
+  process.env.HASNA_FILES_MCP_PROFILE = "full";
   process.env.OPEN_FILES_MCP_ALLOW_DOWNLOADS = "1";
   process.env.OPEN_FILES_MCP_ALLOW_SIGNED_URLS = "1";
   process.env.OPEN_FILES_MCP_ALLOW_ALL = "1";
@@ -502,8 +504,13 @@ describe("write/ingest MCP tools keep the local-transport guard in api mode", ()
         const result = await client.callTool({ name: tool, arguments: args });
         expect(result.isError).toBe(true);
         const text = callText(result);
-        expect(text).toContain("runs on-box only");
-        expect(text).toContain("hosted transport");
+        if (tool === "build_context_pack" || tool === "search_context_pack") {
+          expect(text).toContain("REMOTE_COMMAND_UNSUPPORTED");
+          expect(text).toContain("no local SQLite fallback was attempted");
+        } else {
+          expect(text).toContain("runs on-box only");
+          expect(text).toContain("hosted transport");
+        }
       } finally {
         await close();
       }

@@ -42,6 +42,8 @@ const SCRUBBED_ENV_KEYS = [
   "MCP_HTTP",
   "MCP_STDIO",
   "MCP_HTTP_PORT",
+  "HASNA_FILES_MCP_PROFILE",
+  "OPEN_FILES_MCP_PROFILE",
 ] as const;
 
 const INITIALIZE_REQUEST =
@@ -77,6 +79,8 @@ function localEnv(dataDir: string): NodeJS.ProcessEnv {
   delete env.MCP_HTTP;
   delete env.MCP_STDIO;
   delete env.MCP_HTTP_PORT;
+  delete env.HASNA_FILES_MCP_PROFILE;
+  delete env.OPEN_FILES_MCP_PROFILE;
   return env;
 }
 
@@ -203,9 +207,25 @@ test("MCP --help exits before the credential gate and never binds a port or open
     expect(result.stdout).toContain("--stdio");
     expect(result.stdout).toContain("-V, --version");
     expect(result.stdout).toContain("HTTP port (default: 8863, env: MCP_HTTP_PORT)");
+    expect(result.stdout).toContain("--profile <name>");
     expect(result.stderr).toBe("");
   });
   expect(existsSync(join(dataDir, "files"))).toBe(false);
+  expect(existsSync(join(dataDir, "files.db"))).toBe(false);
+});
+
+test("invalid MCP profile refuses before credential resolution or HTTP binding", async () => {
+  const dataDir = makeDataDir();
+  await withHeldPort(async (port) => {
+    const result = await runMcp(
+      ["--profile", "wide", "--http", "--port", String(port)],
+      unconfiguredEnv(dataDir),
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("expected minimal, standard, or full");
+    expect(result.stderr).not.toContain("REMOTE_API_CONFIG_MISSING");
+    expect(result.stderr).not.toContain("EADDRINUSE");
+  });
   expect(existsSync(join(dataDir, "files.db"))).toBe(false);
 });
 
