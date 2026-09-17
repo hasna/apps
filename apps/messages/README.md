@@ -51,6 +51,15 @@ The client (CLI / MCP / SDK) resolves its credential and its API authority
 through the shared `@hasna/contracts` chain and talks to the server's HTTP API
 or to a local store — it never opens Postgres directly.
 
+**The SQLite engine is not linked into the client bins.** `bin/index.js`
+(`messages`) and `bin/mcp.js` (`messages-mcp`) contain no `bun:sqlite` at all:
+the on-box store is emitted once as `dist/local-store.js` and loaded through
+one gated dynamic import (`src/local-store-loader.ts`) that refuses unless the
+explicit `HASNA_MESSAGES_LOCAL=1` opt-in selected it — a configured authority
+or credential outranks the flag. `messages serve` likewise loads the sibling
+`messages-serve` bundle at runtime, so the server and its storage backends
+stay out of the client bin too.
+
 ## Credentials (client surfaces)
 
 The CLI, the MCP server and the `./sdk` client all call the **one**
@@ -184,7 +193,7 @@ bun install
 bun run test        # domain + CLI + HTTP surface tests (SQLite in-memory / temp file)
 bun run typecheck
 bun run contract-check   # manifest conformance via @hasna/contracts
-bun run build       # dist/ (sdk + index) and bin/ (CLI, MCP, serve)
+bun run build       # dist/ (sdk + index + local-store) and bin/ (CLI, MCP, serve)
 bun run test:postgres   # live PostgreSQL proof gate (MESSAGES_TEST_DATABASE_URL)
 ```
 

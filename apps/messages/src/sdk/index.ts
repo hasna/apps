@@ -26,7 +26,7 @@ import type {
   ThreadSummary,
 } from "../types";
 import { MessagesService, threadKeyFor, newThreadId } from "../service";
-import { SqliteMessagesStore } from "../server/sqlite-store";
+import { loadLocalMessagesService } from "../local-store-loader";
 import {
   MESSAGES_API_KEY_ENV,
   MESSAGES_API_URL_ENV,
@@ -300,15 +300,19 @@ export function createMessagesClient(
 
 /**
  * Resolve the client store from the environment. `http` returns the HTTP
- * client; `local` returns a local MessagesService over a local SQLite store
- * (the on-box backend) — selected ONLY by the explicit HASNA_MESSAGES_LOCAL=1
- * opt-in, never by a missing API URL, and announced once on stderr. Callers
- * dispatch on `transport`; any other outcome throws.
+ * client; `local` returns a local MessagesService over the on-box SQLite
+ * store — selected ONLY by the explicit HASNA_MESSAGES_LOCAL=1 opt-in, never
+ * by a missing API URL, and announced once on stderr. Callers dispatch on
+ * `transport`; any other outcome throws.
+ *
+ * ASYNC because the on-box store is loaded through the one gated dynamic
+ * import (`src/local-store-loader.ts`): an SDK consumer that only speaks HTTP
+ * never links a SQLite engine, and a hosted environment cannot open one.
  */
-export function resolveMessagesClientStore(
+export async function resolveMessagesClientStore(
   env: MessagesClientEnv = process.env,
   overrides: MessagesClientFromEnvOverrides = {},
-): { transport: "http"; client: MessagesClient } | { transport: "local"; service: MessagesService } {
+): Promise<{ transport: "http"; client: MessagesClient } | { transport: "local"; service: MessagesService }> {
   const resolveOptions: MessagesClientResolveOptions = {
     ...(overrides.baseUrl !== undefined ? { baseUrl: overrides.baseUrl } : {}),
     ...(overrides.apiKey !== undefined ? { apiKey: overrides.apiKey } : {}),
@@ -317,7 +321,7 @@ export function resolveMessagesClientStore(
   const report = resolveMessagesClientTransport(env, resolveOptions);
   if (report.transport === "local") {
     const sqlitePath = env[MESSAGES_SQLITE_PATH_ENV];
-    return { transport: "local", service: new MessagesService(new SqliteMessagesStore(sqlitePath)) };
+    return { transport: "local", service: await loadLocalMessagesService(env, sqlitePath) };
   }
   const client = createMessagesClient(env, overrides);
   if (!client) throw new Error("HTTP transport resolved but no client could be created");
@@ -328,6 +332,12 @@ export {
   MessagesService,
   threadKeyFor,
   newThreadId,
-  SqliteMessagesStore,
 };
+/**
+ * The gated door to the on-box SQLite store. It replaces the old
+ * `SqliteMessagesStore` value export: the store class itself is server-side
+ * (`messages-serve` owns backend selection) and is no longer linked into the
+ * client bundles.
+ */
+export { loadLocalMessagesService } from "../local-store-loader";
 export type { MessagesStore } from "../service";
