@@ -5,7 +5,12 @@ import { join } from "node:path";
 import { LocalConfigStore, type ConfigStore } from "../data/config-store";
 import { getDatabase, resetDatabase } from "../db/database";
 import { configAssetDigest, configAssetLocator } from "./asset-plan";
-import { computeDomainIntegrity, computeRestorableDomainIntegrity, exportConfigs } from "./export";
+import {
+  computeDomainIntegrity,
+  computeRestorableDomainIntegrity,
+  exportConfigs,
+  validateInstructionsDomainArchive,
+} from "./export";
 import { importConfigs } from "./import";
 import { tempRootPath } from "./test-temp-root";
 import {
@@ -298,6 +303,81 @@ describe("Instructions domain archive v2", () => {
     // timestamps, so exact operational timestamp integrity is archive evidence,
     // not a promise that a restore can reproduce those timestamps.
     expect(restoredArchive.manifest.integrity).not.toEqual(sourceArchive.manifest.integrity);
+  });
+
+  test("preserves sparse and duplicate legacy snapshot rows, including divergent content", async () => {
+    let legacy = await store.createConfig({
+      name: "Legacy sparse history",
+      category: "rules",
+      content: "current content",
+    });
+    for (let version = 2; version <= 4; version++) {
+      legacy = await store.updateConfig(legacy.id, { content: "current content" });
+    }
+
+    // Model the hosted legacy shape: version 2 and the current version are
+    // absent, while version 3 has both same-content and divergent duplicates.
+    await store.pruneSnapshots(legacy.id, 0);
+    await store.createSnapshot(legacy.id, "version one", 1);
+    await store.createSnapshot(legacy.id, "branch alpha", 3);
+    await store.createSnapshot(legacy.id, "branch beta", 3);
+    await store.createSnapshot(legacy.id, "branch alpha", 3);
+
+    let noHistory = await store.createConfig({
+      name: "Legacy empty history",
+      category: "rules",
+      content: "current without snapshots",
+    });
+    noHistory = await store.updateConfig(noHistory.id, { content: "current without snapshots" });
+    await store.pruneSnapshots(noHistory.id, 0);
+
+    const sourcePath = join(tmpDir, "legacy-duplicates.tar.gz");
+    const sourceExport = await exportConfigs(sourcePath, { store });
+    const sourceArchive = await readV2Archive(sourcePath);
+    expect(sourceExport.counts.config_snapshots).toBe(4);
+    expect(sourceArchive.domain.config_snapshots.filter(
+      (snapshot) => snapshot.config_slug === noHistory.slug,
+    )).toEqual([]);
+    expect(sourceArchive.domain.config_snapshots
+      .map(({ version, content }) => ({ version, content }))
+      .sort((left, right) => left.version - right.version || left.content.localeCompare(right.content)))
+      .toEqual([
+        { version: 1, content: "version one" },
+        { version: 3, content: "branch alpha" },
+        { version: 3, content: "branch alpha" },
+        { version: 3, content: "branch beta" },
+      ]);
+
+    const repeatedId = structuredClone(sourceArchive.domain);
+    repeatedId.config_snapshots[1]!.id = repeatedId.config_snapshots[0]!.id;
+    expect(() => validateInstructionsDomainArchive(repeatedId)).toThrow(/duplicate.*config snapshot id/i);
+
+    resetDatabase();
+    const destination = new LocalConfigStore(getDatabase(":memory:"));
+    const restored = await importConfigs(sourcePath, { store: destination });
+    expect(restored.counts.config_snapshots).toEqual({ created: 4, skipped: 0 });
+
+    const restoredConfig = await destination.getConfig("legacy-sparse-history");
+    expect(restoredConfig).toMatchObject({ version: 4, content: "current content" });
+    expect((await destination.listSnapshots(restoredConfig.id))
+      .map(({ version, content }) => ({ version, content }))
+      .sort((left, right) => left.version - right.version || left.content.localeCompare(right.content)))
+      .toEqual([
+        { version: 1, content: "version one" },
+        { version: 3, content: "branch alpha" },
+        { version: 3, content: "branch alpha" },
+        { version: 3, content: "branch beta" },
+      ]);
+    const restoredNoHistory = await destination.getConfig("legacy-empty-history");
+    expect(restoredNoHistory).toMatchObject({ version: 2, content: "current without snapshots" });
+    expect(await destination.listSnapshots(restoredNoHistory.id)).toEqual([]);
+
+    const restoredPath = join(tmpDir, "legacy-duplicates-restored.tar.gz");
+    await exportConfigs(restoredPath, { store: destination });
+    const restoredArchive = await readV2Archive(restoredPath);
+    expect(computeRestorableDomainIntegrity(restoredArchive.domain)).toEqual(
+      computeRestorableDomainIntegrity(sourceArchive.domain),
+    );
   });
 
   test("includes every archived operational timestamp in exact deployment integrity", async () => {

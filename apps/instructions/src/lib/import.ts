@@ -201,14 +201,18 @@ function configInput(config: Config, content: string) {
 async function restoreNewConfig(store: ConfigStore, archived: Config, domain: InstructionsDomainArchiveV2): Promise<Config> {
   const snapshots = domain.config_snapshots
     .filter((row) => row.config_slug === archived.slug)
-    .sort((left, right) => left.version - right.version);
-  const byVersion = new Map(snapshots.map((snapshot) => [snapshot.version, snapshot.content]));
-  let content = byVersion.get(1) ?? snapshots[0]?.content ?? archived.content;
-  let restored = await store.createConfig(configInput(archived, content));
+    .sort((left, right) => left.version - right.version || compareText(left.content, right.content) || compareText(left.id, right.id));
+
+  // ConfigStore increments versions through updateConfig and automatically
+  // snapshots those writes. Advance the config to its archived current version
+  // first, then remove that synthetic history and recreate every archived
+  // physical snapshot logically. This preserves sparse histories, multiple rows
+  // at one version, divergent duplicate contents, and histories with no row for
+  // the current config version.
+  let restored = await store.createConfig(configInput(archived, archived.content));
   for (let version = 2; version <= archived.version; version++) {
-    content = byVersion.get(version) ?? (version === archived.version ? archived.content : content);
     restored = await store.updateConfig(restored.id, {
-      content,
+      content: archived.content,
       ...(version === archived.version ? {
         name: archived.name,
         kind: archived.kind,
@@ -224,11 +228,16 @@ async function restoreNewConfig(store: ConfigStore, archived: Config, domain: In
       } : {}),
     });
   }
-  await store.pruneSnapshots(restored.id, snapshots.length);
+  await store.pruneSnapshots(restored.id, 0);
+  for (const snapshot of snapshots) {
+    await store.createSnapshot(restored.id, snapshot.content, snapshot.version);
+  }
   const restoredSnapshots = (await store.listSnapshots(restored.id))
     .map(({ version, content: snapshotContent }) => ({ version, content: snapshotContent }))
-    .sort((left, right) => left.version - right.version);
-  const expectedSnapshots = snapshots.map(({ version, content: snapshotContent }) => ({ version, content: snapshotContent }));
+    .sort((left, right) => left.version - right.version || compareText(left.content, right.content));
+  const expectedSnapshots = snapshots
+    .map(({ version, content: snapshotContent }) => ({ version, content: snapshotContent }))
+    .sort((left, right) => left.version - right.version || compareText(left.content, right.content));
   if (
     restored.version !== archived.version ||
     restored.content !== archived.content ||
