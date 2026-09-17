@@ -29,7 +29,7 @@
     "test:client-gates": "bun test tooling/ci/tests/client-gates",
     "test:versioning": "bun test test/versioning",
     "test:suites": "bun run test:versioning && bun run test:standard",
-    "prepare:ordered": "bun run --filter @hasna/contracts build && bun run --filter @hasna/events build && bun run --filter @hasna/secrets build && bun run --filter @hasna/attachments build && bun run --filter @hasna/loops build && bun run --filter @hasna/mementos build && bun run --filter @hasna/skills build && bun run --filter @hasna/connectors postinstall",
+    "prepare:ordered": "bun run --filter @hasna/contracts build && bun run --filter @hasna/events build && bun run --filter @hasna/secrets build && bun run --filter @hasna/loops build && bun run --filter @hasna/mementos build && bun run --filter @hasna/skills build && bun run --filter @hasna/connectors postinstall",
     "check:frozen-locks": "bun tooling/ci/check-frozen-locks.ts"
   },
   "devDependencies": {

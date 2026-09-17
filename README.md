@@ -25,9 +25,8 @@ tooling/ci/            CI gate scripts (secret scan, name conformance, publish g
 
 Member packages live under `apps/` — one directory per public `@hasna/<name>`
 package with the four surfaces (CLI, MCP server bin, `-serve` server bin,
-`./sdk` import) as a target standard — not every member ships all four today
-(25 of 75).
-
+`./sdk` import) as a target standard — not every member ships all four today.
+The live member and surface counts come from the repository gates rather than
 Retired umbrella: the `@hasna/cli` package (bin `hasna`, deprecated on npm)
 is retired and has no source in this repo — do not deploy or advertise it
 here. The supported surface is the per-app CLIs, and the name-conformance
@@ -36,8 +35,7 @@ gate refuses any README claim of a unified CLI that no member package ships.
 The LIVE member count is what
 the census gate prints —
 `bun tooling/ci/check-names.ts` — and this README deliberately carries no
-member-count snapshot beyond the four-surface ratio above, because a snapshot
-rots while the gate's output does not.
+member-count snapshot, because a snapshot rots while the gate's output does not.
 The initial `main` commit was the owner-approved bootstrap; everything after
 is PR-first. The remaining public-estate repos are tracked by the import wave
 (todos `28ac4516`) and land PR-first; per-member gaps against the four-surface

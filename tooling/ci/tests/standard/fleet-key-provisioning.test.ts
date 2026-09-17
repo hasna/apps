@@ -242,6 +242,18 @@ describe("registry: the written inventory of hosted apps", () => {
     expect(missing).toEqual([]);
   });
 
+  test("Shortlinks and Attachments keep canonical fleet coverage after moving to internal-apps", () => {
+    for (const [name, probePath] of [["attachments", "/v1/attachments"], ["shortlinks", "/v1/links"]] as const) {
+      const app = registry.find((entry) => entry.app === name);
+      expect(app).toBeDefined();
+      expect(app!.source).toBe("external");
+      expect(app!.notes).toContain("hasna-internal/internal-apps");
+      expect(app!.baseUrl).toBe(`https://api.hasna.com/${name}`);
+      expect(probeUrlFor(app!.baseUrl, app!.probePath)).toBe(`https://api.hasna.com/${name}${probePath}`);
+      expect(fs.existsSync(path.join(ROOT, "apps", name, "package.json"))).toBe(false);
+    }
+  });
+
   test("messages — the app the issue was filed for — is registered", () => {
     const messages = registry.find((a) => a.app === "messages");
     expect(messages).toBeDefined();

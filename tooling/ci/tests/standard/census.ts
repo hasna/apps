@@ -110,6 +110,10 @@
  * DELETED — apps/router left the public tree entirely (npm registry 404 for
  * @hasna/router), so the member no longer exists here and its recorded
  * exceptions are stale under the two-sided contract.
+ * 2026-09-17 (internal-apps move): attachments and shortlinks left the public
+ * producer tree. Neither member had a surface or conformance exception entry,
+ * so the live filesystem census drops them without a registry deletion; their
+ * hosted fleet entries remain externally produced in hosted-apps.json.
  * 2026-09-07 (hasna/apps#1720 validation, telephony fix lane): telephony's
  * SDK exception entry DELETED — the member now exports ./sdk
  * (package.json exports + manifest exportSubpath), so the recorded
