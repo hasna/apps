@@ -72,6 +72,7 @@ let api: V1StoreApi;
 beforeEach(() => {
   captureInheritedProcessEnv();
   process.env["EMAILS_DB_PATH"] = ":memory:";
+  process.env["HASNA_EMAILS_LOCAL"] = "1";
   resetDatabase();
   db = getDatabase();
   api = startV1StoreApi({ store: createSqliteEmailStore({ database: db, detail: "parity fixture" }) });
@@ -81,6 +82,7 @@ afterEach(() => {
   api.stop();
   closeDatabase();
   delete process.env["EMAILS_DB_PATH"];
+  delete process.env["HASNA_EMAILS_LOCAL"];
   restoreInheritedProcessEnv();
 });
 

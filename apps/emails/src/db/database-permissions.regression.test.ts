@@ -30,6 +30,8 @@ type EnvKey =
   | "USERPROFILE"
   | "HASNA_EMAILS_DB_PATH"
   | "EMAILS_DB_PATH"
+  | "HASNA_EMAILS_LOCAL"
+  | "EMAILS_LOCAL"
   | "HASNA_DATA_HOME"
   | "HASNA_EMAILS_HOME"
   | "EMAILS_HOME";
@@ -39,6 +41,8 @@ const ENV_KEYS: EnvKey[] = [
   "USERPROFILE",
   "HASNA_EMAILS_DB_PATH",
   "EMAILS_DB_PATH",
+  "HASNA_EMAILS_LOCAL",
+  "EMAILS_LOCAL",
   "HASNA_DATA_HOME",
   "HASNA_EMAILS_HOME",
   "EMAILS_HOME",
@@ -331,6 +335,7 @@ if (process.platform !== "win32") {
       mkdirSync(target, { mode: 0o755 });
       symlinkSync(target, alias, "dir");
       process.env.EMAILS_DB_PATH = join(alias, "emails.db");
+      process.env["HASNA_EMAILS_LOCAL"] = "1";
 
       const canonicalPath = getDatabasePath();
       expect(canonicalPath).toBe(join(realpathSync(target), "emails.db"));
@@ -563,6 +568,7 @@ if (process.platform !== "win32") {
 describe("SQLite in-memory path compatibility", () => {
   it("leaves the filesystem untouched for :memory:", () => {
     process.env.EMAILS_DB_PATH = ":memory:";
+    process.env["HASNA_EMAILS_LOCAL"] = "1";
     process.chdir(root);
 
     const db = getDatabase();
@@ -572,6 +578,7 @@ describe("SQLite in-memory path compatibility", () => {
 
   it("treats file::memory: as a literal private SQLite file under Bun", () => {
     process.env.EMAILS_DB_PATH = "file::memory:";
+    process.env["HASNA_EMAILS_LOCAL"] = "1";
     process.chdir(root);
 
     expect(databaseFileExists()).toBe(false);

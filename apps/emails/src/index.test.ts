@@ -131,7 +131,7 @@ describe("public package entrypoint", () => {
     emails.closeDatabase();
     const db = emails.getDatabase(":memory:");
     const savedClientEnv = new Map(
-      ["EMAILS_MODE", "EMAILS_SELF_HOSTED_URL", "EMAILS_SELF_HOSTED_API_KEY", "EMAILS_SESSION_TOKEN"]
+      ["EMAILS_MODE", "HASNA_EMAILS_API_URL", "HASNA_EMAILS_API_KEY", "EMAILS_SESSION_TOKEN"]
         .map((key) => [key, process.env[key]] as const),
     );
     try {
@@ -141,8 +141,8 @@ describe("public package entrypoint", () => {
       // the explicit-database helpers need neither a mode nor an API
       // configuration to serve a caller-owned database.
       delete process.env["EMAILS_MODE"];
-      delete process.env["EMAILS_SELF_HOSTED_URL"];
-      delete process.env["EMAILS_SELF_HOSTED_API_KEY"];
+      delete process.env["HASNA_EMAILS_API_URL"];
+      delete process.env["HASNA_EMAILS_API_KEY"];
       delete process.env["EMAILS_SESSION_TOKEN"];
 
       const provider = emails.runInTransaction(db, () =>
@@ -199,8 +199,13 @@ import {
   resolvePartialId,
   runInTransaction,
 } from "./types/index.js";
-import { createSqliteEmailStore, getDatabase as getStorageDatabase } from "./types/storage.js";
-import type { EmailStore } from "./types/storage.js";
+import {
+  API_CREDENTIAL_SETTINGS,
+  LOCAL_OPT_IN_SETTINGS,
+  createSqliteEmailStore,
+  getDatabase as getStorageDatabase,
+} from "./types/storage.js";
+import type { EmailStore, StorePlan, TransportBindingProvider } from "./types/storage.js";
 
 const db: Database = getDatabase(":memory:");
 const same: Database = getStorageDatabase(":memory:");
@@ -214,6 +219,16 @@ runInTransaction(db, () => same);
 // now and takes an OPTIONAL store that may be an \`EmailStore\` (new) or the \`Database\`
 // this surface has published for its whole 1.x life (unchanged). All THREE shapes compile,
 // and the database arm is the one a released consumer already depends on.
+const canonicalCredential: "HASNA_EMAILS_API_KEY" = API_CREDENTIAL_SETTINGS[2];
+const localSetting: "HASNA_EMAILS_LOCAL" | "EMAILS_LOCAL" = LOCAL_OPT_IN_SETTINGS[0];
+const plan: StorePlan = { store: "sqlite", databasePath: null, setting: localSetting };
+const bindingProvider: TransportBindingProvider = () => ({
+  baseUrl: "https://emails.example.test",
+  credential: "fixture",
+});
+void canonicalCredential;
+void plan;
+void bindingProvider;
 const store: EmailStore = createSqliteEmailStore();
 const byId: Promise<unknown> = getEmail("message-id");
 const byStore: Promise<unknown> = getEmail("message-id", store);
@@ -309,6 +324,7 @@ void getEmail("message-id", 42 as unknown as string);
       }
       const storageEntry = readFileSync(join(rootDir, "storage.js"), "utf8");
       expect(storageEntry).toContain("clientModeLabel");
+      expect(storageEntry).toContain("LOCAL_OPT_IN_SETTINGS");
       expect(storageEntry).not.toContain("var PG_MIGRATIONS");
       for (const removed of ["PgAdapterAsync", "storagePush", "storagePull", "storageSync"]) {
         expect(storageEntry).not.toContain(removed);

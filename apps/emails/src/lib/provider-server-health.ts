@@ -1,4 +1,4 @@
-import { resolveEmailsHostedTransport } from "./emails-credentials.js";
+import { resolveEmailsHostedTransport, type HostedEmailsTransport } from "./emails-credentials.js";
 import { loadEmailsClientEnvSecret } from "./client-env.js";
 
 export interface ServerProviderHealth {
@@ -35,9 +35,15 @@ export async function fetchProviderServerHealth(providerId: string, live = true,
   }
   throw new Error("No Emails API credential is configured.");
 }
-export async function listServerProviderIds(): Promise<string[]> {
-  const { createConfiguredEmailStore } = await import("../store-resolution.js");
-  const store = createConfiguredEmailStore();
+export async function listServerProviderIds(transport?: HostedEmailsTransport): Promise<string[]> {
+  const store = transport
+    ? (await import("../store-http/index.js")).createHttpEmailStore({
+        baseUrl: transport.baseUrl,
+        credential: transport.credential,
+        credentialSetting: transport.credentialSetting,
+        credentialFallbacks: transport.credentialFallbacks,
+      })
+    : (await import("../store-resolution.js")).createConfiguredEmailStore();
   const providers: Array<{ id: string }> = [];
   const seen = new Set<string>();
   let complete = false;
@@ -56,10 +62,14 @@ export async function listServerProviderIds(): Promise<string[]> {
   return providers.map(provider => provider.id);
 }
 export async function listServerProviderHealth(live = true): Promise<ServerProviderHealth[]> {
-  const providers = await listServerProviderIds();
+  loadEmailsClientEnvSecret(process.env);
+  const transport = resolveEmailsHostedTransport(process.env);
+  const providers = await listServerProviderIds(transport);
+  const credentials = [transport.credential, ...(transport.credentialFallbacks ?? []).map((item) => item.value)];
   const results: ServerProviderHealth[] = [];
   for (let offset = 0; offset < providers.length; offset += 8) {
-    results.push(...await Promise.all(providers.slice(offset, offset + 8).map((provider) => fetchProviderServerHealth(provider, live))));
+    results.push(...await Promise.all(providers.slice(offset, offset + 8).map((provider) =>
+      fetchProviderServerHealth(provider, live, { baseUrl: transport.baseUrl, credentials }))));
   }
   return results;
 }

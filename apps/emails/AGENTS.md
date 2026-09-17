@@ -27,7 +27,7 @@ breaks for each one.
 ## Client access and shared state
 
 The Emails API client resolves its URL and key through the shared
-`@hasna/contracts` 1.0.2 resolver (apps/emails/src/lib/emails-credentials.ts) —
+the pinned `@hasna/contracts/client` resolver (apps/emails/src/lib/emails-credentials.ts) —
 the same tiers every hosted Hasna CLI uses, FRESH on every request: the
 deliberate `HASNA_EMAILS_API_KEY_OVERRIDE` / `HASNA_PROFILE` selections (a
 blank override or an absent profile refuses; a `HASNA_EMAILS_API_KEY_REF` vault
@@ -36,8 +36,8 @@ macOS Keychain items for this app (`api-key`, `api-url`), the
 `~/.hasna/emails/config/credentials` file, then `HASNA_EMAILS_API_KEY`. There
 are no `--api-key` / `--profile` resolver flags on the CLI. The
 canonical env names are `HASNA_EMAILS_API_URL` / `HASNA_EMAILS_API_KEY`; the
-legacy `EMAILS_SELF_HOSTED_URL` / `EMAILS_SELF_HOSTED_API_KEY` spellings stay
-accepted as aliases for one release. A live `EMAILS_SESSION_TOKEN` / agent
+stale `EMAILS_SELF_HOSTED_URL` / `EMAILS_SELF_HOSTED_API_KEY` spellings are
+retired and refused by name. A live `EMAILS_SESSION_TOKEN` / agent
 `EMAILS_IDP_TOKEN` (the app's own multi-tenancy principals) wins as the bearer
 credential; the URL always comes from the resolver. Missing or invalid API
 access must fail closed. Ordinary CLI, terminal UI, and MCP operations use the
@@ -53,9 +53,15 @@ such as `HASNA_EMAILS_DB_PATH`, `EMAILS_DB_PATH`, and
 records, including the older `~/.emails` path; do not bulk-delete or rename them. The standalone SQLite dashboard
 also remains separate from the shared API service. These compatibility surfaces
 are not a reason to add a client storage selector or local fallback. Nonblank
-`HASNA_EMAILS_DB_PATH` or `EMAILS_DB_PATH` settings must be rejected by ordinary
-client entrypoints before opening SQLite, including when API access is also
-configured; direct users to remove them and configure account access.
+`HASNA_EMAILS_DB_PATH` or `EMAILS_DB_PATH` settings and the explicit
+`HASNA_EMAILS_LOCAL=1` / `EMAILS_LOCAL=1` opt-in must be rejected by ordinary client entrypoints
+before opening SQLite, including when API access is also configured. Automatic client-side selection through `planEmailStore()` /
+`createConfiguredEmailStore()` may use SQLite only when that opt-in is set; a
+database path by itself is only a location and must never select local storage.
+Calling an explicitly local low-level constructor with a caller-owned Database is
+itself an explicit compatibility choice and does not use automatic selection. The standalone `emails-serve` binary retains its separate server-backend
+contract: `EMAILS_DATABASE_URL` selects PostgreSQL, while an unset value serves
+the loopback SQLite dashboard.
 
 ## MCP Setup (Recommended for AI Agents)
 

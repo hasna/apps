@@ -37,7 +37,7 @@ async function runSmoke(env: Record<string, string>): Promise<{ exitCode: number
 }
 
 // A non-secret vault path. Kept for reference; the smoke configures the client
-// through the shared resolver's env tier (the one-release aliases) instead of the
+// through the shared resolver's canonical env tier instead of the
 // retired vault-pointer delivery chain (hasna/apps#1720).
 const CLIENT_ENV_POINTER = "hasna/test/opensource/emails/live/client-env";
 
@@ -103,10 +103,10 @@ describe("published self-hosted client smoke", () => {
       PATH: process.env.PATH ?? "",
       HOME: home,
       // The hosted client resolves the service origin and key through the shared
-      // credential resolver (the one-release aliases here — accepted beneath the
-      // canonical HASNA_EMAILS_API_URL / HASNA_EMAILS_API_KEY names).
-      EMAILS_SELF_HOSTED_URL: stub.baseUrl,
-      EMAILS_SELF_HOSTED_API_KEY: stub.apiKey,
+      // credential resolver using the canonical
+      // HASNA_EMAILS_API_URL / HASNA_EMAILS_API_KEY names.
+      HASNA_EMAILS_API_URL: stub.baseUrl,
+      HASNA_EMAILS_API_KEY: stub.apiKey,
       EMAILS_SMOKE_CLI: wrapper,
       NO_COLOR: "1",
     };
@@ -154,13 +154,29 @@ describe("published self-hosted client smoke", () => {
     const env: Record<string, string> = {
       PATH: process.env.PATH ?? "",
       HOME: home,
-      EMAILS_SELF_HOSTED_URL: stub.baseUrl,
-      EMAILS_SELF_HOSTED_API_KEY: stub.apiKey,
+      HASNA_EMAILS_API_URL: stub.baseUrl,
+      HASNA_EMAILS_API_KEY: stub.apiKey,
       EMAILS_SMOKE_CLI: wrapper,
       EMAILS_DB_PATH: "",
+      HASNA_EMAILS_LOCAL: "",
     };
     const result = await runSmoke(env);
     expect(result.exitCode).not.toBe(0);
-    expect(result.stderr).toContain("must both be unset");
+    expect(result.stderr).toContain("must all be unset");
+  });
+
+  it("refuses retired client aliases before invoking the CLI", async () => {
+    const retiredValue = "retired-value-must-not-leak";
+    const result = await runSmoke({
+      PATH: process.env.PATH ?? "",
+      HOME: home,
+      HASNA_EMAILS_API_URL: stub.baseUrl,
+      HASNA_EMAILS_API_KEY: stub.apiKey,
+      EMAILS_SELF_HOSTED_API_KEY: retiredValue,
+      EMAILS_SMOKE_CLI: wrapper,
+    });
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain("EMAILS_SELF_HOSTED_URL and EMAILS_SELF_HOSTED_API_KEY are retired");
+    expect(result.stderr).not.toContain(retiredValue);
   });
 });

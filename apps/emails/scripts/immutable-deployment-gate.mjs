@@ -620,12 +620,18 @@ async function runGate(configPath, evidencePath) {
       }),
     });
 
-    // An explicit SQLite path conflicts with API transport; it must never be
-    // smuggled into successful probes under a deleted deployment selector.
-    for (const setting of ["HASNA_EMAILS_DB_PATH", "EMAILS_DB_PATH"]) {
-      probes.push({ name: `local-database-conflict-${setting.toLowerCase()}`,
+    // Every client-side local selector conflicts with API transport. Database
+    // paths get the poison path; the explicit opt-ins get their only valid value.
+    // None may be smuggled into a successful production probe.
+    for (const { setting, value, kind } of [
+      { setting: "HASNA_EMAILS_DB_PATH", value: poisonDb, kind: "database" },
+      { setting: "EMAILS_DB_PATH", value: poisonDb, kind: "database" },
+      { setting: "HASNA_EMAILS_LOCAL", value: "1", kind: "opt-in" },
+      { setting: "EMAILS_LOCAL", value: "1", kind: "opt-in" },
+    ]) {
+      probes.push({ name: `local-${kind}-conflict-${setting.toLowerCase()}`,
         duration_ms: runProgramExpectFailure(candidateInstall.cli, ["--json", "inbox", "list", "--limit", "1"], {
-          env: { ...cliEnv, [setting]: poisonDb }, label: "conflicting local database refusal",
+          env: { ...cliEnv, [setting]: value }, label: `conflicting local ${kind} refusal`,
         }),
       });
     }

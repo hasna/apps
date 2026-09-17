@@ -152,6 +152,7 @@ function fixture() {
   });
   delete process.env.EMAILS_DB_PATH;
   delete process.env.HASNA_EMAILS_DB_PATH;
+  delete process.env["HASNA_EMAILS_LOCAL"];
   process.env.HASNA_EMAILS_API_URL = server.url.origin;
   process.env.EMAILS_SESSION_TOKEN = token;
   resetSelfHostedConfigCache();

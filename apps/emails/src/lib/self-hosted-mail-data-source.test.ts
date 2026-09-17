@@ -6,7 +6,8 @@ import {
   resolveSelfHostedMailDataSource,
 } from "./self-hosted-mail-data-source.js";
 import { resetSelfHostedConfigCache } from "../db/self-hosted-store.js";
-import { EMAILS_SELF_HOSTED_API_KEY_ENV, EMAILS_SESSION_TOKEN_ENV } from "./client-env.js";
+import { EMAILS_SESSION_TOKEN_ENV } from "./client-env.js";
+import { EMAILS_API_KEY_ENV } from "./emails-credentials.js";
 import { resetMailDataSource, resolveMailDataSource } from "./mail-data-source.js";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -38,13 +39,15 @@ const LEGACY_ENV_KEYS = [
   "HASNA_MAILERY_API_URL",
   "HASNA_MAILERY_API_KEY",
   "HASNA_MAILERY_ENV_FILE",
+  "EMAILS_SELF_HOSTED_URL",
+  "EMAILS_SELF_HOSTED_API_KEY",
 ] as const;
 
 function clearModeEnv(): void {
   delete process.env["EMAILS_MODE"];
   delete process.env["HASNA_EMAILS_MODE"];
-  delete process.env["EMAILS_SELF_HOSTED_URL"];
-  delete process.env["EMAILS_SELF_HOSTED_API_KEY"];
+  delete process.env["HASNA_EMAILS_API_URL"];
+  delete process.env["HASNA_EMAILS_API_KEY"];
   for (const key of LEGACY_ENV_KEYS) delete process.env[key];
 }
 
@@ -492,6 +495,72 @@ describe("SelfHostedMailDataSource — /v1 resource mapping", () => {
       .toThrow(/requires HTTPS/);
     expect(() => new SelfHostedMailDataSource({ baseUrl: "http://localhost:8080/v1", apiKey: "local" }))
       .not.toThrow();
+  });
+
+  it("re-resolves a memoized data-source credential and refuses authority drift", async () => {
+    const messageId = "00000000-0000-4000-8000-000000000099";
+    const serve = fakeServe([v1(messageId)]);
+    const authorizations: string[] = [];
+    let baseUrl = "https://emails.example/v1/";
+    let apiKey = "first-key";
+    let fetches = 0;
+    const ds = new SelfHostedMailDataSource({
+      baseUrl,
+      apiKey,
+      bindingProvider: () => ({
+        baseUrl,
+        apiKey,
+        credentials: [{ setting: EMAILS_API_KEY_ENV, value: apiKey }],
+      }),
+      fetchImpl: async (url, init) => {
+        fetches += 1;
+        authorizations.push(String(new Headers(init.headers).get("authorization") ?? ""));
+        return serve.fetchImpl(url, init);
+      },
+    });
+
+    await expect(ds.getMessage(messageId)).resolves.not.toBeNull();
+    apiKey = "second-key";
+    await expect(ds.getMessage(messageId)).rejects.toThrow("credential binding changed");
+    expect(authorizations).toEqual(["Bearer first-key", "Bearer first-key"]);
+    expect(fetches).toBe(2);
+
+    baseUrl = "https://other.example/v1";
+    await expect(ds.getMessage(messageId)).rejects.toThrow("authority changed");
+    expect(fetches).toBe(2);
+  });
+
+  it("binds cached mailbox metadata to the current credential and authority", async () => {
+    const serve = fakeServe([v1("cached", { labels: ["important"] })]);
+    const authorizations: string[] = [];
+    let baseUrl = "https://emails.example/v1";
+    let apiKey = "first-key";
+    let fetches = 0;
+    const ds = new SelfHostedMailDataSource({
+      baseUrl,
+      apiKey,
+      bindingProvider: () => ({ baseUrl, apiKey }),
+      fetchImpl: async (url, init) => {
+        fetches += 1;
+        authorizations.push(String(new Headers(init.headers).get("authorization") ?? ""));
+        return serve.fetchImpl(url, init);
+      },
+    });
+
+    await ds.listLabelSummaries();
+    const afterWarm = fetches;
+    await ds.listLabelSummaries();
+    expect(fetches).toBe(afterWarm);
+
+    apiKey = "second-key";
+    await expect(ds.listLabelSummaries()).rejects.toThrow("credential binding changed");
+    expect(fetches).toBe(afterWarm);
+    expect(authorizations.at(-1)).toBe("Bearer first-key");
+
+    const beforeDrift = fetches;
+    baseUrl = "https://other.example/v1";
+    await expect(ds.listLabelSummaries()).rejects.toThrow("authority changed");
+    expect(fetches).toBe(beforeDrift);
   });
 
   it("lists inbox mapping snake_case rows to TuiMessage, newest first", async () => {
@@ -2411,7 +2480,7 @@ describe("SelfHostedMailDataSource — /v1 resource mapping", () => {
       apiKey: "k",
       credentials: [
         { setting: EMAILS_SESSION_TOKEN_ENV, value: "session-token-placeholder" },
-        { setting: EMAILS_SELF_HOSTED_API_KEY_ENV, value: "api-key-placeholder" },
+        { setting: EMAILS_API_KEY_ENV, value: "api-key-placeholder" },
       ],
       fetchImpl,
     });
@@ -2440,7 +2509,7 @@ describe("SelfHostedMailDataSource — /v1 resource mapping", () => {
       apiKey: "k",
       credentials: [
         { setting: EMAILS_SESSION_TOKEN_ENV, value: "session-token-placeholder" },
-        { setting: EMAILS_SELF_HOSTED_API_KEY_ENV, value: "api-key-placeholder" },
+        { setting: EMAILS_API_KEY_ENV, value: "api-key-placeholder" },
       ],
       fetchImpl,
     });
@@ -2456,8 +2525,8 @@ describe("resolveMailDataSource — self-hosted seam selection", () => {
     // Storage configuration alone routes this arm (hasna/apps#1566): the API
     // origin and credential select the self-hosted source — the deployment word
     // is removed and never set.
-    process.env["EMAILS_SELF_HOSTED_URL"] = "https://emails.example";
-    process.env["EMAILS_SELF_HOSTED_API_KEY"] = "k";
+    process.env["HASNA_EMAILS_API_URL"] = "https://emails.example";
+    process.env["HASNA_EMAILS_API_KEY"] = "k";
     resetSelfHostedConfigCache();
     resetMailDataSource();
     const ds = resolveMailDataSource();
@@ -2466,8 +2535,9 @@ describe("resolveMailDataSource — self-hosted seam selection", () => {
     expect(resolveSelfHostedMailDataSource()).toBeInstanceOf(SelfHostedMailDataSource);
   });
 
-  it("does not construct a self-hosted client while a database path selects local storage", () => {
+  it("does not construct a self-hosted client while the explicit opt-in selects local storage", () => {
     process.env["EMAILS_DB_PATH"] = ":memory:";
+    process.env["HASNA_EMAILS_LOCAL"] = "1";
     resetSelfHostedConfigCache();
     resetMailDataSource();
     expect(resolveSelfHostedMailDataSource()).toBeNull();

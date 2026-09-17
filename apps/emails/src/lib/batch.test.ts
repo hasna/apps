@@ -51,6 +51,7 @@ let SANDBOX_PROVIDER: Provider;
 beforeEach(async () => {
   captureInheritedProcessEnv();
   process.env["EMAILS_DB_PATH"] = ":memory:";
+  process.env["HASNA_EMAILS_LOCAL"] = "1";
   resetDatabase();
   db = getDatabase();
   const created = await realStore().providers.create({ name: "sandbox", type: "sandbox", active: 1 });
@@ -394,7 +395,7 @@ describe("batchSend inherits the storage configuration contract", () => {
   it("refuses to run when the configuration names both a local database and an API", async () => {
     // The URL alone is enough: the contradiction is checked BEFORE the credential, so
     // this case needs no credential setting at all.
-    process.env["EMAILS_SELF_HOSTED_URL"] = "https://emails.example.test";
+    process.env["HASNA_EMAILS_API_URL"] = "https://emails.example.test";
     try {
       const failure = batchSend({
         csvPath: "unused.csv",
@@ -406,7 +407,7 @@ describe("batchSend inherits the storage configuration contract", () => {
       });
       await expect(failure).rejects.toThrow(/two configured places to keep its mail/);
     } finally {
-      delete process.env["EMAILS_SELF_HOSTED_URL"];
+      delete process.env["HASNA_EMAILS_API_URL"];
     }
   });
 });

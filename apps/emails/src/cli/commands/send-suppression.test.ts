@@ -382,7 +382,12 @@ describe("emails batch keeps its (already correct) skip-unless-force shape", () 
     // client. Restore the prior path so later shared-process tests keep their
     // own configuration.
     const priorDbPath = process.env["EMAILS_DB_PATH"];
+    // The opt-in is local-store configuration exactly like the path, so it is saved and
+    // restored with it: this file runs before the CLI-spawning suites, and a leaked flag
+    // makes the hosted-only bin they spawn refuse (it inherits this process's env).
+    const priorLocalOptIn = process.env["HASNA_EMAILS_LOCAL"];
     process.env["EMAILS_DB_PATH"] = ":memory:";
+    process.env["HASNA_EMAILS_LOCAL"] = "1";
     resetDatabase();
     try {
       const { batchSend } = await import("../../lib/batch.js");
@@ -407,6 +412,8 @@ describe("emails batch keeps its (already correct) skip-unless-force shape", () 
       closeDatabase();
       if (priorDbPath === undefined) delete process.env["EMAILS_DB_PATH"];
       else process.env["EMAILS_DB_PATH"] = priorDbPath;
+      if (priorLocalOptIn === undefined) delete process.env["HASNA_EMAILS_LOCAL"];
+      else process.env["HASNA_EMAILS_LOCAL"] = priorLocalOptIn;
     }
   });
 });

@@ -21,14 +21,18 @@ async function run(env: NodeJS.ProcessEnv, entry: string, args: string[]) {
   try { const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]); return { code, stdout, stderr }; }
   finally { clearTimeout(timeout); }
 }
-for (const setting of ["EMAILS_DB_PATH", "HASNA_EMAILS_DB_PATH"]) {
+for (const setting of ["EMAILS_DB_PATH", "HASNA_EMAILS_DB_PATH", "EMAILS_LOCAL", "HASNA_EMAILS_LOCAL"]) {
   test(`${setting} cannot open a local mailbox from CLI or MCP`, async () => {
-    const { home, env } = fixture(); const file = join(home, "mail.db"); env[setting] = file;
+    const { home, env } = fixture();
+    const file = join(home, "mail.db");
+    env[setting] = setting.endsWith("DB_PATH") ? file : "1";
     for (const [entry, args] of [["src/cli/index.tsx", ["stats", "--json"]], ["src/cli/index.tsx", ["ui"]], ["src/mcp/index.ts", ["--stdio"]]] as const) {
       const result = await run(env, entry, [...args]);
       expect(result.code).not.toBe(0);
       expect(result.stdout + result.stderr).toContain("authenticated Emails API");
       expect(existsSync(file)).toBe(false);
+      expect(existsSync(join(home, "mail", "emails.db"))).toBe(false);
+      expect(existsSync(join(home, ".hasna", "emails", "emails.db"))).toBe(false);
     }
   }, 30000);
 }

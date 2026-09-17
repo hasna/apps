@@ -27,7 +27,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { closeDatabase, getDatabase, resetDatabase, type Database } from "./db/database.js";
 import { uuid } from "./db/runtime.js";
-import { EMAILS_SELF_HOSTED_API_KEY_ENV, EMAILS_SESSION_TOKEN_ENV } from "./lib/client-env.js";
+import { EMAILS_SESSION_TOKEN_ENV } from "./lib/client-env.js";
+import { EMAILS_API_KEY_ENV } from "./lib/emails-credentials.js";
 import { emailsSelfHostedOpenApi } from "./server/self-hosted/openapi.js";
 import { SELF_HOSTED_RESOURCES } from "./server/self-hosted/resources.js";
 import { CAPABILITY_KEYS, capabilityRefusal, isCapabilityRefusal } from "./store/capabilities.js";
@@ -75,6 +76,7 @@ let api: V1StoreApi;
 beforeEach(() => {
   captureInheritedProcessEnv();
   process.env["EMAILS_DB_PATH"] = ":memory:";
+  process.env["HASNA_EMAILS_LOCAL"] = "1";
   resetDatabase();
   db = getDatabase();
   // The service the client talks to. It stores nothing itself — every row it serves
@@ -87,6 +89,7 @@ afterEach(() => {
   api.stop();
   closeDatabase();
   delete process.env["EMAILS_DB_PATH"];
+  delete process.env["HASNA_EMAILS_LOCAL"];
   restoreInheritedProcessEnv();
 });
 
@@ -249,14 +252,15 @@ describe("HttpEmailStore conformance", () => {
   });
 
   it("never exposes a credential through the diagnostics descriptor", () => {
-    // A URL carrying userinfo and a query string is the realistic hazard: this string is
-    // the one most likely to reach a log.
-    const descriptor = httpStoreDescriptor("https://operator:sup3rsecret@mail.example.test/v1?token=abc#frag");
+    // Credential-bearing or query-bearing authorities are rejected, never sanitized
+    // into something that could later receive the bearer header.
+    expect(() => httpStoreDescriptor("https://operator:sup3rsecret@mail.example.test/v1"))
+      .toThrow("credentials");
+    expect(() => httpStoreDescriptor("https://mail.example.test/v1?token=abc#frag"))
+      .toThrow("query string");
+    const descriptor = httpStoreDescriptor("https://mail.example.test/v1");
     expect(descriptor.kind).toBe("api");
     expect(descriptor.detail).toBe("Emails API at https://mail.example.test");
-    for (const secret of ["sup3rsecret", "operator", "token", "abc", "?", "#"]) {
-      expect(descriptor.detail).not.toContain(secret);
-    }
     // The DEFAULT detail of a real store, not one this test supplied.
     const subject = store();
     expect(subject.descriptor.detail.length).toBeGreaterThan(0);
@@ -578,7 +582,7 @@ describe("the HTTP transport's bounds", () => {
       credential: "session-token-placeholder",
       credentialSetting: EMAILS_SESSION_TOKEN_ENV,
       credentialFallbacks: [
-        { setting: EMAILS_SELF_HOSTED_API_KEY_ENV, value: "api-key-placeholder" },
+        { setting: EMAILS_API_KEY_ENV, value: "api-key-placeholder" },
       ],
       fetchImpl,
     });
@@ -591,6 +595,49 @@ describe("the HTTP transport's bounds", () => {
       "Bearer session-token-placeholder",
       "Bearer api-key-placeholder",
     ]);
+  });
+
+  it("revalidates a long-lived transport credential and refuses drift before dispatch", async () => {
+    const authorizations: string[] = [];
+    let credential = "first-key";
+    const transport = createTransport({
+      baseUrl: "https://mail.example.test/v1/",
+      credential,
+      bindingProvider: () => ({
+        baseUrl: "https://mail.example.test",
+        credential,
+        credentialSetting: EMAILS_API_KEY_ENV,
+      }),
+      fetchImpl: async (_url, init) => {
+        authorizations.push(init?.headers?.Authorization ?? "");
+        return Response.json({ domains: [] });
+      },
+    });
+
+    await transport.request("GET", "/domains");
+    credential = "second-key";
+    await expect(transport.request("GET", "/domains")).rejects.toThrow("credential binding changed");
+    expect(authorizations).toEqual(["Bearer first-key"]);
+  });
+
+  it("refuses authority drift before sending the freshly resolved credential", async () => {
+    let fetches = 0;
+    const transport = createTransport({
+      baseUrl: "https://first.example.test",
+      credential: "first-key",
+      bindingProvider: () => ({
+        baseUrl: "https://second.example.test/v1",
+        credential: "second-key",
+        credentialSetting: EMAILS_API_KEY_ENV,
+      }),
+      fetchImpl: async () => {
+        fetches += 1;
+        return Response.json({ domains: [] });
+      },
+    });
+
+    await expect(transport.request("GET", "/domains")).rejects.toThrow("authority changed");
+    expect(fetches).toBe(0);
   });
 
   it("splits 403 into a credential FAULT and a per-request refusal", async () => {
@@ -626,11 +673,14 @@ describe("the HTTP transport's bounds", () => {
     expect(refused.status).toBe(403);
   });
 
-  it("strips a credential and a query string out of the base URL it reports", () => {
-    const { requestBase, safeBase } = toV1BaseUrl("https://user:pw@mail.example.test/?a=b#c");
-    expect(requestBase).toBe("https://mail.example.test/v1");
-    expect(safeBase).toBe("https://mail.example.test");
-    // A configured URL that ALREADY ends in /v1 must not gain a second one.
+  it("uses the strict shared authority boundary and appends exactly one /v1", () => {
+    expect(() => toV1BaseUrl("https://user:pw@mail.example.test/")).toThrow("credentials");
+    expect(() => toV1BaseUrl("https://mail.example.test/?a=b#c")).toThrow("query string");
+    expect(() => toV1BaseUrl("http://mail.example.test")).toThrow("loopback");
+    expect(toV1BaseUrl("https://mail.example.test")).toEqual({
+      requestBase: "https://mail.example.test/v1",
+      safeBase: "https://mail.example.test",
+    });
     expect(toV1BaseUrl("https://mail.example.test/v1").requestBase).toBe("https://mail.example.test/v1");
     expect(toV1BaseUrl("https://mail.example.test/v1/").requestBase).toBe("https://mail.example.test/v1");
   });

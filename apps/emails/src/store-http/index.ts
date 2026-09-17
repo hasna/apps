@@ -49,7 +49,13 @@ import {
 } from "./resources.js";
 import { RESOURCE_PATHS } from "./routes.js";
 import { createSendKeysRepository } from "./send-keys.js";
-import { createTransport, toV1BaseUrl, type FetchImplementation } from "./wire.js";
+export type { TransportBinding, TransportBindingProvider } from "./wire.js";
+import {
+  createTransport,
+  toV1BaseUrl,
+  type FetchImplementation,
+  type TransportBindingProvider,
+} from "./wire.js";
 
 /**
  * What this store can do, and — for everything it cannot — the missing route, stated
@@ -249,6 +255,8 @@ export interface HttpEmailStoreOptions {
   credentialSetting?: EmailsClientCredentialSetting;
   /** Later credentials to try after a selected session token needs reauthentication. */
   credentialFallbacks?: readonly EmailsClientCredentialCandidate[];
+  /** Re-resolve one request's authority and credential together. */
+  bindingProvider?: TransportBindingProvider;
   /** Injectable `fetch`, for tests and for callers with their own agent. */
   fetchImpl?: FetchImplementation;
   timeoutMs?: number;
@@ -285,6 +293,7 @@ export function createHttpEmailStore(
     credential: options.credential,
     ...(options.credentialSetting ? { credentialSetting: options.credentialSetting } : {}),
     ...(options.credentialFallbacks ? { credentialFallbacks: options.credentialFallbacks } : {}),
+    ...(options.bindingProvider ? { bindingProvider: options.bindingProvider } : {}),
     ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
     ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
   });

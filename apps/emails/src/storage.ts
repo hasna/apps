@@ -92,7 +92,12 @@ export {
   createHttpEmailStore,
   httpStoreDescriptor,
 } from "./store-http/index.js";
-export type { HttpEmailStoreOptions, MissingRoute } from "./store-http/index.js";
+export type {
+  HttpEmailStoreOptions,
+  MissingRoute,
+  TransportBinding,
+  TransportBindingProvider,
+} from "./store-http/index.js";
 
 // WHICH of those two stores an installation gets, decided from storage configuration.
 //
@@ -106,6 +111,7 @@ export {
   API_BASE_URL_SETTING,
   API_CREDENTIAL_SETTINGS,
   DATABASE_PATH_SETTINGS,
+  LOCAL_OPT_IN_SETTINGS,
   StoreConfigurationError,
   createConfiguredEmailStore,
   planEmailStore,

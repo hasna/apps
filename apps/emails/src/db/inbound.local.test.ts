@@ -44,13 +44,16 @@ import {
 
 let db: Database;
 let originalDbPath: string | undefined;
+let originalLocalOptIn: string | undefined;
 let sequence = 0;
 
 type StoreInput = Parameters<typeof storeInboundEmail>[0];
 
 beforeEach(() => {
   originalDbPath = process.env.EMAILS_DB_PATH;
+  originalLocalOptIn = process.env["HASNA_EMAILS_LOCAL"];
   process.env.EMAILS_DB_PATH = ":memory:";
+  process.env["HASNA_EMAILS_LOCAL"] = "1";
   resetDatabase();
   db = getDatabase();
   sequence = 0;
@@ -60,6 +63,10 @@ afterEach(() => {
   closeDatabase();
   if (originalDbPath === undefined) delete process.env.EMAILS_DB_PATH;
   else process.env.EMAILS_DB_PATH = originalDbPath;
+  // Restore the local opt-in like the path: a leaked flag configures a local store
+  // for every later file in this shared bun process.
+  if (originalLocalOptIn === undefined) delete process.env["HASNA_EMAILS_LOCAL"];
+  else process.env["HASNA_EMAILS_LOCAL"] = originalLocalOptIn;
 });
 
 function addProvider(id: string): void {

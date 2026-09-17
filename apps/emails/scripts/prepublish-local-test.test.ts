@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync, symlinkSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, symlinkSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -16,7 +16,8 @@ describe("canonical prepublish test isolation", () => {
     const operator = {
       HOME: "/operator/home", USERPROFILE: "/operator/home", PATH: "/test/bin", CI: "1",
       EMAILS_MODE: "local", EMAILS_DB_PATH: ":memory:", HASNA_EMAILS_MODE: "local",
-      HASNA_EMAILS_DB_PATH: "/operator/db", EMAILS_DATABASE_URL: "operator-database",
+      HASNA_EMAILS_DB_PATH: "/operator/db", HASNA_EMAILS_LOCAL: "1", EMAILS_LOCAL: "1",
+      EMAILS_DATABASE_URL: "operator-database",
       HASNA_EMAILS_API_URL: "https://emails.example.test", HASNA_EMAILS_API_KEY: "synthetic-api-key",
       EMAILS_SELF_HOSTED_URL: "https://emails.example.test", EMAILS_SELF_HOSTED_API_KEY: "synthetic-api-key",
       EMAILS_CLIENT_ENV_SECRET: "synthetic/client-env", EMAILS_SESSION_TOKEN: "synthetic-session",
@@ -95,4 +96,29 @@ test("canonical isolated paths", () => {
     });
     expect(result.status, result.stderr).toBe(0);
   } finally { rmSync(fixture, { recursive: true, force: true }); }
+});
+
+
+test("the actual runner refuses repository .env injection and package auto-install", () => {
+  const fixture = mkdtempSync(join(tmpdir(), "emails-runner-no-env-"));
+  try {
+    mkdirSync(join(fixture, "tmp"), { recursive: true, mode: 0o700 });
+    const runner = join(fixture, "prepublish-local-test.mjs");
+    copyFileSync(join(import.meta.dir, "prepublish-local-test.mjs"), runner);
+    writeFileSync(join(fixture, ".env"), "HASNA_EMAILS_API_KEY=poison-from-dotenv\n");
+    const file = join(fixture, "no-env.test.ts");
+    writeFileSync(file, `import { expect, test } from "bun:test";
+test("dotenv stays disabled", () => {
+  expect(process.env.HASNA_EMAILS_API_KEY).toBeUndefined();
+});
+`);
+    const result = spawnSync(process.execPath, ["--no-env-file", runner, file], {
+      cwd: fixture,
+      encoding: "utf8",
+      env: buildPrepublishTestEnv(process.env, fixture),
+    });
+    expect(result.status, result.stderr).toBe(0);
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
 });

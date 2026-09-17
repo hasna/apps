@@ -5,8 +5,8 @@
 //
 // Enable by exporting (deployment modes are removed — hasna/apps#1566 — so the
 // API origin and credential alone select the arm):
-//   EMAILS_SELF_HOSTED_URL=https://emails.example
-//   EMAILS_SELF_HOSTED_API_KEY=<key>
+//   HASNA_EMAILS_API_URL=https://emails.example
+//   HASNA_EMAILS_API_KEY=<key>
 
 import { describe, expect, test } from "bun:test";
 import { createDomain, deleteDomain, getDomain, getDomainByName, listDomains } from "./domains.js";
@@ -15,8 +15,8 @@ import { resetSelfHostedConfigCache } from "./self-hosted-store.js";
 // The live lane must be unambiguous: an API origin with a credential, and no
 // database path that would make storage configuration contradict itself.
 const HAS_CLOUD =
-  Boolean(process.env.EMAILS_SELF_HOSTED_URL) &&
-  Boolean(process.env.EMAILS_SELF_HOSTED_API_KEY) &&
+  Boolean(process.env.HASNA_EMAILS_API_URL) &&
+  Boolean(process.env.HASNA_EMAILS_API_KEY) &&
   !Boolean(process.env.EMAILS_DB_PATH || process.env.HASNA_EMAILS_DB_PATH);
 
 const maybe = HAS_CLOUD ? test : test.skip;

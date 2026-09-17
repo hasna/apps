@@ -8,11 +8,11 @@ import { mcpTestRequestInit, startTestMcpHttpServer } from "../test-support/mcp-
 import { startV1Stub } from "../test-support/v1-stub.js";
 import { buildServer } from "./server.js";
 
-const pathSettings = ["EMAILS_DB_PATH", "HASNA_EMAILS_DB_PATH"];
+const storageSettings = ["EMAILS_DB_PATH", "HASNA_EMAILS_DB_PATH", "EMAILS_LOCAL", "HASNA_EMAILS_LOCAL"];
 let previous: Record<string, string | undefined>, home: string;
 beforeEach(() => {
-  previous = Object.fromEntries([...pathSettings, "HASNA_EMAILS_HOME", "EMAILS_HOME"].map(key => [key, process.env[key]]));
-  for (const key of pathSettings) delete process.env[key];
+  previous = Object.fromEntries([...storageSettings, "HASNA_EMAILS_HOME", "EMAILS_HOME"].map(key => [key, process.env[key]]));
+  for (const key of storageSettings) delete process.env[key];
   home = mkdtempSync(join(tmpdir(), "emails-mcp-api-only-"));
   process.env.HASNA_EMAILS_HOME = home;
   process.env.EMAILS_HOME = home;
@@ -24,13 +24,13 @@ afterEach(() => {
   rmSync(home, { recursive: true, force: true });
 });
 
-for (const setting of pathSettings) {
+for (const setting of storageSettings) {
   test(`MCP construction rejects ${setting} before opening a database`, () => {
     const file = join(home, "mail.db");
-    process.env[setting] = file;
+    process.env[setting] = setting.endsWith("DB_PATH") ? file : "1";
     expect(() => buildServer()).toThrow("authenticated Emails API");
     expect(existsSync(file)).toBe(false);
-    process.env[setting] = ":memory:";
+    process.env[setting] = setting.endsWith("DB_PATH") ? ":memory:" : "1";
     expect(() => buildServer()).toThrow("authenticated Emails API");
   });
 }

@@ -29,6 +29,7 @@ beforeEach(() => {
   process.env.EMAILS_SESSION_TOKEN = crypto.randomUUID();
   delete process.env.HASNA_EMAILS_DB_PATH;
   delete process.env.EMAILS_DB_PATH;
+  delete process.env["HASNA_EMAILS_LOCAL"];
   resetSelfHostedConfigCache();
 });
 afterEach(() => {

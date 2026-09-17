@@ -11,12 +11,13 @@
 // The URL and the API key now resolve through `@hasna/contracts/client`, the same
 // five tiers every hosted Hasna CLI uses, fresh on every call.
 //
-// CANONICAL NAMES AND THE ONE-RELEASE ALIASES. The canonical names are
-// `HASNA_EMAILS_API_URL` / `HASNA_EMAILS_API_KEY`, exactly what the shared seam
-// reads for the app slug `emails`. The legacy `EMAILS_SELF_HOSTED_URL` /
-// `EMAILS_SELF_HOSTED_API_KEY` spellings remain accepted, silently, one rung
-// BELOW the canonical names — the same compatibility window skills gave its
-// `SKILLS_API_*` names. They are read nowhere else in this package.
+// CANONICAL NAMES ONLY. The canonical names are `HASNA_EMAILS_API_URL` /
+// `HASNA_EMAILS_API_KEY`, exactly what the shared seam reads for the app slug
+// `emails`. The legacy `EMAILS_SELF_HOSTED_URL` / `EMAILS_SELF_HOSTED_API_KEY`
+// spellings had a temporary compatibility window; they are now RETIRED — read
+// nowhere in this package — and an environment that still exports one is REFUSED by name (`assertNoRetiredEmailsClientAliases`), because
+// silently ignoring a configured authority would hand that intent to whatever the
+// ambient tiers happen to hold.
 //
 // THE APP'S OWN PRINCIPALS STAY ABOVE THE RESOLVER. `emails auth login` issues a
 // user SESSION token and agents may carry an identity token (ADR-0002). Those are
@@ -34,8 +35,9 @@
 //   - a URL configured but NO credential → LOUD failure naming what is missing.
 //     There is no local fallback: serving local rows while authentication is
 //     unconfigured is a false green (owner ruling 2026-09-04).
-//   - neither → the caller decides: an explicit database path is the only way
-//     back to local SQLite, and it must say so on stderr.
+//   - neither → the caller decides: the explicit opt-in `HASNA_EMAILS_LOCAL=1`
+//     (src/lib/local-opt-in.ts) is the only way to local SQLite, and it must say so
+//     on stderr. A database path alone is not that choice.
 //
 // WHY THE TYPES BELOW ARE SPELLED HERE RATHER THAN IMPORTED. This package builds
 // with `--packages external` (the AWS SDK and the MCP SDK stay external), so the
@@ -162,12 +164,36 @@ export const EMAILS_API_URL_ENV_KEYS: readonly string[] = ENV_KEYS.apiUrlKeys;
 export const EMAILS_API_KEY_ENV_KEYS: readonly string[] = ENV_KEYS.apiKeyKeys;
 
 /** The canonical spellings, for messages that have to name exactly one. */
-export const EMAILS_API_URL_ENV = EMAILS_API_URL_ENV_KEYS[0] as string;
-export const EMAILS_API_KEY_ENV = EMAILS_API_KEY_ENV_KEYS[0] as string;
+export const EMAILS_API_URL_ENV: "HASNA_EMAILS_API_URL" = "HASNA_EMAILS_API_URL";
+export const EMAILS_API_KEY_ENV: "HASNA_EMAILS_API_KEY" = "HASNA_EMAILS_API_KEY";
 
-/** The one-release legacy aliases this package still accepts (one rung below canonical). */
-export const EMAILS_SELF_HOSTED_URL_ENV = "EMAILS_SELF_HOSTED_URL";
-export const EMAILS_SELF_HOSTED_API_KEY_ENV = "EMAILS_SELF_HOSTED_API_KEY";
+/**
+ * The RETIRED client aliases, paired with the canonical name each one used to
+ * stand in for. Read nowhere; refused by `assertNoRetiredEmailsClientAliases`.
+ */
+export const RETIRED_EMAILS_CLIENT_ENV_KEYS: ReadonlyArray<readonly [retired: string, canonical: string]> =
+  Object.freeze([
+    ["EMAILS_SELF_HOSTED_URL", EMAILS_API_URL_ENV] as const,
+    ["EMAILS_SELF_HOSTED_API_KEY", EMAILS_API_KEY_ENV] as const,
+  ]);
+
+/**
+ * Refuse an environment that still exports a retired alias. Pure env read — no
+ * Keychain, no disk — so a caller can run it before deciding anything else. A
+ * A declared alias is refused even when blank: retirement requires unsetting the key.
+ */
+export function assertNoRetiredEmailsClientAliases(env: Env = process.env): void {
+  for (const [retired, canonical] of RETIRED_EMAILS_CLIENT_ENV_KEYS) {
+    if (env[retired] === undefined) continue;
+    throw new ClientTransportConfigurationError(
+      EMAILS_APP,
+      `${retired} is retired and is no longer read by this client. Set ${canonical} instead — or store the value in ` +
+        `the Keychain item ${keychainService(canonical === EMAILS_API_URL_ENV ? "api-url" : "api-key")} ` +
+        `or ~/.hasna/${EMAILS_APP}/config/credentials — and unset ${retired}.`,
+      [retired, canonical],
+    );
+  }
+}
 
 /**
  * The DELIBERATE tiers of the shared chain, as the resolver spells them for this
@@ -247,27 +273,41 @@ export function hostedEmailsAuthorityConfigured(
   return false;
 }
 
-/** The app's own session/identity token, in precedence order, or null. */
-function appPrincipalCredential(env: Env): { setting: string; value: string } | null {
+/** Every app session/identity token present, in precedence order. */
+function appPrincipalCredentials(env: Env): Array<{ setting: string; value: string }> {
+  const credentials: Array<{ setting: string; value: string }> = [];
   for (const setting of [EMAILS_SESSION_TOKEN_ENV, EMAILS_IDP_TOKEN_ENV] as const) {
     const value = env[setting]?.trim();
-    if (value) return { setting, value };
+    if (value) credentials.push({ setting, value });
   }
-  return null;
+  return credentials;
+}
+
+/** The highest-precedence app principal, or null. */
+function appPrincipalCredential(env: Env): { setting: string; value: string } | null {
+  return appPrincipalCredentials(env)[0] ?? null;
 }
 
 /**
- * Capture the configuration this package and the resolver read, translating the
- * one-release aliases onto the canonical names during the copy.
+ * Capture the configuration this package and the resolver read.
  *
  * The returned object is a COPY — but the copy is handed to the resolver with
  * the Keychain tier explicitly enabled (see {@link snapshotEmailsOptions}), which
  * is the #1788-sanctioned shape: the Keychain/disk tiers stay AMBIENT by default
- * and are never silently disabled for a caller-built environment. The aliases
- * are translated here (not in `process.env`) so nothing else in the package has
- * to know about the compatibility window.
+ * and are never silently disabled for a caller-built environment.
  */
 export function snapshotEmailsEnvironment(env: Env = process.env): Env {
+  // The retired aliases are refused, never translated (see the module header).
+  assertNoRetiredEmailsClientAliases(env);
+  for (const key of [...ENV_KEYS.apiUrlKeys, ...ENV_KEYS.apiKeyKeys]) {
+    if (!Object.prototype.hasOwnProperty.call(env, key) || env[key] === undefined) continue;
+    if (String(env[key]).trim() !== "") continue;
+    throw new ClientTransportConfigurationError(
+      EMAILS_APP,
+      `${key} is set but blank; declared client authority and credential settings never fall through to another identity or local storage.`,
+      [key],
+    );
+  }
   const snapshot: Env = {};
   const ownKeys = new Set([
     ...ENV_KEYS.apiUrlKeys,
@@ -278,8 +318,6 @@ export function snapshotEmailsEnvironment(env: Env = process.env): Env {
     EMAILS_API_KEY_OVERRIDE_ENV,
     EMAILS_API_KEY_REF_ENV,
     EMAILS_PROFILE_ENV,
-    EMAILS_SELF_HOSTED_URL_ENV,
-    EMAILS_SELF_HOSTED_API_KEY_ENV,
     EMAILS_SESSION_TOKEN_ENV,
     EMAILS_IDP_TOKEN_ENV,
     "HOME",
@@ -293,16 +331,6 @@ export function snapshotEmailsEnvironment(env: Env = process.env): Env {
     if (!descriptor || !("value" in descriptor)) continue;
     const raw = String(descriptor.value ?? "");
     snapshot[key] = raw;
-  }
-  // Alias -> canonical, one rung below: a canonical value always wins; a blank
-  // canonical is treated as unset so an alias can supply it.
-  const urlAlias = snapshot[EMAILS_SELF_HOSTED_URL_ENV]?.trim();
-  if (urlAlias && !(snapshot[ENV_KEYS.apiUrlKeys[0]!] ?? "").trim()) {
-    snapshot[ENV_KEYS.apiUrlKeys[0]!] = urlAlias;
-  }
-  const keyAlias = snapshot[EMAILS_SELF_HOSTED_API_KEY_ENV]?.trim();
-  if (keyAlias && !(snapshot[ENV_KEYS.apiKeyKeys[0]!] ?? "").trim()) {
-    snapshot[ENV_KEYS.apiKeyKeys[0]!] = keyAlias;
   }
   return Object.freeze(snapshot);
 }
@@ -345,12 +373,20 @@ export function configuredEmailsApiUrl(
   const snapshot = snapshotEmailsEnvironment(env);
   const opts = snapshotEmailsOptions(env, options);
   const keys = clientTransportEnvKeys(EMAILS_APP);
-  for (const key of keys.apiUrlKeys) {
-    const raw = snapshot[key]?.trim();
-    if (raw) return { value: raw, source: key };
+  const definedUrlEntries = keys.apiUrlKeys
+    .filter((key) => Object.prototype.hasOwnProperty.call(snapshot, key) && snapshot[key] !== undefined)
+    .map((key) => ({ source: key, value: String(snapshot[key]) }));
+  const blank = definedUrlEntries.find((entry) => entry.value.trim() === "");
+  if (blank) {
+    throw new ClientTransportConfigurationError(
+      EMAILS_APP,
+      `${blank.source} is set but blank; Emails clients require a usable API authority and never fall back to SQLite.`,
+      [blank.source],
+    );
   }
+  const envUrls = definedUrlEntries.map((entry) => ({ source: entry.source, value: entry.value.trim() }));
+
   const fromKeychain = keychainConfigValue(EMAILS_APP, snapshot, opts.credentials?.keychain);
-  if (fromKeychain) return { value: fromKeychain.value.trim(), source: fromKeychain.source };
   const fromDisk = appConfigDiskValue(EMAILS_APP, snapshot, keys.apiUrlKeys);
   if (fromDisk?.unusable) {
     throw new ClientTransportConfigurationError(
@@ -360,8 +396,24 @@ export function configuredEmailsApiUrl(
       [fromDisk.key],
     );
   }
-  if (fromDisk) return { value: fromDisk.value.trim(), source: fromDisk.path };
-  return null;
+  const candidates = [
+    ...envUrls,
+    ...(fromKeychain ? [{ source: fromKeychain.source, value: fromKeychain.value.trim() }] : []),
+    ...(fromDisk ? [{ source: fromDisk.path, value: fromDisk.value.trim() }] : []),
+  ].map((candidate) => ({
+    ...candidate,
+    normalized: normalizeEmailsBaseUrl(candidate.value, candidate.source),
+  }));
+  const selected = candidates[0] ?? null;
+  if (selected && candidates.some((candidate) => candidate.normalized !== selected.normalized)) {
+    throw new ClientTransportConfigurationError(
+      EMAILS_APP,
+      `${candidates.map((candidate) => candidate.source).join(" and ")} select different service authorities; ` +
+        "refusing to send a credential written for one authority to another.",
+      candidates.map((candidate) => candidate.source),
+    );
+  }
+  return selected ? { value: selected.value, source: selected.source } : null;
 }
 
 /** The credential file paths consulted, for a message that has to name them. */
@@ -446,7 +498,8 @@ export function resolveEmailsHostedTransport(
     );
   }
 
-  const principal = appPrincipalCredential(snapshot);
+  const principals = appPrincipalCredentials(snapshot);
+  const principal = principals[0] ?? null;
   const credential = principal ?? (contractsCredential ? { setting: contractsCredential.source, value: contractsCredential.apiKey } : null);
 
   let configured: ConfiguredEmailsApiUrl | null = null;
@@ -476,9 +529,8 @@ export function resolveEmailsHostedTransport(
         `${configured.source} points this client at an Emails service but no API credential ` +
           `resolved — refusing to start. Looked in the Keychain item ` +
           `${keychainService("api-key")}${emailsCredentialFiles(snapshot).length > 0 ? `, in ` +
-          `${emailsCredentialFiles(snapshot).join(" or ")}` : ""}, and in ${EMAILS_API_KEY_ENV} ` +
-          `(or its alias ${EMAILS_SELF_HOSTED_API_KEY_ENV}). ` +
-          `Set ${EMAILS_API_KEY_ENV} (or ${EMAILS_SELF_HOSTED_API_KEY_ENV}), store the key in the ` +
+          `${emailsCredentialFiles(snapshot).join(" or ")}` : ""}, and in ${EMAILS_API_KEY_ENV}. ` +
+          `Set ${EMAILS_API_KEY_ENV}, store the key in the ` +
           `Keychain item ${keychainService("api-key")}, or write ` +
           `~/.hasna/${EMAILS_APP}/config/credentials.`,
         [EMAILS_API_KEY_ENV],
@@ -487,8 +539,9 @@ export function resolveEmailsHostedTransport(
     throw new ClientTransportConfigurationError(
       EMAILS_APP,
       `No Emails API credential resolved and no authority is configured — refusing to start. ` +
-        `Set ${EMAILS_API_KEY_ENV} and ${EMAILS_API_URL_ENV} (or ${EMAILS_SELF_HOSTED_API_KEY_ENV} and ` +
-        `${EMAILS_SELF_HOSTED_URL_ENV}), store the key in the Keychain item ` +
+        `Looked in the Keychain item ${keychainService("api-key")}, in ` +
+        `~/.hasna/${EMAILS_APP}/config/credentials, and in ${EMAILS_API_KEY_ENV}. ` +
+        `Set ${EMAILS_API_KEY_ENV} and ${EMAILS_API_URL_ENV}, store the key in the Keychain item ` +
         `${keychainService("api-key")}, or write ~/.hasna/${EMAILS_APP}/config/credentials.`,
       [EMAILS_API_KEY_ENV, EMAILS_API_URL_ENV],
     );
@@ -498,7 +551,7 @@ export function resolveEmailsHostedTransport(
     throw new ClientTransportConfigurationError(
       EMAILS_APP,
       `A credential resolves but no Emails API URL is configured — refusing to guess an endpoint. ` +
-        `Set ${EMAILS_API_URL_ENV} (or ${EMAILS_SELF_HOSTED_URL_ENV}), store the api-url in the Keychain item ` +
+        `Set ${EMAILS_API_URL_ENV}, store the api-url in the Keychain item ` +
         `${keychainService("api-url")}, or write ~/.hasna/${EMAILS_APP}/config/credentials.`,
       [EMAILS_API_URL_ENV],
     );
@@ -506,8 +559,9 @@ export function resolveEmailsHostedTransport(
 
   const fallbacks: Array<{ setting: string; value: string }> = [];
   if (principal) {
-    // A session/identity token is the primary credential; the contracts-resolved
-    // key (if any) is the fallback the transport tries after `reauthenticate`.
+    // Preserve the released fallback contract: a selected session may retry with
+    // the operator key. An IdP token is selected only when no session is present;
+    // it is never inserted as an intermediate escalation step.
     if (contractsCredential) {
       fallbacks.push({ setting: contractsCredential.source, value: contractsCredential.apiKey });
     }

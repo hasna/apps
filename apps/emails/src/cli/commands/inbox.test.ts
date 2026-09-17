@@ -192,8 +192,8 @@ function useAttachmentInventoryPages(
   pages: Array<[cursor: string, page: { items: Array<Record<string, unknown>>; next_cursor: string | null }]>,
 ): void {
   attachmentInventoryPages = new Map(pages);
-  process.env.EMAILS_SELF_HOSTED_URL = `http://127.0.0.1:${attachmentInventoryServer.port}`;
-  process.env.EMAILS_SELF_HOSTED_API_KEY = crypto.randomUUID(); // Per-run synthetic fixture credential.
+  process.env.HASNA_EMAILS_API_URL = `http://127.0.0.1:${attachmentInventoryServer.port}`;
+  process.env.HASNA_EMAILS_API_KEY = crypto.randomUUID(); // Per-run synthetic fixture credential.
   resetSelfHostedConfigCache();
 }
 
@@ -1021,9 +1021,10 @@ describe("inbox attachments", () => {
       }
       delete process.env.EMAILS_CLIENT_ENV_SECRET;
       delete process.env.EMAILS_SESSION_TOKEN;
-      process.env.EMAILS_SELF_HOSTED_URL = `http://127.0.0.1:${attachmentInventoryServer.port}`;
-      process.env.EMAILS_SELF_HOSTED_API_KEY = crypto.randomUUID(); // Per-run synthetic fixture credential.
+      process.env.HASNA_EMAILS_API_URL = `http://127.0.0.1:${attachmentInventoryServer.port}`;
+      process.env.HASNA_EMAILS_API_KEY = crypto.randomUUID(); // Per-run synthetic fixture credential.
       process.env.EMAILS_DB_PATH = poisonDbDir;
+      process.env["HASNA_EMAILS_LOCAL"] = "1";
       resetSelfHostedConfigCache();
 
       const rejection = await runInboxCommandExpectingExit(["--json", "inbox", "attachments"]);
@@ -1102,6 +1103,7 @@ describe("inbox attachments", () => {
     const poisonDbDir = mkdtempSync(join(tmpdir(), "emails-no-local-inventory-"));
     const previousDbPath = process.env.EMAILS_DB_PATH;
     process.env.EMAILS_DB_PATH = poisonDbDir;
+    process.env["HASNA_EMAILS_LOCAL"] = "1";
     try {
       const rejection = await runInboxCommandExpectingExit(["--json", "inbox", "attachments"]);
       expect(rejection.error).toBe("process.exit:1");
@@ -1465,8 +1467,8 @@ describe("inbox attachment", () => {
     const inheritedProcessEnv = { ...process.env };
 
     try {
-      process.env.EMAILS_SELF_HOSTED_URL = `http://127.0.0.1:${legacyServer.port}`;
-      process.env.EMAILS_SELF_HOSTED_API_KEY = crypto.randomUUID(); // Per-run synthetic fixture credential.
+      process.env.HASNA_EMAILS_API_URL = `http://127.0.0.1:${legacyServer.port}`;
+      process.env.HASNA_EMAILS_API_KEY = crypto.randomUUID(); // Per-run synthetic fixture credential.
       resetSelfHostedConfigCache();
       resetMailDataSource();
 

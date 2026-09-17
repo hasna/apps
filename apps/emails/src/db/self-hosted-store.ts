@@ -23,7 +23,7 @@ import {
   resolveEmailsApiUrl,
   resolveEmailsHostedTransport,
   emailsKeychainItem,
-  EMAILS_SELF_HOSTED_API_KEY_ENV,
+  EMAILS_API_KEY_ENV,
   EMAILS_SESSION_TOKEN_ENV,
   type EmailsClientCredentialCandidate,
   type EmailsClientCredentialSetting,
@@ -84,8 +84,7 @@ function toV1BaseUrl(apiUrl: string): string {
 }
 
 const CONFIG_HELP =
-  "Set HASNA_EMAILS_API_URL and HASNA_EMAILS_API_KEY (or the legacy " +
-  "EMAILS_SELF_HOSTED_URL / EMAILS_SELF_HOSTED_API_KEY aliases), store the key in " +
+  "Set HASNA_EMAILS_API_URL and HASNA_EMAILS_API_KEY, store the key in " +
   `the Keychain item ${emailsKeychainItem("api-key")}, or write ` +
   "~/.hasna/emails/config/credentials to use the API.";
 
@@ -209,7 +208,7 @@ function curlProcessEnv(): NodeJS.ProcessEnv {
 function credentialsForConfig(config: SelfHostedConfig): readonly EmailsClientCredentialCandidate[] {
   return [
     {
-      setting: config.credentialSetting ?? EMAILS_SELF_HOSTED_API_KEY_ENV,
+      setting: config.credentialSetting ?? EMAILS_API_KEY_ENV,
       value: config.credential,
     },
     ...(config.credentialFallbacks ?? []),
@@ -421,13 +420,39 @@ export function selfHostedStoreFor(resource: string): SelfHostedResourceStore {
   const clean = resource.replace(/^\/+|\/+$/g, "");
   const base = `/${clean}`;
   const singular = singularOf(clean);
+  const sameCredentials = (left: SelfHostedConfig, right: SelfHostedConfig): boolean => {
+    const leftCandidates = credentialsForConfig(left);
+    const rightCandidates = credentialsForConfig(right);
+    return leftCandidates.length === rightCandidates.length
+      && leftCandidates.every((candidate, index) =>
+        candidate.setting === rightCandidates[index]?.setting
+        && candidate.value === rightCandidates[index]?.value);
+  };
+  const currentConfig = (): SelfHostedConfig => {
+    const current = resolveSelfHostedConfig(process.env, { selectedMode: "self_hosted" });
+    if (current.baseUrl !== config.baseUrl) {
+      throw new SelfHostedTransportError(
+        "CONFIG",
+        base,
+        "the configured Emails API authority changed; rebuild the client before sending a credential to the new authority",
+      );
+    }
+    if (!sameCredentials(current, config)) {
+      throw new SelfHostedTransportError(
+        "CONFIG",
+        base,
+        "the configured Emails credential binding changed; rebuild the client before continuing the logical operation",
+      );
+    }
+    return current;
+  };
 
   return {
     resource: clean,
     baseUrl: config.baseUrl,
     list(query) {
       const path = `${base}${encodeQuery(query)}`;
-      const { status, body } = httpRequest(config, "GET", path);
+      const { status, body } = httpRequest(currentConfig(), "GET", path);
       if (status < 200 || status >= 300) throw new SelfHostedHttpError(status, "GET", base);
       const raw = parseSelfHostedSuccessJson(body, { status, method: "GET", path });
       validateSelfHostedSdkSuccessResponse("GET", path, status, raw);
@@ -435,7 +460,7 @@ export function selfHostedStoreFor(resource: string): SelfHostedResourceStore {
     },
     get(id) {
       const path = `${base}/${encodeURIComponent(id)}`;
-      const { status, body } = httpRequest(config, "GET", path);
+      const { status, body } = httpRequest(currentConfig(), "GET", path);
       if (status === 404) {
         validateNotFoundResponse("GET", path, body);
         return null;
@@ -446,7 +471,7 @@ export function selfHostedStoreFor(resource: string): SelfHostedResourceStore {
       return unwrapSingle(raw, singular)!;
     },
     create(body) {
-      const res = httpRequest(config, "POST", base, body);
+      const res = httpRequest(currentConfig(), "POST", base, body);
       if (res.status < 200 || res.status >= 300) throw new SelfHostedHttpError(res.status, "POST", base);
       const raw = parseSelfHostedSuccessJson(res.body, { status: res.status, method: "POST", path: base });
       validateSelfHostedSdkSuccessResponse("POST", base, res.status, raw);
@@ -454,7 +479,7 @@ export function selfHostedStoreFor(resource: string): SelfHostedResourceStore {
     },
     update(id, patch, method = "PATCH") {
       const path = `${base}/${encodeURIComponent(id)}`;
-      const res = httpRequest(config, method, path, patch);
+      const res = httpRequest(currentConfig(), method, path, patch);
       if (res.status < 200 || res.status >= 300) {
         throw new SelfHostedHttpError(res.status, method, path);
       }
@@ -464,7 +489,7 @@ export function selfHostedStoreFor(resource: string): SelfHostedResourceStore {
     },
     del(id) {
       const path = `${base}/${encodeURIComponent(id)}`;
-      const { status, body } = httpRequest(config, "DELETE", path);
+      const { status, body } = httpRequest(currentConfig(), "DELETE", path);
       if (status === 404) {
         validateNotFoundResponse("DELETE", path, body);
         return false;

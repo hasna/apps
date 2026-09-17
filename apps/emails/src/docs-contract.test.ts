@@ -10,6 +10,8 @@ describe("agent documentation contract", () => {
 
     expect(agents).toContain("~/.hasna/emails/emails.db");
     expect(agents).toContain("HASNA_EMAILS_DB_PATH");
+    expect(agents).toContain("HASNA_EMAILS_LOCAL=1");
+    expect(agents).toContain("retired and refused by name");
     expect(agents).toContain("100+ MCP tools");
     expect(agents).toContain("prepare_inbox");
     expect(agents).toContain("wait_for_code");
@@ -74,7 +76,9 @@ describe("agent documentation contract", () => {
 
     expect(auth).toContain("EMAILS_SESSION_TOKEN");
     expect(auth).toContain("EMAILS_IDP_TOKEN");
-    expect(auth).toContain("EMAILS_SELF_HOSTED_API_KEY");
+    expect(auth).toContain("HASNA_EMAILS_API_KEY");
+    expect(auth).toContain("spellings are retired");
+    expect(auth).toContain("refused by name");
     expect(auth).toContain("0021_idp_principal_tenants");
 
     expect(provisioning).toContain("Address provisioning is available for configured SES inbound domains");
@@ -111,6 +115,8 @@ describe("agent documentation contract", () => {
     }
     expect(smoke).toContain('test "${HASNA_EMAILS_DB_PATH+x}" = "x"');
     expect(smoke).toContain('test "${EMAILS_DB_PATH+x}" = "x"');
+    expect(smoke).toContain('test "${HASNA_EMAILS_LOCAL+x}" = "x"');
+    expect(smoke).toContain('test "${EMAILS_LOCAL+x}" = "x"');
     expect(smoke).toContain('"$emails_cli" status --json');
     expect(smoke).toContain('"$emails_cli" provider list --json');
     expect(smoke).toContain('"$emails_cli" inbox list --limit 1 --json');

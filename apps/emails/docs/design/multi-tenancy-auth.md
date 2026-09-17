@@ -697,7 +697,8 @@ ingest/webhook path resolves tenant before writing (§6 cross-cutting).
    (scoped store, `resolveRequestContext`, api_key_tenants lookup, auth endpoints). Boot
    runs 0012: identity tables created, all rows + all existing keys backfilled to the
    default tenant, transitional DEFAULT in place. The operator's existing
-   `EMAILS_SELF_HOSTED_API_KEY` keeps working (its `kid` now maps to default tenant); all
+   `EMAILS_SELF_HOSTED_API_KEY` historically kept working (its `kid` mapped to the
+   default tenant); the alias is now retired for clients, and all
    existing data is visible under the default tenant. Sessions become available; operator
    runs `emails auth bootstrap` to create their owner user.
 2. **Verify in prod**: existing key reads/writes work; all data under default tenant; new
@@ -875,13 +876,15 @@ by envelope-only routing through a global single-tenant domain map.
 
 ## 15. Implementation reconciliation (v3)
 
-The implementation now has exactly two deployment modes: local SQLite and
-operator-owned `self_hosted` PostgreSQL. It has no hosted SaaS control plane and
-no hybrid synchronization mode. Passing an explicit Bun `Database` handle to
-the public library always selects that caller-owned SQLite database, even when
-the process is otherwise configured as a self-hosted client.
+The implementation now separates authenticated `/v1` clients from the standalone
+server backend; there is no deployment-mode selector or hybrid synchronization
+mode. Client authority and credentials resolve through the shared Contracts seam.
+The package embeds no service authority. Passing an explicit Bun `Database` handle
+to the public library always selects that caller-owned SQLite database, while
+automatic local selection requires `HASNA_EMAILS_LOCAL=1`.
 
-The self-hosted schema is additive through migrations 0012–0021:
+The server schema remains additive through the migration ledger bundled with the
+exact release. The tenancy slice introduced migrations 0012–0021:
 
 - 0012 adds tenant/identity/session/membership/API-key binding and tenant-scopes
   existing resources with a default-tenant backfill;

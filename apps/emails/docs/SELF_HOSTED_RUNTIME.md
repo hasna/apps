@@ -7,15 +7,17 @@ Client configuration (deployment modes are removed — hasna/apps#1566 — so th
 API origin and one credential alone select the arm):
 
 ```bash
-export EMAILS_SELF_HOSTED_URL="https://emails.example.com"
-export EMAILS_SELF_HOSTED_API_KEY="..." # or EMAILS_SESSION_TOKEN / EMAILS_IDP_TOKEN
+export HASNA_EMAILS_API_URL="https://emails.example.com"
+export HASNA_EMAILS_API_KEY="..." # or EMAILS_SESSION_TOKEN / EMAILS_IDP_TOKEN
 emails inbox list
 ```
 
-The client chooses `EMAILS_SESSION_TOKEN`, then `EMAILS_IDP_TOKEN`, then
-`EMAILS_SELF_HOSTED_API_KEY` when more than one is present. A client-env vault
-entry referenced by `EMAILS_CLIENT_ENV_SECRET` may carry the URL and any one of
-those credentials. See [AUTHENTICATION.md](AUTHENTICATION.md) for the account,
+The client chooses `EMAILS_SESSION_TOKEN`, then `EMAILS_IDP_TOKEN`, then the
+credential resolved from `HASNA_EMAILS_API_KEY`, Keychain, or the canonical
+credentials file. The retired `EMAILS_SELF_HOSTED_URL` and
+`EMAILS_SELF_HOSTED_API_KEY` aliases are refused by name. A client-env vault
+entry referenced by `EMAILS_CLIENT_ENV_SECRET` may carry the app session or
+identity principal; the authority and operator key stay in the shared resolver. See [AUTHENTICATION.md](AUTHENTICATION.md) for the account,
 tenant-key, and optional IdP flows.
 
 For a repeatable read-only client check, run the published smoke from the exact
@@ -77,9 +79,9 @@ emails self-hosted key create
 emails-serve
 ```
 
-The current migration ledger ends at `0021_idp_principal_tenants`. A release
-image used after that migration must recognize 0021; an older image fails
-readiness on the unknown applied ledger row and is not a rollback target.
+Apply every migration bundled with the exact release before promotion. A release
+image must recognize every row already present in the migration ledger; an older
+image that rejects an applied migration is not a rollback target.
 
 ## Auth: signup domain allowlist and sender identity
 

@@ -3,10 +3,11 @@
 // The store seam (src/store-resolution.ts) decides which store this process reads
 // and writes: the HTTP API client when the shared @hasna/contracts resolver
 // (src/lib/emails-credentials.ts) produces a hosted authority plus a credential, and
-// the local SQLite database only when a database path is configured explicitly
-// (HASNA_EMAILS_DB_PATH / EMAILS_DB_PATH). Every other row — both configured, an
-// authority without a credential, or nothing at all — is a boot error in the
-// seam's own words (`StoreConfigurationError`, fail-closed ruling 2026-09-04).
+// the local SQLite database only behind the explicit opt-in HASNA_EMAILS_LOCAL=1
+// (src/lib/local-opt-in.ts; a database path alone selects nothing). Every other
+// row — both configured, an authority without a credential, a path without the
+// opt-in, or nothing at all — is a boot error in the seam's own words
+// (`StoreConfigurationError`, fail-closed ruling 2026-09-04).
 // This module maps that plan onto the two-arm "client mode" value the repository
 // families that are NOT yet collapsed onto the store seam still route on:
 // `local` for the SQLite plan, `self_hosted` for the API plan.
@@ -106,9 +107,10 @@ export function resolveClientModeSelection(env: NodeJS.ProcessEnv = process.env)
  * Delivers the app's own principals (session/identity tokens) from a configured
  * EMAILS_CLIENT_ENV_SECRET vault pointer into the environment FIRST — a live
  * session is a credential the API arm can use — then resolves the mode exactly
- * as `resolveClientModeSelection` does. Local storage is reachable only through
- * an explicit configured database path; nothing configured fails closed instead
- * of defaulting (fail-closed ruling, 2026-09-04, incident 715712).
+ * as `resolveClientModeSelection` does. Automatic local selection is reachable
+ * only through `HASNA_EMAILS_LOCAL=1` / `EMAILS_LOCAL=1`; a database path is an
+ * optional location and never the selector. Nothing configured fails closed
+ * instead of defaulting (fail-closed ruling, 2026-09-04, incident 715712).
  */
 export function resolveClientMode(env: NodeJS.ProcessEnv = process.env): ClientModeResolution {
   loadEmailsClientEnvSecret(env);
