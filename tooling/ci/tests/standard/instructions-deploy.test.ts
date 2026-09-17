@@ -60,7 +60,166 @@ describe("standard-adherence: protected Instructions deployment lane", () => {
 
   test("the checker proves a positive control and rejects its negative controls", () => {
     expect(selfTestInstructionsDeploy(root)).toEqual([]);
-  }, 10_000);
+  }, 20_000);
+
+  test("starts the exact candidate image with its default command and proves its HTTP process remains live", () => {
+    const build = workflow.indexOf("Build native ARM64 image locally");
+    const smoke = workflow.indexOf("Smoke exact image HTTP startup");
+    const oidc = workflow.indexOf("Configure AWS credentials with GitHub OIDC");
+    const smokeScript = workflow.slice(smoke, workflow.indexOf("Generate local vulnerability report"));
+
+    expect(build).toBeGreaterThan(-1);
+    expect(smoke).toBeGreaterThan(build);
+    expect(oidc).toBeGreaterThan(smoke);
+    expect(smokeScript).toContain('expected_version="$(node -p \'require("./package.json").version\')"');
+    expect(smokeScript).toContain("--publish 127.0.0.1::8080");
+    expect(smokeScript).toContain('"${LOCAL_IMAGE}:${SOURCE_SHA}" >/dev/null');
+    expect(smokeScript).not.toContain("--entrypoint");
+    expect(smokeScript).toContain('"${smoke_url}/health"');
+    expect(smokeScript).toContain('"${smoke_url}/version"');
+    expect(smokeScript.match(/\.version == \$version/g)).toHaveLength(3);
+    expect(smokeScript.match(/"\$\{smoke_url\}\/health"/g)).toHaveLength(2);
+    expect(smokeScript).toContain("sleep 3");
+    expect(smokeScript).toContain('test "$(docker inspect --format \'{{.State.Running}}\' "${smoke_container}")" = "true"');
+    expect(smokeScript).toContain("trap cleanup_smoke EXIT");
+  });
+
+  test("rejects command overrides and weakened HTTP startup or liveness checks", () => {
+    const smokeStep = workflow.indexOf("      - name: Smoke exact image HTTP startup");
+    const publish = workflow.indexOf("            --publish 127.0.0.1::8080 \\", smokeStep);
+    const smokeWait = "          sleep 3\n";
+    const smokeRunning = '          test "$(docker inspect --format \'{{.State.Running}}\' "${smoke_container}")" = "true"\n';
+    const settledHealth = [
+      "          curl --fail --silent --show-error --max-time 2 \\",
+      '            --output "${settled_health_json}" "${smoke_url}/health"',
+      "          jq -e --arg version \"${expected_version}\" '",
+      '            .status == "ok" and .version == $version and .name == "instructions"',
+      '          \' "${settled_health_json}" >/dev/null',
+    ].join("\n");
+    const orderedSettleSequence = `${smokeWait}${smokeRunning}${settledHealth}`;
+    const versionProbe = [
+      "          curl --fail --silent --show-error --max-time 2 \\",
+      '            --output "${version_json}" "${smoke_url}/version"',
+      "          jq -e --arg version \"${expected_version}\" '",
+      '            .status == "ok" and .version == $version and .name == "instructions"',
+      '          \' "${version_json}" >/dev/null',
+    ].join("\n");
+    const exactStart = [
+      "          docker run --detach \\",
+      '            --name "${smoke_container}" \\',
+      "            --publish 127.0.0.1::8080 \\",
+      '            "${LOCAL_IMAGE}:${SOURCE_SHA}" >/dev/null',
+    ].join("\n");
+    const mutations = [
+      workflow.replace(
+        '"${LOCAL_IMAGE}:${SOURCE_SHA}" >/dev/null',
+        '"unrelated-image:fixed" >/dev/null',
+      ),
+      `${workflow.slice(0, publish)}            --entrypoint bun \\\n${workflow.slice(publish)}`,
+      workflow.replaceAll('"${smoke_url}/health"', '"${smoke_url}/status"'),
+      workflow.replaceAll(
+        '.status == "ok" and .version == $version and .name == "instructions"',
+        '.status == "ok" and (.version | type) == "string" and .name == "instructions"',
+      ),
+      workflow.replace(
+        '          test "$(docker inspect --format \'{{.State.Running}}\' "${smoke_container}")" = "true"',
+        '          echo "running assertion removed"',
+      ),
+      workflow.replace("          sleep 3", "          sleep 3 &"),
+      workflow.replace(
+        '          test "$(docker inspect --format \'{{.State.Running}}\' "${smoke_container}")" = "true"',
+        '          test "$(docker inspect --format \'{{.State.Running}}\' "${smoke_container}")" = "true" || true',
+      ),
+      workflow.replace(
+        '            "${LOCAL_IMAGE}:${SOURCE_SHA}" >/dev/null',
+        '            "${LOCAL_IMAGE}:${SOURCE_SHA}" >/dev/null\n          docker rm --force "${smoke_container}"\n          docker run -d --name "${smoke_container}-override" --entrypoint bun "${LOCAL_IMAGE}:${SOURCE_SHA}" dist/server/index.js',
+      ),
+      workflow.replace(
+        '            "${LOCAL_IMAGE}:${SOURCE_SHA}" >/dev/null',
+        '            "${LOCAL_IMAGE}:${SOURCE_SHA}" >/dev/null\n          docker container run --detach --name "${smoke_container}-override" --entrypoint bun "${LOCAL_IMAGE}:${SOURCE_SHA}" dist/server/index.js',
+      ),
+      workflow.replace(
+        "          docker run --detach \\",
+        "          : <<'INERT_HTTP_START'\n          docker run --detach \\",
+      ).replace(
+        '            "${LOCAL_IMAGE}:${SOURCE_SHA}" >/dev/null',
+        '            "${LOCAL_IMAGE}:${SOURCE_SHA}" >/dev/null\n          INERT_HTTP_START\n          docker run -d --name "${smoke_container}" --entrypoint bun "${LOCAL_IMAGE}:${SOURCE_SHA}" dist/server/index.js',
+      ),
+      workflow.replace(
+        orderedSettleSequence,
+        `${smokeRunning}${settledHealth}\n${smokeWait.trimEnd()}`,
+      ),
+      workflow.replace(
+        orderedSettleSequence,
+        `${smokeRunning}${smokeWait}${settledHealth}`,
+      ),
+      workflow.replace(
+        orderedSettleSequence,
+        `${settledHealth}\n${smokeWait}${smokeRunning.trimEnd()}`,
+      ),
+      workflow.replace("          docker run --detach \\", "          /usr/bin/docker run --detach \\"),
+      workflow.replace("          docker run --detach \\", "          env docker run --detach \\"),
+      workflow.replace(
+        exactStart,
+        [
+          "          docker create \\",
+          '            --name "${smoke_container}" \\',
+          "            --publish 127.0.0.1::8080 \\",
+          '            "${LOCAL_IMAGE}:${SOURCE_SHA}" >/dev/null',
+          '          docker start "${smoke_container}" >/dev/null',
+        ].join("\n"),
+      ),
+      workflow.replace(
+        orderedSettleSequence,
+        `          if false; then\n${orderedSettleSequence}\n          fi`,
+      ),
+      workflow.replace(
+        versionProbe,
+        `          if false; then\n${versionProbe}\n          fi`,
+      ),
+      workflow.replace(
+        exactStart,
+        [
+          "          if false; then",
+          exactStart,
+          "          fi",
+          "          engine=/usr/bin/docker",
+          '          "${engine}" run -d --name "${smoke_container}" --publish 127.0.0.1::8080 "${LOCAL_IMAGE}:${SOURCE_SHA}" >/dev/null',
+        ].join("\n"),
+      ),
+      workflow.replace("          trap cleanup_smoke EXIT\n", "").replace(
+        exactStart,
+        `${exactStart}\n          trap cleanup_smoke EXIT`,
+      ),
+      workflow.replace(exactStart, `${exactStart}\n          trap - EXIT`),
+      workflow.replace(
+        "      - name: Smoke exact image HTTP startup\n        run:",
+        '      - name: Smoke exact image HTTP startup\n        if: ${{ false }}\n        run:',
+      ),
+      workflow.replace(
+        "      - name: Smoke exact image HTTP startup\n        run:",
+        "      - name: Smoke exact image HTTP startup\n        continue-on-error: true\n        run:",
+      ),
+      workflow.replace(
+        "      - name: Smoke exact image HTTP startup\n        run:",
+        "      - name: Smoke exact image HTTP startup\n        shell: bash -n {0}\n        run:",
+      ),
+      workflow.replace(
+        "      - name: Smoke exact image HTTP startup\n        run:",
+        '      - name: Smoke exact image HTTP startup\n        env:\n          GH_TOKEN: ${{ secrets.DEPLOY_PAT }}\n        run:',
+      ),
+      workflow.replace(
+        "      - name: Smoke exact image HTTP startup\n        run:",
+        "      - name: Smoke exact image HTTP startup\n        env:\n          LOCAL_IMAGE: unrelated-image\n        run:",
+      ),
+    ];
+
+    expect(publish).toBeGreaterThan(smokeStep);
+    for (const mutation of mutations) {
+      expect(mutation).not.toBe(workflow);
+      expect(validateInstructionsDeploy(mutation, "ci", "1.3.14").length).toBeGreaterThan(0);
+    }
+  }, 15_000);
 
   test("captures two consecutive identical valid archives before migration and pushes only the stable archive", () => {
     const baseline = workflow.indexOf("Export and validate complete pre-migration domain archive");
