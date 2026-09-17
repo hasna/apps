@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.6
+
+### Patch Changes
+
+- Recover expired or missing hook context through the authenticated Skills API while preserving session versions and fail-closed checks.
+
 ## 0.8.5
 
 ### Patch Changes
