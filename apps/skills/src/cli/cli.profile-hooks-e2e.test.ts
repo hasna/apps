@@ -215,6 +215,79 @@ test("built CLI refuses revoked HTTP access without silent cache fallback and bl
   } finally { await f.close(); }
 });
 
+test("expired native sessions reauthorize online while preserving their exact versions and expiry", async () => {
+  const f = await fixture();
+  try {
+    await f.a.install();
+    const first = await f.a.ok(["profiles", "set", "engineering", "--file", f.versions[0]!.file, "--json"]);
+    await f.a.ok(["sync", "--json"]);
+    await f.a.hook("claude", "UserPromptSubmit", { prompt: "review this patch" });
+    const sessions = join(f.a.data, "selection-cache", "sessions");
+    const receiptPath = join(sessions, readdirSync(sessions)[0]!);
+    const receipt = json(receiptPath);
+    receipt.verifiedAt = new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString();
+    put(receiptPath, JSON.stringify(receipt));
+    await f.a.ok(["profiles", "set", "engineering", "--file", f.versions[1]!.file, "--if-match", first.revision, "--json"]);
+    await f.a.ok(["sync", "--json"]);
+    for (const agent of ["claude", "codex"] as const) {
+      const before = f.requests.length;
+      const plain = await f.a.hook(agent, "UserPromptSubmit", { prompt: "ok so we are all good?" });
+      expect(plain).toEqual({});
+      expect(f.requests.length).toBeGreaterThan(before);
+      const explicit = await f.a.hook(agent, "UserPromptSubmit", { prompt: "$review-code" });
+      expect(explicit.hookSpecificOutput.additionalContext).toContain("Published 1.0.0");
+      expect(explicit.hookSpecificOutput.additionalContext).not.toContain("Published 2.0.0");
+      expect(json(receiptPath).verifiedAt).toBe(receipt.verifiedAt);
+      expect(json(receiptPath).profile).toEqual(receipt.profile);
+      const restored = await f.a.hook(agent, "SessionStart", { source: "resume" });
+      expect(restored.hookSpecificOutput.additionalContext).toContain("Published 1.0.0");
+      const child = await f.a.hook(agent, "SubagentStart", { agent_id: `expired-child-${agent}` });
+      expect(child.hookSpecificOutput.additionalContext).toContain("Published 1.0.0");
+    }
+    // Reauthorization is not a timestamp-only renewal of every pinned bundle.
+    const cached = await f.a.run(["context", "--stdin", "--cached", "--json"], { stdin: { session_id: "parent-session", prompt: "$review-code" } });
+    expect(cached.exitCode).toBe(1); expect(JSON.parse(cached.stdout).error.code).toBe("CACHED_PROFILE_EXPIRED");
+  } finally { await f.close(); }
+});
+
+test("expired hook sessions still block when hosted authentication fails", async () => {
+  const f = await fixture();
+  try {
+    await f.a.install();
+    await f.a.ok(["profiles", "set", "engineering", "--file", f.versions[0]!.file, "--json"]);
+    await f.a.ok(["sync", "--json"]);
+    await f.a.hook("claude", "UserPromptSubmit", { prompt: "review this patch" });
+    const sessions = join(f.a.data, "selection-cache", "sessions");
+    const receiptPath = join(sessions, readdirSync(sessions)[0]!);
+    const receipt = json(receiptPath); receipt.verifiedAt = new Date(0).toISOString();
+    put(receiptPath, JSON.stringify(receipt));
+    const before = readFileSync(receiptPath, "utf8"), requests = f.requests.length;
+    const denied = await f.a.hook("claude", "UserPromptSubmit", { prompt: "$review-code" }, { HASNA_SKILLS_API_KEY: "revoked-fixture-credential" });
+    expect(denied.decision).toBe("block");
+    expect(JSON.stringify(denied)).not.toContain("Published 1.0.0");
+    expect(f.requests.length).toBeGreaterThan(requests);
+    expect(readFileSync(receiptPath, "utf8")).toBe(before);
+  } finally { await f.close(); }
+});
+
+test("missing hook cache resolves from the API but malformed receipts never trigger recovery", async () => {
+  const f = await fixture();
+  try {
+    await f.a.install();
+    await f.a.ok(["profiles", "set", "engineering", "--file", f.versions[0]!.file, "--json"]);
+    const recovered = await f.a.hook("claude", "UserPromptSubmit", { prompt: "$review-code" });
+    expect(recovered.hookSpecificOutput.additionalContext).toContain("Published 1.0.0");
+    const sessions = join(f.a.data, "selection-cache", "sessions");
+    const receiptPath = join(sessions, readdirSync(sessions)[0]!);
+    put(receiptPath, "{invalid");
+    const before = f.requests.length;
+    const refused = await f.a.hook("claude", "UserPromptSubmit", { prompt: "$review-code" });
+    expect(refused.decision).toBe("block");
+    expect(f.requests).toHaveLength(before);
+    expect(readFileSync(receiptPath, "utf8")).toBe("{invalid");
+  } finally { await f.close(); }
+});
+
 test("built Gemini hook selects the user's request after its native SessionStart policy prefix", async () => {
   const f = await fixture();
   try {
