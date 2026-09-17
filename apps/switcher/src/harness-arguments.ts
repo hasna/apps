@@ -64,7 +64,25 @@ const short: Partial<Record<HarnessId, { required: string; optional: string; boo
   "prime-agent": { required: "p", optional: "", boolean: "hv" },
   gemini: { required: "mpieo", optional: "rw", boolean: "shvydl" },
 };
-const providerKeys = new Set(["model", "model_provider", "model_providers", "model_catalog_json", "review_model", "agents", "memories"]);
+const providerKeys = new Set(["model", "model_provider", "model_providers", "model_catalog_json", "review_model", "agents", "memories", "sqlite_home"]);
+export function codexOptionTakesValue(option: string): boolean {
+  return values.codex.includes(option) || option.length===2 && option[0]==="-" && short.codex!.required.includes(option[1]);
+}
+export function codexConfigRoots(key: string): string[] {
+  if(key.length>4096||/[\r\n\0]/.test(key))throw new Error("Invalid Codex configuration key.");
+  return Object.keys(Bun.TOML.parse(`${key} = 0`));
+}
+/** Locate a native subcommand without confusing option values or a literal
+ * prompt after -- with that command. Reuse the validated Codex option grammar. */
+export function codexCommandIndex(args: readonly string[]): number {
+  for(let i=0;i<args.length;i++) {
+    const arg=args[i];if(arg==="--")return -1;
+    if(!arg.startsWith("-"))return i;
+    if(arg.startsWith("--")) { if(!arg.includes("=")&&values.codex.includes(arg))i++;continue; }
+    for(let j=1;j<arg.length;j++)if(short.codex!.required.includes(arg[j])) { if(j===arg.length-1)i++;break; }
+  }
+  return -1;
+}
 export function geminiPolicyArguments(input: readonly string[], originalHome: string): string[] {
   const args = [...input], expand = (value: string) => value.split(",").map(part => {const path = part.trim(); return path === "~" || path.startsWith("~/") ? originalHome + path.slice(1) : part;}).join(",");
   for (let i = 0; i < args.length; i++) {
@@ -88,8 +106,8 @@ function codexProviderOverride(value: string): boolean {
   const key = value.slice(0, value.indexOf("=") < 0 ? value.length : value.indexOf("=")).trim();
   // Match the TOML key syntax, including quoted roots, rather than looking for
   // provider words in unrelated option values such as a custom system prompt.
-  try { return Object.keys(Bun.TOML.parse(`${key} = 0`)).some(root => providerKeys.has(root)); }
-  catch { return /^(model|model_provider|model_providers|model_catalog_json|review_model|agents|memories)(?:\s*\.|\s*$)/.test(key); }
+  try { return codexConfigRoots(key).some(root => providerKeys.has(root)); }
+  catch { return /^(model|model_provider|model_providers|model_catalog_json|review_model|agents|memories|sqlite_home)(?:\s*\.|\s*$)/.test(key); }
 }
 
 export function assertHarnessArguments(harness: HarnessId, args: readonly string[], options: { additionalReserved?: readonly string[]; reserveCodexConfig?: boolean } = {}): void {

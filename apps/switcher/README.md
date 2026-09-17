@@ -109,11 +109,13 @@ Successful inference does not establish browser or computer compatibility for
 every provider. See the [browser extension guide](https://learn.chatgpt.com/docs/chrome-extension)
 and [DeepSeek compatibility details](https://api-docs.deepseek.com/guides/responses_api/).
 
-Switcher starts a separate app instance with persistent provider/model state
-under `~/.hasna/switcher/state/desktop/PROFILE`. Your regular ChatGPT app and its
-signed-in state are preserved. Each profile retains its own local conversations
-and preferences across launches; it does not copy the regular app's login or
-conversation history. A second launch of the same active profile is refused.
+Switcher starts a separate app instance with private login and Electron state
+under `~/.hasna/switcher/state/desktop/shared-codex-CORPUS_ID`. This identity
+depends on the canonical native state directory, never provider, model or account.
+Local conversations, skills and instructions use the same native corpus as Codex
+CLI (normally `~/.codex`). Your regular ChatGPT app's signed-in state is preserved;
+authentication and cookies are not copied. A second launch of the same active
+desktop state is refused; quit that instance before changing its provider.
 Keep the launching terminal running until you quit that instance: Switcher owns
 its inference gateway and stops its own app process on interruption or timeout.
 
@@ -123,6 +125,92 @@ Switcher refuses to overwrite authentication added manually to a provider
 profile. It does not modify or re-sign the installed app. Select a nonstandard
 installation with `--app-path /absolute/path/ChatGPT.app`; native CLI arguments,
 `--executable` and `--backend` are not accepted for desktop launches.
+
+### Shared native conversations
+
+`HASNA_CODEX_STATE_HOME` and `HASNA_CLAUDE_STATE_HOME` identify the common native
+corpus. Switcher also honors `SUBSCRIPTIONS_SHARED_HOME_CODEX` and
+`SUBSCRIPTIONS_SHARED_HOME_CLAUDE`, then a native `CODEX_HOME`/`CLAUDE_CONFIG_DIR`
+that is not an account overlay, then `~/.codex`/`~/.claude`. This preserves the
+corpus when one launcher is nested inside another account's environment.
+Directories must be absolute, owned and free of writable/symlink redirection.
+
+Codex overlays share the sessions, archived sessions, capabilities and
+`thread-writer-locks` directories. The entire SQLite store uses the canonical
+configuration's `sqlite_home`, or the canonical root; inherited account-specific
+`CODEX_SQLITE_HOME` is ignored. There are no per-database or WAL symlinks.
+`session_index.jsonl` stays an overlay-local native index; legacy index-only names
+remain pending explicit migration. Authentication,
+Electron cookies, `.codex-global-state.json`, plugin caches and worktree metadata
+are not projected between homes. Claude's compatible projects, todos, skills,
+commands, agents, rules, history and instructions use its common corpus; credentials and
+settings remain separate.
+
+Both tools share only `.hasna/instructions`, never the rest of `.hasna`. Codex's
+optional `AGENTS.override.md` takes native precedence over `AGENTS.md`; Switcher
+does not create empty versions of either file. Missing canonical instruction
+files have dangling overlay links so later user edits are visible without a copy.
+The desktop config projects only the canonical `instructions`,
+`developer_instructions`, `model_instructions_file`, `compact_prompt`, the four
+`include_*_instructions`/`include_environment_context` switches, and
+`project_doc_max_bytes`/`project_doc_fallback_filenames`. Relative model instruction
+files resolve against the canonical config directory and must be readable trusted
+regular files. Native file/config instruction precedence is preserved; routing
+and private authentication settings are rendered separately. Unsupported legacy
+`profile` selection refuses launch rather than silently losing its instructions.
+Codex CLI normally reads these keys directly from its canonical home. When nested
+inside a private authentication home, its audited instruction keys must match the
+canonical projection, including the resolved model instruction file path; missing
+or stale keys visibly refuse launch. Switcher does not rewrite that account's
+configuration or place instruction text in process arguments. Refresh the account
+overlay's instruction projection before retrying a conflicting nested launch.
+
+The desktop adapter requests native `thread/list` with all providers and filesystem
+read-repair, then starts, resumes or forks with the current launch provider and model.
+It disables the supported provider-model fallback on `thread/start`, preserves
+native permissions, and does not rewrite saved transcripts or tool-call IDs. For CLI resume:
+
+```sh
+switcher launch codex --provider PROVIDER --model MODEL -- resume
+switcher launch codex --provider PROVIDER --model MODEL -- resume --last
+switcher launch codex --provider PROVIDER --model MODEL -- resume --all
+switcher launch codex --provider PROVIDER --model MODEL -- resume SESSION_ID
+```
+
+The first three forms use Switcher's cross-provider native catalog discovery,
+then execute native Codex with the exact chosen ID. `--all` includes other
+workspaces; normal discovery keeps the current workspace filter. Explicit IDs
+pass directly to native Codex. Discovery sends no inference prompt. Native
+Codex's own picker outside these Switcher forms can still filter by provider.
+Existing nonempty legacy overlay directories are preserved and are never
+silently replaced with links; conflicting state requires an explicit migration.
+
+Normal launch reports legacy desktop data as pending migration. Inspect and stage
+an explicit noncredential snapshot with the local native-state command:
+
+```sh
+switcher state import codex --from /absolute/legacy/profile/codex
+switcher state import codex --from /absolute/legacy/profile/codex --entry sessions --apply
+switcher state import claude --from /absolute/legacy/claude/profile --entry projects --apply
+```
+
+The default is a read-only plan. `--apply` copies unique allowlisted files, skips
+byte-identical duplicates, and refuses divergent collisions before starting the
+copy. Recognized native Codex session IDs are also checked across active/archived
+rollouts: divergent versions with different filenames refuse import, while exact
+duplicates are not published twice. `--entry` may be repeated to limit a snapshot.
+Source files stay unchanged; symlinks, hardlinked aliases and
+credential/config/SQLite/index/plugin-cache entries cannot be imported.
+All source files are checked again before staging and before publishing each new
+copy without replacement. A racing destination writer is never overwritten.
+Imports are bounded to 100,000 entries and 2 GiB per operation.
+
+This is **copy-only staging**, not complete migration: the old home can still
+receive writes. Legacy SQLite metadata and index-only display names stay in the
+original, and the pending warning remains. Codex's supported catalog scan repairs
+copied transcript discovery; this does not prove every legacy desktop preference
+or title has migrated. Stop old writers and review their remaining state before
+retiring any old profile. Switcher does not retire or delete it automatically.
 
 `--dry-run` validates app detection and provider/model discovery without opening
 the app. The SDK offers local installation discovery through `detectChatGPTApp()`;

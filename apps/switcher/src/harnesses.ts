@@ -553,7 +553,7 @@ async function prepareNativeLaunch(input: HarnessLaunchInput, providerBaseUrl = 
     return {executable,args:["--settings",file,"--model",input.model,...args],env,configPaths,warnings};
   }
   if(input.harness==="codex") {
-    const rolePolicy=await prepareCodexModelPolicy({cwd:input.cwd,stateDir:input.stateDir,model:input.model,policy:input.modelPolicy?{version:1,...input.modelPolicy}:undefined,switcherProvider:"switcher",switcherBaseUrl:input.baseUrl});
+    const rolePolicy=await prepareCodexModelPolicy({home:input.sharedState?.home,cwd:input.cwd,stateDir:input.stateDir,model:input.model,policy:input.modelPolicy?{version:1,...input.modelPolicy}:undefined,switcherProvider:"switcher",switcherBaseUrl:input.baseUrl});
     const file=await jsonFile(input.stateDir,"codex-models.json",{models:input.models.map((model,index)=>codexModel(model,index,providerBaseUrl,model.id===input.model?input.reasoning:undefined))});
     configPaths.push(file);
     configPaths.push(...Object.values(rolePolicy.agentConfigPaths));
@@ -570,6 +570,7 @@ async function prepareNativeLaunch(input: HarnessLaunchInput, providerBaseUrl = 
       overrides.push("-c",`agents.${name}.config_file=${quote(path)}`);
     }
     overrides.push("-c",`memories.extract_model=${quote(input.model)}`,"-c",`memories.consolidation_model=${quote(input.model)}`);
+    if(input.sharedState?.sqliteHome)overrides.push("-c",`sqlite_home=${quote(input.sharedState.sqliteHome)}`);
     if(input.reasoning)overrides.push("-c",`model_reasoning_effort=${quote(input.reasoning)}`);
     if(input.dangerouslyBypassApprovalsAndSandbox)overrides.push("-c",'approval_policy="never"',"-c",'sandbox_mode="danger-full-access"');
     warnings.push("Codex catalog uses conservative generic tool metadata and a model-neutral coding prompt; reasoning controls come from declared capabilities, documented provider support or an explicit --reasoning selection.");

@@ -1,26 +1,29 @@
 import { expect,test } from "bun:test";
-import { mkdtemp,mkdir,readFile,writeFile,rm,stat,symlink } from "node:fs/promises";
+import { mkdtemp,mkdir,readFile,writeFile,rm,stat,symlink,realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { prepareClaudeDesktopLaunch } from "../src/claude-desktop-launch";
 import { detectClaudeDesktopApp } from "../src/desktop-apps";
 import type { HarnessLaunchInput,PreparedLaunch } from "../src/harness-types";
 import type { RoutingEvent } from "../src/inference-gateway";
+import { resolveNativeState } from "../src/native-state";
 
 const app={path:"/Applications/Claude.app",executable:"/Applications/Claude.app/Contents/MacOS/Claude",bundleId:"com.anthropic.claudefordesktop",version:"1.52386.0"};
 test("Claude desktop routes arbitrary Messages models, scopes credentials, leases the shared profile and restores prior selection",async()=>{
-  const root=await mkdtemp(join(tmpdir(),"switcher-claude-desktop-")),userData=join(root,"desktop"),state=join(root,"launch");
+  const root=await realpath(await mkdtemp(join(tmpdir(),"switcher-claude-desktop-"))),userData=join(root,"desktop"),state=join(root,"launch");
   await mkdir(state,{mode:0o700});await mkdir(join(userData,"configLibrary"),{recursive:true,mode:0o700});
   const previous=JSON.stringify({appliedId:"previous",entries:[{id:"previous",name:"Existing gateway"}],extra:"preserve"});
   const metaPath=join(userData,"configLibrary/_meta.json");await writeFile(metaPath,previous);
   const events:RoutingEvent[]=[],requests:{model:string;authorization:string|null}[]=[];
   const upstream=Bun.serve({hostname:"127.0.0.1",port:0,async fetch(request){const body=await request.json() as {model:string};requests.push({model:body.model,authorization:request.headers.get("authorization")});return Response.json({id:"msg_test",type:"message",role:"assistant",model:body.model,content:[{type:"text",text:"DESKTOP_OK"}],stop_reason:"end_turn",usage:{input_tokens:2,output_tokens:3}});}});
   const system={userData,assertAvailable:async()=>{}};
-  const input:HarnessLaunchInput={harness:"claude",baseUrl:upstream.url.href,protocol:"anthropic-messages",model:"vendor/main",models:[{id:"vendor/main",name:"Main"},{id:"vendor/fast",name:"Fast"}],modelPolicy:{version:1,roles:{fast:"vendor/fast"}},credential:"upstream-fixture-credential",stateDir:state,cwd:root,onRoutingEvent:event=>events.push(event)};
+  const sharedState=await resolveNativeState("claude",{HOME:root});
+  const input:HarnessLaunchInput={harness:"claude",baseUrl:upstream.url.href,protocol:"anthropic-messages",model:"vendor/main",models:[{id:"vendor/main",name:"Main"},{id:"vendor/fast",name:"Fast"}],modelPolicy:{version:1,roles:{fast:"vendor/fast"}},credential:"upstream-fixture-credential",stateDir:state,cwd:root,onRoutingEvent:event=>events.push(event),sharedState};
   let prepared:PreparedLaunch|undefined;
   try {
     prepared=await prepareClaudeDesktopLaunch(input,app,join(root,"engine"),system);
-    expect(prepared.env).toEqual({CLAUDE_CONFIG_DIR:join(root,"engine")});
+    expect(prepared.env).toEqual({CLAUDE_CONFIG_DIR:join(root,"engine"),HASNA_CLAUDE_STATE_HOME:sharedState.home});
+    expect(await realpath(join(root,"engine/projects"))).toBe(join(sharedState.home,"projects"));
     expect(prepared.executable).toBe(app.executable);expect(prepared.args).toEqual([]);
     const meta=JSON.parse(await readFile(metaPath,"utf8"));expect(meta.entries).toHaveLength(2);
     const configPath=join(userData,"configLibrary",meta.appliedId+".json");
@@ -66,7 +69,7 @@ test("Claude desktop installation requires its actual bundle and macOS",async()=
 });
 
 test.skipIf(process.platform!=="darwin")("exact Claude desktop CLI launches without a global Claude CLI and removes its gateway credential on exit",async()=>{
-  const root=await mkdtemp(join(tmpdir(),"switcher-claude-cli-")),bundle=join(root,"Claude.app"),contents=join(bundle,"Contents");
+  const root=await realpath(await mkdtemp(join(tmpdir(),"switcher-claude-cli-"))),bundle=join(root,"Claude.app"),contents=join(bundle,"Contents");
   await mkdir(join(contents,"MacOS"),{recursive:true});
   await writeFile(join(contents,"Info.plist"),`<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>${app.bundleId}</string><key>CFBundleExecutable</key><string>Claude</string><key>CFBundleShortVersionString</key><string>${app.version}</string></dict></plist>`);
   await writeFile(join(contents,"MacOS/Claude"),`#!${process.execPath}\nconst dir=process.env.HOME+"/Library/Application Support/Claude-3p/configLibrary/";const meta=await Bun.file(dir+"_meta.json").json();const config=await Bun.file(dir+meta.appliedId+".json").json();await Bun.write(${JSON.stringify(join(root,"receipt.json"))},JSON.stringify({model:config.inferenceModels[0].labelOverride,configPath:dir+meta.appliedId+".json",home:process.env.CLAUDE_CONFIG_DIR,override:process.env.CLAUDE_USER_DATA_DIR}));console.log("private-gui-output");\n`,{mode:0o700});

@@ -1,12 +1,14 @@
 import { createHash } from "node:crypto";
 import { writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { Fault } from "./domain";
 import { privateDirectory } from "./runtime";
 import { renderCodexAgentToml } from "./codex-model-policy";
 import type { PreparedLaunch } from "./harness-types";
 import type { ChatGPTInstallation } from "./desktop-apps";
 import { safeDesktopRead as safeRead,writeDesktopPrivate as writePrivate,desktopLease } from "./desktop-state";
+import { CODEX_INSTRUCTION_KEYS, nativeStateEnvironment, projectNativeState, type NativeState } from "./native-state";
 
 type Dict=Record<string,unknown>;
 const object=(value:unknown):value is Dict=>value!==null&&typeof value==="object"&&!Array.isArray(value);
@@ -20,7 +22,8 @@ const quote=(value:string)=>`'${value.replaceAll("'","'\"'\"'")}'`;
 
 /** Separate desktop state from the signed-in app. The upstream credential stays
  * in the parent gateway. SQLite releases the profile lease even after a crash. */
-export async function prepareChatGPTLaunch(native:PreparedLaunch,app:ChatGPTInstallation,stateDir:string,sessionDir:string):Promise<PreparedLaunch> {
+export async function prepareChatGPTLaunch(native:PreparedLaunch,app:ChatGPTInstallation,stateDir:string,sessionDir:string,sharedState?:NativeState):Promise<PreparedLaunch> {
+  if(sharedState&&sharedState.tool!=="codex")throw new Fault(422,"native_state_tool","ChatGPT requires the canonical Codex corpus.");
   await privateDirectory(sessionDir);
   const home=join(sessionDir,"codex"),userData=join(sessionDir,"electron");
   await privateDirectory(home);await privateDirectory(userData);
@@ -36,12 +39,14 @@ export async function prepareChatGPTLaunch(native:PreparedLaunch,app:ChatGPTInst
     }finally{release();}
   };
   try {
+    if(sharedState)await projectNativeState(sharedState,home);
     const settings:string[]=[];
     for(let i=0;i<native.args.length;i+=2){
       if(native.args[i]!=="-c"||typeof native.args[i+1]!=="string")throw new Fault(400,"desktop_arguments","Desktop launches accept provider/model settings, not native CLI commands.");
-      settings.push(native.args[i+1]);
+      if(!sharedState?.sqliteHome||!native.args[i+1].startsWith("sqlite_home="))settings.push(native.args[i+1]);
     }
     settings.push('cli_auth_credentials_store="file"','forced_login_method="api"');
+    if(sharedState?.sqliteHome)settings.push(`sqlite_home=${JSON.stringify(sharedState.sqliteHome)}`);
     if(!settings.some(setting=>setting.startsWith("approval_policy=")))settings.push('approval_policy="on-request"');
     if(!settings.some(setting=>setting.startsWith("sandbox_mode=")))settings.push('sandbox_mode="workspace-write"');
     const configPath=join(home,"config.toml");
@@ -51,6 +56,7 @@ export async function prepareChatGPTLaunch(native:PreparedLaunch,app:ChatGPTInst
     let existing:Dict={};
     try {existing=Bun.TOML.parse(await safeRead(configPath)??"") as Dict;}
     catch(error){if((error as NodeJS.ErrnoException).code!=="ENOENT")throw new Fault(422,"desktop_config_invalid","The desktop profile config cannot be read safely.");}
+    if(sharedState) { for(const key of CODEX_INSTRUCTION_KEYS)delete existing[key];Object.assign(existing,sharedState.instructions); }
     const config=merge(existing,Bun.TOML.parse(settings.join("\n")) as Dict);
     await writePrivate(configPath,renderCodexAgentToml(config));
     const key=native.env.SWITCHER_HARNESS_API_KEY;
@@ -60,14 +66,22 @@ export async function prepareChatGPTLaunch(native:PreparedLaunch,app:ChatGPTInst
     await writePrivate(authPath,authText);
     const wrapper=join(stateDir,"chatgpt-codex");
     const overrides=settings.flatMap(setting=>["-c",setting]);
+    let bridge = "";
+    if(sharedState) {
+      const entry = fileURLToPath(new URL(import.meta.url.endsWith(".ts") ? "./codex-state-bridge.ts" : "../codex-state-bridge.js", import.meta.url));
+      const ownedKeys = new Set(["model_provider","model_providers","model_catalog_json","review_model","agents","memories","sqlite_home"]);
+      const routing = Object.fromEntries(Object.entries(config).filter(([key])=>ownedKeys.has(key)));
+      if(typeof config.model!=="string")throw new Fault(500,"desktop_model_missing","Desktop preparation did not receive its selected model.");
+      bridge = `if [ "\${1-}" = app-server ]; then\n  exec ${[process.execPath,entry,app.codexExecutable,config.model,JSON.stringify(routing)].map(quote).join(" ")} "$@" ${overrides.map(quote).join(" ")}\nfi\n`;
+    }
     // The app also uses CODEX_CLI_PATH for `sandbox ... -- node kernel.js`.
     // Appending model options there passes them to the kernel, not Codex, and
     // breaks browser/computer tools. Preserve the helper's own sandbox policy.
-    await writeFile(wrapper,`#!/bin/sh\nset -eu\nunset OPENAI_API_KEY CODEX_API_KEY CODEX_ACCESS_TOKEN OPENAI_BASE_URL OPENAI_ORG_ID OPENAI_ORGANIZATION OPENAI_PROJECT_ID\nexport CODEX_HOME=${quote(home)}\nif [ "\${1-}" = sandbox ]; then\n  exec ${quote(app.codexExecutable)} "$@"\nfi\nexec ${quote(app.codexExecutable)} "$@" ${overrides.map(quote).join(" ")}\n`,{mode:0o700,flag:"wx"});
+    await writeFile(wrapper,`#!/bin/sh\nset -eu\nunset OPENAI_API_KEY CODEX_API_KEY CODEX_ACCESS_TOKEN OPENAI_BASE_URL OPENAI_ORG_ID OPENAI_ORGANIZATION OPENAI_PROJECT_ID\nexport CODEX_HOME=${quote(home)}\nif [ "\${1-}" = sandbox ]; then\n  exec ${quote(app.codexExecutable)} "$@"\nfi\n${bridge}exec ${quote(app.codexExecutable)} "$@" ${overrides.map(quote).join(" ")}\n`,{mode:0o700,flag:"wx"});
     return {...native,executable:app.executable,args:[`--user-data-dir=${userData}`],
-      env:{...native.env,CODEX_HOME:home,CODEX_ELECTRON_USER_DATA_PATH:userData,CODEX_CLI_PATH:wrapper,CODEX_APP_SERVER_FORCE_CLI:"1",CODEX_APP_SERVER_USE_LOCAL_DAEMON:"0"},
+      env:{...native.env,...(sharedState?nativeStateEnvironment(sharedState):{}),CODEX_HOME:home,CODEX_ELECTRON_USER_DATA_PATH:userData,CODEX_CLI_PATH:wrapper,CODEX_APP_SERVER_FORCE_CLI:"1",CODEX_APP_SERVER_USE_LOCAL_DAEMON:"0"},
       configPaths:[...native.configPaths,configPath,wrapper],
-      warnings:[...native.warnings,`ChatGPT provider profile: ${sessionDir}. Local Codex conversations use this provider; ChatGPT cloud Chat/Work and account-only features are not redirected. Keep Switcher running until you quit this app instance.`],
+      warnings:[...native.warnings,`ChatGPT state: ${sessionDir}.${sharedState?` Local conversations and skills use ${sharedState.home} across providers.`:""} Local Codex conversations use this provider; ChatGPT cloud Chat/Work and account-only features are not redirected. Keep Switcher running until you quit this app instance.`],
       cleanup:async()=>{try{await native.cleanup?.();}finally{await cleanup();}},
     };
   }catch(error){await cleanup();throw error;}

@@ -18,6 +18,8 @@ import { prepareClaudeDesktopLaunch } from "./claude-desktop-launch";
 import type { ChatGPTInstallation, ClaudeDesktopInstallation } from "./desktop-apps";
 import type { ReasoningEffort } from "./reasoning";
 import { childEnvironment } from "./harness-environment";
+import { assertNativeInstructionOverlay, legacyNativeStateWarnings, nativeDesktopStateId, nativeStateEnvironment, projectNativeState, resolveNativeState, type NativeState } from "./native-state";
+import { resolveCodexResumeArguments } from "./codex-session-discovery";
 import type { RoutingEvent } from "./inference-gateway";
 export { childEnvironment } from "./harness-environment";
 export type LaunchBackend = "direct" | "ori";
@@ -31,7 +33,7 @@ async function writeOriCodexCatalog(stateDir: string, models: LaunchPlan["catalo
   return path;
 }
 
-type OriPreparationOptions = Pick<LaunchOptions, "oriExecutable" | "args" | "resolveCredential" | "credentialEnv"> & {stateDir?: string; cwd?: string; onRoutingEvent?:(event:RoutingEvent)=>void};
+type OriPreparationOptions = Pick<LaunchOptions, "oriExecutable" | "args" | "resolveCredential" | "credentialEnv"> & {stateDir?: string; cwd?: string; onRoutingEvent?:(event:RoutingEvent)=>void; sharedState?:NativeState};
 type OriSupportedHarness = Exclude<LaunchPlan["profile"]["harness"], "omp" | "cline" | "hermes" | "prime-agent" | "gemini" | "aider" | "opencode" | "kilo">;
 
 function oriTarget(harness: LaunchPlan["profile"]["harness"]): OriSupportedHarness {
@@ -90,7 +92,7 @@ export async function prepareOriForPlan(plan: LaunchPlan, options: OriPreparatio
   const native=await prepareHarnessLaunch({harness:plan.profile.harness,baseUrl:plan.provider.baseUrl,protocol:plan.provider.protocol,authStyle:plan.provider.authStyle,
     model:plan.profile.model,models:plan.catalog.models.filter(m=>modelExpired(m)||harnessEligible(m,plan.profile.harness)),modelPolicy:plan.profile.modelPolicy,
     providerId:plan.provider.id,onRoutingEvent:options.onRoutingEvent,credential,executable:detection.executable,version:detection.version,
-    stateDir:options.stateDir,cwd:resolve(options.cwd??process.cwd()),args:options.args??[]});
+    stateDir:options.stateDir,cwd:resolve(options.cwd??process.cwd()),args:options.args??[],sharedState:options.sharedState});
   try {
     const shim=prepareOriModelPolicy(request.target as "codex"|"grok",native);
     const dir=join(options.stateDir,"ori-bin"),path=join(dir,shim.name);
@@ -164,21 +166,39 @@ export async function launch(client: SwitcherClient, profileId: string, options:
   // keep the cancellation promise handled in that synchronous path too.
   void preparationCancellation.catch(() => undefined);
   try {
+    const sharedState = plan.profile.harness === "codex" || plan.profile.harness === "claude"
+      ? await resolveNativeState(plan.profile.harness) : undefined;
+    const desktopState = sharedState ? nativeDesktopStateId(sharedState) : profileId;
+    const stateWarnings = sharedState ? await legacyNativeStateWarnings(root, sharedState) : [];
+    let nativeHome: string | undefined;
+    if (sharedState && !options.desktop && !options.claudeDesktop) {
+      nativeHome = resolve(process.env[sharedState.tool === "codex" ? "CODEX_HOME" : "CLAUDE_CONFIG_DIR"] ?? sharedState.home);
+      await assertNativeInstructionOverlay(sharedState, nativeHome);
+      await projectNativeState(sharedState, nativeHome);
+    }
     const input = {
-      harness:plan.profile.harness,baseUrl:plan.provider.baseUrl,protocol:plan.provider.protocol,authStyle:plan.provider.authStyle,model:plan.profile.model,models:plan.catalog.models.filter(m=>modelExpired(m)||harnessEligible(m,plan.profile.harness)),modelPolicy:plan.profile.modelPolicy,providerId:plan.provider.id,onRoutingEvent,credential,stateDir,cwd:resolve(options.cwd??process.cwd()),
+      harness:plan.profile.harness,baseUrl:plan.provider.baseUrl,protocol:plan.provider.protocol,authStyle:plan.provider.authStyle,model:plan.profile.model,models:plan.catalog.models.filter(m=>modelExpired(m)||harnessEligible(m,plan.profile.harness)),modelPolicy:plan.profile.modelPolicy,providerId:plan.provider.id,onRoutingEvent,credential,stateDir,cwd:resolve(options.cwd??process.cwd()),sharedState,
     };
-    let prepared = options.claudeDesktop ? await prepareClaudeDesktopLaunch(input,options.claudeDesktop,join(root,"desktop-claude",profileId)) : backend === "ori" ? (await prepareOriForPlan(plan,{...options,stateDir,onRoutingEvent})).prepared : await prepareHarnessLaunch({
+    let prepared = options.claudeDesktop ? await prepareClaudeDesktopLaunch(input,options.claudeDesktop,join(root,"desktop-claude",desktopState)) : backend === "ori" ? (await prepareOriForPlan(plan,{...options,stateDir,onRoutingEvent,sharedState})).prepared : await prepareHarnessLaunch({
       harness:plan.profile.harness, baseUrl:plan.provider.baseUrl, protocol:plan.provider.protocol,
       model:plan.profile.model, models:plan.catalog.models.filter(m=>modelExpired(m)||harnessEligible(m,plan.profile.harness)),
       modelPolicy:plan.profile.modelPolicy,providerId:plan.provider.id,onRoutingEvent,
       reasoning:options.reasoning,dangerouslyBypassApprovalsAndSandbox:options.dangerouslyBypassApprovalsAndSandbox,
       credential, authStyle:plan.provider.authStyle, executable:nativeExecutable ?? detection?.executable, args:options.args ?? [], stateDir,
-      cwd:resolve(options.cwd ?? process.cwd()), version:detection?.version,
+      cwd:resolve(options.cwd ?? process.cwd()), version:detection?.version,sharedState,
       ...(["pi","omp","dsh","cline","hermes","prime-agent","gemini","aider","opencode","kilo"].includes(plan.profile.harness) ? {sessionDir:join(root,"sessions",plan.profile.harness,profileId)} : {}),
     });
     cleanup = prepared.cleanup;
+    prepared = {...prepared,warnings:[...prepared.warnings,...stateWarnings]};
+    if (sharedState) prepared = {...prepared,env:{...prepared.env,...nativeStateEnvironment(sharedState),
+      ...(nativeHome ? {[sharedState.tool === "codex" ? "CODEX_HOME" : "CLAUDE_CONFIG_DIR"]:nativeHome} : {})}};
+    if (sharedState?.tool === "codex" && !options.desktop && backend === "direct" && options.args?.length) {
+      const baseArgs = prepared.args.slice(0, prepared.args.length - options.args.length);
+      const resumedArgs = await resolveCodexResumeArguments({...prepared,args:baseArgs}, options.args, input.cwd);
+      prepared = {...prepared,args:[...baseArgs,...resumedArgs]};
+    }
     if (options.desktop) {
-      prepared = await prepareChatGPTLaunch(prepared,options.desktop,stateDir,join(root,"desktop",profileId));
+      prepared = await prepareChatGPTLaunch(prepared,options.desktop,stateDir,join(root,"desktop",desktopState),sharedState);
       cleanup = prepared.cleanup;
     }
     for (const warning of [...plan.warnings,...prepared.warnings]) console.error(`switcher: ${warning}`);

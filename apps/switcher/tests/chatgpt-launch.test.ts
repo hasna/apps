@@ -1,5 +1,5 @@
 import { expect,test } from "bun:test";
-import { mkdtemp,mkdir,readFile,writeFile,rm,stat,symlink } from "node:fs/promises";
+import { mkdtemp,mkdir,readFile,writeFile,rm,stat,symlink,realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { prepareChatGPTLaunch } from "../src/chatgpt-launch";
@@ -54,7 +54,7 @@ test("desktop profiles pin the runtime/provider, isolate state, protect credenti
 });
 
 test.skipIf(process.platform!=="darwin")("exact desktop CLI selects an arbitrary Responses provider and records app exit without leaking GUI output",async()=>{
-  const root=await mkdtemp(join(tmpdir(),"switcher-desktop-cli-"));
+  const root=await realpath(await mkdtemp(join(tmpdir(),"switcher-desktop-cli-")));
   const app=join(root,"Installed ChatGPT.app"),contents=join(app,"Contents");
   await mkdir(join(contents,"MacOS"),{recursive:true});await mkdir(join(contents,"Resources"));
   await writeFile(join(contents,"Info.plist"),`<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.openai.codex</string><key>CFBundleExecutable</key><string>ChatGPT</string><key>CFBundleShortVersionString</key><string>26.901.51231</string></dict></plist>`);
@@ -70,7 +70,7 @@ test.skipIf(process.platform!=="darwin")("exact desktop CLI selects an arbitrary
     expect(created.code,created.stderr).toBe(0);
     const command=["launch","chatgpt","--provider","arbitrary","--model","vendor/model","--app-path",app,"--reasoning","max","--dangerously-bypass-approvals-and-sandbox"];
     const plan=await run([...command,"--dry-run"]);expect(plan.code,plan.stderr).toBe(0);
-    expect(JSON.parse(plan.stdout)).toMatchObject({profile:{harness:"codex",model:"vendor/model"},desktop:{path:app,mode:"isolated-provider"}});
+    expect(JSON.parse(plan.stdout)).toMatchObject({profile:{harness:"codex",model:"vendor/model"},desktop:{path:app,mode:"shared-state-private-auth",sessionIdentity:"canonical-native-corpus"}});
     expect(await Bun.file(join(root,"receipt.json")).exists()).toBe(false);
     for(const extra of [["--backend","direct"],["--","exec"]])expect((await run([...command,...extra])).code).toBe(1);
     const launched=await run(command);expect(launched.code,launched.stderr).toBe(7);
