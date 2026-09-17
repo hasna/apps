@@ -10,7 +10,7 @@ import { downloadResolvedFileObject, resolveFileObject, resolvedFileObjectSummar
 import { extractTextFromFile } from "../lib/extraction.js";
 import { buildExtractionSnapshot, extractTextSnapshotFromFile } from "../lib/extraction-snapshot.js";
 import { doctorKnowledgeSources } from "../lib/knowledge-doctor.js";
-import { exportKnowledgeSourceManifest } from "../lib/knowledge-manifest.js";
+import { exportKnowledgeSourceManifest, writeKnowledgeSourceManifestArtifact } from "../lib/knowledge-manifest.js";
 import { resolveKnowledgeSourceRef } from "../lib/knowledge-resolver.js";
 import { assertHostedExtractionIdentity, doctorKnowledgeSourcesViaApi, resolveKnowledgeSourceRefViaApi } from "../lib/knowledge-resolver-api.js";
 import { buildFilesContextPack, buildFilesSearchPack } from "../lib/context-pack.js";
@@ -18,7 +18,7 @@ import { acknowledgeKnowledgeSourceOutbox, pollKnowledgeSourceOutbox } from "../
 import { parseOpenFilesSourceRef } from "../lib/source-ref.js";
 import { store } from "../store/index.js";
 import { announceFilesLocalMode, resolveFilesCloudStorage } from "../lib/cloud-storage.js";
-import { ApiStore } from "../store/api-store.js";
+import { ApiStore, hostedErrorMessage } from "../store/api-store.js";
 import type { LogActivityInput } from "../store/types.js";
 import { registerEvidenceTools } from "./evidence-tools.js";
 import { registerOrganizationTools } from "./organization-tools.js";
@@ -1143,8 +1143,8 @@ registerTool("export_knowledge_manifest", "Export a read-only open-files source 
   status: z.enum(["active", "deleted", "moved", "all"]).optional(),
   include_deleted: z.boolean().optional(),
   delta: z.boolean().optional(),
-  since_cursor: z.string().optional(),
-  since_sync_version: z.number().optional(),
+  since_cursor: z.string().optional().describe("Signed hosted checkpoint (or local manifest cursor) from a previous manifest"),
+  since_sync_version: z.number().optional().describe("Local-only per-file cursor; hosted transport refuses it"),
   cursor: z.string().optional(),
   limit: z.number().optional().default(100),
   format: z.enum(["json", "jsonl"]).optional().default("json"),
@@ -1154,6 +1154,48 @@ registerTool("export_knowledge_manifest", "Export a read-only open-files source 
   include_acl_summary: z.boolean().optional(),
   include_evidence_assets: z.boolean().optional(),
 }, async (params) => {
+  const manifestApi = apiStore();
+  if (manifestApi) {
+    // Hosted: the service builds the manifest from its own store. A local
+    // artifact path is still this machine's file, so it is written here; an S3
+    // artifact needs on-box source credentials and is refused rather than
+    // silently skipped.
+    try {
+      if (params.output_s3_source_id || params.output_s3_key) {
+        return mcpError("output_s3_source_id/output_s3_key are unavailable on the hosted transport; use output_local_path.");
+      }
+      if (params.output_local_path) {
+        const denied = requireMcpCapability("export_knowledge_manifest", "mutations");
+        if (denied) return denied;
+      }
+      const manifest = await manifestApi.exportKnowledgeManifest({
+        source_id: params.source_id,
+        collection_id: params.collection_id,
+        project_id: params.project_id,
+        tag: params.tag,
+        status: params.status,
+        include_deleted: params.include_deleted,
+        delta: params.delta,
+        since_cursor: params.since_cursor,
+        since_sync_version: params.since_sync_version,
+        cursor: params.cursor,
+        limit: params.limit,
+        format: params.format as KnowledgeSourceManifestFormat,
+        include_acl_summary: params.include_acl_summary,
+        include_evidence_assets: params.include_evidence_assets,
+      });
+      if (params.output_local_path) {
+        manifest.artifact = await writeKnowledgeSourceManifestArtifact(manifest, {
+          provider: "local",
+          path: params.output_local_path,
+          format: params.format as KnowledgeSourceManifestFormat,
+        });
+      }
+      return { content: [{ type: "text", text: JSON.stringify(manifest) }] };
+    } catch (error) {
+      return mcpError(hostedErrorMessage(error));
+    }
+  }
   const denyApi = requireLocalTransport("export_knowledge_manifest");
   if (denyApi) return denyApi;
   try {

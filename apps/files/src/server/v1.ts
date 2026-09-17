@@ -22,6 +22,21 @@ import {
 import type { FileAssetStatus } from "../types/index.js";
 import type { TypedQueryClient } from "../generated/storage-kit/query.js";
 import {
+  buildHostedManifestFileItem,
+  buildManifestEnvelope,
+  normalizeManifestLimit,
+} from "../lib/knowledge-manifest-shared.js";
+import {
+  decodeManifestCheckpoint,
+  decodeManifestPageCursor,
+  encodeManifestCheckpoint,
+  encodeManifestPageCursor,
+  KnowledgeManifestCursorError,
+  manifestCursorGreaterThan,
+  manifestQueryFingerprint,
+} from "./knowledge-manifest-cursor.js";
+import type { KnowledgeSourceManifestOptions } from "../types/index.js";
+import {
   extractRemoteFileText,
   normalizeContentReadLimit,
   readRemoteObject,
@@ -82,6 +97,8 @@ export interface V1HandlerOptions {
   /** Server-owned object verification for the file-upload complete route.
    *  Injected so the route is testable without live S3; defaults to a HEAD. */
   verifyUploadedObject?: store.RemoteUploadVerifier;
+  /** Optional test seam; production uses the API signing secret. */
+  manifestCursorSecret?: string;
 }
 
 export function createV1Handler(options: V1HandlerOptions = {}): V1Handler {
@@ -606,6 +623,200 @@ export function createV1Handler(options: V1HandlerOptions = {}): V1Handler {
         }
 
         // ── /v1/stats ──────────────────────────────────────────────────
+        // ── /v1/knowledge/manifest ─────────────────────────────────────
+        if (seg[0] === "knowledge" && seg[1] === "manifest" && seg.length === 2 && method === "GET") {
+          const allowedQuery = new Set([
+            "source_id", "collection_id", "project_id", "tag", "status",
+            "include_deleted", "delta", "since_cursor", "since_sync_version",
+            "after", "before", "cursor", "limit", "format",
+            "include_acl_summary", "include_evidence_assets",
+          ]);
+          for (const key of url.searchParams.keys()) {
+            if (!allowedQuery.has(key)) return err(`unknown knowledge manifest query parameter: ${key}`, 400, { reason: "unknown_manifest_query" });
+            if (url.searchParams.getAll(key).length !== 1) {
+              return err(`knowledge manifest query parameter may appear only once: ${key}`, 400, { reason: "invalid_manifest_query" });
+            }
+          }
+          for (const key of ["source_id", "collection_id", "project_id", "tag", "cursor", "since_cursor"] as const) {
+            const value = q(key);
+            if (value !== undefined && (value.trim() === "" || value.length > 2048)) {
+              return err(`${key} must be non-empty and at most 2048 bytes`, 400, { reason: "invalid_manifest_query" });
+            }
+          }
+          const validBoundary = (value: string | undefined): boolean => {
+            if (value === undefined) return true;
+            if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+              const date = new Date(`${value}T00:00:00.000Z`);
+              return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+            }
+            return /^\d{4}-\d{2}-\d{2}T/.test(value) && Number.isFinite(Date.parse(value)) && /(?:Z|[+-]\d{2}:\d{2})$/.test(value);
+          };
+          if (!validBoundary(q("after")) || !validBoundary(q("before"))) {
+            return err("after and before must be valid ISO dates or timezone-qualified timestamps", 400, { reason: "invalid_manifest_query" });
+          }
+
+          const parseBoolean = (key: string): boolean | undefined | Response => {
+            const raw = q(key);
+            if (raw === undefined) return undefined;
+            if (raw === "true" || raw === "1") return true;
+            if (raw === "false" || raw === "0") return false;
+            return err(`${key} must be true, false, 1, or 0`, 400, { reason: "invalid_manifest_query" });
+          };
+          const parseInteger = (key: string, minimum: number, maximum: number): number | undefined | Response => {
+            const raw = q(key);
+            if (raw === undefined) return undefined;
+            const value = Number(raw);
+            if (!Number.isSafeInteger(value) || value < minimum || value > maximum) {
+              return err(`${key} must be an integer between ${minimum} and ${maximum}`, 400, { reason: "invalid_manifest_query" });
+            }
+            return value;
+          };
+
+          const includeAcl = parseBoolean("include_acl_summary");
+          if (includeAcl instanceof Response) return includeAcl;
+          if (includeAcl) {
+            return err(
+              "include_acl_summary is not available on the hosted transport: this service does not model file organization reviews.",
+              400,
+              { reason: "acl_summary_unavailable" },
+            );
+          }
+          const includeEvidence = parseBoolean("include_evidence_assets");
+          if (includeEvidence instanceof Response) return includeEvidence;
+          if (includeEvidence) {
+            return err(
+              "include_evidence_assets is not available on /v1/knowledge/manifest; read /v1/evidence/assets directly.",
+              400,
+              { reason: "evidence_assets_unavailable" },
+            );
+          }
+          if (q("since_sync_version") !== undefined) {
+            return err(
+              "since_sync_version is a local per-file revision and is unavailable on the hosted manifest; use since_cursor.",
+              400,
+              { reason: "legacy_sync_version_unavailable" },
+            );
+          }
+          if (q("cursor") && q("since_cursor")) {
+            return err("cursor and since_cursor cannot be combined", 400, { reason: "invalid_manifest_query" });
+          }
+
+          const includeDeleted = parseBoolean("include_deleted");
+          if (includeDeleted instanceof Response) return includeDeleted;
+          const delta = parseBoolean("delta");
+          if (delta instanceof Response) return delta;
+          const requestedLimit = parseInteger("limit", 1, 1000);
+          if (requestedLimit instanceof Response) return requestedLimit;
+          const status = q("status");
+          if (status !== undefined && !["active", "deleted", "moved", "all"].includes(status)) {
+            return err("status must be active, deleted, moved, or all", 400, { reason: "invalid_manifest_query" });
+          }
+          const formatRaw = q("format");
+          if (formatRaw !== undefined && formatRaw !== "json" && formatRaw !== "jsonl") {
+            return err("format must be json or jsonl", 400, { reason: "invalid_manifest_query" });
+          }
+          const effectiveDelta = Boolean(delta || q("since_cursor"));
+          if (effectiveDelta && (
+            q("source_id") || q("collection_id") || q("project_id") || q("tag")
+            || q("after") || q("before") || (status !== undefined && status !== "all")
+          )) {
+            return err(
+              "Filtered hosted deltas are unavailable because membership exits require a separate tombstone contract; request an unfiltered delta or a filtered full snapshot.",
+              400,
+              { reason: "filtered_delta_unavailable" },
+            );
+          }
+
+          const tenantId = await store.getApiKeyTenant(client, decision.principal.kid);
+          if (!tenantId) return err("File tenant binding not found", 403, { reason: "tenant_binding_missing" });
+          const cursorSecret = options.manifestCursorSecret ?? options.signingSecret ?? signingSecret();
+          const format = formatRaw === "jsonl" ? "jsonl" as const : "json" as const;
+          const opts = {
+            source_id: q("source_id"),
+            collection_id: q("collection_id"),
+            project_id: q("project_id"),
+            tag: q("tag"),
+            status: status as KnowledgeSourceManifestOptions["status"],
+            include_deleted: includeDeleted,
+            delta: effectiveDelta,
+            since_cursor: q("since_cursor"),
+            after: q("after"),
+            before: q("before"),
+            cursor: q("cursor"),
+            limit: requestedLimit,
+            format,
+          } satisfies KnowledgeSourceManifestOptions;
+
+          try {
+            let sinceCursor = "0";
+            let pageAfter = "0";
+            let highWatermark: string;
+            if (opts.cursor) {
+              const pageCursor = decodeManifestPageCursor(opts.cursor, tenantId, cursorSecret);
+              sinceCursor = pageCursor.since;
+              const expectedQuery = manifestQueryFingerprint(opts, sinceCursor);
+              if (pageCursor.query !== expectedQuery) throw new KnowledgeManifestCursorError();
+              pageAfter = pageCursor.after;
+              highWatermark = pageCursor.high;
+            } else {
+              sinceCursor = opts.since_cursor
+                ? decodeManifestCheckpoint(opts.since_cursor, tenantId, cursorSecret)
+                : "0";
+              highWatermark = await store.knowledgeManifestHighWatermark(client, tenantId);
+              if (manifestCursorGreaterThan(sinceCursor, highWatermark)) throw new KnowledgeManifestCursorError();
+            }
+
+            const queryHash = manifestQueryFingerprint(opts, sinceCursor);
+            const limit = normalizeManifestLimit(opts.limit);
+            const rows = await store.listKnowledgeManifestRows(client, {
+              tenant_id: tenantId,
+              source_id: opts.source_id,
+              collection_id: opts.collection_id,
+              project_id: opts.project_id,
+              tag: opts.tag,
+              status: opts.status,
+              include_deleted: opts.include_deleted,
+              delta: Boolean(opts.delta || opts.since_cursor),
+              after: opts.after,
+              before: opts.before,
+              high_watermark: highWatermark,
+              since_cursor: sinceCursor,
+              page_after: pageAfter,
+              limit: limit + 1,
+            });
+            const hasNext = rows.length > limit;
+            const page = hasNext ? rows.slice(0, limit) : rows;
+            const items = page.map(buildHostedManifestFileItem);
+            const last = page.at(-1);
+            const nextCursor = hasNext && last
+              ? encodeManifestPageCursor({
+                  after: last.cursor,
+                  high: highWatermark,
+                  since: sinceCursor,
+                  query: queryHash,
+                }, tenantId, cursorSecret)
+              : undefined;
+            return json(buildManifestEnvelope({
+              generated_at: new Date().toISOString(),
+              format,
+              opts,
+              items,
+              high_watermark: highWatermark,
+              next_cursor: nextCursor,
+              delta_cursor: encodeManifestCheckpoint(highWatermark, tenantId, cursorSecret),
+              filter_contract: "files.knowledge.manifest.v1",
+              cursor_contract: "files.knowledge.manifest.change.v1",
+              has_more: hasNext,
+              complete: !opts.cursor && !hasNext,
+            }));
+          } catch (error) {
+            if (error instanceof KnowledgeManifestCursorError) {
+              return err(error.message, 400, { reason: error.code });
+            }
+            return err("Hosted knowledge manifest unavailable", 500, { reason: "manifest_store_incompatible" });
+          }
+        }
+
         if (seg[0] === "stats" && seg.length === 1 && method === "GET") return json(await store.stats(client));
 
         // ── /v1/evidence (shared cross-app vault) ──────────────────────

@@ -1,0 +1,67 @@
+name: files live PostgreSQL
+
+on:
+  pull_request:
+    paths:
+      - 'apps/files/**'
+      - 'bun.lock'
+      - '.github/workflows/files-live-postgres.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'apps/files/**'
+      - 'bun.lock'
+      - '.github/workflows/files-live-postgres.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  files-live-postgres:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: files_ci
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 127.0.0.1:5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d files_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+      - name: Install frozen dependencies without lifecycle scripts
+        run: bun install --frozen-lockfile --ignore-scripts
+      - name: Prove the required gate refuses a missing database
+        working-directory: apps/files
+        run: |
+          set -euo pipefail
+          if env -u HASNA_FILES_TEST_POSTGRES_URL FILES_REQUIRE_LIVE_POSTGRES=1 bun test src/server/knowledge-manifest.pg.test.ts > "$RUNNER_TEMP/files-missing-database.log" 2>&1; then
+            echo "Required PostgreSQL gate incorrectly accepted a missing database"
+            exit 1
+          fi
+          grep -q 'HASNA_FILES_TEST_POSTGRES_URL must point at a throwaway PostgreSQL database' "$RUNNER_TEMP/files-missing-database.log"
+          grep -Eq '^[[:space:]]*1 fail$' "$RUNNER_TEMP/files-missing-database.log"
+      - name: Exercise global cursors, tenant isolation, and immutable snapshots
+        working-directory: apps/files
+        env:
+          HASNA_FILES_TEST_POSTGRES_URL: postgres://postgres@127.0.0.1:5432/files_ci
+          FILES_REQUIRE_LIVE_POSTGRES: '1'
+        run: |
+          set -euo pipefail
+          bun -e 'const u = new URL(process.env.HASNA_FILES_TEST_POSTGRES_URL); if (u.protocol !== "postgres:" || u.hostname !== "127.0.0.1" || u.port !== "5432" || u.pathname !== "/files_ci" || u.username !== "postgres" || u.password || u.search || u.hash) throw new Error("Refusing a non-isolated integration database");'
+          bun test src/server/knowledge-manifest.pg.test.ts --timeout 120000 2>&1 | tee "$RUNNER_TEMP/files-live-postgres.log"
+          grep -Eq '^[[:space:]]*1 pass$' "$RUNNER_TEMP/files-live-postgres.log"
+          grep -Eq '^[[:space:]]*0 fail$' "$RUNNER_TEMP/files-live-postgres.log"
+          if grep -q '[(]skip[)]' "$RUNNER_TEMP/files-live-postgres.log"; then
+            echo "Live PostgreSQL gate refused skipped tests"
+            exit 1
+          fi

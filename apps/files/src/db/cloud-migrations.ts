@@ -525,6 +525,305 @@ export const FILE_CONTENT_TENANCY_MIGRATIONS: readonly Migration[] = [
   ),
 ];
 
+/**
+ * Durable, tenant-bound knowledge-manifest snapshots.
+ *
+ * The existing per-file sync_version is not globally monotonic and relation
+ * mutations do not advance it. This append-only log assigns every affected
+ * file a sequence cursor and stores the safe manifest projection at that exact
+ * point, allowing a paginated walk to remain pinned to one high watermark even
+ * while later writes occur.
+ */
+export const FILE_KNOWLEDGE_MANIFEST_MIGRATIONS: readonly Migration[] = [
+  defineMigration(
+    "files-knowledge-manifest-0001-global-change-log",
+    `CREATE TABLE IF NOT EXISTS files_knowledge_manifest_clock (
+       singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
+       cursor BIGINT NOT NULL CHECK (cursor >= 0)
+     );
+     INSERT INTO files_knowledge_manifest_clock(singleton, cursor)
+     SELECT TRUE, COALESCE(MAX(cursor), 0)
+     FROM knowledge_source_outbox_events
+     ON CONFLICT (singleton) DO UPDATE SET cursor = GREATEST(
+       files_knowledge_manifest_clock.cursor,
+       EXCLUDED.cursor
+     );
+     ALTER TABLE knowledge_source_outbox_events
+       ADD COLUMN IF NOT EXISTS manifest_snapshot JSONB;
+     CREATE INDEX IF NOT EXISTS idx_knowledge_manifest_tenant_cursor
+       ON knowledge_source_outbox_events(tenant_id, cursor)
+       WHERE manifest_snapshot IS NOT NULL;
+     CREATE INDEX IF NOT EXISTS idx_knowledge_manifest_tenant_file_cursor
+       ON knowledge_source_outbox_events(tenant_id, file_id, cursor DESC)
+       WHERE manifest_snapshot IS NOT NULL;
+
+     CREATE OR REPLACE FUNCTION files_capture_knowledge_manifest_change(
+       requested_file_id TEXT,
+       requested_event_type TEXT DEFAULT 'updated',
+       force_deleted BOOLEAN DEFAULT FALSE
+     ) RETURNS VOID
+     LANGUAGE plpgsql
+     AS $$
+     DECLARE assigned_cursor BIGINT;
+     BEGIN
+       UPDATE files_knowledge_manifest_clock
+       SET cursor = cursor + 1
+       WHERE singleton = TRUE
+       RETURNING cursor INTO assigned_cursor;
+       IF assigned_cursor IS NULL THEN
+         RAISE EXCEPTION 'knowledge manifest clock unavailable';
+       END IF;
+       INSERT INTO knowledge_source_outbox_events (
+         id, cursor, event_type, source_ref, file_id, source_id,
+         revision_id, status, hash, size, mime, path,
+         metadata, created_at, tenant_id, manifest_snapshot
+       )
+       SELECT
+         'manifest_' || assigned_cursor::text || '_' || substr(md5(random()::text), 1, 8),
+         assigned_cursor,
+         CASE WHEN force_deleted THEN 'deleted' ELSE requested_event_type END,
+         'open-files://file/' || f.id,
+         f.id,
+         f.source_id,
+         revision.id,
+         CASE WHEN force_deleted THEN 'deleted' ELSE f.status END,
+         f.hash,
+         f.size,
+         f.mime,
+         NULL,
+         jsonb_build_object('manifest_change', requested_event_type)::text,
+         NOW()::text,
+         f.tenant_id,
+         jsonb_build_object(
+           'file_id', f.id,
+           'source_id', f.source_id,
+           'source_type', s.type,
+           'source_enabled', s.enabled,
+           'name', f.name,
+           'mime', f.mime,
+           'size', f.size,
+           'hash', f.hash,
+           'status', CASE WHEN force_deleted THEN 'deleted' ELSE f.status END,
+           'indexed_at', f.indexed_at,
+           'modified_at', f.modified_at,
+           'tags', COALESCE((
+             SELECT jsonb_agg(t.name ORDER BY t.name)
+             FROM file_tags ft
+             JOIN tags t ON t.id = ft.tag_id
+             WHERE ft.file_id = f.id
+               AND ft.tenant_id = f.tenant_id
+               AND t.tenant_id = f.tenant_id
+           ), '[]'::jsonb),
+           'project_ids', COALESCE((
+             SELECT jsonb_agg(pf.project_id ORDER BY pf.project_id)
+             FROM project_files pf
+             JOIN projects p ON p.id = pf.project_id
+             WHERE pf.file_id = f.id
+               AND pf.tenant_id = f.tenant_id
+               AND p.tenant_id = f.tenant_id
+           ), '[]'::jsonb),
+           'collection_ids', COALESCE((
+             SELECT jsonb_agg(cf.collection_id ORDER BY cf.collection_id)
+             FROM collection_files cf
+             JOIN collections c ON c.id = cf.collection_id
+             WHERE cf.file_id = f.id
+               AND cf.tenant_id = f.tenant_id
+               AND c.tenant_id = f.tenant_id
+           ), '[]'::jsonb),
+           'revision', CASE WHEN revision.id IS NULL THEN NULL ELSE jsonb_build_object(
+             'id', revision.id,
+             'source_ref', revision.source_ref,
+             'content_hash_algorithm', revision.content_hash_algorithm,
+             'content_hash', revision.content_hash
+           ) END,
+           'extraction', CASE WHEN extraction.id IS NULL THEN
+             jsonb_build_object('status', 'unavailable')
+           ELSE jsonb_build_object(
+             'status', extraction.status,
+             'revision_id', extraction.revision_id
+           ) END
+         )
+       FROM files f
+       JOIN sources s
+         ON s.id = f.source_id
+        AND s.tenant_id = f.tenant_id
+       LEFT JOIN LATERAL (
+         SELECT fv.id, fv.source_ref, fv.content_hash_algorithm, fv.content_hash
+         FROM file_versions fv
+         WHERE fv.file_id = f.id
+           AND fv.tenant_id = f.tenant_id
+           AND fv.state = 'active'
+         ORDER BY fv.created_at DESC, fv.id DESC
+         LIMIT 1
+       ) revision ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT d.id, d.status, d.revision_id
+         FROM file_search_documents d
+         WHERE d.file_id = f.id
+           AND d.tenant_id = f.tenant_id
+           AND d.kind = 'extracted_text'
+           AND revision.id IS NOT NULL
+           AND d.revision_id = revision.id
+         ORDER BY d.updated_at DESC, d.id DESC
+         LIMIT 1
+       ) extraction ON TRUE
+       WHERE f.id = requested_file_id
+         AND f.tenant_id IS NOT NULL;
+     END;
+     $$;
+
+     CREATE OR REPLACE FUNCTION files_manifest_file_change_trigger()
+     RETURNS TRIGGER LANGUAGE plpgsql AS $$
+     BEGIN
+       IF TG_OP = 'DELETE' THEN
+         PERFORM files_capture_knowledge_manifest_change(OLD.id, 'deleted', TRUE);
+         RETURN OLD;
+       END IF;
+       PERFORM files_capture_knowledge_manifest_change(
+         NEW.id,
+         CASE WHEN TG_OP = 'INSERT' THEN 'indexed' ELSE 'updated' END,
+         FALSE
+       );
+       RETURN NEW;
+     END;
+     $$;
+
+     CREATE OR REPLACE FUNCTION files_manifest_relation_change_trigger()
+     RETURNS TRIGGER LANGUAGE plpgsql AS $$
+     BEGIN
+       IF TG_OP = 'UPDATE' AND OLD.file_id IS DISTINCT FROM NEW.file_id THEN
+         PERFORM files_capture_knowledge_manifest_change(OLD.file_id, 'updated', FALSE);
+       END IF;
+       PERFORM files_capture_knowledge_manifest_change(
+         CASE WHEN TG_OP = 'DELETE' THEN OLD.file_id ELSE NEW.file_id END,
+         'updated',
+         FALSE
+       );
+       RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
+     END;
+     $$;
+
+     CREATE OR REPLACE FUNCTION files_manifest_file_child_change_trigger()
+     RETURNS TRIGGER LANGUAGE plpgsql AS $$
+     BEGIN
+       IF TG_OP = 'UPDATE' AND OLD.file_id IS DISTINCT FROM NEW.file_id THEN
+         PERFORM files_capture_knowledge_manifest_change(
+           OLD.file_id,
+           CASE WHEN TG_TABLE_NAME = 'file_versions' THEN 'revision_changed' ELSE 'extraction_changed' END,
+           FALSE
+         );
+       END IF;
+       PERFORM files_capture_knowledge_manifest_change(
+         CASE WHEN TG_OP = 'DELETE' THEN OLD.file_id ELSE NEW.file_id END,
+         CASE WHEN TG_TABLE_NAME = 'file_versions' THEN 'revision_changed' ELSE 'extraction_changed' END,
+         FALSE
+       );
+       RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
+     END;
+     $$;
+
+     CREATE OR REPLACE FUNCTION files_manifest_parent_change_trigger()
+     RETURNS TRIGGER LANGUAGE plpgsql AS $$
+     DECLARE affected RECORD;
+     BEGIN
+       IF TG_TABLE_NAME = 'sources' THEN
+         FOR affected IN SELECT id AS file_id FROM files WHERE source_id = COALESCE(NEW.id, OLD.id) LOOP
+           PERFORM files_capture_knowledge_manifest_change(
+             affected.file_id,
+             CASE WHEN TG_OP = 'DELETE' THEN 'deleted' ELSE 'source_updated' END,
+             TG_OP = 'DELETE'
+           );
+         END LOOP;
+       ELSIF TG_TABLE_NAME = 'tags' THEN
+         FOR affected IN SELECT file_id FROM file_tags WHERE tag_id = COALESCE(NEW.id, OLD.id) LOOP
+           PERFORM files_capture_knowledge_manifest_change(affected.file_id, 'updated', FALSE);
+         END LOOP;
+       ELSIF TG_TABLE_NAME = 'projects' THEN
+         FOR affected IN SELECT file_id FROM project_files WHERE project_id = COALESCE(NEW.id, OLD.id) LOOP
+           PERFORM files_capture_knowledge_manifest_change(affected.file_id, 'updated', FALSE);
+         END LOOP;
+       ELSIF TG_TABLE_NAME = 'collections' THEN
+         FOR affected IN SELECT file_id FROM collection_files WHERE collection_id = COALESCE(NEW.id, OLD.id) LOOP
+           PERFORM files_capture_knowledge_manifest_change(affected.file_id, 'updated', FALSE);
+         END LOOP;
+       END IF;
+       RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
+     END;
+     $$;
+
+     DROP TRIGGER IF EXISTS files_manifest_file_insert_update ON files;
+     CREATE TRIGGER files_manifest_file_insert_update
+       AFTER INSERT OR UPDATE ON files
+       FOR EACH ROW EXECUTE FUNCTION files_manifest_file_change_trigger();
+     DROP TRIGGER IF EXISTS files_manifest_file_delete ON files;
+     CREATE TRIGGER files_manifest_file_delete
+       BEFORE DELETE ON files
+       FOR EACH ROW EXECUTE FUNCTION files_manifest_file_change_trigger();
+
+     DROP TRIGGER IF EXISTS files_manifest_file_tags_change ON file_tags;
+     CREATE TRIGGER files_manifest_file_tags_change
+       AFTER INSERT OR UPDATE OR DELETE ON file_tags
+       FOR EACH ROW EXECUTE FUNCTION files_manifest_relation_change_trigger();
+     DROP TRIGGER IF EXISTS files_manifest_project_files_change ON project_files;
+     CREATE TRIGGER files_manifest_project_files_change
+       AFTER INSERT OR UPDATE OR DELETE ON project_files
+       FOR EACH ROW EXECUTE FUNCTION files_manifest_relation_change_trigger();
+     DROP TRIGGER IF EXISTS files_manifest_collection_files_change ON collection_files;
+     CREATE TRIGGER files_manifest_collection_files_change
+       AFTER INSERT OR UPDATE OR DELETE ON collection_files
+       FOR EACH ROW EXECUTE FUNCTION files_manifest_relation_change_trigger();
+
+     DROP TRIGGER IF EXISTS files_manifest_file_versions_change ON file_versions;
+     CREATE TRIGGER files_manifest_file_versions_change
+       AFTER INSERT OR UPDATE OR DELETE ON file_versions
+       FOR EACH ROW EXECUTE FUNCTION files_manifest_file_child_change_trigger();
+     DROP TRIGGER IF EXISTS files_manifest_search_documents_change ON file_search_documents;
+     CREATE TRIGGER files_manifest_search_documents_change
+       AFTER INSERT OR UPDATE OR DELETE ON file_search_documents
+       FOR EACH ROW EXECUTE FUNCTION files_manifest_file_child_change_trigger();
+
+     DROP TRIGGER IF EXISTS files_manifest_sources_change ON sources;
+     DROP TRIGGER IF EXISTS files_manifest_sources_delete ON sources;
+     CREATE TRIGGER files_manifest_sources_change
+       AFTER UPDATE ON sources
+       FOR EACH ROW EXECUTE FUNCTION files_manifest_parent_change_trigger();
+     CREATE TRIGGER files_manifest_sources_delete
+       BEFORE DELETE ON sources
+       FOR EACH ROW EXECUTE FUNCTION files_manifest_parent_change_trigger();
+     DROP TRIGGER IF EXISTS files_manifest_tags_change ON tags;
+     CREATE TRIGGER files_manifest_tags_change
+       AFTER UPDATE ON tags
+       FOR EACH ROW EXECUTE FUNCTION files_manifest_parent_change_trigger();
+     DROP TRIGGER IF EXISTS files_manifest_projects_change ON projects;
+     CREATE TRIGGER files_manifest_projects_change
+       AFTER UPDATE ON projects
+       FOR EACH ROW EXECUTE FUNCTION files_manifest_parent_change_trigger();
+     DROP TRIGGER IF EXISTS files_manifest_collections_change ON collections;
+     CREATE TRIGGER files_manifest_collections_change
+       AFTER UPDATE ON collections
+       FOR EACH ROW EXECUTE FUNCTION files_manifest_parent_change_trigger();
+
+     DO $$
+     DECLARE existing_file RECORD;
+     BEGIN
+       FOR existing_file IN
+         SELECT f.id
+         FROM files f
+         WHERE NOT EXISTS (
+           SELECT 1 FROM knowledge_source_outbox_events e
+           WHERE e.file_id = f.id
+             AND e.tenant_id = f.tenant_id
+             AND e.manifest_snapshot IS NOT NULL
+         )
+         ORDER BY f.id
+       LOOP
+         PERFORM files_capture_knowledge_manifest_change(existing_file.id, 'indexed', FALSE);
+       END LOOP;
+     END;
+     $$;`,
+  ),
+];
+
 /** Full ordered migration set applied by the runner and checked by /ready. */
 export const CLOUD_MIGRATIONS: readonly Migration[] = [
   ...dataMigrations.slice(0, LEGACY_NUMERIC_MIGRATION_COUNT),
@@ -532,4 +831,5 @@ export const CLOUD_MIGRATIONS: readonly Migration[] = [
   ...bridgeMigrations,
   ...dataMigrations.slice(LEGACY_NUMERIC_MIGRATION_COUNT),
   ...FILE_CONTENT_TENANCY_MIGRATIONS,
+  ...FILE_KNOWLEDGE_MANIFEST_MIGRATIONS,
 ];

@@ -230,7 +230,9 @@ files knowledge outbox ack <consumer-id> <cursor>
 ```
 
 Manifest output is selected with `--format json|jsonl`; there is no `--jsonl`
-flag. Use `--out <path>` for a local artifact. Resolver modes are `metadata`,
+flag. Use `--out <path>` for a local artifact. On the hosted transport, continue
+with the signed `--cursor` or start an unfiltered delta with the signed
+`--since-cursor`; `--since-sync-version` is local-only. Resolver modes are `metadata`,
 `content`, `extracted_text`, `snapshot`, and `signed_url`.
 
 ## Evidence Commands

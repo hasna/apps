@@ -23,6 +23,7 @@ import { buildServer } from "./index.js";
 const ENV_KEYS = [
   "HASNA_FILES_DATA_DIR",
   "HASNA_FILES_DB_PATH",
+  "HASNA_FILES_LOCAL",
   "HASNA_FILES_API_URL",
   "HASNA_FILES_API_KEY",
   "HASNA_FILES_MCP_PROFILE",
@@ -59,6 +60,7 @@ function setLocalMode() {
   testDir = mkdtempSync(join(tmpdir(), "files-mcp-transport-"));
   process.env.HASNA_FILES_DATA_DIR = testDir;
   process.env.HASNA_FILES_DB_PATH = join(testDir, "files.db");
+  process.env.HASNA_FILES_LOCAL = "1";
   // Ambient credential isolation (see ENV_KEYS): the scratch dir cannot
   // contain `files/config/credentials`, so the disk tier consults nothing.
   process.env.HOME = testDir;
@@ -118,6 +120,50 @@ const HOSTED_FILE = {
   created_at: "2026-08-18T00:00:00.000Z",
   modified_at: "2026-08-18T00:00:00.000Z",
   tags: [],
+};
+
+const HOSTED_MANIFEST = {
+  filter_contract: "files.knowledge.manifest.v1",
+  cursor_contract: "files.knowledge.manifest.change.v1",
+  manifest_id: "manifest_feedfacefeedfacefeedface",
+  generated_at: "2026-09-17T12:00:00.000Z",
+  format: "json",
+  filters: {},
+  item_count: 1,
+  has_more: false,
+  complete: true,
+  delta: false,
+  high_watermark: "12",
+  delta_cursor: "checkpoint-token",
+  tombstone_count: 0,
+  items: [{
+    kind: "file",
+    source_ref: "open-files://file/f_hosted1",
+    revision_ref: "open-files://file/f_hosted1/revision/rev_hosted1",
+    revision_id: "rev_hosted1",
+    change_cursor: "3",
+    source_revision_hash: `sha256:${"c".repeat(64)}`,
+    file_id: "f_hosted1",
+    source_id: "src_1",
+    source_type: "local",
+    name: "notes.md",
+    mime: "text/markdown",
+    size: 34,
+    status: "active",
+    updated_at: "2026-08-18T00:00:00.000Z",
+    deleted: false,
+    tags: [],
+    open_files_root: {
+      open_files_root: "open-files://source/src_1",
+      source_id: "src_1",
+      source_type: "local",
+      evidence_hash: `sha256:${"d".repeat(64)}`,
+    },
+    storage: { provider: "local", source_id: "src_1" },
+    extraction: { text_available: true, status: "available", extracted_text_ref: "open-files://file/f_hosted1/text" },
+    permissions: { mode: "read_only", allowed_purposes: ["knowledge_index"] },
+    permission_labels: ["read_only"],
+  }],
 };
 
 const HOSTED_CONTENT = "hello hosted files\nline two\nline three\n";
@@ -197,6 +243,16 @@ async function startFakeServer(): Promise<FakeServer> {
       }
       if (method === "GET" && path === "/files") {
         return Response.json({ items: [HOSTED_FILE] });
+      }
+      if (method === "GET" && path === "/knowledge/manifest") {
+        if (url.searchParams.get("include_acl_summary") === "true") {
+          return Response.json({
+            error: "include_acl_summary is not available on the hosted transport: this service does not model file organization reviews.",
+            reason: "acl_summary_unavailable",
+          }, { status: 400 });
+        }
+        if (url.searchParams.get("tag") === "malformed") return Response.json({ items: [] });
+        return Response.json(HOSTED_MANIFEST);
       }
       const f = path.match(/^\/files\/([^/]+)$/);
       if (method === "GET" && f) {
@@ -640,6 +696,67 @@ describe("ported read-side MCP tools on the hosted (api) transport", () => {
     }
   });
 
+  test("export_knowledge_manifest reads the hosted manifest route", async () => {
+    const { client, close } = await connectedClient();
+    try {
+      const result = await client.callTool({ name: "export_knowledge_manifest", arguments: {} });
+      expect(result.isError).not.toBe(true);
+      const manifest = JSON.parse(callText(result));
+      expect(manifest.manifest_id).toBe("manifest_feedfacefeedfacefeedface");
+      expect(manifest.high_watermark).toBe("12");
+      expect(manifest.items[0].file_id).toBe("f_hosted1");
+      expect(fake.hits.map((h) => `${h.method} ${h.path}`)).toEqual(["GET /knowledge/manifest"]);
+    } finally {
+      await close();
+    }
+  });
+
+  test("export_knowledge_manifest refuses malformed 2xx responses", async () => {
+    const { client, close } = await connectedClient();
+    try {
+      const result = await client.callTool({
+        name: "export_knowledge_manifest",
+        arguments: { tag: "malformed" },
+      });
+      expect(result.isError).toBe(true);
+      expect(callText(result)).toContain("Hosted knowledge manifest response is incompatible");
+    } finally {
+      await close();
+    }
+  });
+
+  test("export_knowledge_manifest surfaces the service's acl_summary refusal verbatim", async () => {
+    const { client, close } = await connectedClient();
+    try {
+      const result = await client.callTool({
+        name: "export_knowledge_manifest",
+        arguments: { include_acl_summary: true },
+      });
+      expect(result.isError).toBe(true);
+      // The reason the service gave, not a bare status code — and no
+      // fabricated acl_summary anywhere in the answer.
+      expect(callText(result)).toContain("does not model file organization reviews");
+      expect(callText(result)).not.toContain("\"acl_summary\"");
+    } finally {
+      await close();
+    }
+  });
+
+  test("export_knowledge_manifest refuses an S3 artifact on the hosted transport", async () => {
+    const { client, close } = await connectedClient();
+    try {
+      const result = await client.callTool({
+        name: "export_knowledge_manifest",
+        arguments: { output_s3_source_id: "src_1", output_s3_key: "manifests/m.json" },
+      });
+      expect(result.isError).toBe(true);
+      expect(callText(result)).toContain("output_local_path");
+      expect(fake.hits).toHaveLength(0);
+    } finally {
+      await close();
+    }
+  });
+
   test("upload_file ingests a local document through the hosted transport as a tagged project resource", async () => {
     const fixture = join(testDir!, "partner-contract.pdf");
     writeFileSync(fixture, "contract bytes");
@@ -674,7 +791,6 @@ describe("write/ingest MCP tools keep the local-transport guard in api mode", ()
     { tool: "index_source", args: {} },
     { tool: "build_context_pack", args: {} },
     { tool: "search_context_pack", args: { query: "anything" } },
-    { tool: "export_knowledge_manifest", args: {} },
     { tool: "poll_knowledge_outbox", args: {} },
     { tool: "ack_knowledge_outbox", args: { consumer_id: "consumer-1", cursor: 1 } },
     { tool: "copy_file", args: { file_id: "f_hosted1", dest_source_id: "src_2" } },

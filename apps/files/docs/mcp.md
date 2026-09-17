@@ -208,7 +208,7 @@ delete_project
 ### Knowledge
 
 ```txt
-export_knowledge_manifest
+export_knowledge_manifest  # full profile; hosted pages use signed tenant-bound cursors
 resolve_knowledge_source
 doctor_knowledge_sources
 resolve_extracted_text

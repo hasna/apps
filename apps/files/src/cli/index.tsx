@@ -21,7 +21,7 @@ import { downloadResolvedFileObject, resolveFileObject, resolvedFileObjectSummar
 import { extractTextFromFile } from "../lib/extraction.js";
 import { buildExtractionSnapshot, extractTextSnapshotFromFile } from "../lib/extraction-snapshot.js";
 import { doctorKnowledgeSources } from "../lib/knowledge-doctor.js";
-import { exportKnowledgeSourceManifest, formatKnowledgeSourceManifest } from "../lib/knowledge-manifest.js";
+import { exportKnowledgeSourceManifest, formatKnowledgeSourceManifest, writeKnowledgeSourceManifestArtifact } from "../lib/knowledge-manifest.js";
 import { resolveKnowledgeSourceRef } from "../lib/knowledge-resolver.js";
 import { assertHostedExtractionIdentity, doctorKnowledgeSourcesViaApi, resolveKnowledgeSourceRefViaApi } from "../lib/knowledge-resolver-api.js";
 import { buildFilesContextPack, buildFilesSearchPack } from "../lib/context-pack.js";
@@ -55,6 +55,7 @@ import type {
   FileSearchDocumentStatus,
   GoogleDriveConfig,
   KnowledgeSourceDoctorReport,
+  KnowledgeSourceManifest,
   KnowledgeSourceManifestFormat,
   KnowledgeSourceResolution,
   KnowledgeSourceResolveMode,
@@ -62,6 +63,7 @@ import type {
   SearchScope,
 } from "../types/index.js";
 import { ApiStore, store } from "../store/index.js";
+import { hostedErrorMessage } from "../store/api-store.js";
 import { announceFilesLocalMode, resolveFilesCloudStorage } from "../lib/cloud-storage.js";
 
 import { createRequire } from "module";
@@ -1889,6 +1891,25 @@ function printKnowledgeResolution(
   if (result.access?.url) console.log(result.access.url);
 }
 
+/** Render a knowledge manifest identically on the hosted and local arms. */
+function printKnowledgeManifest(
+  manifest: KnowledgeSourceManifest,
+  format: KnowledgeSourceManifestFormat,
+  json?: boolean,
+  out?: string,
+): void {
+  if (json || format === "json") {
+    console.log(JSON.stringify(manifest, null, 2));
+    return;
+  }
+  if (out) {
+    console.log(chalk.green(`manifest written: ${manifest.artifact?.path}`));
+    console.log(chalk.dim(`items:${manifest.item_count} high_watermark:${manifest.high_watermark}`));
+    return;
+  }
+  process.stdout.write(formatKnowledgeSourceManifest(manifest, format));
+}
+
 const knowledge = program.command("knowledge").description("Read-only source APIs for knowledge indexing");
 
 knowledge
@@ -1901,8 +1922,8 @@ knowledge
   .option("--status <status>", "Filter by file status: active, deleted, moved, all")
   .option("--include-deleted", "Include soft-deleted rows")
   .option("--delta", "Export a delta manifest including tombstones")
-  .option("--since-cursor <cursor>", "Delta cursor from a previous manifest")
-  .option("--since-sync-version <n>", "Delta from a sync_version")
+  .option("--since-cursor <cursor>", "Signed hosted checkpoint (or local manifest cursor) from a previous manifest")
+  .option("--since-sync-version <n>", "Local-only delta from a per-file sync_version; hosted transport refuses it")
   .option("--cursor <cursor>", "Page cursor")
   .option("--limit <n>", "Max file rows", "100")
   .option("--format <format>", "Output format: json or jsonl", "json")
@@ -1928,10 +1949,39 @@ knowledge
     includeEvidenceAssets?: boolean;
     json?: boolean;
   }) => {
+    const limit = parseIntFlag(opts.limit, "limit", { min: 1 });
+    const format = parseManifestFormat(opts.format);
+    const manifestApi = apiStore();
+    if (manifestApi) {
+      // Hosted: the service builds the manifest from its own store
+      // (GET /v1/knowledge/manifest). The artifact is still written here,
+      // because the output path is this machine's.
+      try {
+        const manifest = await manifestApi.exportKnowledgeManifest({
+          source_id: opts.source,
+          collection_id: opts.collection,
+          project_id: opts.project,
+          tag: opts.tag,
+          status: opts.status as any,
+          include_deleted: opts.includeDeleted,
+          delta: opts.delta,
+          since_cursor: opts.sinceCursor,
+          since_sync_version: opts.sinceSyncVersion ? parseIntFlag(opts.sinceSyncVersion, "since-sync-version", { min: 0 }) : undefined,
+          cursor: opts.cursor,
+          limit,
+          format,
+          include_acl_summary: opts.includeAclSummary,
+          include_evidence_assets: opts.includeEvidenceAssets,
+        });
+        if (opts.out) {
+          manifest.artifact = await writeKnowledgeSourceManifestArtifact(manifest, { provider: "local", path: opts.out, format });
+        }
+        printKnowledgeManifest(manifest, format, opts.json, opts.out);
+        return;
+      } catch (e) { console.error(chalk.red(hostedErrorMessage(e))); process.exit(1); }
+    }
     requireLocalTransport("files knowledge manifest");
     try {
-      const limit = parseIntFlag(opts.limit, "limit", { min: 1 });
-      const format = parseManifestFormat(opts.format);
       const manifest = await exportKnowledgeSourceManifest({
         source_id: opts.source,
         collection_id: opts.collection,
@@ -1950,18 +2000,7 @@ knowledge
         include_evidence_assets: opts.includeEvidenceAssets,
       });
 
-      if (opts.json || format === "json") {
-        console.log(JSON.stringify(manifest, null, 2));
-        return;
-      }
-
-      if (opts.out) {
-        console.log(chalk.green(`manifest written: ${manifest.artifact?.path}`));
-        console.log(chalk.dim(`items:${manifest.item_count} high_watermark:${manifest.high_watermark}`));
-        return;
-      }
-
-      process.stdout.write(formatKnowledgeSourceManifest(manifest, format));
+      printKnowledgeManifest(manifest, format, opts.json, opts.out);
     } catch (e) { console.error(chalk.red((e as Error).message)); process.exit(1); }
   });
 
