@@ -644,7 +644,7 @@ of app folders, and `XDG_CONFIG_HOME` is not consulted at all.
 | `skills search <query>` | `s` | Search by name, description, or tags |
 | `skills info <name>` | | Show metadata, env vars, and system dependencies |
 | `skills show <name>` | | Show account or owned portable skill details |
-| `skills docs <name>` | | Show documentation (SKILL.md > README.md > CLAUDE.md) |
+| `skills docs <name>` | `--file skill\|readme\|claude` | Show preferred documentation; an explicit file must exist and unknown aliases fail |
 | `skills requires <name>` | | Show env vars, system deps, and npm dependencies |
 | `skills profiles show <id>` / `skills profiles set <id> --file <json>` | | Read an exact shared selection or update it with writer authorization |
 | `skills install [name@version] --selection-profile <id>` | | Cache selected immutable bundles; without names, sync the profile |
