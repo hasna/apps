@@ -246,6 +246,63 @@ jobs:
           test "${runtime_bun}" = "1.3.14"
           test "$(docker run --rm --entrypoint bun "${LOCAL_IMAGE}:${SOURCE_SHA}" dist/server/index.js --version)" = "${expected_version}"
 
+      - name: Smoke exact image HTTP startup
+        run: |
+          set -Eeuo pipefail
+          expected_version="$(node -p 'require("./package.json").version')"
+          smoke_container="instructions-http-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          smoke_dir="${RUNNER_TEMP}/instructions-http-smoke"
+          health_json="${smoke_dir}/health.json"
+          version_json="${smoke_dir}/version.json"
+          settled_health_json="${smoke_dir}/settled-health.json"
+          mkdir -p "${smoke_dir}"
+          chmod 700 "${smoke_dir}"
+          cleanup_smoke() {
+            docker rm --force "${smoke_container}" >/dev/null 2>&1 || true
+          }
+          trap cleanup_smoke EXIT
+          docker run --detach \
+            --name "${smoke_container}" \
+            --publish 127.0.0.1::8080 \
+            "${LOCAL_IMAGE}:${SOURCE_SHA}" >/dev/null
+          smoke_port="$(docker port "${smoke_container}" 8080/tcp | awk -F: '$1 == "127.0.0.1" { print $NF; exit }')"
+          [[ "${smoke_port}" =~ ^[0-9]+$ ]]
+          smoke_url="http://127.0.0.1:${smoke_port}"
+          smoke_started=false
+          for attempt in $(seq 1 30); do
+            if [[ "$(docker inspect --format '{{.State.Running}}' "${smoke_container}")" != "true" ]]; then
+              docker logs "${smoke_container}" >&2 || true
+              echo "exact Instructions image exited before serving HTTP" >&2
+              exit 1
+            fi
+            if curl --fail --silent --show-error --max-time 2 \
+              --output "${health_json}" "${smoke_url}/health"; then
+              smoke_started=true
+              break
+            fi
+            sleep 1
+          done
+          [[ "${smoke_started}" == "true" ]] || {
+            docker logs "${smoke_container}" >&2 || true
+            echo "exact Instructions image did not serve /health" >&2
+            exit 1
+          }
+          jq -e --arg version "${expected_version}" '
+            .status == "ok" and .version == $version and .name == "instructions"
+          ' "${health_json}" >/dev/null
+          curl --fail --silent --show-error --max-time 2 \
+            --output "${version_json}" "${smoke_url}/version"
+          jq -e --arg version "${expected_version}" '
+            .status == "ok" and .version == $version and .name == "instructions"
+          ' "${version_json}" >/dev/null
+          sleep 3
+          test "$(docker inspect --format '{{.State.Running}}' "${smoke_container}")" = "true"
+          curl --fail --silent --show-error --max-time 2 \
+            --output "${settled_health_json}" "${smoke_url}/health"
+          jq -e --arg version "${expected_version}" '
+            .status == "ok" and .version == $version and .name == "instructions"
+          ' "${settled_health_json}" >/dev/null
+
       - name: Generate local vulnerability report
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
