@@ -328,3 +328,22 @@ describe("authenticated hosted file content", () => {
     expect(body).not.toContain("object");
   });
 });
+
+describe("hosted file signing authorization", () => {
+  test("classifies sign-download as files:read before resolving object access", async () => {
+    let requiredScopes: string[] | undefined;
+    const h = createV1Handler({
+      getClient: () => fakeClient({ objectTenant: undefined }),
+      verifier: {
+        authenticate: async (_headers: Headers, context: { requiredScopes?: string[] }) => {
+          requiredScopes = context.requiredScopes;
+          return { ok: true, principal: { kid: "kid-a" } };
+        },
+      } as never,
+    });
+    const req = request("/v1/files/f_remote/sign-download", undefined, { method: "POST", body: "{}" });
+    const response = await h.handle(req, new URL(req.url));
+    expect(requiredScopes).toEqual(["files:read"]);
+    expect(response?.status).toBe(404);
+  });
+});

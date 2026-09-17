@@ -125,7 +125,7 @@ export function createV1Handler(options: V1HandlerOptions = {}): V1Handler {
 
       const method = req.method;
       const isRead = method === "GET" || method === "HEAD";
-      const isContentRead = /^\/v1\/files\/[^/]+\/(?:content|extract-text)$/.test(path);
+      const isContentRead = /^\/v1\/files\/[^/]+\/(?:content|extract-text|sign-download)$/.test(path);
       const requiredScopes = [isRead || isContentRead ? "files:read" : "files:write"];
 
       // ── Authenticate ───────────────────────────────────────────────────

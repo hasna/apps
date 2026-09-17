@@ -408,7 +408,8 @@ export interface KnowledgeSourceDoctorCheck {
   source_id?: string;
   path?: string;
   deleted: boolean;
-  stale: boolean;
+  /** Omitted when the selected transport cannot prove revision staleness. */
+  stale?: boolean;
   content: {
     mime: string;
     size?: number;
@@ -1407,7 +1408,7 @@ export interface ListFilesOptions {
   collection_id?: string;
   project_id?: string;
   ext?: string;
-  status?: FileStatus;
+  status?: FileStatus | "all";
   sync_status?: SyncStatus;
   limit?: number;
   offset?: number;

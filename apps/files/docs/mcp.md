@@ -99,11 +99,7 @@ agent ID may record activity telemetry.
 
 ## Local and API Modes
 
-Data-plane tools use the same local/API store selection as the CLI. Physical
-operations that need files or ingestion state on the current machine fail in
-API mode. These include source indexing and Google Drive sync, byte download or
-upload, context/extraction/knowledge resolution, imports, copies, starting
-watchers, and all organization-review tools.
+Data-plane tools use the same local/API store selection as the CLI. Physical operations that need ingestion state on the current machine fail in API mode. These include source indexing and Google Drive sync, local imports/copies, starting watchers, context-pack assembly, manifest/outbox workflows, and organization-review tools. Hosted byte download, bounded extraction, snapshots, and knowledge resolution use authenticated Files `/v1` routes.
 
 Two process-local exceptions do not route through the API store:
 `resolve_id` consults the local SQLite ID resolver even in API mode, and

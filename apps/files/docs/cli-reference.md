@@ -77,9 +77,9 @@ the machine where they run.
 | `files open <file-id>` | Open a local file with the OS default app | On-box |
 | `files where <file-id>` | Print a local file's absolute path | On-box |
 | `files cat <file-id>` | Print local file bytes | On-box |
-| `files extract-text <file-id>` | Produce bounded chunk-ready text | On-box |
-| `files extract-snapshot <file-id>` | Produce a deterministic semantic snapshot | On-box |
-| `files knowledge` | Manifest, resolver, doctor, and outbox APIs | On-box |
+| `files extract-text <file-id>` | Produce bounded chunk-ready text; hosted reads require `--output-file` | Data plane |
+| `files extract-snapshot <file-id>` | Produce a deterministic semantic snapshot | Data plane |
+| `files knowledge` | Hosted resolver/doctor plus local manifest and outbox APIs | Mixed |
 | `files evidence` | Manage shared evidence assets | Data plane |
 | `files organize` | Review imported Google Drive metadata | On-box |
 | `files recent` | List recently touched files | Data plane |

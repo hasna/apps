@@ -12,6 +12,8 @@ import { getSource } from "../db/sources.js";
 import { buildOpenFilesFileRef, parseOpenFilesSourceRef } from "./source-ref.js";
 import { extractTextFromBuffer, isExtractableTextMime, type ExtractTextOptions } from "./extraction.js";
 import { buildExtractionSnapshot } from "./extraction-snapshot.js";
+import { isKnowledgeMimeAllowed } from "./knowledge-shared.js";
+import { mapExtractionStatus } from "./knowledge-shared.js";
 import { resolveFileObject } from "./file-object.js";
 import { createS3ClientConfig } from "./s3.js";
 import type {
@@ -308,7 +310,7 @@ async function resolveMode(
 
   if (mode === "signed_url") return resolveSignedUrl(context, purpose, mode, opts);
 
-  if (!isMimeAllowed(context.mime, context.name, opts)) {
+  if (!isKnowledgeMimeAllowed(context.mime, context.name, opts)) {
     return baseResolution(
       context,
       purpose,
@@ -388,7 +390,7 @@ async function resolveSignedUrl(
   mode: KnowledgeSourceResolveMode,
   opts: KnowledgeSourceResolverOptions,
 ): Promise<KnowledgeSourceResolution> {
-  if (!isMimeAllowed(context.mime, context.name, opts)) {
+  if (!isKnowledgeMimeAllowed(context.mime, context.name, opts)) {
     return baseResolution(
       context,
       purpose,
@@ -780,25 +782,6 @@ function getUnsafePathReason(sourcePath: string): string | undefined {
   return undefined;
 }
 
-function isMimeAllowed(
-  mime: string,
-  name: string,
-  opts: KnowledgeSourceResolverOptions,
-): boolean {
-  if (opts.allow_binary) return true;
-  const normalized = mime.split(";")[0]?.toLowerCase() ?? "application/octet-stream";
-  if (opts.allowed_mimes?.length) {
-    return opts.allowed_mimes.some((allowed) => {
-      const normalizedAllowed = allowed.toLowerCase();
-      if (normalizedAllowed.endsWith("/*")) {
-        return normalized.startsWith(normalizedAllowed.slice(0, -1));
-      }
-      return normalized === normalizedAllowed;
-    });
-  }
-  return isExtractableTextMime(normalized, name);
-}
-
 function normalizeMaxBytes(value: number | undefined): number {
   if (!Number.isFinite(value ?? DEFAULT_MAX_BYTES)) return DEFAULT_MAX_BYTES;
   const normalized = Math.floor(value ?? DEFAULT_MAX_BYTES);
@@ -824,13 +807,6 @@ function extractOptions(opts: KnowledgeSourceResolverOptions): ExtractTextOption
     redactor: opts.redactor,
     redact_patterns: opts.redact_patterns,
   };
-}
-
-function mapExtractionStatus(extraction: ExtractedTextResult): KnowledgeSourceResolveStatus {
-  if (extraction.status === "ready" || extraction.status === "empty") return "ready";
-  if (extraction.status === "too_large") return "too_large";
-  if (extraction.status === "unsupported") return "unsupported";
-  return "error";
 }
 
 function formatHash(algorithm: string | undefined, hash: string | undefined): string | undefined {
