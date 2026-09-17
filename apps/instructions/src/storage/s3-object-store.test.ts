@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setSystemTime, test } from "bun:test";
 import type { InstructionsS3Config } from "./s3-config.js";
 import {
   assertSafeInstructionsObjectKey,
@@ -27,6 +27,8 @@ function missingFile() {
     async stat() { throw new Error("missing"); },
   };
 }
+
+afterEach(() => setSystemTime());
 
 describe("Instructions S3 object store", () => {
   test("public native store exposes conditional-create and read-only operations only", () => {
@@ -232,6 +234,7 @@ describe("Instructions S3 object store", () => {
   });
 
   test("uses conditional creation, records created version id, and treats precondition loss as existing", async () => {
+    setSystemTime(new Date("2026-09-17T12:08:32.000Z"));
     const requests: Array<{ url: string; init?: RequestInit }> = [];
     const responses = [
       new Response(null, { status: 201, headers: { "x-amz-version-id": "created-v1" } }),
@@ -240,10 +243,7 @@ describe("Instructions S3 object store", () => {
     const store = createInstructionsS3ObjectStore(
       CONFIG,
       () => ({
-        presign(key, options) {
-          expect(options).toEqual({ method: "PUT", expiresIn: 60 });
-          return `https://fixture.invalid/${key}`;
-        },
+        presign() { throw new Error("unused"); },
         file: missingFile,
       }),
       async (url, init) => {
@@ -256,10 +256,97 @@ describe("Instructions S3 object store", () => {
     await expect(store.putIfAbsent("instructions/backups/a/payload", bytes, { contentType: "text/plain" })).resolves.toEqual({ status: "created", versionId: "created-v1" });
     await expect(store.putIfAbsent("instructions/backups/a/payload", bytes, { contentType: "text/plain" })).resolves.toEqual({ status: "existing" });
     expect(requests).toHaveLength(2);
+    expect(requests[0]?.url).toBe("https://s3.us-east-1.amazonaws.com/instructions-backups/instructions/backups/a/payload");
     expect(requests[0]?.init?.method).toBe("PUT");
     expect(requests[0]?.init?.redirect).toBe("error");
-    expect(new Headers(requests[0]?.init?.headers).get("if-none-match")).toBe("*");
-    expect(new Headers(requests[0]?.init?.headers).get("content-md5")).toBe("gNLgSzBQpnuXJzV0g2ENYw==");
+    const headers = new Headers(requests[0]?.init?.headers);
+    expect(headers.get("content-md5")).toBe("gNLgSzBQpnuXJzV0g2ENYw==");
+    expect(headers.get("content-type")).toBe("text/plain");
+    expect(headers.get("host")).toBe("s3.us-east-1.amazonaws.com");
+    expect(headers.get("if-none-match")).toBe("*");
+    expect(headers.get("x-amz-content-sha256")).toBe("3e58bada6a180c0d7f817bdae51fba96a461575b309bfbc17a6918d20c6617c7");
+    expect(headers.get("x-amz-date")).toBe("20260917T120832Z");
+    expect(headers.get("x-amz-security-token")).toBe("fixture-session");
+    expect(headers.get("authorization")).toBe(
+      "AWS4-HMAC-SHA256 Credential=fixture-access/20260917/us-east-1/s3/aws4_request, " +
+      "SignedHeaders=content-md5;content-type;host;if-none-match;x-amz-content-sha256;x-amz-date;x-amz-security-token, " +
+      "Signature=283ab10bef4fec00be7457a92dfd709d90f96eb2e638704bda2fad7d374dddbc",
+    );
+  });
+
+  test("signs the canonical object URI for virtual-hosted and custom path-style endpoints", async () => {
+    setSystemTime(new Date("2026-09-17T12:08:32.000Z"));
+    const requests: Array<{ url: string; headers: Headers }> = [];
+    const key = "instructions/backups/a file/%payload";
+    const configs: InstructionsS3Config[] = [
+      { ...CONFIG, forcePathStyle: false },
+      { ...CONFIG, endpoint: "https://objects.example.test", forcePathStyle: false },
+      { ...CONFIG, endpoint: "https://objects.example.test", forcePathStyle: true },
+    ];
+    for (const config of configs) {
+      const store = createInstructionsS3ObjectStore(
+        config,
+        () => ({ presign() { throw new Error("unused"); }, file: missingFile }),
+        async (url, init) => {
+          requests.push({ url: String(url), headers: new Headers(init?.headers) });
+          return new Response(null, { status: 201, headers: { "x-amz-version-id": "created-v1" } });
+        },
+      );
+      await expect(store.putIfAbsent(key, new Uint8Array([1]), { contentType: "application/octet-stream" }))
+        .resolves.toMatchObject({ status: "created", versionId: "created-v1" });
+    }
+
+    expect(requests.map((request) => request.url)).toEqual([
+      "https://instructions-backups.s3.us-east-1.amazonaws.com/instructions/backups/a%20file/%25payload",
+      "https://instructions-backups.objects.example.test/instructions/backups/a%20file/%25payload",
+      "https://objects.example.test/instructions-backups/instructions/backups/a%20file/%25payload",
+    ]);
+    expect(requests.map((request) => request.headers.get("host"))).toEqual([
+      "instructions-backups.s3.us-east-1.amazonaws.com",
+      "instructions-backups.objects.example.test",
+      "objects.example.test",
+    ]);
+    for (const request of requests) {
+      const authorization = request.headers.get("authorization");
+      expect(authorization).toContain(
+        "SignedHeaders=content-md5;content-type;host;if-none-match;x-amz-content-sha256;x-amz-date;x-amz-security-token",
+      );
+      expect(authorization).toMatch(/Signature=[0-9a-f]{64}$/);
+    }
+  });
+
+  test("signs conditional creation with the temporary AWS environment credentials used by deploys", async () => {
+    setSystemTime(new Date("2026-09-17T12:08:32.000Z"));
+    const original = {
+      accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+      secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+      sessionToken: process.env.AWS_SESSION_TOKEN,
+    };
+    process.env.AWS_ACCESS_KEY_ID = CONFIG.credentials!.accessKeyId;
+    process.env.AWS_SECRET_ACCESS_KEY = CONFIG.credentials!.secretAccessKey;
+    process.env.AWS_SESSION_TOKEN = CONFIG.credentials!.sessionToken;
+    try {
+      const { credentials: _credentials, ...environmentConfig } = CONFIG;
+      let headers = new Headers();
+      const store = createInstructionsS3ObjectStore(
+        environmentConfig,
+        () => ({ presign() { throw new Error("unused"); }, file: missingFile }),
+        async (_url, init) => {
+          headers = new Headers(init?.headers);
+          return new Response(null, { status: 201 });
+        },
+      );
+      await expect(store.putIfAbsent("instructions/backups/a/payload", new Uint8Array([1]), {
+        contentType: "application/octet-stream",
+      })).resolves.toEqual({ status: "created" });
+      expect(headers.get("x-amz-security-token")).toBe("fixture-session");
+      expect(headers.get("authorization")).toContain("Credential=fixture-access/20260917/us-east-1/s3/aws4_request");
+      expect(headers.get("authorization")).toContain("x-amz-security-token");
+    } finally {
+      restoreEnvironment("AWS_ACCESS_KEY_ID", original.accessKeyId);
+      restoreEnvironment("AWS_SECRET_ACCESS_KEY", original.secretAccessKey);
+      restoreEnvironment("AWS_SESSION_TOKEN", original.sessionToken);
+    }
   });
 
   test("retries conflicts and reconciles uncertain commits without mutable fallback", async () => {
@@ -340,3 +427,8 @@ describe("Instructions S3 object store", () => {
     expect(await store.head(key, { versionId })).toMatchObject({ versionId, size: 3 });
   });
 });
+
+function restoreEnvironment(name: string, value: string | undefined): void {
+  if (value === undefined) delete process.env[name];
+  else process.env[name] = value;
+}
