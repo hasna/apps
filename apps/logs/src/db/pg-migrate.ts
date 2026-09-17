@@ -23,6 +23,7 @@ import {
   defineMigration,
 } from "../generated/storage-kit/index.ts";
 import { LOG_IDENTITY_FIELDS_SQL } from "./migrations/006_logs_identity_fields.ts";
+import { LOG_ARTIFACT_OBJECT_KEY_SQL } from "./migrations/007_artifact_object_key.ts";
 import { PG_MIGRATIONS } from "./pg-migrations.ts";
 
 export const LOGS_APP_NAME = "logs";
@@ -38,8 +39,12 @@ export function logsCloudMigrations(): Migration[] {
   // the columns to 0001's CREATE TABLE would change that migration's checksum
   // and the ledger refuses already-applied databases.
   const identity = defineMigration("0002_logs_identity_fields", LOG_IDENTITY_FIELDS_SQL);
+  const artifactObjectKey = defineMigration(
+    "0003_logs_artifact_object_key",
+    LOG_ARTIFACT_OBJECT_KEY_SQL,
+  );
   const auth = apiKeyMigrations().map((m) => defineMigration(m.id, m.sql));
-  return [schema, identity, ...auth];
+  return [schema, identity, artifactObjectKey, ...auth];
 }
 
 export interface RunMigrationsOptions {
