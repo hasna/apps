@@ -14,6 +14,7 @@ import { getPrimaryMachineStartupWarning } from "../db/machines.js";
 import { detectProject } from "../lib/project-detect.js";
 import { loadWebhooksFromDb } from "../lib/built-in-hooks.js";
 import { startAutoInject, stopAutoInject } from "../lib/auto-inject-orchestrator.js";
+import { redactMemoryForOutput } from "../lib/redact.js";
 
 import { registerMemoryCrudTools } from "./tools/memory-crud.js";
 import { registerMemoryHistoryTools } from "./tools/memory-history.js";
@@ -42,6 +43,14 @@ import { registerSystemTools } from "./tools/system-tools.js";
 import { registerMementosStorageTools } from "./tools/storage-tools.js";
 import { registerConsolidationTools } from "./tools/consolidation-tools.js";
 import { isStdioMode, resolveMcpHttpPort, startMcpHttpServer } from "./http.js";
+import {
+  createProfiledMcpServer,
+  legacyResourcesEnabled,
+  resolveMcpProfileValue,
+  selectMcpProfile,
+  type McpProfileSelection,
+} from "./profile.js";
+import { ToolRegistry } from "./tools/tool-registry.js";
 
 // Read version from package.json — never hardcode
 import { createRequire } from "node:module";
@@ -65,13 +74,17 @@ Options:
   --http           Serve MCP over Streamable HTTP (default, 127.0.0.1)
   --stdio          Serve MCP over stdio (env: MCP_STDIO=1)
   --port <number>  HTTP port (default: 8867, env: MCP_HTTP_PORT)
+  --mcp-profile <list> Comma-separated MCP profiles (default: core)
+                   core|search|graph|automation|admin|storage|hooks|full
+                   env: HASNA_MEMENTOS_MCP_PROFILE (alias: MEMENTOS_MCP_PROFILE)
   -h, --help       Show help
   -V, --version    Show version
 `
   );
 }
 
-export function buildServer(): McpServer {
+export function buildServer(profileValue = resolveMcpProfileValue()): McpServer {
+  const selection = selectMcpProfile(profileValue);
   const server = new McpServer(
     {
       name: "mementos",
@@ -83,43 +96,61 @@ export function buildServer(): McpServer {
       },
       instructions: `Mementos is the persistent memory layer for AI agents. It stores, searches, and manages memories across sessions and projects.
 
+Active MCP profile: ${selection.profiles.join(",")}. Use HASNA_MEMENTOS_MCP_PROFILE=full (or --mcp-profile full) only when the complete administrative surface is required.
+
 When running with --dangerously-load-development-channels, mementos will proactively push relevant memories into your conversation via channel notifications. These appear as <channel source="mementos"> tags. They contain memories activated by your current task context — use them to inform your work. You don't need to call memory_inject when auto-inject is active.`,
     },
   );
+  const registry = new ToolRegistry();
+  const profiledServer = createProfiledMcpServer(server, selection, registry);
 
-  registerMemoryCrudTools(server);
-  registerMemoryHistoryTools(server);
-  registerMemoryHealthTools(server);
-  registerMemoryValidationTools(server);
-  registerMemorySearchTools(server);
-  registerMemoryLifecycleTools(server);
-  registerMemoryStatsTools(server);
-  registerMemoryAuditTools(server);
-  registerMemoryIoTools(server);
-  registerMemoryInjectTools(server);
-  registerEntityTools(server);
-  registerRelationTools(server);
-  registerGraphQueryTools(server);
-  registerAgentTools(server);
-  registerProjectTools(server);
-  registerBulkTools(server);
-  registerLockTools(server);
-  registerFocusTools(server);
-  registerHookTools(server);
-  registerSynthesisTools(server);
-  registerAutoMemoryTools(server);
-  registerSessionTools(server);
-  registerUtilityTools(server);
-  registerSystemTools(server);
-  registerMementosStorageTools(server);
-  registerConsolidationTools(server);
+  registerMemoryCrudTools(profiledServer);
+  registerMemoryHistoryTools(profiledServer);
+  registerMemoryHealthTools(profiledServer);
+  registerMemoryValidationTools(profiledServer);
+  registerMemorySearchTools(profiledServer);
+  registerMemoryLifecycleTools(profiledServer);
+  registerMemoryStatsTools(profiledServer);
+  registerMemoryAuditTools(profiledServer);
+  registerMemoryIoTools(profiledServer);
+  registerMemoryInjectTools(profiledServer);
+  registerEntityTools(profiledServer);
+  registerRelationTools(profiledServer);
+  registerGraphQueryTools(profiledServer);
+  registerAgentTools(profiledServer);
+  registerProjectTools(profiledServer);
+  registerBulkTools(profiledServer);
+  registerLockTools(profiledServer);
+  registerFocusTools(profiledServer);
+  registerHookTools(profiledServer);
+  registerSynthesisTools(profiledServer);
+  registerAutoMemoryTools(profiledServer);
+  registerSessionTools(profiledServer);
+  registerUtilityTools(profiledServer, registry);
+  registerSystemTools(profiledServer);
+  registerMementosStorageTools(profiledServer);
+  registerConsolidationTools(profiledServer);
+  if (!selection.full) registry.retain(selection.toolNames);
+
+  registerLegacyResources(server, selection);
+
+  mcpServer = server;
+  return server;
+}
+
+function registerLegacyResources(server: McpServer, selection: McpProfileSelection): void {
+  // The historical resources return complete collections and have no cursor.
+  // Keep them only behind the explicit full profile; reduced/default profiles
+  // use bounded list/get tools instead and therefore do not advertise a
+  // context-filling 1000-record resource.
+  if (!legacyResourcesEnabled(selection)) return;
 
   server.resource(
     "memories",
     "mementos://memories",
-    { description: "All active memories", mimeType: "application/json" },
+    { description: "Legacy full-profile resource: up to 1000 active memories", mimeType: "application/json" },
     async () => {
-      const memories = listMemories({ status: "active", limit: 1000 });
+      const memories = listMemories({ status: "active", limit: 1000 }).map(redactMemoryForOutput);
       return { contents: [{ uri: "mementos://memories", text: JSON.stringify(memories, null, 2), mimeType: "application/json" }] };
     }
   );
@@ -127,7 +158,7 @@ When running with --dangerously-load-development-channels, mementos will proacti
   server.resource(
     "agents",
     "mementos://agents",
-    { description: "All registered agents", mimeType: "application/json" },
+    { description: "Legacy full-profile resource: all registered agents", mimeType: "application/json" },
     async () => {
       const agents = listAgents();
       return { contents: [{ uri: "mementos://agents", text: JSON.stringify(agents, null, 2), mimeType: "application/json" }] };
@@ -137,15 +168,12 @@ When running with --dangerously-load-development-channels, mementos will proacti
   server.resource(
     "projects",
     "mementos://projects",
-    { description: "All registered projects", mimeType: "application/json" },
+    { description: "Legacy full-profile resource: all registered projects", mimeType: "application/json" },
     async () => {
       const projects = listProjects();
       return { contents: [{ uri: "mementos://projects", text: JSON.stringify(projects, null, 2), mimeType: "application/json" }] };
     }
   );
-
-  mcpServer = server;
-  return server;
 }
 
 async function ensureRestServerRunning(): Promise<void> {
@@ -228,10 +256,15 @@ async function main(): Promise<void> {
     return;
   }
 
+  const profileValue = resolveMcpProfileValue();
   await prepareMcpRuntime();
+  const profileSelection = selectMcpProfile(profileValue);
+  if (profileSelection.unknown.length > 0) {
+    console.error(`[mementos-mcp] Unknown MCP profile(s) ${profileSelection.unknown.join(", ")}; using ${profileSelection.profiles.join(",")}.`);
+  }
 
   if (isStdioMode()) {
-    const server = buildServer();
+    const server = buildServer(profileValue);
     const transport = new StdioServerTransport();
     await server.connect(transport);
 
@@ -249,7 +282,7 @@ async function main(): Promise<void> {
   }
 
   // Default: shared Streamable HTTP server (one process per MCP, many agents).
-  const handle = await startMcpHttpServer(buildServer, {
+  const handle = await startMcpHttpServer(() => buildServer(profileValue), {
     port: resolveMcpHttpPort(),
   });
   process.on("SIGINT", () => { void handle.close().finally(() => process.exit(0)); });

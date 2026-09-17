@@ -15,7 +15,7 @@ import type {
 } from "../../types/index.js";
 
 import { ensureAutoProject, formatError } from "./memory-utils.js";
-import { registerToolSchemas, searchToolEntries, getToolSchema, getAllToolEntries } from "./tool-registry.js";
+import { ToolRegistry } from "./tool-registry.js";
 
 // Tool schemas for this module's tools
 const UTILITY_TOOL_SCHEMAS = {
@@ -79,27 +79,30 @@ const UTILITY_TOOL_SCHEMAS = {
     example: '{"project_id":"proj-uuid","scope":"project"}',
   },
   search_tools: {
-    description: "Search available tools by name or keyword. Returns names only.",
+    description: "Search active-profile tools by name or keyword. Returns a bounded names-only page.",
     category: "meta",
     params: {
       query: { type: "string", description: "Search keyword (matches tool name or description)", required: true },
-      category: { type: "string", description: "Category filter", enum: ["memory", "agent", "project", "bulk", "utility", "graph", "meta"] },
+      category: { type: "string", description: "Optional category filter" },
+      limit: { type: "number", description: "Maximum names to return (default 20, maximum 50)" },
+      offset: { type: "number", description: "Zero-based result offset (default 0)" },
     },
-    example: '{"query":"memory","category":"memory"}',
+    example: '{"query":"memory","limit":20}',
   },
   describe_tools: {
-    description: "Get full parameter schemas and examples for tools. Omit names to list all tools.",
+    description: "Describe one to ten explicitly named active-profile tools.",
     category: "meta",
     params: {
-      names: { type: "array", description: "Tool names to describe (omit for all tools)", items: { type: "string" } },
+      names: { type: "array", description: "One to ten active tool names", required: true, items: { type: "string" } },
     },
     example: '{"names":["memory_save","memory_recall"]}',
   },
 };
 
-export function registerUtilityTools(server: McpServer): void {
-  // Register schemas for discovery tools
-  registerToolSchemas(UTILITY_TOOL_SCHEMAS);
+export function registerUtilityTools(server: McpServer, registry: ToolRegistry): void {
+  // Register richer schemas for the discovery tools themselves. Other active
+  // tools are captured from their live Zod registration by the profiled server.
+  registry.registerToolSchemas(UTILITY_TOOL_SCHEMAS);
 
   server.tool(
     "clean_expired",
@@ -350,30 +353,52 @@ export function registerUtilityTools(server: McpServer): void {
 
   server.tool(
     "search_tools",
-    "Search available tools by name or keyword. Returns names only.",
+    "Search active-profile tools by name or keyword. Returns a bounded names-only page.",
     {
-      query: z.string(),
-      category: z.enum(["memory", "agent", "project", "bulk", "utility", "graph", "meta"]).optional(),
+      query: z.string().min(1),
+      category: z.enum(["memory", "agent", "project", "bulk", "utility", "graph", "search", "automation", "admin", "storage", "hooks", "meta"]).optional(),
+      limit: z.coerce.number().int().min(1).max(50).optional(),
+      offset: z.coerce.number().int().min(0).optional(),
     },
     async (args) => {
-      const results = searchToolEntries(args.query, args.category);
-      if (results.length === 0) return { content: [{ type: "text" as const, text: "No tools found." }] };
-      return { content: [{ type: "text" as const, text: results.map(t => `${t.name} [${t.category}]: ${t.description}`).join("\n") }] };
+      const limit = Math.min(Math.max(Math.floor(args.limit ?? 20), 1), 50);
+      const offset = Math.max(Math.floor(args.offset ?? 0), 0);
+      const matches = registry.searchToolEntries(args.query, args.category);
+      const names = matches.slice(offset, offset + limit).map((entry) => entry.name);
+      const hasMore = offset + names.length < matches.length;
+      return {
+        content: [{
+          type: "text" as const,
+          text: JSON.stringify({
+            names,
+            count: names.length,
+            limit,
+            offset,
+            has_more: hasMore,
+            next_offset: hasMore ? offset + names.length : null,
+          }),
+        }],
+      };
     }
   );
 
   server.tool(
     "describe_tools",
-    "Get full parameter schemas and examples for tools. Omit names to list all tools.",
+    "Describe one to ten explicitly named active-profile tools.",
     {
-      names: z.array(z.string()).optional(),
+      names: z.array(z.string()).min(1).max(10),
     },
     async (args) => {
-      const targets = (args.names && args.names.length > 0)
-        ? args.names
-        : getAllToolEntries().map(t => t.name);
+      const targets = Array.from(new Set(args.names));
+      const unknown = targets.filter((name) => !registry.getToolSchema(name));
+      if (unknown.length > 0) {
+        return {
+          content: [{ type: "text" as const, text: `Unknown active-profile tool(s): ${unknown.join(", ")}` }],
+          isError: true,
+        };
+      }
       const results = targets
-        .map(name => getToolSchema(name))
+        .map(name => registry.getToolSchema(name))
         .filter((schema): schema is NonNullable<typeof schema> => schema !== undefined)
         .map(schema => {
           const paramLines = Object.entries(schema.params).map(([pname, p]) => {
@@ -382,7 +407,7 @@ export function registerUtilityTools(server: McpServer): void {
             return `  ${pname}${req}: ${p.type}${enumStr} — ${p.description}`;
           });
           const lines = [
-            `### ${schema.description.split('.')[0]} [${schema.category}]`,
+            `### ${schema.name ?? "tool"} [${schema.category}]`,
             schema.description,
           ];
           if (paramLines.length > 0) {

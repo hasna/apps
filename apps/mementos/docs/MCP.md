@@ -1,7 +1,8 @@
 # MCP reference
 
 `mementos-mcp` exposes the memory system through the Model Context Protocol.
-The current server registers 123 tools and three resources from the live source
+The default `core` profile registers 23 bounded agent tools. The explicit `full`
+profile preserves all 123 tools and three legacy resources from the live source
 tree.
 
 ## Transport modes
@@ -28,7 +29,10 @@ MCP_STDIO=1 mementos-mcp
 
 Command-based MCP host configuration must include `--stdio`; launching
 `mementos-mcp` with no arguments starts HTTP and will not speak MCP on stdin.
-For example:
+The default profile is `core`. Select one or more additive profiles with
+`--mcp-profile search,graph`, `HASNA_MEMENTOS_MCP_PROFILE`, or the compatibility
+alias `MEMENTOS_MCP_PROFILE`. Unknown profile names fall back to `core`, never
+to the full administrative surface. For example:
 
 ```bash
 claude mcp add --transport stdio --scope user mementos -- mementos-mcp --stdio
@@ -81,11 +85,56 @@ returns topic/count summaries which can be followed by targeted
 `memory_recall` calls.
 
 MCP `tools/list` is authoritative for all names and Zod-derived input schemas.
-The convenience `search_tools` and `describe_tools` tools currently index only
-the seven utility discovery schemas registered in `utility-tools.ts`, not all
-123 live tools.
+The convenience `search_tools` tool searches the active profile and returns a
+bounded JSON page containing names only. `describe_tools` requires one to ten
+explicit active-profile names; omitting `names` can no longer dump the complete
+catalog.
 
-## Tool inventory
+`memory_list(full=true)` is also bounded. It returns minified JSON with `items`
+and truthful `_meta` fields (`count`, `limit`, `offset`, `next_offset`,
+`has_more`, `complete`, and `truncated`) instead of a bare array whose coverage
+cannot be determined. Full pages default to a 65,536-byte ceiling (override with
+`max_bytes`, up to 1 MiB). If one record cannot fit, `_meta.blocked_item_id`
+directs the caller to `memory_get` or a narrower `fields` projection.
+
+This is an intentional response-shape change. Migrate consumers from:
+
+```javascript
+const memories = JSON.parse(text)
+```
+
+to:
+
+```javascript
+const { items: memories, _meta } = JSON.parse(text)
+if (_meta.has_more && _meta.next_offset !== null) {
+  // call memory_list again with offset: _meta.next_offset
+}
+```
+
+## MCP profiles
+
+Every reduced profile includes `core`; comma-separated profile names compose.
+Use `full` only for compatibility or broad administration.
+
+| Profile | Purpose |
+| --- | --- |
+| `core` | 23 common memory, context, focus, agent/project identity, and discovery tools; default |
+| `search` | history, advanced search, health, audit-read, activity, and report tools |
+| `graph` | entities, relations, graph traversal, file dependency graph, and tool insights |
+| `automation` | synthesis, auto-memory, auto-inject, session extraction, consolidation, and reflection |
+| `admin` | fleet registries, bulk operations, locks, import/export, ACL, GDPR, audit and eviction tools |
+| `storage` | storage status/sync/migration tools, including PostgreSQL migration |
+| `hooks` | hooks, webhooks, subscriptions, tool events, and feedback |
+| `full` | all 123 tools plus the three legacy unpaged resources |
+
+The legacy `mementos://memories`, `mementos://agents`, and
+`mementos://projects` resources are registered only in `full`. Reduced profiles
+use bounded tools such as `memory_list`, `memory_get`, `list_agents`, and
+`list_projects`, preventing a resource read from injecting up to 1,000 complete
+memory objects into agent context.
+
+## Full-profile tool inventory
 
 ### Core memories (29)
 

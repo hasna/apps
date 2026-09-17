@@ -44,7 +44,7 @@ afterAll(() => {
 
 describe("memory_export full population in api mode", () => {
   test("exports the full population from a capped server, not one 1000-row page", async () => {
-    const server = buildServer();
+    const server = buildServer("admin");
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     await server.connect(serverTransport);
     const client = new Client({ name: "pagination-test", version: "0.0.0" });
