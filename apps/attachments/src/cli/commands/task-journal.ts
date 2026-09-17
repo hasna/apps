@@ -1,7 +1,7 @@
 import { Command } from "commander";
 import type { Attachment } from "../../core/db";
 import { resolveStore, type Store } from "../../core/store";
-import { withTodosAuth, serviceConfig } from "../../core/todos";
+import { serviceConfig, readTodosTask, requestTodosJson, todosTaskUrl, todoRecord } from "../../core/todos";
 
 export interface TaskJournalOptions {
   todosUrl?: string;
@@ -30,61 +30,43 @@ export interface TaskJournal {
   attachments: Attachment[];
 }
 
-/**
- * Fetch task metadata from todos REST API.
- * Returns null if todos is unreachable or task not found.
- */
+/** Fetch the current hosted task envelope; failures never become partial data. */
 export async function fetchTaskMeta(
   taskId: string,
   todosUrl: string,
   fetchFn: typeof fetch = fetch
-): Promise<TaskMeta | null> {
-  const url = `${todosUrl}/api/tasks/${taskId}`;
-  const init = withTodosAuth(url);
-  try {
-    const response = await fetchFn(url, init);
-    if (response.status === 404) return null;
-    if (!response.ok) return null;
-    const data = await response.json() as Record<string, unknown>;
-    return {
-      id: taskId,
-      subject: (data.subject as string) ?? (data.title as string) ?? taskId,
-      status: (data.status as string) ?? undefined,
-      assignee: (data.assignee as string) ?? (data.assigned_to as string) ?? undefined,
-      created_at: (data.created_at as string) ?? undefined,
-    };
-  } catch {
-    // Todos unreachable — return minimal meta
-    return null;
-  }
+): Promise<TaskMeta> {
+  const task = await readTodosTask(taskId, todosUrl, fetchFn);
+  return {
+    id: task.id,
+    subject: typeof task.title === "string" ? task.title : task.id,
+    status: typeof task.status === "string" ? task.status : undefined,
+    assignee: typeof task.assigned_to === "string" ? task.assigned_to : undefined,
+    created_at: typeof task.created_at === "string" ? task.created_at : undefined,
+  };
 }
 
-/**
- * Fetch task history from todos REST API.
- * Returns empty array if todos is unreachable.
- */
+/** Only an acknowledged empty history is an empty result. */
 export async function fetchTaskHistory(
   taskId: string,
   todosUrl: string,
   fetchFn: typeof fetch = fetch
 ): Promise<TaskHistoryEntry[]> {
-  const url = `${todosUrl}/api/tasks/${taskId}/history`;
-  const init = withTodosAuth(url);
-  try {
-    const response = await fetchFn(url, init);
-    if (!response.ok) return [];
-    const data = await response.json() as unknown;
-    if (!Array.isArray(data)) return [];
-    return data.map((entry: Record<string, unknown>) => ({
-      timestamp: (entry.timestamp as string) ?? (entry.created_at as string) ?? "",
-      action: (entry.action as string) ?? (entry.type as string) ?? "unknown",
-      actor: (entry.actor as string) ?? (entry.agent as string) ?? undefined,
-      details: (entry.details as string) ?? (entry.message as string) ?? undefined,
-      progress: typeof entry.progress === "number" ? entry.progress : undefined,
-    }));
-  } catch {
-    return [];
-  }
+  const data = await requestTodosJson(todosTaskUrl(todosUrl, taskId, "history"), taskId, {}, fetchFn);
+  if (!Array.isArray(data.history) || data.count !== data.history.length) throw new Error("Invalid Todos history response.");
+  return data.history.map((value: unknown) => {
+    const entry = todoRecord(value, "history entry");
+    if (typeof entry.created_at !== "string" || !entry.created_at || typeof entry.action !== "string" || !entry.action) {
+      throw new Error("Invalid Todos history entry.");
+    }
+    return {
+      timestamp: entry.created_at,
+      action: entry.action,
+      actor: typeof entry.agent_id === "string" ? entry.agent_id : undefined,
+      details: typeof entry.field === "string" ? `${entry.field}: ${entry.old_value ?? ""} → ${entry.new_value ?? ""}` : undefined,
+      progress: undefined,
+    };
+  });
 }
 
 /**
@@ -113,28 +95,22 @@ export async function buildTaskJournal(
 ): Promise<{ journal: TaskJournal; todosReachable: boolean }> {
   const todosUrl = options.todosUrl ?? serviceConfig("TODOS").url;
 
-  // Fetch from todos (parallel)
-  const [meta, history] = await Promise.all([
-    fetchTaskMeta(taskId, todosUrl, fetchFn),
-    fetchTaskHistory(taskId, todosUrl, fetchFn),
-  ]);
+  // Resolve short references once, then use the canonical identity throughout.
+  const task = await fetchTaskMeta(taskId, todosUrl, fetchFn);
+  const history = await fetchTaskHistory(task.id, todosUrl, fetchFn);
 
-  const todosReachable = meta !== null || history.length > 0;
-
-  const task: TaskMeta = meta ?? { id: taskId };
-
-  // Query attachments via the resolved store (local db or /v1 API)
+  // Query the configured Attachments HTTPS authority only after Todos succeeds.
   const store = storeFactory ? storeFactory() : resolveStore();
   let attachments: Attachment[] = [];
   try {
-    attachments = await findTaskAttachments(taskId, store);
+    attachments = await findTaskAttachments(task.id, store);
   } finally {
     store.close();
   }
 
   return {
     journal: { task, history, attachments },
-    todosReachable,
+    todosReachable: true,
   };
 }
 
@@ -261,22 +237,6 @@ export function registerTaskJournal(program: Command): void {
 
       try {
         const { journal, todosReachable } = await buildTaskJournal(taskId, { todosUrl });
-
-        // 404: task not found in todos AND no attachments
-        if (!todosReachable && journal.attachments.length === 0 && !journal.task.subject) {
-          // Attempt a direct 404 check
-          try {
-            const url = `${todosUrl}/api/tasks/${taskId}`;
-            const response = await fetch(url, withTodosAuth(url));
-            if (response.status === 404) {
-              process.stderr.write(`Error: Task not found: ${taskId}\n`);
-              process.exit(1);
-              return;
-            }
-          } catch {
-            // todos unreachable, not a 404
-          }
-        }
 
         let output: string;
         if (format === "json") {

@@ -1,6 +1,6 @@
 import { Command } from "commander";
 import { resolveStore } from "../../core/store";
-import { withTodosAuth, serviceConfig } from "../../core/todos";
+import { serviceConfig, readTodosTask, taskMetadata, todoRecord } from "../../core/todos";
 
 export interface ResolveEvidenceOptions {
   todosUrl?: string;
@@ -23,7 +23,7 @@ export interface ResolvedAttachment {
 
 /**
  * Fetches a task from the todos REST API and extracts evidence attachment IDs,
- * then resolves each ID to the current link in the local DB.
+ * then resolves each ID on the configured Attachments HTTPS authority.
  */
 export async function resolveEvidence(
   taskId: string,
@@ -33,31 +33,10 @@ export async function resolveEvidence(
   fetchFn: typeof fetch = fetch
 ): Promise<ResolvedAttachment[]> {
   const todosUrl = options.todosUrl ?? serviceConfig("TODOS").url;
-  const url = `${todosUrl}/api/tasks/${taskId}`;
-
-  let response: Response;
-  try {
-    response = await fetchFn(url, withTodosAuth(url));
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Could not reach todos server at ${todosUrl}: ${message}`);
-  }
-
-  if (!response.ok) {
-    if (response.status === 404) {
-      throw new Error(`Task not found: ${taskId}`);
-    }
-    const body = await response.text().catch(() => "");
-    throw new Error(
-      `Failed to fetch task ${taskId}: HTTP ${response.status}${body ? ` — ${body}` : ""}`
-    );
-  }
-
-  const task = await response.json() as Record<string, unknown>;
-
-  // Extract metadata._evidence.attachments
-  const metadata = task.metadata as Record<string, unknown> | undefined;
-  const evidence = metadata?._evidence as Record<string, unknown> | undefined;
+  const task = await readTodosTask(taskId, todosUrl, fetchFn);
+  const metadata = taskMetadata(task);
+  const evidence = metadata._evidence === undefined ? undefined : todoRecord(metadata._evidence, "evidence");
+  if (evidence?.attachments !== undefined && !Array.isArray(evidence.attachments)) throw new Error("Invalid Todos evidence attachments.");
   const attachments = evidence?.attachments as EvidenceAttachmentEntry[] | undefined;
 
   if (!attachments || attachments.length === 0) {
@@ -69,6 +48,7 @@ export async function resolveEvidence(
   const resolved: ResolvedAttachment[] = [];
   try {
     for (const entry of attachments) {
+      if (!entry || typeof entry.id !== "string" || !entry.id.trim()) throw new Error("Invalid Todos evidence attachment identity.");
       const record = await store.get(entry.id);
       if (record) {
         resolved.push({
@@ -78,13 +58,7 @@ export async function resolveEvidence(
           size: record.size,
         });
       } else {
-        // Fall back to whatever was stored in the task evidence
-        resolved.push({
-          id: entry.id,
-          filename: entry.filename,
-          link: entry.link,
-          size: entry.size,
-        });
+        throw new Error(`Attachment not found on the configured authority: ${entry.id}`);
       }
     }
   } finally {

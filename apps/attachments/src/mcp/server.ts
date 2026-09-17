@@ -236,7 +236,7 @@ const FULL_SCHEMAS: Record<string, object> = {
   },
   complete_task_with_files: {
     name: "complete_task_with_files",
-    description: "Upload one or more local files to S3 and complete a todos task with those attachment IDs as evidence. Calls POST /api/tasks/:id/complete with attachment_ids.",
+    description: "Upload files through Attachments, merge evidence into the hosted Todos task with an observed write version, and complete it. Partial failures require reconciliation before retrying.",
     inputSchema: {
       type: "object",
       properties: {

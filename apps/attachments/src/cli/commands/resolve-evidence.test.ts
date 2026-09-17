@@ -93,7 +93,7 @@ function makeFetch(status: number, body: unknown = {}): typeof fetch {
   return mock(async (_url: unknown, _opts?: unknown) => ({
     ok: status >= 200 && status < 300,
     status,
-    json: async () => body,
+    json: async () => ({ task: body }),
     text: async () => (typeof body === "string" ? body : JSON.stringify(body)),
   })) as unknown as typeof fetch;
 }
@@ -182,7 +182,7 @@ describe("resolveEvidence", () => {
     expect(result).toHaveLength(0);
   });
 
-  it("falls back to evidence data when attachment not found in DB", async () => {
+  it("refuses stale evidence when attachment is absent on its authority", async () => {
     mockFindById.mockImplementation(() => null);
 
     const task = makeTaskResponse([
@@ -190,16 +190,11 @@ describe("resolveEvidence", () => {
     ]);
     const fakeFetch = makeFetch(200, task);
 
-    const result = await resolveEvidence("TASK-001", {}, fakeFetch);
-
-    expect(result).toHaveLength(1);
-    expect(result[0].id).toBe("att_orphan");
-    expect(result[0].link).toBe("https://fallback-link.example.com");
-    expect(result[0].filename).toBe("orphan.txt");
-    expect(result[0].size).toBe(512);
+    await expect(resolveEvidence("TASK-001", {}, fakeFetch)).rejects.toThrow("att_orphan");
+    expect(mockDbClose).toHaveBeenCalled();
   });
 
-  it("resolves multiple attachments, mixing DB hits and misses", async () => {
+  it("does not return partial evidence when one attachment is missing", async () => {
     const dbAtt = makeDbAttachment({ id: "att_found", link: "https://fresh.example.com/att_found" });
     mockFindById.mockImplementation((id: string) => {
       if (id === "att_found") return dbAtt;
@@ -212,13 +207,8 @@ describe("resolveEvidence", () => {
     ]);
     const fakeFetch = makeFetch(200, task);
 
-    const result = await resolveEvidence("TASK-001", {}, fakeFetch);
-
-    expect(result).toHaveLength(2);
-    expect(result[0].id).toBe("att_found");
-    expect(result[0].link).toBe("https://fresh.example.com/att_found");
-    expect(result[1].id).toBe("att_missing");
-    expect(result[1].link).toBe("https://stale.example.com/att_missing");
+    await expect(resolveEvidence("TASK-001", {}, fakeFetch)).rejects.toThrow("att_missing");
+    expect(mockDbClose).toHaveBeenCalled();
   });
 
   it("throws when task not found (404)", async () => {
@@ -242,7 +232,7 @@ describe("resolveEvidence", () => {
 
     await expect(
       resolveEvidence("TASK-001", { todosUrl: "https://todos.example.test" }, fakeFetch)
-    ).rejects.toThrow("Could not reach todos server at https://todos.example.test");
+    ).rejects.toThrow("transport error");
   });
 
   it("uses custom todosUrl for the fetch request", async () => {
@@ -251,12 +241,12 @@ describe("resolveEvidence", () => {
     let capturedUrl = "";
     const fakeFetch = mock(async (url: unknown) => {
       capturedUrl = String(url);
-      return { ok: true, status: 200, json: async () => task, text: async () => "" } as Response;
+      return { ok: true, status: 200, json: async () => ({ task }), text: async () => "" } as Response;
     }) as unknown as typeof fetch;
 
     await resolveEvidence("TASK-001", { todosUrl: "https://custom.example.test" }, fakeFetch);
 
-    expect(capturedUrl).toBe("https://custom.example.test/api/tasks/TASK-001");
+    expect(capturedUrl).toBe("https://custom.example.test/v1/tasks/TASK-001");
   });
 
   it("closes DB after successful resolution", async () => {
@@ -382,7 +372,7 @@ describe("resolve-evidence CLI command", () => {
     let capturedUrl = "";
     globalThis.fetch = mock(async (url: unknown) => {
       capturedUrl = String(url);
-      return { ok: true, status: 200, json: async () => task, text: async () => "" } as Response;
+      return { ok: true, status: 200, json: async () => ({ task }), text: async () => "" } as Response;
     }) as unknown as typeof fetch;
 
     const capture = captureOutput();
@@ -433,7 +423,7 @@ describe("resolve-evidence CLI command", () => {
       await expect(
         program.parseAsync(["resolve-evidence", "TASK-001"], { from: "user" })
       ).rejects.toThrow("process.exit called");
-      expect(capture.err.join("")).toContain("Could not reach todos server");
+      expect(capture.err.join("")).toContain("transport error");
     } finally {
       capture.restore();
       exitSpy.mockRestore();
