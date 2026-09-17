@@ -46,7 +46,7 @@ import {
   type GitHubVisibility,
 } from "./workspace-github.js";
 import { doctorWorkspaceWithStore } from "./workspace-doctor.js";
-import { resolveProjectStore, type ProjectStore } from "../store/project-store.js";
+import { LocalOnlyOperationError, resolveProjectStore, type ProjectStore } from "../store/project-store.js";
 import { importRegisteredRoots, importWorkspace, importWorkspaceBulk, planWorkspaceImport } from "./workspace-import.js";
 import {
   cleanupWorkspaceCreationTarget,
@@ -2497,12 +2497,15 @@ export function buildWorkspaceAgentTools(ctx: WorkspaceAgentToolContext) {
 }
 
 export async function runWorkspaceAgentPrompt(options: WorkspaceAgentPromptOptions): Promise<WorkspaceAgentPromptResult> {
+  const store = resolveProjectStore();
+  if (store.transport !== "local") {
+    throw new LocalOnlyOperationError("projects prompt mode");
+  }
   const model = pickModel(options.model);
   const dryRun = Boolean(options.dryRun);
   const approve = Boolean(options.approve) && !dryRun;
   const mock = Boolean(options.mock || process.env["WORKSPACES_AGENT_MOCK"]);
   const runAgent = ensureWorkspaceAgent(model);
-  const store = resolveProjectStore();
   const actorAgent = resolvePromptAgent(options.agent) ?? runAgent;
   const forcedRootId = resolveRootId(options.root);
   const forcedRecipeId = resolveRecipeId(options.recipe);

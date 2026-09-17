@@ -607,20 +607,18 @@ describe("pg-store pure helpers", () => {
 });
 
 describe("pg-store event attribution", () => {
-  test("drops a machine-local agent id that does not exist in the hosted agents table", async () => {
+  test("rejects an agent id that does not exist in the hosted agents table", async () => {
     const { client, events } = eventAgentFkClient();
     const store = new ProjectsPgStore(client);
 
-    const event = await store.recordEvent({
+    await expect(store.recordEvent({
       workspace_id: "wks_hosted",
       agent_id: "agt_machine_local",
       event_type: "started",
       source: "cli",
-    });
+    })).rejects.toThrow("Agent not found: agt_machine_local");
 
-    expect(event.agent_id).toBeNull();
-    expect(events).toHaveLength(1);
-    expect(events[0]?.agent_id).toBeNull();
+    expect(events).toEqual([]);
   });
 
   test("preserves an agent id that exists in the hosted agents table", async () => {

@@ -577,7 +577,12 @@ Prompt mode uses AI SDK with OpenRouter. Configure the key with `OPENROUTER_API_
 
 Mutations require `--yes`. Without approval, mutating tools return structured plans/previews. `--dry-run` forces no-write behavior even if `--yes` is present.
 
-The prompt agent can inspect roots, recipes, agents, tmux profiles, and projects; create/update/tag/untag/archive/delete/import projects; import/publish GitHub repos; link/unlink external integrations; start projects with saved launch defaults; and plan/apply tmux profiles. It records agent runs and tool calls in SQLite.
+Prompt mode currently owns a machine-local agent-run ledger and therefore
+requires explicit `HASNA_PROJECTS_LOCAL=1`. Under a hosted Projects authority it
+fails closed before opening SQLite; use the regular CLI or MCP start surfaces
+for hosted project starts.
+
+The prompt agent can inspect roots, recipes, agents, tmux profiles, and projects; create/update/tag/untag/archive/delete/import projects; import/publish GitHub repos; link/unlink external integrations; start projects with saved launch defaults; and plan/apply tmux profiles. Machine-local prompt-agent runs remain local-only; shared project mutations use the selected Projects store.
 
 `projects agent-eval` seeds temporary project fixtures into an isolated SQLite database under the eval base path and runs a repeatable prompt suite over root registration/matching, recipe and agent planning, project listing/show/events, create/deduplication, import/scan, update, archive/unarchive, delete/hard-delete, cleanup, verification, tmux planning, GitHub publish/unpublish/import, and integration linking. Live mode uses OpenRouter; `--mock` runs deterministic create-path coverage and skips live-only cases. The JSON summary reports `success_rate`, `confidence`, and `db_path`.
 
@@ -726,6 +731,7 @@ Endpoints:
     `POST /v1/projects/{id}/archive|unarchive`, `GET /v1/projects/{id}/events`
   - `GET|POST /v1/roots`, `GET|PATCH|DELETE /v1/roots/{id}`
   - `GET|POST /v1/agents`, `GET /v1/agents/{id}`
+  - `GET /v1/machines` (read-only canonical-machine registry)
   - `GET|POST /v1/recipes`, `GET /v1/recipes/{id}`
 
 Reads require the `projects:read` scope; writes require `projects:write`. Issue a
@@ -743,7 +749,16 @@ const projects = createProjectsClientFromEnv();
 const created = await projects.createProject({ name: "My Project", tags: ["demo"] });
 const list = await projects.listProjects({ tag: "demo" });
 const discovery = await projects.listProjects({ query: "billing", query_scope: "discovery", tags: ["web", "ts"], exclude_evals: true, limit: 25 });
+const machines = await projects.listMachines();
 ```
+
+For `projects start --actor <id-or-slug>` and the equivalent MCP start tools,
+hosted mode resolves the explicit actor through `GET /v1/agents/{id-or-slug}`
+and sends the returned immutable agent ID on the start event and project update.
+An omitted actor remains unattributed rather than inventing a local identity.
+Hosted actor resolution never opens the on-box Projects database. The
+configured authority remains the app base
+`https://api.hasna.com/projects`; clients append `/v1` exactly once.
 
 ## Architecture
 

@@ -21,7 +21,6 @@ import {
   resolveRegisteredProjectTarget,
 } from "./project-resolver.js";
 import {
-  ensureProjectChannel,
   notifyProjectAgentOnline,
   shouldEnsureProjectChannel,
   type ConversationsChannelRunner,
@@ -29,7 +28,7 @@ import {
   type ProjectChannelEnsureResult,
 } from "./project-channel.js";
 import { importWorkspace, planWorkspaceImport, type WorkspaceImportPreview } from "./workspace-import.js";
-import { resolveProjectStore } from "../store/project-store.js";
+import { resolveProjectStore, type ProjectStore } from "../store/project-store.js";
 import { applyWorkspaceTmux, tmuxProfileToSpec, type WorkspaceTmuxResult, type WorkspaceTmuxWindowSpec } from "./workspace-runtime.js";
 import { attachSession } from "./tmux.js";
 import { buildProjectStartRender, PROJECT_RENDER_SCHEMA_VERSION } from "./project-render.js";
@@ -44,6 +43,8 @@ export interface ProjectStartResolution {
 }
 
 export interface ProjectStartOptions {
+  /** Active registry/store selected by the calling surface. */
+  store?: ProjectStore;
   agentTool?: ProjectStartAgent;
   toolCommand?: string;
   session?: string;
@@ -330,10 +331,10 @@ function defaultStartWindows(
 
 export async function resolveProjectStartTarget(
   target: string | undefined,
-  options: Pick<ProjectStartOptions, "register" | "dryRun" | "agentId" | "db" | "importTags" | "importMetadata" | "source" | "auditCommand"> = {},
+  options: Pick<ProjectStartOptions, "store" | "register" | "dryRun" | "agentId" | "db" | "importTags" | "importMetadata" | "source" | "auditCommand"> = {},
 ): Promise<{ project: Workspace; resolution: ProjectStartResolution }> {
   const normalizedTarget = target?.trim() || ".";
-  const store = resolveProjectStore();
+  const store = options.store ?? resolveProjectStore();
 
   // Resolve an already-registered project through the active Store. On the hosted backend this resolves the target by id/slug against the shared hosted registry
   // (so hosted-only projects resolve). On the local transport we keep the richer on-disk
@@ -429,7 +430,7 @@ export async function startProject(
   options: ProjectStartOptions = {},
 ): Promise<ProjectStartResult> {
   const { project, resolution } = await resolveProjectStartTarget(target, options);
-  const store = resolveProjectStore();
+  const store = options.store ?? resolveProjectStore();
   const defaults = projectManagementSummary(project);
   const defaultWindows = defaults.start_windows;
   const agentTool = parseProjectStartAgent(options.agentTool ?? defaults.start_agent ?? undefined);
@@ -483,8 +484,7 @@ export async function startProject(
 
   let channel: ProjectChannelEnsureResult | null = null;
   if (options.ensureChannel ?? shouldEnsureProjectChannel()) {
-    channel = ensureProjectChannel(project, {
-      db: options.db,
+    channel = await store.ensureChannel(project, {
       agentId: options.agentId,
       source: options.source ?? "cli",
       command: options.auditCommand,
