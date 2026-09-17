@@ -32,6 +32,33 @@ const taskSchema = {
   },
 } as const;
 
+const taskDependencySchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["task_id", "depends_on"],
+  properties: {
+    task_id: { type: "string", minLength: 1 },
+    depends_on: { type: "string", minLength: 1 },
+    external_project_id: { type: "string", nullable: true },
+    external_task_id: { type: "string", nullable: true },
+  },
+} as const;
+
+const dependencyPageSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["dependencies", "count", "total", "limit", "offset", "has_more", "next_offset"],
+  properties: {
+    dependencies: { type: "array", items: { $ref: "#/components/schemas/TaskDependency" } },
+    count: { type: "integer", minimum: 0 },
+    total: { type: "integer", minimum: 0 },
+    limit: { type: "integer", minimum: 0 },
+    offset: { type: "integer", minimum: 0 },
+    has_more: { type: "boolean" },
+    next_offset: { type: "integer", minimum: 0, nullable: true },
+  },
+} as const;
+
 const taskManifestBoundsSchema = {
   type: "object",
   additionalProperties: false,
@@ -1204,6 +1231,8 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           id: { type: "string" }, name: { type: "string" }, hostname: { type: ["string", "null"] }, platform: { type: ["string", "null"] }, last_seen_at: { type: "string", format: "date-time" }, metadata: { type: "object", additionalProperties: true }, created_at: { type: "string", format: "date-time" }, ssh_address: { type: ["string", "null"] }, is_primary: { type: "boolean" }, archived_at: { type: ["string", "null"] },
         } },
         Task: taskSchema,
+        TaskDependency: taskDependencySchema,
+        DependencyPage: dependencyPageSchema,
         Project: projectSchema,
         TaskManifestBounds: taskManifestBoundsSchema,
         TaskManifestCapability: taskManifestCapabilitySchema,
@@ -3862,6 +3891,35 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
                 },
               },
             },
+          },
+        },
+      },
+      "/v1/dependencies": {
+        get: {
+          operationId: "listDependencies",
+          summary: "List dependency edges with storage-bounded pagination",
+          description:
+            "Send limit and offset for a storage-bounded page. The authority applies LIMIT/OFFSET before materializing rows and returns an authoritative total plus continuation evidence. Omitting both parameters retains the legacy complete response for compatibility and may be expensive; new clients should always send a bounded page.",
+          parameters: [
+            {
+              name: "limit",
+              in: "query",
+              required: false,
+              description: "Maximum edges to materialize for this page. Providing either paging parameter activates the bounded contract.",
+              schema: { type: "integer", minimum: 1, maximum: 500, default: 500 },
+            },
+            {
+              name: "offset",
+              in: "query",
+              required: false,
+              description: "Zero-based dependency-edge offset in stable storage order.",
+              schema: { type: "integer", minimum: 0, default: 0 },
+            },
+          ],
+          responses: {
+            "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/DependencyPage" } } } },
+            "400": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "501": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
           },
         },
       },

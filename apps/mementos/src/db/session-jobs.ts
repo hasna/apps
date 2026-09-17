@@ -2,9 +2,21 @@ import { SqliteAdapter as Database } from "../storage.js";
 type SQLQueryBindings = string | number | null | boolean;
 import { getDatabase, now, uuid } from "./database.js";
 import { isApiMode, apiJson, toQuery } from "./api-mode.js";
+import {
+  MementosApiProtocolError,
+  expectArray,
+  expectBoolean,
+  expectNonNegativeInteger,
+  expectNullableString,
+  expectObject,
+  expectRecord,
+  expectString,
+} from "./api-response-contract.js";
 
 export type SessionJobSource = "claude-code" | "codex" | "manual" | "open-sessions";
 export type SessionJobStatus = "pending" | "processing" | "completed" | "failed";
+export const SESSION_JOBS_PAGE_CONTRACT = "mementos.sessions.jobs.v2" as const;
+export const SESSION_INGEST_CONTRACT = "mementos.sessions.ingest.v2" as const;
 
 export interface SessionMemoryJob {
   id: string;
@@ -54,6 +66,37 @@ export interface UpdateSessionJobInput {
 // Parsers
 // ============================================================================
 
+const SESSION_JOB_SOURCES = new Set<SessionJobSource>(["claude-code", "codex", "manual", "open-sessions"]);
+const SESSION_JOB_STATUSES = new Set<SessionJobStatus>(["pending", "processing", "completed", "failed"]);
+
+function parseHostedSessionJob(value: unknown, operation: string): SessionMemoryJob {
+  const row = expectObject(value, operation);
+  const source = expectString(row, "source", operation);
+  const status = expectString(row, "status", operation);
+  if (!SESSION_JOB_SOURCES.has(source as SessionJobSource)) {
+    throw new MementosApiProtocolError(operation, "unsupported 'source'");
+  }
+  if (!SESSION_JOB_STATUSES.has(status as SessionJobStatus)) {
+    throw new MementosApiProtocolError(operation, "unsupported 'status'");
+  }
+  return {
+    id: expectString(row, "id", operation),
+    session_id: expectString(row, "session_id", operation),
+    agent_id: expectNullableString(row, "agent_id", operation),
+    project_id: expectNullableString(row, "project_id", operation),
+    source: source as SessionJobSource,
+    status: status as SessionJobStatus,
+    transcript: expectString(row, "transcript", operation, { allowEmpty: true }),
+    chunk_count: expectNonNegativeInteger(row, "chunk_count", operation),
+    memories_extracted: expectNonNegativeInteger(row, "memories_extracted", operation),
+    error: expectNullableString(row, "error", operation),
+    metadata: expectRecord(row, "metadata", operation),
+    created_at: expectString(row, "created_at", operation),
+    started_at: expectNullableString(row, "started_at", operation),
+    completed_at: expectNullableString(row, "completed_at", operation),
+  };
+}
+
 function parseJobRow(row: Record<string, unknown>): SessionMemoryJob {
   return {
     id: row["id"] as string,
@@ -81,6 +124,34 @@ export function createSessionJob(
   input: CreateSessionJobInput,
   db?: Database
 ): SessionMemoryJob {
+  if (!db && isApiMode()) {
+    const operation = "POST /sessions/ingest";
+    const { data } = apiJson<unknown>("POST", "/sessions/ingest", {
+      session_id: input.session_id,
+      transcript: input.transcript,
+      source: input.source ?? "manual",
+      agent_id: input.agent_id,
+      project_id: input.project_id,
+      metadata: input.metadata ?? {},
+    });
+    const response = expectObject(data, operation);
+    if (response["contract"] !== SESSION_INGEST_CONTRACT) {
+      throw new MementosApiProtocolError(
+        operation,
+        `expected contract '${SESSION_INGEST_CONTRACT}'`,
+      );
+    }
+    const jobId = expectString(response, "job_id", operation);
+    const jobObject = expectObject(response["job"], operation);
+    const job = parseHostedSessionJob(
+      { ...jobObject, transcript: input.transcript },
+      `${operation} job`,
+    );
+    if (job.id !== jobId || job.session_id !== input.session_id) {
+      throw new MementosApiProtocolError(operation, "job receipt identity does not match the request");
+    }
+    return job;
+  }
   const d = db || getDatabase();
   const id = uuid();
   const timestamp = now();
@@ -108,14 +179,15 @@ export function createSessionJob(
 
 export function getSessionJob(id: string, db?: Database): SessionMemoryJob | null {
   if (!db && isApiMode()) {
-    const { status, data } = apiJson<SessionMemoryJob>(
+    const operation = `GET /sessions/jobs/${encodeURIComponent(id)}`;
+    const { status, data } = apiJson<unknown>(
       "GET",
       `/sessions/jobs/${encodeURIComponent(id)}`,
       undefined,
       { allow404: true },
     );
-    if (status === 404 || !data) return null;
-    return data;
+    if (status === 404) return null;
+    return parseHostedSessionJob(data, operation);
   }
   const d = db || getDatabase();
   const row = d
@@ -134,10 +206,63 @@ export function listSessionJobs(
       agent_id: filter?.agent_id,
       project_id: filter?.project_id,
       status: filter?.status,
+      session_id: filter?.session_id,
       limit: filter?.limit,
+      offset: filter?.offset,
     });
-    const { data } = apiJson<{ jobs: SessionMemoryJob[] }>("GET", `/sessions/jobs${q}`);
-    return data?.jobs ?? [];
+    const operation = "GET /sessions/jobs";
+    const { data } = apiJson<unknown>("GET", `/sessions/jobs${q}`);
+    const response = expectObject(data, operation);
+    if (response["contract"] !== SESSION_JOBS_PAGE_CONTRACT) {
+      throw new MementosApiProtocolError(
+        operation,
+        `expected contract '${SESSION_JOBS_PAGE_CONTRACT}'`,
+      );
+    }
+    const jobs = expectArray(response["jobs"], operation, "jobs").map((job, index) =>
+      parseHostedSessionJob(job, `${operation} item ${index}`),
+    );
+    const count = expectNonNegativeInteger(response, "count", operation);
+    const responseLimit = expectNonNegativeInteger(response, "limit", operation);
+    const responseOffset = expectNonNegativeInteger(response, "offset", operation);
+    const hasMore = expectBoolean(response, "has_more", operation);
+    const nextOffset = response["next_offset"];
+    if (responseLimit < 1) {
+      throw new MementosApiProtocolError(operation, "expected 'limit' to be positive");
+    }
+    if (count !== jobs.length || count > responseLimit) {
+      throw new MementosApiProtocolError(operation, "page count is inconsistent with jobs/limit");
+    }
+    if (nextOffset !== null && (!Number.isSafeInteger(nextOffset) || (nextOffset as number) < 0)) {
+      throw new MementosApiProtocolError(operation, "expected 'next_offset' to be a non-negative safe integer or null");
+    }
+    if (hasMore && nextOffset !== responseOffset + jobs.length) {
+      throw new MementosApiProtocolError(operation, "'has_more' requires the exact next offset");
+    }
+    if (!hasMore && nextOffset !== null) {
+      throw new MementosApiProtocolError(operation, "terminal page must set 'next_offset' to null");
+    }
+    if (filter?.limit !== undefined && responseLimit !== filter.limit) {
+      throw new MementosApiProtocolError(operation, "server did not preserve requested 'limit'");
+    }
+    if (filter?.offset !== undefined && responseOffset !== filter.offset) {
+      throw new MementosApiProtocolError(operation, "server did not preserve requested 'offset'");
+    }
+    for (const job of jobs) {
+      if (filter?.agent_id !== undefined && job.agent_id !== filter.agent_id) {
+        throw new MementosApiProtocolError(operation, "server did not preserve requested 'agent_id'");
+      }
+      if (filter?.project_id !== undefined && job.project_id !== filter.project_id) {
+        throw new MementosApiProtocolError(operation, "server did not preserve requested 'project_id'");
+      }
+      if (filter?.session_id !== undefined && job.session_id !== filter.session_id) {
+        throw new MementosApiProtocolError(operation, "server did not preserve requested 'session_id'");
+      }
+      if (filter?.status !== undefined && job.status !== filter.status) {
+        throw new MementosApiProtocolError(operation, "server did not preserve requested 'status'");
+      }
+    }
+    return jobs;
   }
   const d = db || getDatabase();
   const conditions: string[] = [];

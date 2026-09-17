@@ -55,11 +55,11 @@ const tempDirs: string[] = [];
 let stub: V1Stub;
 
 function cliEnv(): NodeJS.ProcessEnv {
-  const { EMAILS_DB_PATH: _ignoredDbPath, ...environment } = process.env;
+  const { EMAILS_DB_PATH: _ignoredDbPath, HASNA_EMAILS_LOCAL: _ignoredLocalOptIn, ...environment } = process.env;
   return {
     ...environment,
-    EMAILS_SELF_HOSTED_URL: stub.baseUrl,
-    EMAILS_SELF_HOSTED_API_KEY: stub.apiKey,
+    HASNA_EMAILS_API_URL: stub.baseUrl,
+    HASNA_EMAILS_API_KEY: stub.apiKey,
     NO_COLOR: "1",
   };
 }

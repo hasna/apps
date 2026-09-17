@@ -6,7 +6,7 @@
  */
 export const nativeRoles = ["main", "subagent", "fast", "planning", "review", "summary", "compaction", "weak", "editor"] as const;
 export type NativeRole = typeof nativeRoles[number];
-export type NativePolicyHarness = "claude" | "codex" | "grok" | "opencode" | "opencode2" | "omp" | "hermes" | "aider" | "kilo" | "gemini" | "cline" | "dsh" | "pi" | "prime-agent";
+export type NativePolicyHarness = "claude" | "codex" | "grok" | "opencode" | "opencode2" | "omp" | "hermes" | "aider" | "kilo" | "gemini" | "cline" | "dsh" | "pi" | "prime-agent" | "antigravity" | "junie";
 export type NativeModelPolicyInput = {
   harness: NativePolicyHarness;
   mainModel: string;
@@ -46,6 +46,12 @@ export function compileNativeModelPolicy(input: NativeModelPolicyInput): NativeM
   const config: Record<string, unknown> = {};
   let unsupportedRoles: NativeRole[] = [];
   switch (input.harness) {
+    case "antigravity":
+    case "junie":
+      config.model = models.main;
+      config.fast = models.fast;
+      unsupportedRoles = nativeRoles.filter(role => role !== "main" && role !== "fast");
+      break;
     case "claude":
       if (!versionAtLeast(input.version, [2, 1, 257])) throw new Error("Claude model policy enforcement requires Claude Code >=2.1.257.");
       env.ANTHROPIC_MODEL = models.main;

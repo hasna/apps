@@ -18,11 +18,11 @@ export interface ProviderSyncReport {
 }
 export async function pullProviderObservations(providerRef?: string, signal?: AbortSignal): Promise<{ ok: boolean; providers: ProviderSyncReport[] }> {
   if (providerRef !== undefined && !providerRef.trim()) throw new Error("--provider must name a provider identifier.");
-  const ids = await listServerProviderIds();
-  const selected = providerRef === undefined ? ids : ids.includes(providerRef) ? [providerRef] : ids.filter(id => id.startsWith(providerRef));
-  if (providerRef !== undefined && selected.length !== 1) throw new Error(selected.length ? "Provider identifier is ambiguous." : "Provider not found in this tenant.");
   loadEmailsClientEnvSecret(process.env);
   const transport = resolveEmailsHostedTransport(process.env);
+  const ids = await listServerProviderIds(transport);
+  const selected = providerRef === undefined ? ids : ids.includes(providerRef) ? [providerRef] : ids.filter(id => id.startsWith(providerRef));
+  if (providerRef !== undefined && selected.length !== 1) throw new Error(selected.length ? "Provider identifier is ambiguous." : "Provider not found in this tenant.");
   const credentials = [transport.credential, ...(transport.credentialFallbacks ?? []).map(item => item.value)];
   async function request(path: string, body?: unknown) {
     for (let i = 0; i < credentials.length; i++) {

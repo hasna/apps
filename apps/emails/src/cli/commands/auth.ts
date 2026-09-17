@@ -406,14 +406,14 @@ function handleBootstrap(output: OutputFn) {
       const password = await resolvePassword(opts.password);
       const body: Record<string, unknown> = { email, password };
       if (opts.name?.trim()) body["name"] = opts.name.trim();
-      // API-key auth: uses the operator's existing EMAILS_SELF_HOSTED_API_KEY.
+      // API-key auth: uses the operator's existing HASNA_EMAILS_API_KEY.
       const { status, json } = selfHostedApiRequest("POST", "/auth/bootstrap-owner", body);
       if (status === 403 && bodyReason(json) === "email_not_allowed") {
         return handleError(new Error("The owner email must be in a domain this deployment allows (server: EMAILS_AUTH_ALLOWED_EMAIL_DOMAINS)."));
       }
       if (status === 401 || status === 403) {
         return handleError(
-          new Error("Bootstrap requires the operator API key (EMAILS_SELF_HOSTED_API_KEY)."),
+          new Error("Bootstrap requires the operator API key (HASNA_EMAILS_API_KEY)."),
         );
       }
       if (status === 409) {

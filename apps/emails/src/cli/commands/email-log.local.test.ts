@@ -13,6 +13,7 @@ import {
   API_BASE_URL_SETTING,
   API_CREDENTIAL_SETTINGS,
   DATABASE_PATH_SETTINGS,
+  LOCAL_OPT_IN_SETTINGS,
 } from "../../store-resolution.js";
 import { registerEmailLogCommands } from "./email-log.local.test-support.js";
 
@@ -30,6 +31,7 @@ function restoreInheritedProcessEnv(): void {
 async function setupDb() {
   resetDatabase();
   process.env["EMAILS_DB_PATH"] = ":memory:";
+  process.env["HASNA_EMAILS_LOCAL"] = "1";
   const db = getDatabase();
   const provider = createProvider({ name: "sandbox", type: "sandbox" }, db);
   const sent = await createSentEmailLedger(provider.id, {
@@ -93,6 +95,7 @@ beforeEach(async () => {
 afterEach(() => {
   closeDatabase();
   delete process.env["EMAILS_DB_PATH"];
+  delete process.env["HASNA_EMAILS_LOCAL"];
   restoreInheritedProcessEnv();
 });
 
@@ -353,7 +356,7 @@ describe("webhook listen command", () => {
     // spelled one at a time. `DATABASE_PATH_SETTINGS` has TWO entries and an earlier version of
     // this case deleted only the second by name — it passed solely because the hermetic runner
     // happens to unset the first, which is a dependency on the runner rather than on this file.
-    for (const setting of DATABASE_PATH_SETTINGS) delete process.env[setting];
+    for (const setting of [...DATABASE_PATH_SETTINGS, ...LOCAL_OPT_IN_SETTINGS]) delete process.env[setting];
     process.env[API_BASE_URL_SETTING] = "https://mail.example.test";
     process.env[API_CREDENTIAL_SETTINGS[2]] = "not-a-real-credential";
     const errors = await runExpectingError(["webhook", "listen", "--port", "0"]);

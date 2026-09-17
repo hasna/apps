@@ -22,30 +22,8 @@ export function registerSessionCommand(program: Command): void {
       const { readFileSync: _rfs } = await import("node:fs");
       const transcript = _rfs(transcriptFile, "utf-8");
       const sessionId = opts.sessionId ?? `cli-${Date.now()}`;
-      const { isApiMode, apiJson } = await import("../../db/api-mode.js");
-      if (isApiMode()) {
-        // Hosted ingest: the shared cloud owns the job queue and the extraction
-        // worker, so the transcript ships to the server (POST /sessions/ingest,
-        // mapped from the client's /v1 authority), which creates the job AND
-        // enqueues it for server-side extraction — the local code path would
-        // hit the getDatabase() split-brain guard instead of queueing anything.
-        const { data } = apiJson<{ job_id: string; status: string; message?: string }>("POST", "/sessions/ingest", {
-          session_id: sessionId,
-          transcript,
-          source: opts.source as "claude-code" | "codex" | "manual" | "open-sessions",
-          agent_id: opts.agent,
-          project_id: opts.project,
-        });
-        console.log(
-          chalk.green(
-            `✓ Session queued (hosted store): ${chalk.cyan(data.job_id)}` +
-              (data.message ? ` — ${data.message}` : ""),
-          ),
-        );
-        console.log(`  Session: ${sessionId}`);
-        console.log(`  Length:  ${transcript.length} chars`);
-        return;
-      }
+      const { isApiMode } = await import("../../db/api-mode.js");
+      const hosted = isApiMode();
       const { createSessionJob } = await import("../../db/session-jobs.js");
       const { enqueueSessionJob } = await import("../../lib/session-queue.js");
       const job = createSessionJob({
@@ -55,8 +33,13 @@ export function registerSessionCommand(program: Command): void {
         agent_id: opts.agent,
         project_id: opts.project,
       });
+      // Hosted createSessionJob() posts to /v1/sessions/ingest, where the
+      // server already enqueues the job. enqueueSessionJob() is a hosted no-op
+      // and remains the local queue kick for explicit local mode.
       enqueueSessionJob(job.id);
-      console.log(chalk.green(`✓ Session queued: ${chalk.cyan(job.id)}`));
+      console.log(chalk.green(
+        `✓ Session queued${hosted ? " (hosted store)" : ""}: ${chalk.cyan(job.id)}`,
+      ));
       console.log(`  Session: ${sessionId}`);
       console.log(`  Length:  ${transcript.length} chars`);
     });
@@ -85,15 +68,19 @@ export function registerSessionCommand(program: Command): void {
     .option("--agent <id>", "Filter by agent")
     .option("--project <id>", "Filter by project")
     .option("--status <status>", "Filter by status")
+    .option("--session-id <id>", "Filter by session ID")
     .option("--limit <n>", "Max results", "20")
-    .action(async (opts: { agent?: string; project?: string; status?: string; limit: string }) => {
+    .option("--offset <n>", "Result offset", "0")
+    .action(async (opts: { agent?: string; project?: string; status?: string; sessionId?: string; limit: string; offset: string }) => {
       const globalOpts = program.opts<GlobalOpts>();
       const { listSessionJobs } = await import("../../db/session-jobs.js");
       const jobs = listSessionJobs({
         agent_id: opts.agent,
         project_id: opts.project,
         status: opts.status as "pending" | "processing" | "completed" | "failed" | undefined,
-        limit: parseInt(opts.limit),
+        session_id: opts.sessionId,
+        limit: parseInt(opts.limit, 10),
+        offset: parseInt(opts.offset, 10),
       });
       if (globalOpts.json) {
         outputJson(jobs);

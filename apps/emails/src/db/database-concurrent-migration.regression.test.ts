@@ -24,9 +24,11 @@ import { closeDatabase, getDatabase, resetDatabase } from "./database.ts";
 
 const tempDirs: string[] = [];
 let previousDbPath: string | undefined;
+let previousLocalOptIn: string | undefined;
 
 beforeEach(() => {
   previousDbPath = process.env["EMAILS_DB_PATH"];
+  previousLocalOptIn = process.env["HASNA_EMAILS_LOCAL"];
 });
 
 afterEach(() => {
@@ -34,6 +36,10 @@ afterEach(() => {
   resetDatabase();
   if (previousDbPath === undefined) delete process.env["EMAILS_DB_PATH"];
   else process.env["EMAILS_DB_PATH"] = previousDbPath;
+  // The local opt-in is local-store configuration exactly like the path: restore it
+  // the same way, or it leaks into every later file in this shared bun process.
+  if (previousLocalOptIn === undefined) delete process.env["HASNA_EMAILS_LOCAL"];
+  else process.env["HASNA_EMAILS_LOCAL"] = previousLocalOptIn;
   for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -46,6 +52,7 @@ function seedRewoundDatabase(): string {
   closeDatabase();
   resetDatabase();
   process.env["EMAILS_DB_PATH"] = path;
+  process.env["HASNA_EMAILS_LOCAL"] = "1";
   getDatabase();
   closeDatabase();
   resetDatabase();
@@ -94,6 +101,7 @@ describe("concurrent migration safety", () => {
       closeDatabase();
       resetDatabase();
       process.env["EMAILS_DB_PATH"] = path;
+      process.env["HASNA_EMAILS_LOCAL"] = "1";
       const db = getDatabase();
 
       // The pass must have actually run. A rewound sentinel that is still
@@ -114,6 +122,7 @@ describe("concurrent migration safety", () => {
     closeDatabase();
     resetDatabase();
     process.env["EMAILS_DB_PATH"] = path;
+    process.env["HASNA_EMAILS_LOCAL"] = "1";
     const db = getDatabase();
 
     const level = db.query("SELECT MAX(id) as max_id FROM _migrations").get() as { max_id: number | null } | null;

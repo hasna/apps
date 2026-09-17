@@ -1068,6 +1068,28 @@ describe("cloud task CRUD maps /v1 envelopes and carries the bearer key", () => 
     expect(calls.map((call) => call.method)).toEqual(["POST", "GET"]);
   });
 
+  test("create rejects authoritative readback that drops assigned_to or task_list_id", async () => {
+    const calls = installFetch(() => ({
+      status: 201,
+      body: {
+        task: {
+          id: "new1",
+          title: "made",
+          assigned_to: null,
+          task_list_id: null,
+        },
+      },
+    }));
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+
+    await expect(cloudCreateTask(client, {
+      title: "made",
+      assigned_to: "ada",
+      task_list_id: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+    })).rejects.toThrow("TASK_CREATE_PERSISTENCE_UNVERIFIED");
+    expect(calls.map((call) => call.method)).toEqual(["POST", "GET"]);
+  });
+
   test("create never replays a task POST when the authority rejects acceptance", async () => {
     const calls = installFetch(() => ({
       status: 500,
@@ -1738,6 +1760,15 @@ describe("cloud agent + lock + deps + verification routing (identity/coordinatio
 
 describe("cloud read/analytics routing reads the shared cloud dataset", () => {
   const iso = (msAgo: number) => new Date(Date.now() - msAgo).toISOString();
+  const dependencyPage = (dependencies: Array<{ task_id: string; depends_on: string }>) => ({
+    dependencies,
+    count: dependencies.length,
+    total: dependencies.length,
+    limit: 500,
+    offset: 0,
+    has_more: false,
+    next_offset: null,
+  });
 
   test("active work -> GET /v1/tasks?status=in_progress, priority-sorted", async () => {
     const calls = installFetch(() => ({
@@ -1894,17 +1925,60 @@ describe("cloud read/analytics routing reads the shared cloud dataset", () => {
   });
 
   test("all dependencies -> GET /v1/dependencies, unwraps { dependencies }", async () => {
-    const calls = installFetch(() => ({ body: { dependencies: [{ task_id: "a", depends_on: "b" }], count: 1 } }));
+    const calls = installFetch(() => ({ body: dependencyPage([{ task_id: "a", depends_on: "b" }]) }));
     const client = getTodosCloudClient(CLOUD_ENV)!;
     const edges = await cloudAllDependencies(client);
     expect(edges).toHaveLength(1);
-    expect(calls[0]!.url).toBe("https://todos.example.com/v1/dependencies");
+    expect(calls[0]!.url).toBe("https://todos.example.com/v1/dependencies?limit=500&offset=0");
+  });
+
+  test("all dependencies follows bounded pages and rejects malformed completeness evidence", async () => {
+    const calls = installFetch((call) => {
+      const url = new URL(call.url);
+      const offset = Number(url.searchParams.get("offset"));
+      if (offset === 0) {
+        return { body: {
+          dependencies: [{ task_id: "a", depends_on: "b" }],
+          count: 1,
+          total: 2,
+          limit: 500,
+          offset: 0,
+          has_more: true,
+          next_offset: 1,
+        } };
+      }
+      return { body: {
+        dependencies: [{ task_id: "c", depends_on: "d" }],
+        count: 1,
+        total: 2,
+        limit: 500,
+        offset: 1,
+        has_more: false,
+        next_offset: null,
+      } };
+    });
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    expect(await cloudAllDependencies(client)).toEqual([
+      { task_id: "a", depends_on: "b" },
+      { task_id: "c", depends_on: "d" },
+    ]);
+    expect(calls.map((call) => call.url)).toEqual([
+      "https://todos.example.com/v1/dependencies?limit=500&offset=0",
+      "https://todos.example.com/v1/dependencies?limit=500&offset=1",
+    ]);
+
+    installFetch(() => ({ body: { dependencies: [], count: 0 } }));
+    const malformedClient = getTodosCloudClient({
+      ...CLOUD_ENV,
+      HASNA_TODOS_API_URL: "https://malformed-todos.example.com",
+    })!;
+    await expect(cloudAllDependencies(malformedClient)).rejects.toThrow("refusing incomplete dependency analytics");
   });
 
   test("blocking deps map -> incomplete blockers only", async () => {
     installFetch((c) => {
-      if (c.url.endsWith("/dependencies")) {
-        return { body: { dependencies: [{ task_id: "cand", depends_on: "done" }, { task_id: "cand", depends_on: "open" }] } };
+      if (new URL(c.url).pathname.endsWith("/dependencies")) {
+        return { body: dependencyPage([{ task_id: "cand", depends_on: "done" }, { task_id: "cand", depends_on: "open" }]) };
       }
       if (c.url.endsWith("/tasks/done")) return { body: { task: { id: "done", status: "completed", title: "done" } } };
       if (c.url.endsWith("/tasks/open")) return { body: { task: { id: "open", status: "pending", title: "open" } } };
@@ -1920,7 +1994,7 @@ describe("cloud read/analytics routing reads the shared cloud dataset", () => {
       if (c.url.endsWith("/agents")) {
         return { body: { agents: [{ id: "ag1", name: "julius", last_seen_at: iso(60 * 1000) }] } };
       }
-      if (c.url.endsWith("/dependencies")) return { body: { dependencies: [] } };
+      if (new URL(c.url).pathname.endsWith("/dependencies")) return { body: dependencyPage([]) };
       // /v1/tasks (list, no status filter)
       return {
         body: {

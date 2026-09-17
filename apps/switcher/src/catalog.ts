@@ -1,6 +1,7 @@
 import { type Catalog, type Model, type Provider, type ProviderInput, Fault, modelSchema, VERSION } from "./domain";
 import { boundedJson } from "./http";
 import { authHeader } from "./auth";
+import {bedrockMantleOrigin} from "./bedrock";
 const positive = (v: unknown) => typeof v === "number" && Number.isInteger(v) && v > 0 ? v : undefined;
 const strings = (v: unknown) => Array.isArray(v) && v.every(i => typeof i === "string") ? v : undefined;
 const modalities = (v: unknown): string[] | undefined => {
@@ -138,6 +139,10 @@ async function discoverBase(provider: Provider, env: Record<string, string | und
         ...(provider.catalogFormat === "gemini" && row.supportedGenerationMethods !== undefined
           ? {supportedGenerationMethods: row.supportedGenerationMethods} : {}),
       };
+      // Mantle lists every model family; its Anthropic Messages endpoint only
+      // accepts Claude. Retain catalog visibility without offering an invalid
+      // native coding choice for this route.
+      if(provider.protocol==="anthropic-messages"&&bedrockMantleOrigin(provider.baseUrl)&&!id.startsWith("anthropic."))candidate.available=false;
       if (provider.catalogFormat === "mistral") {
         const capabilities = row.capabilities;
         if (typeof capabilities?.function_calling === "boolean") candidate.supportedParameters = capabilities.function_calling ? ["tools"] : [];

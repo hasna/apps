@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import { TaskReferenceAmbiguousError, type Task, type TaskFilter } from "../types/index.js";
+import { TaskReferenceAmbiguousError, type Task, type TaskDependency, type TaskFilter } from "../types/index.js";
 import { searchTasks } from "../lib/search.js";
 import {
   createTask,
@@ -18,6 +18,12 @@ import {
   getActiveWork,
   getTasksChangedSince,
 } from "../db/tasks.js";
+import {
+  addDependency,
+  getTaskDependencies,
+  getTaskDependents,
+  removeDependency,
+} from "../db/task-graph.js";
 import {
   createProject,
   getProject,
@@ -237,6 +243,36 @@ export function createLocalSqliteTodosStorageAdapter(
       getNext: (agentId, filters) => getNextTask(agentId, filters, database()),
       getActiveWork: (filters) => getActiveWork(filters, database()),
       getChangedSince: (since, filters) => getTasksChangedSince(since, filters, database()),
+    },
+    dependencies: {
+      add: (taskId, dependsOn) => {
+        addDependency(taskId, dependsOn, database());
+        return { task_id: taskId, depends_on: dependsOn };
+      },
+      remove: (taskId, dependsOn) => removeDependency(taskId, dependsOn, database()),
+      list: (taskId) => {
+        const dependencies = getTaskDependencies(taskId, database());
+        const blocks = getTaskDependents(taskId, database());
+        return { dependencies, blocks, blocked_by: blocks };
+      },
+      listPage: ({ limit, offset }) => {
+        if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) {
+          throw new Error("SQLite dependency page limit must be an integer from 1 to 500");
+        }
+        if (!Number.isSafeInteger(offset) || offset < 0) {
+          throw new Error("SQLite dependency page offset must be a non-negative integer");
+        }
+        const totalRow = database()
+          .query("SELECT COUNT(*) AS total FROM task_dependencies")
+          .get() as { total: number };
+        const dependencies = database()
+          .query("SELECT task_id, depends_on FROM task_dependencies ORDER BY task_id, depends_on LIMIT ? OFFSET ?")
+          .all(limit, offset) as TaskDependency[];
+        return { dependencies, total: totalRow.total };
+      },
+      listAll: () => database()
+        .query("SELECT task_id, depends_on FROM task_dependencies ORDER BY task_id, depends_on")
+        .all() as TaskDependency[],
     },
     projects: {
       create: (input) => createProject(input, database()),

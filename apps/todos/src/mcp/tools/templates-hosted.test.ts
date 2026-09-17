@@ -39,11 +39,12 @@ const withSteps = {
   ],
 };
 
-const task = (id: string, title: string) => ({
+const task = (id: string, title: string, over: Record<string, unknown> = {}) => ({
   id, short_id: id.slice(0, 4), title, status: "pending", priority: "high",
   project_id: null, task_list_id: null, plan_id: null, parent_id: null,
   agent_id: null, assigned_to: null, tags: [], metadata: {}, version: 1,
   created_at: "2026-09-11T00:00:00.000Z", updated_at: "2026-09-11T00:00:00.000Z",
+  ...over,
 });
 
 test("template reads (list/get/preview/export/history) go to /v1/templates and never open a store", async () => {
@@ -127,27 +128,44 @@ test("template writes (create/update/delete/import/init) hit the /v1 write route
   );
 });
 
-test("create_task_from_template applies the remote template through POST /v1/tasks + dependencies", async () => {
+test("create_task_from_template preserves assigned_to and task_list_id through hosted create readback", async () => {
   const created: string[] = [];
+  const createdBodies = new Map<string, Record<string, unknown>>();
+  const taskListId = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
   await withHostedTools(
     registerTemplateTools as never,
     {
       "GET /v1/templates/:id": () => ({ template: withSteps }),
       "POST /v1/tasks": (req) => {
-        const title = (req.body as { title: string }).title;
+        const body = req.body as Record<string, unknown>;
+        const title = body.title as string;
         const id = `task-${created.length}`;
         created.push(title);
-        return { task: task(id, title) };
+        createdBodies.set(id, body);
+        return { task: task(id, title, body) };
       },
       // cloudCreateTask reads the row back before any caller may print success.
-      "GET /v1/tasks/:id": (req) => ({ task: task(req.path.split("/").pop()!, created[Number(req.path.slice(-1))] ?? "") }),
+      "GET /v1/tasks/:id": (req) => {
+        const id = req.path.split("/").pop()!;
+        return { task: task(id, created[Number(id.slice(-1))] ?? "", createdBodies.get(id)) };
+      },
       "POST /v1/tasks/:id/dependencies": (req) => ({ dependency: { task_id: "task-1", depends_on: (req.body as { depends_on: string }).depends_on } }),
     },
     async (ctx) => {
-      const text = await ctx.call("create_task_from_template", { template_id: TEMPLATE.id, variables: { version: "2.0.0" } });
+      const text = await ctx.call("create_task_from_template", {
+        template_id: TEMPLATE.id,
+        variables: { version: "2.0.0" },
+        assigned_to: "ada",
+        task_list_id: taskListId,
+      });
       expect(text).toContain("2 task(s) created from template");
       expect(created).toEqual(["cut 2.0.0", "announce 2.0.0"]);
-      expect(ctx.requests.filter((r) => r.path === "/v1/tasks" && r.method === "POST")).toHaveLength(2);
+      const creates = ctx.requests.filter((r) => r.path === "/v1/tasks" && r.method === "POST");
+      expect(creates).toHaveLength(2);
+      for (const request of creates) {
+        expect(request.body).toMatchObject({ assigned_to: "ada", task_list_id: taskListId });
+        expect(request.body).not.toHaveProperty("agent_id");
+      }
       expect(ctx.requests.some((r) => r.method === "POST" && /^\/v1\/tasks\/task-1\/dependencies$/.test(r.path))).toBe(true);
     },
   );

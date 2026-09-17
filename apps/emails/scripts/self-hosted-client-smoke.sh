@@ -14,29 +14,33 @@ command -v "$emails_cli" >/dev/null 2>&1 || fail "Emails CLI is not executable: 
 # The client must be configured for the operator-owned service, and that
 # selection is a fact about STORAGE configuration, not a deployment word. The
 # URL and credential resolve through the shared credential resolver: either the
-# canonical names, the one-release aliases, or the resolver's other tiers
+# canonical names or the resolver's other tiers
 # (Keychain / ~/.hasna/emails/config/credentials). A live session or identity
 # token is also a credential.
-if test -n "${EMAILS_SELF_HOSTED_URL:-}" || test -n "${HASNA_EMAILS_API_URL:-}"; then
+if test -n "${EMAILS_SELF_HOSTED_URL:-}" || test -n "${EMAILS_SELF_HOSTED_API_KEY:-}"; then
+  fail "EMAILS_SELF_HOSTED_URL and EMAILS_SELF_HOSTED_API_KEY are retired; use HASNA_EMAILS_API_URL / HASNA_EMAILS_API_KEY"
+fi
+
+if test -n "${HASNA_EMAILS_API_URL:-}"; then
   if test -z "${EMAILS_SESSION_TOKEN:-}" &&
     test -z "${EMAILS_IDP_TOKEN:-}" &&
-    test -z "${EMAILS_SELF_HOSTED_API_KEY:-}" &&
     test -z "${HASNA_EMAILS_API_KEY:-}"; then
     fail "set a credential for the configured service URL"
   fi
 elif test -z "${EMAILS_SESSION_TOKEN:-}" && test -z "${EMAILS_IDP_TOKEN:-}" &&
-  test -z "${EMAILS_SELF_HOSTED_API_KEY:-}" && test -z "${HASNA_EMAILS_API_KEY:-}"; then
+  test -z "${HASNA_EMAILS_API_KEY:-}"; then
   # Neither a URL nor any credential in the environment: the resolver may still
   # find a Keychain item or a credentials file, but a smoke run should not depend
   # on the operator's machine state — require explicit configuration here.
-  fail "configure the self-hosted client: set HASNA_EMAILS_API_URL / HASNA_EMAILS_API_KEY (or the EMAILS_SELF_HOSTED_URL / EMAILS_SELF_HOSTED_API_KEY aliases)"
+  fail "configure the self-hosted client: set HASNA_EMAILS_API_URL / HASNA_EMAILS_API_KEY"
 fi
 
 # A database-path setting is evidence of an unresolved two-store configuration,
 # even when its current value is blank. Retirement proof must exercise the API
 # with no local database selector available to this process.
-if test "${HASNA_EMAILS_DB_PATH+x}" = "x" || test "${EMAILS_DB_PATH+x}" = "x"; then
-  fail "HASNA_EMAILS_DB_PATH and EMAILS_DB_PATH must both be unset"
+if test "${HASNA_EMAILS_DB_PATH+x}" = "x" || test "${EMAILS_DB_PATH+x}" = "x" ||
+  test "${HASNA_EMAILS_LOCAL+x}" = "x" || test "${EMAILS_LOCAL+x}" = "x"; then
+  fail "HASNA_EMAILS_DB_PATH, EMAILS_DB_PATH, HASNA_EMAILS_LOCAL, and EMAILS_LOCAL must all be unset"
 fi
 
 smoke_tmp="$(mktemp -d "${TMPDIR:-/tmp}/emails-self-hosted-smoke.XXXXXX")"

@@ -24,8 +24,8 @@ import { EMAILS_IDP_TOKEN_ENV, EMAILS_SESSION_TOKEN_ENV } from "./emails-credent
 
 export const EMAILS_CLIENT_ENV_SECRET_ENV = "EMAILS_CLIENT_ENV_SECRET";
 
-/** The app's own principals, plus the one-release key alias, re-exported from the credential seam. */
-export { EMAILS_IDP_TOKEN_ENV, EMAILS_SELF_HOSTED_API_KEY_ENV, EMAILS_SESSION_TOKEN_ENV } from "./emails-credentials.js";
+/** The app's own principals, re-exported from the credential seam. */
+export { EMAILS_IDP_TOKEN_ENV, EMAILS_SESSION_TOKEN_ENV } from "./emails-credentials.js";
 
 /**
  * The settings the vault entry may still carry: the app's own principals. The
@@ -229,18 +229,14 @@ function writeClientEnvSecretMap(secretPath: string, map: Record<string, string>
   const value = JSON.stringify(map);
   const result = runSecretsCommand(["set", secretPath, "--stdin"], env, value);
   if (result.status === 0) return;
-  // A pre-0.2.9 CLI rejects `--stdin` with its usage line (the value positional
-  // is missing there). Only THAT failure falls back to the legacy argv form —
-  // a genuine write failure on a current CLI is never retried with the value
-  // in argv. The gate is exact: the pre-0.2.9 usage line never mentions
-  // `--stdin`, while every >=0.2.9 usage variant does, so a current CLI's
-  // usage output can never match.
-  if (result.stderr.includes("Usage: secrets set") && !result.stderr.includes("--stdin")) {
-    const legacy = runSecretsCommand(["set", secretPath, value], env);
-    if (legacy.status === 0) return;
-    throw new Error(`secrets set failed for the EMAILS_CLIENT_ENV_SECRET entry (exit ${legacy.status}).`);
-  }
-  throw new Error(`secrets set failed for the EMAILS_CLIENT_ENV_SECRET entry (exit ${result.status}).`);
+  // Never retry by putting the value in argv. Older Secrets CLIs that lack
+  // `--stdin` are unsafe for session persistence and must be upgraded.
+  const upgrade = result.stderr.includes("Usage: secrets set") && !result.stderr.includes("--stdin")
+    ? " The installed secrets CLI does not support safe stdin writes; upgrade it before persisting sessions."
+    : "";
+  throw new Error(
+    `secrets set failed for the EMAILS_CLIENT_ENV_SECRET entry (exit ${result.status}).${upgrade}`,
+  );
 }
 
 /**

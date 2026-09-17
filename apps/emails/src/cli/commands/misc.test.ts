@@ -205,7 +205,7 @@ describe("schedule list routes to /v1/scheduled", () => {
 // that constructs a store.)
 
 describe("doctor runs the diagnostics against the configured store", () => {
-  const DATABASE_PATH_KEYS = ["HASNA_EMAILS_DB_PATH", "EMAILS_DB_PATH"] as const;
+  const DATABASE_PATH_KEYS = ["HASNA_EMAILS_DB_PATH", "EMAILS_DB_PATH", "HASNA_EMAILS_LOCAL", "EMAILS_LOCAL"] as const;
   let priorDatabasePaths: Record<string, string | undefined> = {};
 
   beforeEach(() => {

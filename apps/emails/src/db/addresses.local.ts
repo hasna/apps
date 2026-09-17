@@ -11,7 +11,7 @@ import { selfHostedStoreFor, isSelfHostedMode, type SelfHostedResourceStore } fr
 // ============================================================================
 //
 // When the client-flip resolves to selfHosted (mode=self_hosted + HASNA_EMAILS_API_URL
-// + EMAILS_SELF_HOSTED_API_KEY), the `addresses` resource is served by the app's selfHosted
+// + HASNA_EMAILS_API_KEY), the `addresses` resource is served by the app's selfHosted
 // HTTP API (<API_URL>/v1/addresses) instead of the local SQLite store — the same
 // cred-based gate the `domains` resource already uses. An explicit `db` selects
 // the caller-owned SQLite database and takes precedence over process-wide mode.

@@ -26,6 +26,7 @@ import {
   API_CREDENTIAL_SETTINGS,
   API_SETTINGS_POINTER,
   DATABASE_PATH_SETTINGS,
+  LOCAL_OPT_IN_SETTINGS,
 } from "../../store-resolution.js";
 
 const PROVIDER_ID = "dashboard-provider";
@@ -101,8 +102,9 @@ beforeEach(() => {
   for (const setting of [API_BASE_URL_SETTING, API_SETTINGS_POINTER, ...API_CREDENTIAL_SETTINGS]) {
     delete process.env[setting];
   }
-  for (const setting of DATABASE_PATH_SETTINGS) delete process.env[setting];
+  for (const setting of [...DATABASE_PATH_SETTINGS, ...LOCAL_OPT_IN_SETTINGS]) delete process.env[setting];
   process.env[DATABASE_PATH_SETTINGS[1]] = ":memory:";
+  process.env[LOCAL_OPT_IN_SETTINGS[0]] = "1";
   resetDatabase();
   db = getDatabase();
   db.run("INSERT INTO providers (id, name, type, active) VALUES (?, 'Dashboard', 'sandbox', 1)", [PROVIDER_ID]);
@@ -113,7 +115,7 @@ beforeEach(() => {
   // The handle above stays open, so the dashboard still has its connection while the
   // ENVIRONMENT now describes an API and nothing else. A path and an API together are a hard
   // boot error, so the two cannot both be configured.
-  for (const setting of DATABASE_PATH_SETTINGS) delete process.env[setting];
+  for (const setting of [...DATABASE_PATH_SETTINGS, ...LOCAL_OPT_IN_SETTINGS]) delete process.env[setting];
   process.env[API_BASE_URL_SETTING] = service().baseUrl;
   process.env[API_CREDENTIAL_SETTINGS[2] as string] = service().apiKey;
 });

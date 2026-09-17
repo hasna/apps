@@ -697,7 +697,7 @@ export interface SessionMemoryJob {
   session_id: string;
   agent_id: string | null;
   project_id: string | null;
-  source: string;
+  source: "claude-code" | "codex" | "manual" | "open-sessions";
   status: "pending" | "processing" | "completed" | "failed";
   transcript: string;
   chunk_count: number;
@@ -707,6 +707,212 @@ export interface SessionMemoryJob {
   created_at: string;
   started_at: string | null;
   completed_at: string | null;
+}
+
+export const SESSION_JOBS_PAGE_CONTRACT = "mementos.sessions.jobs.v2" as const;
+
+export interface SessionJobsPage {
+  contract: typeof SESSION_JOBS_PAGE_CONTRACT;
+  jobs: SessionMemoryJob[];
+  count: number;
+  limit: number;
+  offset: number;
+  has_more: boolean;
+  next_offset: number | null;
+}
+
+function sdkProtocolError(operation: string, detail: string): MementosError {
+  return new MementosError(
+    `mementos ${operation} returned a malformed 2xx response: ${detail}`,
+    502,
+  );
+}
+
+function sessionProtocolError(detail: string): MementosError {
+  return sdkProtocolError("session jobs", detail);
+}
+
+function sessionObject(value: unknown, field = "response"): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw sessionProtocolError(`expected ${field} to be a JSON object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function sessionString(object: Record<string, unknown>, field: string, nullable = false): string | null {
+  const value = object[field];
+  if (nullable && value === null) return null;
+  if (typeof value !== "string" || (!nullable && value.length === 0)) {
+    throw sessionProtocolError(`expected '${field}' to be ${nullable ? "a string or null" : "a non-empty string"}`);
+  }
+  return value;
+}
+
+function sessionCount(object: Record<string, unknown>, field: string): number {
+  const value = object[field];
+  if (!Number.isSafeInteger(value) || (value as number) < 0) {
+    throw sessionProtocolError(`expected '${field}' to be a non-negative safe integer`);
+  }
+  return value as number;
+}
+
+function decodeSessionJob(value: unknown, index: number): SessionMemoryJob {
+  const job = sessionObject(value, `jobs[${index}]`);
+  const source = sessionString(job, "source");
+  if (!["claude-code", "codex", "manual", "open-sessions"].includes(source!)) {
+    throw sessionProtocolError(`jobs[${index}] has unsupported 'source'`);
+  }
+  const status = sessionString(job, "status");
+  if (!["pending", "processing", "completed", "failed"].includes(status!)) {
+    throw sessionProtocolError(`jobs[${index}] has unsupported 'status'`);
+  }
+  const metadata = sessionObject(job["metadata"], `jobs[${index}].metadata`);
+  return {
+    id: sessionString(job, "id")!,
+    session_id: sessionString(job, "session_id")!,
+    agent_id: sessionString(job, "agent_id", true),
+    project_id: sessionString(job, "project_id", true),
+    source: source as SessionMemoryJob["source"],
+    status: status as SessionMemoryJob["status"],
+    transcript: typeof job["transcript"] === "string"
+      ? job["transcript"]
+      : (() => { throw sessionProtocolError(`jobs[${index}] expected 'transcript' to be a string`); })(),
+    chunk_count: sessionCount(job, "chunk_count"),
+    memories_extracted: sessionCount(job, "memories_extracted"),
+    error: sessionString(job, "error", true),
+    metadata,
+    created_at: sessionString(job, "created_at")!,
+    started_at: sessionString(job, "started_at", true),
+    completed_at: sessionString(job, "completed_at", true),
+  };
+}
+
+function decodeSessionJobsPage(value: unknown): SessionJobsPage {
+  const page = sessionObject(value);
+  if (page["contract"] !== SESSION_JOBS_PAGE_CONTRACT) {
+    throw sessionProtocolError(`expected contract '${SESSION_JOBS_PAGE_CONTRACT}'`);
+  }
+  if (!Array.isArray(page["jobs"])) throw sessionProtocolError("expected 'jobs' to be an array");
+  const jobs = page["jobs"].map(decodeSessionJob);
+  const count = sessionCount(page, "count");
+  const limit = sessionCount(page, "limit");
+  const offset = sessionCount(page, "offset");
+  if (limit < 1) throw sessionProtocolError("expected 'limit' to be positive");
+  if (count !== jobs.length || count > limit) {
+    throw sessionProtocolError("page count is inconsistent with jobs/limit");
+  }
+  if (typeof page["has_more"] !== "boolean") throw sessionProtocolError("expected 'has_more' to be a boolean");
+  const nextOffset = page["next_offset"];
+  if (nextOffset !== null && (!Number.isSafeInteger(nextOffset) || (nextOffset as number) < 0)) {
+    throw sessionProtocolError("expected 'next_offset' to be a non-negative safe integer or null");
+  }
+  if (page["has_more"] === true && nextOffset !== offset + jobs.length) {
+    throw sessionProtocolError("'has_more' requires the exact next offset");
+  }
+  if (page["has_more"] === false && nextOffset !== null) {
+    throw sessionProtocolError("terminal page must set 'next_offset' to null");
+  }
+  return {
+    contract: SESSION_JOBS_PAGE_CONTRACT,
+    jobs,
+    count,
+    limit,
+    offset,
+    has_more: page["has_more"],
+    next_offset: nextOffset as number | null,
+  };
+}
+
+
+function decodeSessionIngestReceipt(
+  value: unknown,
+  transcript: string,
+  expectedSessionId: string,
+): {
+  contract: "mementos.sessions.ingest.v2";
+  job_id: string;
+  status: "queued";
+  message: string;
+  job: SessionMemoryJob;
+} {
+  const receipt = sessionObject(value);
+  if (receipt["contract"] !== "mementos.sessions.ingest.v2") {
+    throw sdkProtocolError("session ingest", "expected contract 'mementos.sessions.ingest.v2'");
+  }
+  const jobId = sessionString(receipt, "job_id")!;
+  if (receipt["status"] !== "queued") throw sdkProtocolError("session ingest", "expected status 'queued'");
+  const message = sessionString(receipt, "message")!;
+  const rawJob = sessionObject(receipt["job"], "job");
+  const job = decodeSessionJob({ ...rawJob, transcript }, 0);
+  if (job.id !== jobId || job.session_id !== expectedSessionId) {
+    throw sdkProtocolError("session ingest", "job receipt identity does not match the request");
+  }
+  return {
+    contract: "mementos.sessions.ingest.v2",
+    job_id: jobId,
+    status: "queued",
+    message,
+    job,
+  };
+}
+
+function decodeQueueStats(value: unknown): {
+  pending: number;
+  processing: number;
+  completed: number;
+  failed: number;
+} {
+  const stats = sessionObject(value);
+  return {
+    pending: sessionCount(stats, "pending"),
+    processing: sessionCount(stats, "processing"),
+    completed: sessionCount(stats, "completed"),
+    failed: sessionCount(stats, "failed"),
+  };
+}
+
+const SDK_RESOURCE_TYPES = new Set<ResourceType>(["project", "memory", "entity", "agent", "connector", "file"]);
+const SDK_LOCK_TYPES = new Set<LockType>(["advisory", "exclusive"]);
+
+function decodeResourceLock(value: unknown, operation: string): ResourceLock {
+  const lock = sessionObject(value, "lock");
+  const resourceType = sessionString(lock, "resource_type")!;
+  const lockType = sessionString(lock, "lock_type")!;
+  if (!SDK_RESOURCE_TYPES.has(resourceType as ResourceType)) {
+    throw sdkProtocolError(operation, "unsupported 'resource_type'");
+  }
+  if (!SDK_LOCK_TYPES.has(lockType as LockType)) {
+    throw sdkProtocolError(operation, "unsupported 'lock_type'");
+  }
+  return {
+    id: sessionString(lock, "id")!,
+    resource_type: resourceType as ResourceType,
+    resource_id: sessionString(lock, "resource_id")!,
+    agent_id: sessionString(lock, "agent_id")!,
+    lock_type: lockType as LockType,
+    locked_at: sessionString(lock, "locked_at")!,
+    expires_at: sessionString(lock, "expires_at")!,
+  };
+}
+
+function decodeResourceLocks(value: unknown, operation: string): ResourceLock[] {
+  if (!Array.isArray(value)) throw sdkProtocolError(operation, "expected a JSON array");
+  return value.map((lock) => decodeResourceLock(lock, operation));
+}
+
+function decodeBooleanReceipt(value: unknown, field: string, operation: string): Record<string, boolean> {
+  const receipt = sessionObject(value);
+  if (typeof receipt[field] !== "boolean") throw sdkProtocolError(operation, `expected '${field}' to be a boolean`);
+  return { [field]: receipt[field] } as Record<string, boolean>;
+}
+
+function decodeCountReceipt(value: unknown, field: string, operation: string): Record<string, number> {
+  const receipt = sessionObject(value);
+  const count = receipt[field];
+  if (!Number.isSafeInteger(count) || (count as number) < 0) {
+    throw sdkProtocolError(operation, `expected '${field}' to be a non-negative safe integer`);
+  }
+  return { [field]: count as number };
 }
 
 // ============================================================================
@@ -1855,33 +2061,48 @@ export class MementosClient {
 
   async acquireLock(input: AcquireLockInput): Promise<ResourceLock | null> {
     try {
-      return await this.post("/api/locks", input);
-    } catch (e) {
-      if (e instanceof Error && e.message.includes("409")) return null;
-      throw e;
+      return decodeResourceLock(await this.post<unknown>("/api/locks", input), "lock acquire");
+    } catch (error) {
+      if (error instanceof MementosError && error.status === 409) return null;
+      throw error;
     }
   }
 
-  checkLock(resourceType: ResourceType, resourceId: string, lockType?: LockType): Promise<ResourceLock[]> {
+  async checkLock(resourceType: ResourceType, resourceId: string, lockType?: LockType): Promise<ResourceLock[]> {
     const params: Record<string, string> = { resource_type: resourceType, resource_id: resourceId };
     if (lockType) params["lock_type"] = lockType;
-    return this.get("/api/locks", params);
+    return decodeResourceLocks(await this.get<unknown>("/api/locks", params), "lock list");
   }
 
-  releaseLock(lockId: string, agentId: string): Promise<{ released: boolean }> {
-    return this.request("DELETE", `/api/locks/${lockId}`, { agent_id: agentId });
+  async releaseLock(lockId: string, agentId: string): Promise<{ released: boolean }> {
+    return decodeBooleanReceipt(
+      await this.request<unknown>("DELETE", `/api/locks/${encodeURIComponent(lockId)}`, { agent_id: agentId }),
+      "released",
+      "lock release",
+    ) as { released: boolean };
   }
 
-  listAgentLocks(agentId: string): Promise<ResourceLock[]> {
-    return this.get(`/api/agents/${agentId}/locks`);
+  async listAgentLocks(agentId: string): Promise<ResourceLock[]> {
+    return decodeResourceLocks(
+      await this.get<unknown>(`/api/agents/${encodeURIComponent(agentId)}/locks`),
+      "agent lock list",
+    );
   }
 
-  releaseAllAgentLocks(agentId: string): Promise<{ released: number }> {
-    return this.request("DELETE", `/api/agents/${agentId}/locks`);
+  async releaseAllAgentLocks(agentId: string): Promise<{ released: number }> {
+    return decodeCountReceipt(
+      await this.request<unknown>("DELETE", `/api/agents/${encodeURIComponent(agentId)}/locks`),
+      "released",
+      "agent lock release",
+    ) as { released: number };
   }
 
-  cleanExpiredLocks(): Promise<{ cleaned: number }> {
-    return this.post("/api/locks/clean", {});
+  async cleanExpiredLocks(): Promise<{ cleaned: number }> {
+    return decodeCountReceipt(
+      await this.post<unknown>("/api/locks/clean", {}),
+      "cleaned",
+      "lock cleanup",
+    ) as { cleaned: number };
   }
 
   // --------------------------------------------------------------------------
@@ -2081,33 +2302,77 @@ export class MementosClient {
   // Session ingestion
   // --------------------------------------------------------------------------
 
-  ingestSession(input: {
+  async ingestSession(input: {
     transcript: string;
     session_id: string;
     agent_id?: string;
     project_id?: string;
     source?: "claude-code" | "codex" | "manual" | "open-sessions";
     metadata?: Record<string, unknown>;
-  }): Promise<{ job_id: string; status: string; message: string }> {
-    return this.post("/api/sessions/ingest", input as Record<string, unknown>);
+  }): Promise<{
+    contract: "mementos.sessions.ingest.v2";
+    job_id: string;
+    status: "queued";
+    message: string;
+    job: SessionMemoryJob;
+  }> {
+    return decodeSessionIngestReceipt(
+      await this.post<unknown>("/api/sessions/ingest", input as Record<string, unknown>),
+      input.transcript,
+      input.session_id,
+    );
   }
 
-  getSessionJob(jobId: string): Promise<SessionMemoryJob> {
-    return this.get(`/api/sessions/jobs/${jobId}`);
+  async getSessionJob(jobId: string): Promise<SessionMemoryJob> {
+    return decodeSessionJob(
+      await this.get<unknown>(`/api/sessions/jobs/${encodeURIComponent(jobId)}`),
+      0,
+    );
   }
 
-  listSessionJobs(filter?: { agent_id?: string; project_id?: string; status?: string; limit?: number }): Promise<{ jobs: SessionMemoryJob[]; count: number }> {
+  async listSessionJobs(filter?: {
+    agent_id?: string;
+    project_id?: string;
+    session_id?: string;
+    status?: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<SessionJobsPage> {
     const params = new URLSearchParams();
     if (filter?.agent_id) params.set("agent_id", filter.agent_id);
     if (filter?.project_id) params.set("project_id", filter.project_id);
+    if (filter?.session_id) params.set("session_id", filter.session_id);
     if (filter?.status) params.set("status", filter.status);
-    if (filter?.limit) params.set("limit", String(filter.limit));
+    if (filter?.limit !== undefined) params.set("limit", String(filter.limit));
+    if (filter?.offset !== undefined) params.set("offset", String(filter.offset));
     const qs = params.toString() ? `?${params.toString()}` : "";
-    return this.get(`/api/sessions/jobs${qs}`);
+    const response = await this.get<unknown>(`/api/sessions/jobs${qs}`);
+    const page = decodeSessionJobsPage(response);
+    if (filter?.limit !== undefined && page.limit !== filter.limit) {
+      throw sessionProtocolError("server did not preserve requested 'limit'");
+    }
+    if (filter?.offset !== undefined && page.offset !== filter.offset) {
+      throw sessionProtocolError("server did not preserve requested 'offset'");
+    }
+    for (const job of page.jobs) {
+      if (filter?.agent_id !== undefined && job.agent_id !== filter.agent_id) {
+        throw sessionProtocolError("server did not preserve requested 'agent_id'");
+      }
+      if (filter?.project_id !== undefined && job.project_id !== filter.project_id) {
+        throw sessionProtocolError("server did not preserve requested 'project_id'");
+      }
+      if (filter?.session_id !== undefined && job.session_id !== filter.session_id) {
+        throw sessionProtocolError("server did not preserve requested 'session_id'");
+      }
+      if (filter?.status !== undefined && job.status !== filter.status) {
+        throw sessionProtocolError("server did not preserve requested 'status'");
+      }
+    }
+    return page;
   }
 
-  getSessionQueueStats(): Promise<{ pending: number; processing: number; completed: number; failed: number }> {
-    return this.get("/api/sessions/queue/stats");
+  async getSessionQueueStats(): Promise<{ pending: number; processing: number; completed: number; failed: number }> {
+    return decodeQueueStats(await this.get<unknown>("/api/sessions/queue/stats"));
   }
 }
 

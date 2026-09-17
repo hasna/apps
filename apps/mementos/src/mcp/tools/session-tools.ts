@@ -76,6 +76,7 @@ export function registerSessionTools(server: McpServer): void {
       agent_id: z.string().optional(),
       project_id: z.string().optional(),
       status: z.enum(["pending", "processing", "completed", "failed"]).optional(),
+      session_id: z.string().optional(),
       limit: z.coerce.number().optional(),
       offset: z.coerce.number().optional(),
       full: z.boolean().optional().describe("Return complete job JSON objects. Defaults to compact lines."),
@@ -88,6 +89,7 @@ export function registerSessionTools(server: McpServer): void {
           agent_id: args.agent_id,
           project_id: args.project_id,
           status: args.status,
+          session_id: args.session_id,
           limit: args.full ? limit : limit + 1,
           offset,
         });

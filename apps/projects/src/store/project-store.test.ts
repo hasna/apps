@@ -777,6 +777,52 @@ describe("projects store api transport (roots/agents/recipes)", () => {
     expect(calls[0]).toMatchObject({ method: "GET", path: "/v1/agents" });
   });
 
+  test("getAgent accepts only a complete response bound to the requested id or slug", async () => {
+    const agent = {
+      id: "agt_exact_1",
+      slug: "release-bot",
+      name: "Release Bot",
+      kind: "cli" as const,
+      provider: null,
+      model: null,
+      role: "automation",
+      permissions: ["projects:start"],
+      metadata: {},
+      created_at: "2026-09-17T12:00:00.000Z",
+      updated_at: "2026-09-17T12:00:00.000Z",
+    };
+    const bySlug = stubStore(() => agent);
+    await expect(bySlug.store.getAgent("release-bot")).resolves.toEqual(agent);
+    expect(bySlug.calls[0]).toMatchObject({ method: "GET", path: "/v1/agents/release-bot" });
+
+    const byId = stubStore(() => agent);
+    await expect(byId.store.getAgent("agt_exact_1")).resolves.toEqual(agent);
+
+    const minimal = stubStore(() => ({ id: agent.id, slug: agent.slug, name: agent.name, kind: agent.kind }));
+    await expect(minimal.store.getAgent("release-bot")).resolves.toEqual({
+      id: agent.id,
+      slug: agent.slug,
+      name: agent.name,
+      kind: agent.kind,
+      provider: null,
+      model: null,
+      role: null,
+      permissions: [],
+      metadata: {},
+      created_at: "",
+      updated_at: "",
+    });
+
+    const malformed = stubStore(() => ({ id: agent.id, slug: agent.slug }));
+    await expect(malformed.store.getAgent("release-bot")).rejects.toThrow(/malformed response/);
+
+    const malformedOptional = stubStore(() => ({ ...agent, permissions: ["projects:start", 42] }));
+    await expect(malformedOptional.store.getAgent("release-bot")).rejects.toThrow(/malformed response/);
+
+    const mismatched = stubStore(() => agent);
+    await expect(mismatched.store.getAgent("unrelated-agent")).rejects.toThrow(/did not match unrelated-agent/);
+  });
+
   test("listRecipes unwraps { recipes } from GET /v1/recipes", async () => {
     const { store, calls } = stubStore(() => ({ recipes: [{ id: "rc1", slug: "cli" }], count: 1 }));
     const recipes = await store.listRecipes();

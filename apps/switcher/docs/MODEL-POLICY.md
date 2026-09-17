@@ -19,7 +19,7 @@ switcher launch claude --provider deepseek --model deepseek-v4-flash
 
 The guidance identifies the main session model, the current request model, role assignments, permitted IDs, and the full catalog file. It tells the model to use exact provider IDs instead of remembered harness defaults such as Opus. Switcher appends its own block to native instructions; it preserves user messages, tool turns, media, and existing instruction metadata. It refreshes that block on resumed requests and supported token-count/compaction operations.
 
-Prompt following is probabilistic. Switcher also enforces the model policy at a per-launch authenticated loopback gateway. A request for an unapproved model fails before it reaches the provider. The default permitted set contains only the selected main model. Native child/utility model slots are pinned where supported, so ordinary launches do not require manual environment variables.
+Prompt following is probabilistic. Switcher also enforces the model policy at a per-launch authenticated loopback gateway. A request for an unapproved model fails before it reaches the provider. New direct Codex launches use `selection: "catalog"`, which permits the authenticated eligible catalog snapshot for native model switching. Other launches default to the selected main model; existing saved policies keep their restrictions. Native child/utility model slots are pinned where supported, so ordinary launches do not require manual environment variables.
 
 # Assigning roles
 
@@ -46,7 +46,9 @@ A policy file has this shape; replace the example IDs with your provider's exact
 
 Unassigned roles default to the main model. The permitted set combines main, assigned roles, explicit allowed IDs, and fallback targets. All must be present in the eligible catalog. Aliases must point into that permitted set and cannot shadow another real model ID.
 
-The complete provider catalog remains visible in each supported native catalog interface. Visibility does not grant permission to use every entry: add intended alternatives to `allowedModels` or launch again with `--model`. This prevents an agent from choosing a familiar but unintended model from a large provider catalog.
+The Codex picker contains exactly the models allowed by the launch policy. A policy with `"selection": "catalog"` permits all available, unexpired models in the eligible catalog snapshot. `"selection": "restricted"` (also the default for a policy that omits this field) permits main, role assignments and explicit allowed/fallback IDs. Native child and utility role defaults remain pinned to main even when session model switching is enabled.
+
+Other native catalog interfaces may also show unavailable or built-in choices; visibility alone does not grant routing permission. Antigravity and Junie launch with one managed custom model profile; their built-in provider models do not inherit a provider credential.
 
 # Native controls
 
@@ -60,6 +62,8 @@ The complete provider catalog remains visible in each supported native catalog i
 | OMP | Fast (`smol`), planning (`slow` and `plan`). |
 | Hermes | Delegation plus verified auxiliary tasks: compression, title/profile description, review, planning triage, approval, skills, MCP, session search and web extraction. Auxiliary custom-provider settings use the selected protocol and loopback credential. |
 | Gemini CLI 0.58 | Codebase investigator, fast helpers, summarizers, compression, classifier and edit helpers; native default fallback chains terminate at the selected model. Existing generation/tool settings are retained. |
+| Antigravity CLI 1.2.5 | Verified native Flash Lite helper requests route to `fast`, which defaults to main. The custom main model uses its exact Gemini API ID. |
+| Junie build 3196.5 | Custom profile `primaryModel` and `fasterModel`; `fast` defaults to main. |
 | Aider | Weak and editor models. |
 | Kilo | Weak/small and subagent models. |
 | Pi, DeepSeek Harness, Cline, Prime Agent | Selected main model and gateway enforcement; no separate role assignments are advertised. |

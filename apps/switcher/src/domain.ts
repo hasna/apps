@@ -5,8 +5,8 @@ export { modelPolicySchema, routingEventSchema, routingEventsSchema } from "./mo
 export type { ModelPolicy, RoutingEvent } from "./model-policy-schema";
 export type { AuthStyle } from "./auth";
 
-export const VERSION = "0.2.6";
-export const harnessSchema = z.enum(["claude", "codex", "grok", "opencode", "opencode2", "pi", "omp", "dsh", "cline", "hermes", "prime-agent", "gemini", "aider", "kilo"]);
+export const VERSION = "0.2.7";
+export const harnessSchema = z.enum(["claude", "codex", "grok", "opencode", "opencode2", "pi", "omp", "dsh", "cline", "hermes", "prime-agent", "gemini", "antigravity", "junie", "aider", "kilo"]);
 export const protocolSchema = z.enum(["anthropic-messages", "openai-responses", "openai-chat", "gemini-generate-content"]);
 export const idSchema = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/);
 const label = z.string().min(1).max(200);
@@ -104,14 +104,14 @@ export function parse<T>(schema: z.ZodType<T, any, any>, value: unknown): T {
 export function compatible(harness: Profile["harness"], protocol: Provider["protocol"]) {
   if(harness === "claude") return protocol === "anthropic-messages";
   if(harness === "codex") return protocol === "openai-responses";
-  if(harness === "gemini") return protocol === "gemini-generate-content";
+  if(harness === "gemini" || harness === "antigravity") return protocol === "gemini-generate-content";
   if(protocol === "gemini-generate-content") return false;
   return true;
 }
 export function validateHarnessProvider(harness: Profile["harness"], provider: Pick<Provider, "protocol" | "authStyle">): void {
   if (!compatible(harness, provider.protocol))
     throw new Fault(422, "protocol_mismatch", "Harness does not support this provider protocol.");
-  if (harness === "gemini" && provider.authStyle !== "x-api-key")
+  if ((harness === "gemini" || harness === "antigravity") && provider.authStyle !== "x-api-key")
     throw new Fault(422, "auth_mismatch", "Gemini CLI requires x-api-key authentication for its native generateContent protocol.");
 }
 /** Operator expiry dates are inclusive in UTC; they do not promise provider uptime. */

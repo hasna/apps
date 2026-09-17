@@ -1,9 +1,10 @@
 # CLI reference
 
-This page describes the command tree shipped by `@hasna/emails` 1.3.3. It was
-checked against the live `--help` output in both `local` and `self_hosted`
-modes. Use `emails <command> --help` for every option and argument; Commander
-help is the option-level source of truth.
+This page describes the current command tree shipped by `@hasna/emails`. Use
+`emails <command> --help` for every option and argument; Commander help is the
+option-level source of truth. Ordinary CLI, terminal UI, and MCP operations are
+hosted API clients. Explicit storage-library and standalone-server compatibility
+surfaces are documented separately below.
 
 ## Global options
 
@@ -42,61 +43,60 @@ errors are written to stderr.
 | `auth` | `signup`, `login`, `logout`, `whoami`, `switch-tenant`, `verify-email`, `bootstrap` |
 | `keys` | `list`, `create`, `revoke` tenant-scoped API keys. |
 | `ui` | Start the full-screen OpenTUI client. |
-| `serve` | Start the local dashboard API or self-hosted service selected by mode. |
+| `serve` | Start the compatibility server command; server storage follows `EMAILS_DATABASE_URL`. |
 | `mcp` | Print or install MCP configuration for Claude Code, Codex, or Gemini. |
 | `remove` / `uninstall` | Remove MCP configuration from supported agent clients. |
 | `status` | Redacted health and next actions. |
 | `stats`, `analytics`, `monitor` | Delivery statistics and monitoring. |
 | `doctor` | Diagnostics; `doctor delivery <address>` diagnoses missing inbound mail. |
-| `provision` | Registered compatibility namespace; intentionally not implemented (see below). |
+| `provision` | `status`, durable `up`, `job`, `retry`, and `daemon` provisioning workflows. |
 
 Standalone aliases are also shipped for common actions: `addresses`, `log`,
 `search`, `show`, `replies`, `conversation`, `test`, `export`, `pull`,
 `preview`, `scheduler`, `batch`, `completion`, `verify-email`, `code`, `links`,
 `forward`, `reply`, and `whoami`.
 
-## Commands that intentionally refuse
+## Capability-gated commands
 
-Registration in help does not imply implementation. The following compatibility
-and design-target commands fail with an actionable "not implemented in this
-build" error in every deployment mode:
-
-- every `emails provision *` subcommand;
-- `emails domain connect`, `verify`, `status`, `setup-cloudflare`, and `setup`;
-- `emails domains connect`, `verify`, `enable-inbound`, `enable-outbound`, and
-  `disable-outbound`;
-- `emails address provision`.
-
-Use `emails domains status` for stored domain state, `emails domain check` for
-live public DNS, `emails domain adopt` for an already verified provider domain,
-and `emails aws setup-inbound` for SES/S3 inbound wiring.
+Current domain and address orchestration is implemented through authenticated
+`/v1` routes. `emails domain connect`, `setup-cloudflare`, and `setup`,
+`emails address provision`, and `emails provision up|job|retry|daemon` return
+durable server receipts and refuse when the selected server is too old or lacks
+the required provider binding. They never substitute local state for a refused
+or unavailable API operation.
 
 `emails domain add` provisions the full inbound chain by default: it registers
-the domain AND ensures the SES receipt rule into the inbound S3 bucket (the
-same merge-safe path as `emails aws setup-inbound`). When the receipt rule
-cannot be provisioned from the current context (no bucket, no AWS
-credentials), it refuses before writing anything rather than registering a
-domain that silently bounces its mail; `--send-only` is the explicit opt-out
-for domains that should not receive. `emails domain readiness [domain]`
-audits the live chain per domain — MX, the active SES receipt rule, the app
-registration, and best-effort S3 delivery evidence — reporting each link as
-ok / MISSING / unknown with the fix, and exits non-zero when any registered
-domain has drifted into the half-provisioned shape.
+the domain and ensures the SES receipt rule into the inbound S3 bucket. When the
+current operator context cannot prove that route, it refuses before creating a
+half-configured domain; `--send-only` is the explicit opt-out. `emails domain
+readiness [domain]` audits MX, provider routing, app registration, and available
+delivery evidence, reporting each link as `ok`, `MISSING`, or `unknown`.
 
-## Mode differences
+Provider-owned mutations remain capability- and authorization-gated. A command
+appearing in help does not imply that every deployed server or principal may run
+it; use the returned refusal and `emails <command> --help` rather than falling
+back to a local database.
 
-The root command names are the same in both modes, but storage and capability
-checks may refuse an operation that the selected store cannot perform.
+## Client and server storage boundaries
+
+Storage and capability checks fail closed when the selected authority cannot
+serve an operation.
 `emails inbox attachments` (cursor-based attachment inventory) is present only
 for the hosted client; `emails inbox attachment <email-id>` exists in both
 modes. Hosted mode is selected by the shared credential resolver
-(`HASNA_EMAILS_API_URL` / `HASNA_EMAILS_API_KEY` or the one-release
-`EMAILS_SELF_HOSTED_URL` / `EMAILS_SELF_HOSTED_API_KEY` aliases, the macOS
-Keychain items for this app, or `~/.hasna/emails/config/credentials`); local
-mode is reached ONLY by an explicit `HASNA_EMAILS_DB_PATH` / `EMAILS_DB_PATH`,
-and a local run prints `emails: local mode` on stderr. `emails serve` defaults
-to the local dashboard API at `127.0.0.1:3900` in local mode and the
-self-hosted `/v1` service at `0.0.0.0:8080` in hosted mode.
+(`HASNA_EMAILS_API_URL` / `HASNA_EMAILS_API_KEY`, the macOS
+Keychain items for this app, or `~/.hasna/emails/config/credentials`; the retired
+`EMAILS_SELF_HOSTED_*` aliases are refused by name); the local store is reached
+ONLY through the standard opt-in `HASNA_EMAILS_LOCAL=1` (alias `EMAILS_LOCAL=1`) with
+no API authority or credential configured — a `HASNA_EMAILS_DB_PATH` /
+`EMAILS_DB_PATH` alone only names the file and is refused — and a local run
+prints one `emails: LOCAL mode — …` line on stderr. The `emails` and
+`emails-mcp` bins are hosted-only and reject both local selectors. Automatic storage-library selection requires the explicit local opt-in. Direct
+low-level constructors with a caller-owned Database remain explicit compatibility
+surfaces and do not invoke automatic selection.
+The standalone `emails-serve` server has a separate backend contract:
+`EMAILS_DATABASE_URL` selects PostgreSQL for `/v1`; an unset value retains the
+loopback SQLite dashboard.
 
 ## Other shipped bins
 
@@ -105,8 +105,8 @@ self-hosted `/v1` service at `0.0.0.0:8080` in hosted mode.
 `EMAILS_MCP_HTTP_TOKEN`. `--stdio`, `--version`, and `--help` are also
 available.
 
-`emails-serve` starts the same mode-selected HTTP service and also ships these
-operator commands:
+`emails-serve` starts the server backend selected by `EMAILS_DATABASE_URL` and
+also ships these operator commands:
 
 - `ingest-worker`
 - `ingest-s3-backfill`
@@ -127,12 +127,13 @@ shared `@hasna/contracts` resolver, fresh on every request:
 |---|---|
 | `HASNA_EMAILS_API_URL` | Canonical hosted API origin. Overrides the Keychain `api-url` item and the credentials file. |
 | `HASNA_EMAILS_API_KEY` | Canonical hosted API key (one of the resolver's credential tiers). |
-| `EMAILS_SELF_HOSTED_URL` | One-release alias for `HASNA_EMAILS_API_URL` (one rung below canonical). |
-| `EMAILS_SELF_HOSTED_API_KEY` | One-release alias for `HASNA_EMAILS_API_KEY` (one rung below canonical). |
+| `EMAILS_SELF_HOSTED_URL` | RETIRED: refused by name; set `HASNA_EMAILS_API_URL`. |
+| `EMAILS_SELF_HOSTED_API_KEY` | RETIRED: refused by name; set `HASNA_EMAILS_API_KEY`. |
 | `EMAILS_SESSION_TOKEN` | The app's own user session; wins as the bearer credential. |
 | `EMAILS_IDP_TOKEN` | The app's own agent identity token; wins over the resolved key. |
 | `EMAILS_CLIENT_ENV_SECRET` | Secrets-vault pointer persisting the session/identity tokens (no longer delivers URL or key). |
-| `HASNA_EMAILS_DB_PATH` / `EMAILS_DB_PATH` | Explicit local SQLite file — the ONLY way into local mode. |
+| `HASNA_EMAILS_LOCAL` / `EMAILS_LOCAL` | The ONLY client-side local opt-in (storage library); honoured only with no API authority or credential configured. |
+| `HASNA_EMAILS_DB_PATH` / `EMAILS_DB_PATH` | Location of the local SQLite file under the opt-in; alone it selects nothing. |
 | `HASNA_HOME` / `HASNA_CONFIG_HOME` | Relocate `~/.hasna/emails/config/credentials`. |
 | `HASNA_STATION` | Keychain account (falls back to `hostname -s`, then `$USER`). |
 

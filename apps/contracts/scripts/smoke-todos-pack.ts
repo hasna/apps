@@ -207,8 +207,9 @@ try {
     || !packageJson.exports?.["./deployment"]
     || !packageJson.exports?.["./deployment/artifacts"]
     || !packageJson.exports?.["./deployment/artifacts/*"]
+    || !packageJson.exports?.["./output"]
   ) {
-    throw new Error("packed package is missing Todos or deployment export mappings");
+    throw new Error("packed package is missing Todos, deployment, or output export mappings");
   }
   const todosExportKeys = Object.keys(packageJson.exports)
     .filter((key) => key.startsWith("./todos"))
@@ -226,12 +227,27 @@ try {
 import * as todos from "@hasna/contracts/todos";
 import * as deployment from "@hasna/contracts/deployment";
 import * as deploymentArtifacts from "@hasna/contracts/deployment/artifacts";
+import * as output from "@hasna/contracts/output";
 import contract from "@hasna/contracts/todos/artifacts/contract.json" with { type: "json" };
 import invariants from "@hasna/contracts/todos/artifacts/invariant-registry.json" with { type: "json" };
 import deploymentSchemaBundle from "@hasna/contracts/deployment/artifacts/schema-bundle.json" with { type: "json" };
 import deploymentFixtureBundle from "@hasna/contracts/deployment/artifacts/fixture-bundle.json" with { type: "json" };
 import { z } from "zod";
 
+if ("createPageEnvelope" in root) throw new Error("output helpers leaked through the package root");
+const compactPage = output.createPageEnvelope({
+  items: output.projectRecords([{ id: "one", name: "One", extra: "omitted" }], ["name"], { requiredFields: ["id"] }),
+  limit: 1,
+  hasMore: false,
+  complete: true,
+  total: 1,
+});
+if (output.serializeJson(compactPage) !== output.serializeJson(compactPage)) {
+  throw new Error("packed output subpath was not deterministic");
+}
+if (compactPage._meta.count !== 1 || compactPage._meta.complete !== true) {
+  throw new Error("packed output subpath lost page truth metadata");
+}
 if ("TodosModeSchema" in root) throw new Error("Todos leaked through the package root");
 if (Object.keys(deployment.DeploymentSchemaRegistry).length !== 13) {
   throw new Error("deployment subpath did not expose all registered schemas");

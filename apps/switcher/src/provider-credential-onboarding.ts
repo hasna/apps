@@ -1,3 +1,4 @@
+import {bedrockMantleOrigin} from "./bedrock";
 import { z } from "zod";
 import { createHash } from "node:crypto";
 import { createInterface } from "node:readline/promises";
@@ -101,6 +102,9 @@ function authenticationProbe(provider:ProviderInput):{url:URL;method:"GET"|"HEAD
     return {url,method:provider.credentialCheck.method??"GET",authStyle:provider.authStyle??"bearer"};
   }
   const base=new URL(provider.baseUrl);
+  const bedrockOrigin=bedrockMantleOrigin(provider.baseUrl);
+  if(provider.protocol==="anthropic-messages"&&bedrockOrigin)
+    return {url:new URL("/v1/models",bedrockOrigin),method:"GET",authStyle:"bearer"};
   if(provider.credentialEnv==="SWITCHER_PROVIDER_OPENROUTER"&&base.origin==="https://openrouter.ai"&&base.pathname.replace(/\/+$/,"")==="/api/v1")
     return {url:new URL("https://openrouter.ai/api/v1/key"),method:"GET",authStyle:provider.authStyle??"bearer"};
   return undefined;

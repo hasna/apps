@@ -1,42 +1,39 @@
 # Domain readiness
 
-Emails supports two deployment modes:
+Ordinary Emails CLI, terminal UI, and MCP operations are authenticated clients
+of the selected `/v1` authority. The standalone `emails-serve` process owns the
+server backend: `EMAILS_DATABASE_URL` selects operator PostgreSQL, while an unset
+value retains the loopback SQLite dashboard. Provider integrations are
+capabilities, not deployment modes.
 
-- `local`: SQLite and local files are authoritative.
-- `self_hosted`: the operator's Postgres, S3, queues and provider accounts are authoritative.
+AWS SES/S3/SNS/SQS, Route53, Cloudflare, and Resend use operator-supplied
+credentials and server-side bindings. A sending domain is ready only after
+ownership, DKIM, SPF, and provider evidence is valid. Inbound readiness also
+requires an active route and a durable source such as SES to S3/SQS.
 
-Provider integrations are capabilities, not deployment modes. AWS SES/S3/SNS/SQS,
-Route53, Cloudflare and Resend always use credentials supplied by the operator
-and communicate directly with those providers. Additional mailbox providers are
-not supported as provider backends.
-
-A sending domain is ready only after ownership, DKIM and SPF evidence is valid.
-Inbound readiness additionally requires an active provider route and durable
-source such as SES to S3/SQS.
-
-No shipped command publishes DNS. `emails domain dns` prints the records to
-publish and `emails aws setup-inbound` prints the MX record it needs, both for
-you to apply at your DNS provider; nothing purchases a domain or changes MX
-implicitly. (`emails domain buy` purchases explicitly, and `emails domain adopt`
-refuses to wire SES inbound when public root MX belongs to another provider
-unless `--force-mx-switch` is passed.)
-
-Useful checks — these run in every configuration, because they resolve public
-DNS and need no server:
+## Inspection and mutation commands
 
 ```bash
-emails domain dns example.com --provider <provider>   # records the domain must publish
-emails domain check example.com                       # what is actually published, plus root-MX owner
+emails domain dns example.com --provider <provider>
+emails domain check example.com
+emails domain readiness example.com
+emails domain connect example.com --provider <provider>
+emails domain setup-cloudflare example.com
+emails address provision user@example.com
+emails provision up example.com
 ```
 
-`emails domain verify`, `emails domain status`, `emails domains connect`,
-`emails domains enable-inbound|enable-outbound|disable-outbound` and
-`emails provision *` are NOT implemented in this build. Running any of them
-prints what is missing and which command to use instead.
+`domain dns` prints the desired records. `domain check` reads public DNS.
+`domain connect`, `setup-cloudflare`, `address provision`, and `provision up`
+use authenticated server capabilities and durable receipts; they refuse before
+claiming success when the server is too old, a provider binding is absent, or
+publication/verification remains incomplete. Existing MX is preserved unless an
+explicit inbound change is requested. `domain buy` is an explicit registrar
+purchase, and `domain adopt` refuses to replace a foreign root MX unless
+`--force-mx-switch` is supplied.
 
-Self-hosted API clients configure `EMAILS_SELF_HOSTED_URL` and one of
-`EMAILS_SESSION_TOKEN`, `EMAILS_IDP_TOKEN`, or `EMAILS_SELF_HOSTED_API_KEY`
-(deployment modes are removed — hasna/apps#1566 — so the origin and one
-credential alone select the arm; a carried-forward deployment-mode variable is
-refused by name).
-No endpoint, account, database, bucket or secret path is supplied by the package.
+Hosted API clients configure `HASNA_EMAILS_API_URL` and one of
+`EMAILS_SESSION_TOKEN`, `EMAILS_IDP_TOKEN`, or `HASNA_EMAILS_API_KEY`. The
+retired `EMAILS_SELF_HOSTED_URL` / `EMAILS_SELF_HOSTED_API_KEY` client aliases
+are refused by name. No endpoint, account, database, bucket, or secret path is
+supplied by the package.

@@ -55,6 +55,7 @@ function postJson(path: string, body: unknown): RequestInit {
 beforeEach(() => {
   captureInheritedProcessEnv();
   process.env["EMAILS_DB_PATH"] = ":memory:";
+  process.env["HASNA_EMAILS_LOCAL"] = "1";
   // The ambient machine may point EMAILS_CLIENT_ENV_SECRET at a client env; the
   // API routes under test configure the local database, so the pointer must not
   // leak into store resolution (same convention as local-mail-data-source.test.ts).
@@ -65,6 +66,7 @@ beforeEach(() => {
 afterEach(() => {
   closeDatabase();
   delete process.env["EMAILS_DB_PATH"];
+  delete process.env["HASNA_EMAILS_LOCAL"];
   restoreInheritedProcessEnv();
 });
 

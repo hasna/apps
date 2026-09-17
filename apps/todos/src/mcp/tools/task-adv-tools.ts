@@ -436,12 +436,19 @@ export function registerTaskAdvTools(server: McpServer, ctx: TaskAdvContext) {
       "Alias for start_task — mark a task as in_progress and assign it to the calling agent.",
       {
         task_id: z.string().describe("Task ID"),
-        agent_id: z.string().optional().describe("Agent claiming (defaults to context)"),
+        agent_id: z.string().describe("Exact agent ID or configured focus identity claiming the task"),
       },
       async ({ task_id, agent_id }) => {
         try {
-          const focus = ctx.getAgentFocus(agent_id || "");
-          const effectiveAgent = focus ? focus.agent_id : agent_id || "mcp";
+          const requestedAgent = agent_id?.trim();
+          if (!requestedAgent) {
+            return {
+              content: [{ type: "text" as const, text: "claim_task requires agent_id; the placeholder identity 'mcp' is never substituted." }],
+              isError: true,
+            };
+          }
+          const focus = ctx.getAgentFocus(requestedAgent);
+          const effectiveAgent = focus?.agent_id || requestedAgent;
           // http authority routing: POST /v1/tasks/:id/start — the same route
           // `start_task` (which this is documented as an alias of) already used.
           const cloud = getTodosCloudClient();

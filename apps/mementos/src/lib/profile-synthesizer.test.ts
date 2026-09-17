@@ -5,6 +5,7 @@ delete process.env["ANTHROPIC_API_KEY"];
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { resetDatabase, getDatabase } from "../db/database.js";
 import { createMemory, getMemoryByKey } from "../db/memories.js";
+import { registerAgent } from "../db/agents.js";
 import {
   synthesizeProfile,
   getProfileKey,
@@ -130,6 +131,49 @@ describe("profile-synthesizer", () => {
       expect(result).not.toBeNull();
       expect(result!.profile).toContain("stack-db: SQLite with bun:sqlite");
       expect(result!.memory_count).toBe(1);
+    });
+  });
+
+  describe("scope semantics", () => {
+    it("agent scope reads only that agent and caches under the agent target", async () => {
+      const db = getDatabase();
+      const agentA = registerAgent("profile-agent-a", undefined, undefined, undefined, undefined, db);
+      const agentB = registerAgent("profile-agent-b", undefined, undefined, undefined, undefined, db);
+      createMemory({ key: "agent-a-pref", value: "A", category: "preference", scope: "private", agent_id: agentA.id }, "merge", db);
+      createMemory({ key: "agent-b-pref", value: "B", category: "preference", scope: "private", agent_id: agentB.id }, "merge", db);
+
+      const result = await synthesizeProfile({ scope: "agent", agent_id: agentA.id });
+      expect(result?.profile).toContain("agent-a-pref: A");
+      expect(result?.profile).not.toContain("agent-b-pref: B");
+      const cached = getMemoryByKey(`_profile_agent_${agentA.id}`, "shared", agentA.id);
+      expect(cached?.category).toBe("resource");
+      expect(cached?.metadata.stale).toBe(false);
+    });
+
+    it("project scope reads only that project", async () => {
+      const db = getDatabase();
+      createMemory({ key: "project-a-fact", value: "A", category: "fact", scope: "shared", project_id: "project-a" }, "merge", db);
+      createMemory({ key: "project-b-fact", value: "B", category: "fact", scope: "shared", project_id: "project-b" }, "merge", db);
+
+      const result = await synthesizeProfile({ scope: "project", project_id: "project-a" });
+      expect(result?.profile).toContain("project-a-fact: A");
+      expect(result?.profile).not.toContain("project-b-fact: B");
+    });
+
+    it("global scope uses the canonical global cache identity", async () => {
+      const db = getDatabase();
+      createMemory({ key: "global-fact", value: "G", category: "fact", scope: "global" }, "merge", db);
+      createMemory({ key: "project-private-fact", value: "SECRET", category: "fact", scope: "private", project_id: "ignored-project" }, "merge", db);
+      const result = await synthesizeProfile({ scope: "global", agent_id: "ignored-agent", project_id: "ignored-project" });
+      expect(result?.profile).toContain("global-fact: G");
+      expect(result?.profile).not.toContain("project-private-fact");
+      expect(getMemoryByKey("_profile_global_global", "shared")).not.toBeNull();
+      expect(getMemoryByKey("_profile_global_ignored-project", "shared")).toBeNull();
+    });
+
+    it("requires the identifier named by an explicit scoped request", async () => {
+      await expect(synthesizeProfile({ scope: "agent" })).rejects.toThrow("agent scope requires agent_id");
+      await expect(synthesizeProfile({ scope: "project" })).rejects.toThrow("project scope requires project_id");
     });
   });
 
@@ -327,6 +371,15 @@ describe("profile-synthesizer", () => {
 
       const result = await synthesizeProfile({ force_refresh: true });
       expect(result).toBeNull();
+    });
+
+    it("strict server mode refuses provider failure instead of reporting no memories", async () => {
+      process.env["ANTHROPIC_API_KEY"] = "test-key-fake";
+      seedMemory();
+      globalThis.fetch = async () => new Response("Unavailable", { status: 503 });
+
+      await expect(synthesizeProfile({ force_refresh: true, fail_on_provider_error: true }))
+        .rejects.toMatchObject({ code: "MEMENTOS_PROFILE_SYNTHESIS" });
     });
 
     it("saves synthesized profile to DB (cached on next call)", async () => {

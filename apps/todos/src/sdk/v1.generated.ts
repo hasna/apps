@@ -4,13 +4,17 @@
 import { assertTodosPriorRegistrationAdoptionValidationEnvelope } from "../project-registration/adoption-validation.js";
 
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
-// Source: Todos V1 API 0.16.0
+// Source: Todos V1 API 0.16.1
 
 export interface MachineAuthority { "tenant_id": string; "kid": string }
 
 export interface Machine { "id": string; "name": string; "hostname": string; "platform": string; "last_seen_at": string; "metadata": Record<string, unknown>; "created_at": string; "ssh_address": string; "is_primary": boolean; "archived_at": string }
 
 export interface Task { "id"?: string; "title"?: string; "description"?: string; "status"?: "pending" | "in_progress" | "completed" | "failed" | "cancelled"; "priority"?: "low" | "medium" | "high" | "critical"; "project_id"?: string | null; "parent_id"?: string | null; "assigned_to"?: string | null; "agent_id"?: string | null; "created_by"?: string | null; "reason"?: string | null; "tags"?: Array<string>; "version"?: number; "locked_by"?: string | null; "locked_at"?: string | null; "created_at"?: string; "updated_at"?: string }
+
+export interface TaskDependency { "task_id": string; "depends_on": string; "external_project_id"?: string | null; "external_task_id"?: string | null }
+
+export interface DependencyPage { "dependencies": Array<TaskDependency>; "count": number; "total": number; "limit": number; "offset": number; "has_more": boolean; "next_offset": number | null }
 
 export interface Project { "status"?: "active" | "completed" | "on_hold" | "archived"; "short_id"?: string | null; "metadata"?: Record<string, unknown>; "id"?: string; "name"?: string; "path"?: string; "description"?: string | null; "task_list_id"?: string | null; "task_prefix"?: string | null; "task_counter"?: number; "parent_id"?: string | null; "created_at"?: string; "updated_at"?: string }
 
@@ -251,6 +255,15 @@ export class TodosV1Client {
     }
     return data as T;
   }
+
+    /** List dependency edges with storage-bounded pagination */
+    async listDependencies(query?: { "limit"?: number; "offset"?: number }, init?: RequestInit): Promise<DependencyPage> {
+      return this.request("GET", `/v1/dependencies`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
 
     /** Bulk-ingest a snapshot or atomically complete one observed plan */
     async importSnapshot(body: { "exportedAt"?: string; "source"?: string; "tasks"?: Array<Task>; "projects"?: Array<Project>; "projectMachinePaths"?: Array<Record<string, unknown>>; "machines"?: Array<Machine>; "expected_machine_authority"?: MachineAuthority; "plans"?: Array<Record<string, unknown>>; "agents"?: Array<Record<string, unknown>>; "taskLists"?: Array<Record<string, unknown>>; "templates"?: Array<Record<string, unknown>>; "templateTasks"?: Array<TemplateTask>; "auditHistory"?: Array<Record<string, unknown>>; "tombstones"?: Array<Record<string, unknown>>; "planCompletions"?: Array<{ "id": string; "expected_updated_at": string; "status": "completed" }> }, init?: RequestInit): Promise<{ "received"?: number; "machine_authority"?: MachineAuthority; "result"?: { "inserted"?: number; "updated"?: number; "deleted"?: number; "skipped"?: number; "errors"?: Array<string> }; "planCompletions"?: Array<{ "id": string; "status": "completed"; "expected_updated_at": string; "result_updated_at": string; "applied": boolean }> }> {

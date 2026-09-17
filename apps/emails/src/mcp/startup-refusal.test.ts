@@ -120,6 +120,23 @@ describe("emails-mcp startup refusal (fail-closed, #1720)", () => {
     });
   }, 30_000);
 
+  it("refuses every local selector once, without a stack or database creation", () => {
+    for (const setting of ["EMAILS_DB_PATH", "HASNA_EMAILS_DB_PATH", "EMAILS_LOCAL", "HASNA_EMAILS_LOCAL"]) {
+      withFakeHome((home) => {
+        const value = setting.endsWith("DB_PATH") ? join(home, "mail.db") : "1";
+        const result = spawnMcp(hermeticEnv(home, { [setting]: value }), INITIALIZE);
+        expect(result.exitCode).toBe(1);
+        expect(result.stdout).toBe("");
+        const lines = result.stderr.trim().split("\n");
+        expect(lines).toHaveLength(1);
+        expect(lines[0]).toContain(setting);
+        expect(lines[0]).toContain("hosted-only");
+        expect(result.stderr).not.toMatch(/^\s+at /m);
+        expect(filesUnder(home)).toEqual([]);
+      });
+    }
+  }, 90_000);
+
   it("a deliberate tier the resolver cannot honour is the same loud refusal, naming that tier", () => {
     const cases: Array<{ env: Record<string, string>; names: string }> = [
       { env: { HASNA_EMAILS_API_KEY_OVERRIDE: "" }, names: "HASNA_EMAILS_API_KEY_OVERRIDE" },

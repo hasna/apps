@@ -1,16 +1,22 @@
 import { Database } from "bun:sqlite";
-import { join } from "path";
-import { getDataDir } from "../lib/paths.js";
+import { join, resolve } from "path";
+import {
+  assertNoStrandedXdgData,
+  getCanonicalDataRoot,
+  getDataDir,
+  getFilesDataDir,
+} from "../lib/paths.js";
 export { getDataDir } from "../lib/paths.js";
 
-// The effective data dir now resolves through @hasna/paths (XDG / macOS home
-// layout) with gated legacy adoption — see src/lib/paths.ts. The pre-resolver
-// explicit data-dir overrides (HASNA_FILES_DATA_DIR / FILES_DATA_DIR) are
-// preserved as exact-app overrides and win there, and the one-time ~/.files
-// auto-migration is preserved and targets the effective root.
+// Local SQLite is reachable only after the explicit HASNA_FILES_LOCAL=1 opt-in.
+// Its default data dir is the canonical ~/.hasna/files on every platform; the
+// exact data-root overrides remain supported, and the one-time ~/.files
+// migration still targets the selected root. Before a default database is
+// created, src/lib/paths.ts refuses if a retired XDG/macOS store would be left
+// stranded beside a new empty canonical database.
 
 export function getDbPath(): string {
-  return process.env.HASNA_FILES_DB_PATH ?? process.env.FILES_DB_PATH ?? join(getDataDir(), "files.db");
+  return process.env.HASNA_FILES_DB_PATH ?? process.env.FILES_DB_PATH ?? join(getFilesDataDir(), "files.db");
 }
 
 let _db: Database | null = null;
@@ -19,7 +25,19 @@ let _dbPath: string | null = null;
 export const DB_PATH = getDbPath();
 
 export function getDb(): Database {
-  const dbPath = getDbPath();
+  const explicitPath = process.env.HASNA_FILES_DB_PATH ?? process.env.FILES_DB_PATH;
+  // Root resolution is intentionally pure for hosted imports and `files db`.
+  // Provisioning and stranded-XDG refusal happen only when SQLite is actually
+  // opened through the default local path.
+  if (explicitPath) {
+    const canonicalRoot = getCanonicalDataRoot();
+    if (resolve(explicitPath) === resolve(join(canonicalRoot, "files.db"))) {
+      // The final DB path wins over unrelated root overrides. Force the
+      // canonical interlock when the operator explicitly names that path.
+      assertNoStrandedXdgData(canonicalRoot, process.env, { force: true });
+    }
+  }
+  const dbPath = explicitPath ?? join(getDataDir(), "files.db");
   if (_db && _dbPath === dbPath) return _db;
   _db?.close();
   _db = new Database(dbPath, { create: true });

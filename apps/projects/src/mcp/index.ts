@@ -356,6 +356,23 @@ function mcpMutationAgent(store: ProjectStore, optAgent?: string): string | unde
   return store.transport === "local" ? agentId(optAgent) : undefined;
 }
 
+/**
+ * Transport-aware actor resolution for project start tools.
+ *
+ * The local registry keeps its historical ensure/lookup behavior. Hosted
+ * callers resolve an explicit id or slug through /v1/agents and pass the exact
+ * returned immutable id to the start writes; an omitted actor remains
+ * unattributed. No hosted branch may open the local agent
+ * table merely to attach attribution.
+ */
+async function startToolActorId(store: ProjectStore, actor?: string): Promise<string | undefined> {
+  if (store.transport === "local") return actor ? agentId(actor) : ensureCliAgent().id;
+  if (!actor) return undefined;
+  const agent = await store.getAgent(actor);
+  if (!agent) throw new Error(`Agent not found: ${actor}`);
+  return agent.id;
+}
+
 // Machine-local mutation lock routed through the Store. In the hosted backend the
 // Store cannot hold a local lock (hosted writes are atomic server-side and the
 // lock would be invisible fleet-wide), so it degrades to a no-op.
@@ -1131,6 +1148,7 @@ server.tool(
     try {
       const store = resolveProjectStore();
       const result = await startProject(input.target, {
+        store,
         agentTool: input.agent_tool ? parseProjectStartAgent(input.agent_tool) : undefined,
         toolCommand: input.command,
         profile: input.profile,
@@ -1143,9 +1161,7 @@ server.tool(
         importMetadata: input.metadata as JsonObject | undefined,
         dryRun: true,
         attach: false,
-        // Local mints/resolves the on-box CLI agent; hosted attribution is
-        // server-side and must never open projects.db (hasna/apps#1720).
-        agentId: store.transport === "local" ? (input.agent ? agentId(input.agent) : ensureCliAgent().id) : undefined,
+        agentId: await startToolActorId(store, input.agent),
         source: "mcp",
         auditCommand: "projects_render_start",
       });
@@ -1701,6 +1717,7 @@ server.tool(
     try {
       const store = resolveProjectStore();
       return jsonText(await startProject(input.target, {
+        store,
         agentTool: input.agent_tool ? parseProjectStartAgent(input.agent_tool) : undefined,
         toolCommand: input.command,
         profile: input.profile,
@@ -1713,9 +1730,7 @@ server.tool(
         importMetadata: input.metadata as JsonObject | undefined,
         dryRun: input.dry_run,
         attach: false,
-        // Local mints/resolves the on-box CLI agent; hosted attribution is
-        // server-side and must never open projects.db (hasna/apps#1720).
-        agentId: store.transport === "local" ? (input.agent ? agentId(input.agent) : ensureCliAgent().id) : undefined,
+        agentId: await startToolActorId(store, input.agent),
         source: "mcp",
         auditCommand: "projects_start",
       }));

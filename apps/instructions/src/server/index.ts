@@ -129,12 +129,12 @@ app.all("/v1/*", async (c) => {
 
 const HOST = process.env["HOST"] ?? process.env["INSTRUCTIONS_HOST"] ?? "localhost";
 export const serverOptions = { port: PORT, hostname: HOST, fetch: app.fetch } as const;
+export let server: ReturnType<typeof Bun.serve> | undefined;
 if (import.meta.main) {
   console.log(`instructions-serve listening on http://${HOST}:${PORT} (backend: ${serviceBackend()})`);
   // Start explicitly instead of relying on Bun's default-export server magic.
-  // Bun 1.4 stopped keeping this module alive when it also exported the Hono
-  // app for tests, so the binary printed "listening" and then exited 0 without
-  // a listener. Explicit ownership is stable across the supported Bun range.
-  Bun.serve(serverOptions);
+  // The app stays available to tests through its named export. A default export
+  // with a `fetch` method is itself auto-served by Bun, which would race this
+  // explicit listener and terminate the ECS task with EADDRINUSE.
+  server = Bun.serve(serverOptions);
 }
-export default app;

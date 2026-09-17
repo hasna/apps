@@ -30,6 +30,7 @@ import {
   API_CREDENTIAL_SETTINGS,
   API_SETTINGS_POINTER,
   DATABASE_PATH_SETTINGS,
+  LOCAL_OPT_IN_SETTINGS,
 } from "../store-resolution.js";
 import type { ProviderAdapter, RemoteEvent } from "../providers/interface.js";
 import { syncAll, syncProvider } from "./sync.js";
@@ -48,13 +49,14 @@ function clearStoreSettings(): void {
   for (const setting of [API_BASE_URL_SETTING, API_SETTINGS_POINTER, ...API_CREDENTIAL_SETTINGS]) {
     delete process.env[setting];
   }
-  for (const setting of DATABASE_PATH_SETTINGS) delete process.env[setting];
+  for (const setting of [...DATABASE_PATH_SETTINGS, ...LOCAL_OPT_IN_SETTINGS]) delete process.env[setting];
 }
 
 /** Storage configured as a local in-memory database, which is what the ingestion needs. */
 function configureLocalStore(): void {
   clearStoreSettings();
   process.env[DATABASE_PATH_SETTINGS[1]] = ":memory:";
+  process.env[LOCAL_OPT_IN_SETTINGS[0]] = "1";
 }
 
 /** Storage configured as an Emails API, and NO database path. */
@@ -200,6 +202,7 @@ describe("syncProvider storage refusals", () => {
     process.env[API_BASE_URL_SETTING] = "https://mail.example.test";
     process.env[API_CREDENTIAL_SETTINGS[0]] = "not-a-real-credential";
     process.env[DATABASE_PATH_SETTINGS[1]] = ":memory:";
+    process.env[LOCAL_OPT_IN_SETTINGS[0]] = "1";
 
     await expect(syncProvider("p-any")).rejects.toThrow(/did not resolve to one store/);
     await expect(syncProvider("p-any")).rejects.toThrow(new RegExp(API_BASE_URL_SETTING));

@@ -52,7 +52,7 @@ const HELP = `switcher — launch coding harnesses and desktop apps with your pr
   switcher doctor
   switcher state import codex|claude --from LEGACY_NATIVE_HOME [--entry NAME] [--apply]
 
-HARNESS: claude, codex, grok, opencode, opencode2, pi, omp, dsh, cline, hermes, prime-agent, gemini, aider, kilo
+HARNESS: claude, codex, grok, opencode, opencode2, pi, omp, dsh, cline, hermes, prime-agent, gemini, antigravity, junie, aider, kilo
 chatgpt launches the installed macOS desktop app with private login data and shared local sessions.
 Its local Codex conversations use the selected Responses-compatible provider.
 claude-desktop launches Claude in its separate Claude-3p gateway profile with a
@@ -268,7 +268,7 @@ export async function main(args = process.argv.slice(2)) {
     catalogFormat: values["catalog-format"] as PresetOptions["catalogFormat"], catalogAccountId: values["catalog-account-id"], modelsPath: values["models-path"],
   });
   if (command === "doctor") {
-    const harnesses = await Promise.all((["claude","codex","grok","opencode","opencode2","pi","omp","dsh","cline","hermes","prime-agent","gemini","aider","kilo"] as const).map(h => detectHarness(h)));
+    const harnesses = await Promise.all((["claude","codex","grok","opencode","opencode2","pi","omp","dsh","cline","hermes","prime-agent","gemini","antigravity","junie","aider","kilo"] as const).map(h => detectHarness(h)));
     let api: unknown;
     try { api = {mode: runtime.mode, reachable: true, health: await client.health(), ready: await client.ready()}; }
     catch { api = {mode: runtime.mode, reachable: false}; process.exitCode = 1; }
@@ -305,7 +305,7 @@ export async function main(args = process.argv.slice(2)) {
       assertHarnessArguments(profile.harness,nativeArgs);
       await validateHarnessConfiguration(profile.harness,values.cwd??process.cwd(),nativeArgs);
       const provider = await client.getProvider(profile.providerId);
-      if (profile.harness === "gemini") validateHarnessProvider(profile.harness, provider);
+      if (profile.harness === "gemini" || profile.harness === "antigravity") validateHarnessProvider(profile.harness, provider);
       let prepared:Awaited<ReturnType<typeof ensureProviderCredential>>|undefined;
       if (!values["dry-run"]) { prepared=await ensureProviderCredential(provider,{resolver:credentials});credentialPreflight=prepared.providerFingerprint;resolvePreparedCredential=prepared.resolveCredential; }
       if(values["dry-run"])await launchCatalog(client,provider,true);else await refreshCatalog(provider,prepared);

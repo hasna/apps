@@ -1,3 +1,4 @@
+import { toV1BaseUrl as contractsToV1BaseUrl } from "@hasna/contracts/client";
 // The transport: one `fetch` per operation, asynchronous, and nothing else.
 //
 // THIS IS THE MODULE THAT REPLACES `spawnSync("curl")`. The store seam requires
@@ -20,7 +21,7 @@
 
 import { EmailsApiFault } from "./outcome.js";
 import {
-  EMAILS_SELF_HOSTED_API_KEY_ENV,
+  EMAILS_API_KEY_ENV,
   EMAILS_SESSION_TOKEN_ENV,
   type EmailsClientCredentialCandidate,
   type EmailsClientCredentialSetting,
@@ -38,7 +39,21 @@ export type FetchImplementation = (
   init?: { method?: string; headers?: Record<string, string>; body?: string; signal?: AbortSignal },
 ) => Promise<Response>;
 
-export interface TransportOptions {
+export interface TransportBinding {
+  /** The service origin, with or without a trailing `/v1`. */
+  baseUrl: string;
+  /** The API key or session token for this request. Never logged. */
+  credential: string;
+  /** Which setting supplied `credential`; safe to report. */
+  credentialSetting?: EmailsClientCredentialSetting;
+  /** Later credentials to try after a selected session token needs reauthentication. */
+  credentialFallbacks?: readonly EmailsClientCredentialCandidate[];
+}
+
+/** Resolve one request's authority and credential together, fresh. */
+export type TransportBindingProvider = () => TransportBinding | Promise<TransportBinding>;
+
+export interface TransportOptions extends TransportBinding {
   /**
    * The service origin, with or without a trailing `/v1`. Normalised to end in
    * exactly one `/v1` — the same normalisation `toV1BaseUrl` performs — so a caller
@@ -51,6 +66,11 @@ export interface TransportOptions {
   credentialSetting?: EmailsClientCredentialSetting;
   /** Later credentials to try after a selected session token needs reauthentication. */
   credentialFallbacks?: readonly EmailsClientCredentialCandidate[];
+  /**
+   * Optional request-time binding resolver. When present, each logical request
+   * re-resolves the credential, while authority drift refuses before `fetch`.
+   */
+  bindingProvider?: TransportBindingProvider;
   fetchImpl?: FetchImplementation;
   timeoutMs?: number;
   maxResponseBytes?: number;
@@ -84,13 +104,7 @@ export interface Transport {
  * safe to print. The search string and hash go for the same reason.
  */
 export function toV1BaseUrl(configured: string): { requestBase: string; safeBase: string } {
-  const parsed = new URL(configured);
-  parsed.username = "";
-  parsed.password = "";
-  parsed.search = "";
-  parsed.hash = "";
-  const trimmed = parsed.toString().replace(/\/+$/, "");
-  const requestBase = /\/v1$/.test(trimmed) ? trimmed : `${trimmed}/v1`;
+  const requestBase = contractsToV1BaseUrl(configured);
   return { requestBase, safeBase: requestBase.replace(/\/v1$/, "") };
 }
 
@@ -112,11 +126,20 @@ function buildQuery(query: Record<string, QueryValue> | undefined): string {
   return encoded.length > 0 ? `?${encoded}` : "";
 }
 
-function credentialCandidates(options: TransportOptions): readonly EmailsClientCredentialCandidate[] {
+function credentialCandidates(binding: TransportBinding): readonly EmailsClientCredentialCandidate[] {
   return [
-    { setting: options.credentialSetting ?? EMAILS_SELF_HOSTED_API_KEY_ENV, value: options.credential },
-    ...(options.credentialFallbacks ?? []),
+    { setting: binding.credentialSetting ?? EMAILS_API_KEY_ENV, value: binding.credential },
+    ...(binding.credentialFallbacks ?? []),
   ];
+}
+
+function sameCredentialCandidates(
+  left: readonly EmailsClientCredentialCandidate[],
+  right: readonly EmailsClientCredentialCandidate[],
+): boolean {
+  return left.length === right.length
+    && left.every((candidate, index) =>
+      candidate.setting === right[index]?.setting && candidate.value === right[index]?.value);
 }
 
 function errorReason(body: unknown): string | null {
@@ -134,16 +157,37 @@ function shouldTryNextCredential(candidate: EmailsClientCredentialCandidate, res
 }
 
 export function createTransport(options: TransportOptions): Transport {
-  const { requestBase, safeBase } = toV1BaseUrl(options.baseUrl);
+  const initial = toV1BaseUrl(options.baseUrl);
+  const initialCredentials = credentialCandidates(options);
   const doFetch: FetchImplementation = options.fetchImpl ?? ((input, init) => fetch(input, init));
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const maxResponseBytes = options.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
-  const candidates = credentialCandidates(options);
 
   return {
-    safeBaseUrl: safeBase,
+    safeBaseUrl: initial.safeBase,
     async request(method, path, requestOptions): Promise<WireResponse> {
-      const url = `${requestBase}${path}${buildQuery(requestOptions?.query)}`;
+      // Resolve once per LOGICAL request. Retries/fallbacks below stay on the same
+      // credential set, but the next operation observes rotations. Authority and
+      // credential are resolved as one binding so a changed key is never sent to the
+      // construction-time host after the configured authority moves.
+      const binding = options.bindingProvider ? await options.bindingProvider() : options;
+      const current = toV1BaseUrl(binding.baseUrl);
+      if (current.requestBase !== initial.requestBase) {
+        throw new EmailsApiFault(
+          0,
+          `${method} ${path} refused because the configured Emails API authority changed; ` +
+            "rebuild the client before sending a credential to the new authority",
+        );
+      }
+      const candidates = credentialCandidates(binding);
+      if (!sameCredentialCandidates(candidates, initialCredentials)) {
+        throw new EmailsApiFault(
+          0,
+          `${method} ${path} refused because the configured Emails credential binding changed; ` +
+            "rebuild the client before continuing the logical operation",
+        );
+      }
+      const url = `${initial.requestBase}${path}${buildQuery(requestOptions?.query)}`;
       for (let index = 0; index < candidates.length; index += 1) {
         const candidate = candidates[index]!;
         const response = await requestOnce(
@@ -159,7 +203,7 @@ export function createTransport(options: TransportOptions): Transport {
         if (index < candidates.length - 1 && shouldTryNextCredential(candidate, response)) continue;
         return response;
       }
-      return requestOnce(doFetch, timeoutMs, maxResponseBytes, options.credential, url, method, path, requestOptions);
+      return requestOnce(doFetch, timeoutMs, maxResponseBytes, binding.credential, url, method, path, requestOptions);
     },
   };
 }

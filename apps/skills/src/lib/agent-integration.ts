@@ -104,11 +104,24 @@ function treeHash(root: string): string {
   assertSafePath(root); visit(root); return hash.digest("hex");
 }
 
+/** Native project discovery includes each ancestor; migration must inspect the same roots as hooks. */
+function projectAncestorDirectories(projects: string[]): string[] {
+  const directories = new Set<string>();
+  for (const project of projects) {
+    for (let path = resolve(project), depth = 0; ; depth++) {
+      if (depth >= 100) throw new Error("NATIVE_SKILL_DRIFT: project ancestor discovery limit exceeded");
+      directories.add(path);
+      const parent = dirname(path); if (parent === path) break; path = parent;
+    }
+  }
+  return [...directories];
+}
+
 export function inventoryNativeSkills(home = homedir(), options: { includeVendor?: boolean; guardHermes?: boolean; projectDir?: string; projectDirs?: string[]; agentRoots?: Array<{ agent: string; path: string }>; configured?: boolean; discoveryInputs?: ReviewedDiscoveryInputs; allowRootAliases?: boolean } = {}): NativeSkillEntry[] {
   const aliases = rootAliases(home, options.allowRootAliases);
   const roots: Array<readonly [string, string]> = ROOTS.map(([agent, path]) => [agent, canonicalAgentPath(join(home, path), aliases)]);
   const bridgePaths = Object.values(AGENT_ADAPTERS).map(adapter => canonicalAgentPath(join(home, adapter.root, CLI_BRIDGE_NAME), aliases));
-  for (const project of new Set([...(options.projectDirs ?? []), ...(options.projectDir ? [options.projectDir] : [])].map(path => resolve(path)))) {
+  for (const project of projectAncestorDirectories([...(options.projectDirs ?? []), ...(options.projectDir ? [options.projectDir] : [])])) {
     for (const [agent, path] of ROOTS) roots.push([agent, canonicalAgentPath(join(project, path), aliases)]);
   }
   const entries: NativeSkillEntry[] = [], seen = new Set<string>();
@@ -186,6 +199,7 @@ export function inventoryNativeSkills(home = homedir(), options: { includeVendor
   for (const [agent, path] of roots) scanRoot(agent, path);
   if (options.includeVendor) {
     for (const agent of ["codex", "claude"]) scanRoot(agent, canonicalAgentPath(join(home, `.${agent}`, "plugins", "cache"), aliases), true, true);
+    scanRoot("claude", canonicalAgentPath(join(home, ".claude", "plugins", "synced"), aliases), true);
     scanRoot("gemini", join(home, ".gemini", "extensions"), true);
   }
   const configured = options.configured ? INTEGRATION_AGENTS.flatMap(agent => resolveAgentDiscovery({ home, agent, reviewed: options.discoveryInputs, canonical: path => canonicalAgentPath(path, aliases) }).roots.map(path => ({ agent, path }))) : [];
@@ -237,6 +251,9 @@ function configureHooks(config: Record<string, any>, agent: IntegrationAgent, co
     config.permissions.deny = nativeReady ? denied.filter(rule => rule !== "Skill") : [...new Set([...denied, "Skill"])];
     config.permissions.allow = nativeReady ? [...new Set([...allowed, `Skill(${CLI_BRIDGE_NAME})`])] : allowed;
     config.disableBundledSkills = true;
+    // Claude account sync can recreate native copies independently of bundled
+    // skills. This setting must live in user settings; project settings cannot disable it.
+    config.syncClaudeAiSkills = false;
   }
   if (agent === "gemini") {
     config.skills ??= {};
@@ -533,13 +550,7 @@ export function assertManagedAgentBridge(agent: IntegrationAgent, options: { hom
   recheckRootAliases(aliases);
   const expected = canonicalAgentPath(join(home, AGENT_ADAPTERS[agent].root, CLI_BRIDGE_NAME), aliases);
   if (!isOwnedCliBridge(expected, [expected])) throw new Error("NATIVE_SKILL_DRIFT: the native Skills bridge is missing or modified; repair it before continuing");
-  const roots = new Set<string>();
-  for (const project of [options.projectDir ?? process.cwd(), ...(options.projectDirs ?? []), ...(agent === "hermes" && process.env.TERMINAL_CWD ? [process.cwd()] : [])]) {
-    for (let path = resolve(project), depth = 0; ; depth++) {
-      if (depth >= 100) throw new Error("NATIVE_SKILL_DRIFT: project ancestor discovery limit exceeded");
-      roots.add(path); const parent = dirname(path); if (parent === path) break; path = parent;
-    }
-  }
+  const roots = projectAncestorDirectories([options.projectDir ?? process.cwd(), ...(options.projectDirs ?? []), ...(agent === "hermes" && process.env.TERMINAL_CWD ? [process.cwd()] : [])]);
   const visible = (entry: NativeSkillEntry) => entry.agent === agent || (["codex", "gemini", "opencode", "hermes"].includes(agent) && entry.path.includes(`${sep}.agents${sep}skills${sep}`)) || (agent === "opencode" && entry.agent === "claude");
   assertProjectDiscovery(agent, [...roots], home, path => canonicalAgentPath(path, aliases));
   const configPath = canonicalAgentPath(join(home, AGENT_ADAPTERS[agent].config), aliases), config = agent === "hermes" ? parseHermesConfig(readOptional(configPath)) : jsonObject(readOptional(configPath), configPath);
@@ -558,6 +569,7 @@ export function assertManagedAgentBridge(agent: IntegrationAgent, options: { hom
       if (!Array.isArray(config.hooks?.[event]) || config.hooks[event].filter((actual: unknown) => JSON.stringify(actual) === JSON.stringify(entry)).length !== 1) throw new Error("NATIVE_SKILL_DRIFT: required native prompt/skill hooks changed; run skills hook install");
     }
     if (agent === "claude" && (config.disableBundledSkills !== true || config.disableAllHooks === true || !config.permissions?.allow?.includes(`Skill(${CLI_BRIDGE_NAME})`) || config.permissions?.deny?.includes("Skill"))) throw new Error("NATIVE_SKILL_DRIFT: Claude bridge or bundled-skill protection changed; retire copies and run skills hook install");
+    if (agent === "claude" && config.syncClaudeAiSkills !== false) throw new Error("NATIVE_SKILL_DRIFT: Claude account skill synchronization is not disabled (syncClaudeAiSkills); run skills hook install to prevent native copies from returning");
     if (agent === "gemini" && (config.hooksConfig?.enabled === false || config.skills?.enabled !== true || !["antigravity-support", "skill-creator"].every(name => config.skills?.disabled?.includes(name)) || config.skills?.disabled?.includes(CLI_BRIDGE_NAME))) throw new Error("NATIVE_SKILL_DRIFT: Gemini bridge or bundled-skill protection changed; run skills hook install");
   }
   const codexPath = canonicalAgentPath(join(home, ".codex", "config.toml"), aliases);
@@ -581,7 +593,18 @@ export function assertManagedAgentBridge(agent: IntegrationAgent, options: { hom
     }
   } catch (error) { throw new Error(`NATIVE_SKILL_DRIFT: ${(error as Error).message}`); }
   const inventory = inventoryNativeSkills(home, { includeVendor: true, guardHermes: agent === "hermes", projectDirs: [...roots], agentRoots: discovery.roots.map(path => ({ agent, path })), allowRootAliases: aliases.length > 0 });
-  if (inventory.some(entry => visible(entry) && !entry.bridge && !disabledBuiltin(entry))) throw new Error("NATIVE_SKILL_DRIFT: unexpected native skill copies were found; review skills migrate native --include-unmanaged --include-vendor before continuing");
+  const unexpected = inventory.filter(entry => visible(entry) && !entry.bridge && !disabledBuiltin(entry));
+  if (unexpected.length) {
+    // Show filenames only: never read payloads into diagnostics. Escape control
+    // characters and cap both path count and length for native hook output.
+    const paths = unexpected.slice(0, 3).map(entry => {
+      const escaped = JSON.stringify(entry.path).replace(/[\u007f-\u009f\u061c\u200e\u200f\u2028-\u202e\u2066-\u2069]/g,
+        character => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`);
+      return escaped.length > 768 ? `${escaped.slice(0, 384)}...${escaped.slice(-381)}` : escaped;
+    });
+    const remaining = unexpected.length - paths.length;
+    throw new Error(`NATIVE_SKILL_DRIFT: ${unexpected.length} unexpected native skill copies were found: ${paths.join(", ")}${remaining ? `; ${remaining} more` : ""}. Review skills migrate native --project <working-directory> --include-unmanaged --include-vendor --json before continuing; it inventories that directory and its ancestors. Use --apply after reviewing the archive plan.`);
+  }
   recheckRootAliases(aliases);
 }
 

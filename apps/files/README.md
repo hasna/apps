@@ -328,7 +328,7 @@ resolver's to make — the client never reads a raw database DSN:
   fresh per request: a rotation heals a long-lived shell, MCP server or agent
   loop without a restart.
 - Local: the on-box SQLite store at `~/.hasna/files/files.db` (the
-  resolver-resolved data root — see the [Data Directory](#data-directory)
+  canonical or explicitly relocated data root — see the [Data Directory](#data-directory)
   section below), reachable ONLY under the explicit opt-in
   `HASNA_FILES_LOCAL=1` (alias `FILES_LOCAL=1`). It never reads or updates the
   local SQLite index in hosted mode.
@@ -387,17 +387,32 @@ public-safe descriptor.
 
 ## Data Directory
 
-Local data resolves via the in-package resolver (XDG/macOS home
-layout, XDG home-migration plan `0f49f56a`): `~/.local/share/hasna/files/`
-on Linux, `~/Library/Application Support/Hasna/files` on macOS. The legacy
-`~/.hasna/files/` stays the effective data root until the store has been
-migrated to the XDG data home or the operator sets the data-kind override
-`HASNA_DATA_HOME` — an existing local store never becomes invisible on
-upgrade.
+Local data resolves to `~/.hasna/files/` on every platform — the one canonical
+per-app home (home-layout ruling, 2026-09-04).
 
-Override the data root with `HASNA_FILES_DATA_DIR`, `FILES_DATA_DIR`,
-`HASNA_FILES_HOME`, or `FILES_HOME` (first-nonblank wins, in that order); or
-only the SQLite path with `HASNA_FILES_DB_PATH`.
+Overrides, in precedence order:
+
+1. `HASNA_FILES_DATA_DIR`, `FILES_DATA_DIR`, `HASNA_FILES_HOME`, `FILES_HOME` —
+   name the data root directly (first absolute, non-blank value wins, in that
+   order).
+2. `HASNA_DATA_HOME` — relocates the data root to `<HASNA_DATA_HOME>/files`.
+3. `HASNA_HOME` — relocates the `~/.hasna` root, so the data root becomes
+   `<HASNA_HOME>/files`.
+
+`HASNA_CONFIG_HOME`, `HASNA_STATE_HOME` and `HASNA_CACHE_HOME` never move the
+data root. Override only the SQLite path with `HASNA_FILES_DB_PATH`.
+
+Earlier versions resolved an XDG / macOS layout here
+(`~/.local/share/hasna/files`, `~/Library/Application Support/Hasna/files`) and
+would silently adopt it whenever a `files.db` already existed there. That is
+removed: the home no longer depends on the presence of a local store. When
+explicit local mode finds data at an old XDG/macOS root but no canonical
+database, it refuses with `FILES_STRANDED_XDG_DATA` before creating anything.
+Stop Files processes and back up both roots. Then deliberately point
+`HASNA_FILES_DATA_DIR` at the retained root, or perform an offline migration
+into `~/.hasna/files/` that preserves the database, WAL/SHM state,
+configuration, permissions, and other root contents. No automatic move of the
+possibly-live store is attempted.
 
 ## License
 

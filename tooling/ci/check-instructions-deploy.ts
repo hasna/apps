@@ -1,5 +1,6 @@
 /** Static, two-sided policy gate for the protected Instructions production lane. */
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,6 +18,7 @@ const CI_WORKFLOW = ".github/workflows/ci.yml";
 const PACKAGE_JSON = "package.json";
 const GATE = "gate";
 const DEPLOY = "deploy";
+const REVIEWED_HTTP_SMOKE_SHA256 = "f005fae539b33cb41b3e9ffa3faccf9a0d7c9d43ec48e1ea1bec474ca66eefcc";
 
 const NAMES = {
   resolve: "Resolve the deployable commit",
@@ -24,6 +26,7 @@ const NAMES = {
   source: "Verify source is the gated ci-passed main commit",
   build: "Build native ARM64 image locally",
   version: "Verify shipped runtime and package version",
+  httpSmoke: "Smoke exact image HTTP startup",
   trivy: "Generate local vulnerability report",
   trivyGate: "Enforce local vulnerability gate",
   oidc: "Configure AWS credentials with GitHub OIDC",
@@ -61,6 +64,7 @@ const ORDER = [
   NAMES.source,
   NAMES.build,
   NAMES.version,
+  NAMES.httpSmoke,
   NAMES.trivy,
   NAMES.trivyGate,
   NAMES.oidc,
@@ -125,6 +129,32 @@ const effectiveCommands = (run: string): string[] => {
   for (const inner of commandSubstitutions(normalized))
     commands.push(...effectiveCommands(inner));
   return commands;
+};
+
+const normalizedShellLines = (run: string): string[] =>
+  active(run)
+    .replace(/\\\n\s*/g, " ")
+    .split("\n")
+    .map((line) => line.trim().replace(/\s+/g, " "))
+    .filter(Boolean);
+
+interface DockerInvocation {
+  executable: string;
+  containerNamespace: boolean;
+  subcommand: string;
+}
+
+const dockerInvocations = (run: string): DockerInvocation[] => {
+  const invocations: DockerInvocation[] = [];
+  const commandPattern = /(^|[^A-Za-z0-9_.-])((?:\/[A-Za-z0-9_.-]+)*\/?docker)\s+(?:(container)\s+)?([a-z][a-z-]*)\b/gm;
+  for (const match of active(run).matchAll(commandPattern)) {
+    invocations.push({
+      executable: match[2],
+      containerNamespace: match[3] === "container",
+      subcommand: match[4],
+    });
+  }
+  return invocations;
 };
 
 const runsCommand = (run: string, command: string): boolean =>
@@ -589,6 +619,104 @@ export function validateInstructionsDeploy(
     "dist/server/index.js --version",
   ])
     if (!has(version, p)) fail(`version verification missing: ${p}`);
+  const httpSmokeStep = named(steps, NAMES.httpSmoke);
+  const httpSmokeKeys = Object.keys(httpSmokeStep ?? {}).sort();
+  if (
+    httpSmokeKeys.length !== 2 ||
+    httpSmokeKeys[0] !== "name" ||
+    httpSmokeKeys[1] !== "run"
+  )
+    fail("HTTP image smoke step must contain exactly name and run");
+  const httpSmoke = asText(httpSmokeStep?.run);
+  const httpSmokeSha256 = createHash("sha256").update(httpSmoke).digest("hex");
+  if (httpSmokeSha256 !== REVIEWED_HTTP_SMOKE_SHA256)
+    fail("HTTP image smoke must match the reviewed exact script");
+  for (const p of [
+    'require("./package.json").version',
+    '--publish 127.0.0.1::8080',
+    'docker port "${smoke_container}" 8080/tcp',
+    '"${smoke_url}/health"',
+    '"${smoke_url}/version"',
+    '.status == "ok" and .version == $version and .name == "instructions"',
+    "docker inspect --format '{{.State.Running}}'",
+    'test "$(docker inspect --format \'{{.State.Running}}\' "${smoke_container}")" = "true"',
+    'trap cleanup_smoke EXIT',
+    'docker rm --force "${smoke_container}"',
+    'settled-health.json',
+  ])
+    if (!has(httpSmoke, p)) fail(`HTTP image smoke missing: ${p}`);
+  const httpSmokeLines = normalizedShellLines(httpSmoke);
+  const expectedHttpStart = 'docker run --detach --name "${smoke_container}" --publish 127.0.0.1::8080 "${LOCAL_IMAGE}:${SOURCE_SHA}" >/dev/null';
+  const invocations = dockerInvocations(httpSmoke);
+  const invocationCounts = new Map<string, number>();
+  for (const invocation of invocations)
+    invocationCounts.set(invocation.subcommand, (invocationCounts.get(invocation.subcommand) ?? 0) + 1);
+  if ((invocationCounts.get("run") ?? 0) !== 1)
+    fail("HTTP image smoke must contain exactly one Docker container-start command");
+  if (!httpSmokeLines.includes(expectedHttpStart))
+    fail("HTTP image smoke must start the exact source image with its default command");
+  const exactStartIndex = httpSmokeLines.indexOf(expectedHttpStart);
+  const cleanupTrap = "trap cleanup_smoke EXIT";
+  const trapLines = httpSmokeLines.filter((line) => /^(?:builtin\s+|command\s+)?trap(?:\s|$)/.test(line));
+  if (trapLines.length !== 1 || trapLines[0] !== cleanupTrap)
+    fail("HTTP image smoke must install exactly one immutable cleanup trap");
+  if (httpSmokeLines.indexOf(cleanupTrap) < 0 || httpSmokeLines.indexOf(cleanupTrap) >= exactStartIndex)
+    fail("HTTP image smoke cleanup trap must be installed before the container starts");
+  const expectedInvocationCounts: Record<string, number> = {
+    inspect: 2,
+    logs: 2,
+    port: 1,
+    rm: 1,
+    run: 1,
+  };
+  if (
+    invocations.some((invocation) =>
+      invocation.executable !== "docker" ||
+      invocation.containerNamespace ||
+      !(invocation.subcommand in expectedInvocationCounts)
+    ) ||
+    Object.entries(expectedInvocationCounts).some(
+      ([subcommand, count]) => (invocationCounts.get(subcommand) ?? 0) !== count,
+    ) ||
+    invocations.length !== Object.values(expectedInvocationCounts).reduce((sum, count) => sum + count, 0)
+  )
+    fail("HTTP image smoke may use only the intended canonical Docker invocations");
+  if (/\benv(?:\s+(?:--|-[A-Za-z]+|[A-Za-z_][A-Za-z0-9_]*=[^\s]+))*\s+docker\s+/.test(active(httpSmoke)))
+    fail("HTTP image smoke must not invoke Docker through env");
+  if (httpSmoke.includes("--entrypoint"))
+    fail("HTTP image smoke must not override the image entrypoint or command");
+  if (httpSmoke.includes("<<"))
+    fail("HTTP image smoke must not contain heredocs or here-strings");
+  if (httpSmokeLines.filter((line) => line === "sleep 3").length !== 1)
+    fail("HTTP image smoke settle wait must be one complete foreground command");
+  const runningAssertion = 'test "$(docker inspect --format \'{{.State.Running}}\' "${smoke_container}")" = "true"';
+  if (httpSmokeLines.filter((line) => line === runningAssertion).length !== 1)
+    fail("HTTP image smoke running assertion must be one complete unmasked command");
+  const orderedHttpLines = [
+    'if curl --fail --silent --show-error --max-time 2 --output "${health_json}" "${smoke_url}/health"; then',
+    '\' "${health_json}" >/dev/null',
+    'curl --fail --silent --show-error --max-time 2 --output "${version_json}" "${smoke_url}/version"',
+    '\' "${version_json}" >/dev/null',
+    "sleep 3",
+    runningAssertion,
+    'curl --fail --silent --show-error --max-time 2 --output "${settled_health_json}" "${smoke_url}/health"',
+    '\' "${settled_health_json}" >/dev/null',
+  ];
+  const orderedHttpPositions = orderedHttpLines.map((line) =>
+    httpSmokeLines.reduce<number[]>((positions, candidate, index) => {
+      if (candidate === line) positions.push(index);
+      return positions;
+    }, []),
+  );
+  if (
+    orderedHttpPositions.some((positions) => positions.length !== 1) ||
+    orderedHttpPositions.some((positions, index) =>
+      index > 0 && positions[0] <= orderedHttpPositions[index - 1][0]
+    )
+  )
+    fail("HTTP image smoke must validate initial health and version before settle, liveness, and settled health in order");
+  if ((httpSmoke.match(/"\$\{smoke_url\}\/health"/g) ?? []).length < 2)
+    fail("HTTP image smoke must probe health before and after the settle interval");
   const setup = named(
     steps,
     "Set up host Bun for shipped-artefact verification",
@@ -977,6 +1105,9 @@ export function validateInstructionsDeploy(
   const oidcIndex = steps.findIndex((s) => asText(s.name) === NAMES.oidc);
   if (trivyIndex < 0 || oidcIndex < 0 || trivyIndex > oidcIndex)
     fail("local vulnerability scan must run before OIDC");
+  const httpSmokeIndex = steps.findIndex((s) => asText(s.name) === NAMES.httpSmoke);
+  if (httpSmokeIndex < 0 || oidcIndex < 0 || httpSmokeIndex > oidcIndex)
+    fail("HTTP image startup smoke must run before OIDC");
   if (/\bcat\s[^\n]*(?:domain|s3-backup|s3-verify|backup-receipt)/.test(text))
     fail("deployment must not print domain archives or backup receipts");
   if (/echo[^\n]*domain\.json/.test(text))
@@ -1026,6 +1157,29 @@ export function selfTestInstructionsDeploy(root = process.cwd()): string[] {
   const failures: string[] = [];
   if (validateInstructionsDeploy(real, ci, bun).length)
     failures.push("positive control rejected the real workflow");
+  const smokeWait = "          sleep 3\n";
+  const smokeRunning = '          test "$(docker inspect --format \'{{.State.Running}}\' "${smoke_container}")" = "true"\n';
+  const settledHealth = [
+    "          curl --fail --silent --show-error --max-time 2 \\",
+    '            --output "${settled_health_json}" "${smoke_url}/health"',
+    "          jq -e --arg version \"${expected_version}\" '",
+    '            .status == "ok" and .version == $version and .name == "instructions"',
+    '          \' "${settled_health_json}" >/dev/null',
+  ].join("\n");
+  const orderedSettleSequence = `${smokeWait}${smokeRunning}${settledHealth}`;
+  const versionProbe = [
+    "          curl --fail --silent --show-error --max-time 2 \\",
+    '            --output "${version_json}" "${smoke_url}/version"',
+    "          jq -e --arg version \"${expected_version}\" '",
+    '            .status == "ok" and .version == $version and .name == "instructions"',
+    '          \' "${version_json}" >/dev/null',
+  ].join("\n");
+  const exactStart = [
+    "          docker run --detach \\",
+    '            --name "${smoke_container}" \\',
+    "            --publish 127.0.0.1::8080 \\",
+    '            "${LOCAL_IMAGE}:${SOURCE_SHA}" >/dev/null',
+  ].join("\n");
   const mutations: [string, (s: string) => string, string][] = [
     [
       "wrong account",
@@ -1044,6 +1198,247 @@ export function selfTestInstructionsDeploy(root = process.cwd()): string[] {
           "      - name: Removed local vulnerability report",
         ),
       "missing step",
+    ],
+    [
+      "HTTP startup smoke removed",
+      (s) =>
+        s.replace(
+          "      - name: Smoke exact image HTTP startup",
+          "      - name: Removed exact image HTTP startup",
+        ),
+      "missing step",
+    ],
+    [
+      "HTTP startup smoke source image replaced",
+      (s) => {
+        const smokeStep = s.indexOf("      - name: Smoke exact image HTTP startup");
+        const image = s.indexOf('"${LOCAL_IMAGE}:${SOURCE_SHA}" >/dev/null', smokeStep);
+        return image < 0
+          ? s
+          : `${s.slice(0, image)}"unrelated-image:fixed" >/dev/null${s.slice(image + '"${LOCAL_IMAGE}:${SOURCE_SHA}" >/dev/null'.length)}`;
+      },
+      "HTTP image smoke must start the exact source image with its default command",
+    ],
+    [
+      "HTTP startup smoke overrides the entrypoint",
+      (s) => {
+        const smokeStep = s.indexOf("      - name: Smoke exact image HTTP startup");
+        const publish = s.indexOf("            --publish 127.0.0.1::8080 \\", smokeStep);
+        return publish < 0
+          ? s
+          : `${s.slice(0, publish)}            --entrypoint bun \\\n${s.slice(publish)}`;
+      },
+      "HTTP image smoke must start the exact source image with its default command",
+    ],
+    [
+      "HTTP startup smoke binds a fixed public host port",
+      (s) => s.replace("--publish 127.0.0.1::8080", "--publish 8080:8080"),
+      "HTTP image smoke missing: --publish 127.0.0.1::8080",
+    ],
+    [
+      "HTTP startup health probe removed",
+      (s) => s.replaceAll('"${smoke_url}/health"', '"${smoke_url}/status"'),
+      'HTTP image smoke missing: "${smoke_url}/health"',
+    ],
+    [
+      "HTTP startup version equality weakened",
+      (s) => s.replaceAll(
+        '.status == "ok" and .version == $version and .name == "instructions"',
+        '.status == "ok" and (.version | type) == "string" and .name == "instructions"',
+      ),
+      'HTTP image smoke missing: .status == "ok" and .version == $version',
+    ],
+    [
+      "HTTP startup settle interval removed",
+      (s) => s.replace("          sleep 3", "          true # settle removed"),
+      "HTTP image smoke settle wait must be one complete foreground command",
+    ],
+    [
+      "HTTP startup settle interval backgrounded",
+      (s) => s.replace("          sleep 3", "          sleep 3 &"),
+      "HTTP image smoke settle wait must be one complete foreground command",
+    ],
+    [
+      "HTTP startup running assertion removed",
+      (s) => s.replace(
+        '          test "$(docker inspect --format \'{{.State.Running}}\' "${smoke_container}")" = "true"',
+        '          echo "running assertion removed"',
+      ),
+      "HTTP image smoke running assertion must be one complete unmasked command",
+    ],
+    [
+      "HTTP startup running assertion masked",
+      (s) => s.replace(
+        '          test "$(docker inspect --format \'{{.State.Running}}\' "${smoke_container}")" = "true"',
+        '          test "$(docker inspect --format \'{{.State.Running}}\' "${smoke_container}")" = "true" || true',
+      ),
+      "HTTP image smoke running assertion must be one complete unmasked command",
+    ],
+    [
+      "HTTP startup adds a plain command-overridden container",
+      (s) => s.replace(
+        '            "${LOCAL_IMAGE}:${SOURCE_SHA}" >/dev/null',
+        '            "${LOCAL_IMAGE}:${SOURCE_SHA}" >/dev/null\n          docker run --name "${smoke_container}-override" --entrypoint bun "${LOCAL_IMAGE}:${SOURCE_SHA}" --version',
+      ),
+      "HTTP image smoke must contain exactly one Docker container-start command",
+    ],
+    [
+      "HTTP startup adds a short-detach command-overridden container",
+      (s) => s.replace(
+        '            "${LOCAL_IMAGE}:${SOURCE_SHA}" >/dev/null',
+        '            "${LOCAL_IMAGE}:${SOURCE_SHA}" >/dev/null\n          docker rm --force "${smoke_container}"\n          docker run -d --name "${smoke_container}-override" --entrypoint bun "${LOCAL_IMAGE}:${SOURCE_SHA}" dist/server/index.js',
+      ),
+      "HTTP image smoke must contain exactly one Docker container-start command",
+    ],
+    [
+      "HTTP startup adds a container-run command-overridden container",
+      (s) => s.replace(
+        '            "${LOCAL_IMAGE}:${SOURCE_SHA}" >/dev/null',
+        '            "${LOCAL_IMAGE}:${SOURCE_SHA}" >/dev/null\n          docker container run --detach --name "${smoke_container}-override" --entrypoint bun "${LOCAL_IMAGE}:${SOURCE_SHA}" dist/server/index.js',
+      ),
+      "HTTP image smoke must contain exactly one Docker container-start command",
+    ],
+    [
+      "HTTP startup hides the required start in an inert heredoc",
+      (s) => s.replace(
+        "          docker run --detach \\",
+        "          : <<'INERT_HTTP_START'\n          docker run --detach \\",
+      ).replace(
+        '            "${LOCAL_IMAGE}:${SOURCE_SHA}" >/dev/null',
+        '            "${LOCAL_IMAGE}:${SOURCE_SHA}" >/dev/null\n          INERT_HTTP_START\n          docker run -d --name "${smoke_container}" --entrypoint bun "${LOCAL_IMAGE}:${SOURCE_SHA}" dist/server/index.js',
+      ),
+      "HTTP image smoke must not contain heredocs or here-strings",
+    ],
+    [
+      "HTTP startup moves settle after running and second health",
+      (s) => s.replace(
+        orderedSettleSequence,
+        `${smokeRunning}${settledHealth}\n${smokeWait.trimEnd()}`,
+      ),
+      "HTTP image smoke must validate initial health and version before settle, liveness, and settled health in order",
+    ],
+    [
+      "HTTP startup checks running before settle",
+      (s) => s.replace(
+        orderedSettleSequence,
+        `${smokeRunning}${smokeWait}${settledHealth}`,
+      ),
+      "HTTP image smoke must validate initial health and version before settle, liveness, and settled health in order",
+    ],
+    [
+      "HTTP startup performs second health before settle and running",
+      (s) => s.replace(
+        orderedSettleSequence,
+        `${settledHealth}\n${smokeWait}${smokeRunning.trimEnd()}`,
+      ),
+      "HTTP image smoke must validate initial health and version before settle, liveness, and settled health in order",
+    ],
+    [
+      "HTTP startup replaces Docker with an absolute executable path",
+      (s) => s.replace("          docker run --detach \\", "          /usr/bin/docker run --detach \\"),
+      "HTTP image smoke may use only the intended canonical Docker invocations",
+    ],
+    [
+      "HTTP startup replaces Docker with an env wrapper",
+      (s) => s.replace("          docker run --detach \\", "          env docker run --detach \\"),
+      "HTTP image smoke must not invoke Docker through env",
+    ],
+    [
+      "HTTP startup replaces run with create and start",
+      (s) => s.replace(
+        exactStart,
+        [
+          "          docker create \\",
+          '            --name "${smoke_container}" \\',
+          "            --publish 127.0.0.1::8080 \\",
+          '            "${LOCAL_IMAGE}:${SOURCE_SHA}" >/dev/null',
+          '          docker start "${smoke_container}" >/dev/null',
+        ].join("\n"),
+      ),
+      "HTTP image smoke must contain exactly one Docker container-start command",
+    ],
+    [
+      "HTTP startup wraps settle, running, and second health in a false branch",
+      (s) => s.replace(
+        orderedSettleSequence,
+        `          if false; then\n${orderedSettleSequence}\n          fi`,
+      ),
+      "HTTP image smoke must match the reviewed exact script",
+    ],
+    [
+      "HTTP startup wraps exact version verification in a false branch",
+      (s) => s.replace(
+        versionProbe,
+        `          if false; then\n${versionProbe}\n          fi`,
+      ),
+      "HTTP image smoke must match the reviewed exact script",
+    ],
+    [
+      "HTTP startup hides exact start in false branch then uses an indirect engine",
+      (s) => s.replace(
+        exactStart,
+        [
+          "          if false; then",
+          exactStart,
+          "          fi",
+          "          engine=/usr/bin/docker",
+          '          "${engine}" run -d --name "${smoke_container}" --publish 127.0.0.1::8080 "${LOCAL_IMAGE}:${SOURCE_SHA}" >/dev/null',
+        ].join("\n"),
+      ),
+      "HTTP image smoke must match the reviewed exact script",
+    ],
+    [
+      "HTTP startup installs cleanup trap after container start",
+      (s) => s.replace("          trap cleanup_smoke EXIT\n", "").replace(
+        exactStart,
+        `${exactStart}\n          trap cleanup_smoke EXIT`,
+      ),
+      "HTTP image smoke cleanup trap must be installed before the container starts",
+    ],
+    [
+      "HTTP startup disables cleanup trap after container start",
+      (s) => s.replace(exactStart, `${exactStart}\n          trap - EXIT`),
+      "HTTP image smoke must install exactly one immutable cleanup trap",
+    ],
+    [
+      "HTTP startup step is disabled by an if condition",
+      (s) => s.replace(
+        "      - name: Smoke exact image HTTP startup\n        run:",
+        '      - name: Smoke exact image HTTP startup\n        if: ${{ false }}\n        run:',
+      ),
+      "HTTP image smoke step must contain exactly name and run",
+    ],
+    [
+      "HTTP startup step masks failure with continue-on-error",
+      (s) => s.replace(
+        "      - name: Smoke exact image HTTP startup\n        run:",
+        "      - name: Smoke exact image HTTP startup\n        continue-on-error: true\n        run:",
+      ),
+      "HTTP image smoke step must contain exactly name and run",
+    ],
+    [
+      "HTTP startup step replaces execution with syntax-only shell",
+      (s) => s.replace(
+        "      - name: Smoke exact image HTTP startup\n        run:",
+        "      - name: Smoke exact image HTTP startup\n        shell: bash -n {0}\n        run:",
+      ),
+      "HTTP image smoke step must contain exactly name and run",
+    ],
+    [
+      "HTTP startup step injects a privileged token",
+      (s) => s.replace(
+        "      - name: Smoke exact image HTTP startup\n        run:",
+        '      - name: Smoke exact image HTTP startup\n        env:\n          GH_TOKEN: ${{ secrets.DEPLOY_PAT }}\n        run:',
+      ),
+      "HTTP image smoke step must contain exactly name and run",
+    ],
+    [
+      "HTTP startup step overrides the candidate image environment",
+      (s) => s.replace(
+        "      - name: Smoke exact image HTTP startup\n        run:",
+        "      - name: Smoke exact image HTTP startup\n        env:\n          LOCAL_IMAGE: unrelated-image\n        run:",
+      ),
+      "HTTP image smoke step must contain exactly name and run",
     ],
     [
       "migration removed",
@@ -1324,7 +1719,7 @@ if (import.meta.main) {
       process.exit(1);
     }
     console.log(
-      "instructions-deploy self-test: PASS — positive control accepted and 33 negative controls rejected",
+      "instructions-deploy self-test: PASS — positive control accepted and 63 negative controls rejected",
     );
   }
   const errors = validateInstructionsDeploy(
@@ -1338,6 +1733,6 @@ if (import.meta.main) {
     process.exit(1);
   }
   console.log(
-    "instructions-deploy: PASS — exact-ci, scoped, pre-OIDC scanned, target-pinned, complete-domain S3-backed-up, migrate-first, digest-pinned, rollback-ready, exact-domain-integrity verified",
+    "instructions-deploy: PASS — exact-ci, scoped, exact-image HTTP-startup-smoked, pre-OIDC scanned, target-pinned, complete-domain S3-backed-up, migrate-first, digest-pinned, rollback-ready, exact-domain-integrity verified",
   );
 }

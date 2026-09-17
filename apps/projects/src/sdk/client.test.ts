@@ -106,6 +106,27 @@ const terminalFixture: GuardedProjectMutationResult = {
 };
 
 describe("generated Projects SDK server parity", () => {
+  test("lists canonical machines through exactly one /v1 prefix", async () => {
+    let requested = "";
+    const client = new ProjectsClient({
+      baseUrl: "https://projects.example.test",
+      fetch: (async (input: string | URL | Request) => {
+        requested = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        return Response.json({
+          machines: [{ slug: "station03", status: "active", role: "assignable" }],
+          count: 1,
+        });
+      }) as typeof fetch,
+    });
+
+    const response = await client.listMachines();
+    expect(new URL(requested).pathname).toBe("/v1/machines");
+    expect(response).toEqual({
+      machines: [{ slug: "station03", status: "active", role: "assignable" }],
+      count: 1,
+    });
+  });
+
   test("serializes additive list query scopes, repeated tags, and eval exclusion on the existing /v1 route", async () => {
     let requested = "";
     const client = new ProjectsClient({

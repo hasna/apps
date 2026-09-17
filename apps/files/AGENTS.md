@@ -14,8 +14,8 @@ management via CLI + MCP + `files-serve` + generated SDK.
   the MCP server and `./sdk` (`createFilesClientFromEnv`). Never hand the
   resolver a copied env: normalise blanks only, or pass
   `keychain: { enabled: true }` so the ambient gate survives the copy.
-- Local data belongs in `~/.hasna/files/files.db` (resolver-resolved data
-  root), reachable ONLY under the explicit local opt-in
+- Local data belongs in `~/.hasna/files/files.db` (canonical or explicitly
+  relocated data root), reachable ONLY under the explicit local opt-in
   `HASNA_FILES_LOCAL=1` / `FILES_LOCAL=1`. No credential + no opt-in = fail
   closed, exit non-zero, no SQLite, no `*-local-fallback` event; a local run
   always says "LOCAL mode" on stderr. The retired `*_MODE` / `*_STORAGE_MODE`

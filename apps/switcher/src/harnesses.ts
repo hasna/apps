@@ -5,6 +5,8 @@ import { claudeContextEnvironment } from "./claude-context";
 import { compileOpenCodeModelPolicy, openCodeInvocationModel } from "./opencode-model-policy";
 import { prepareKilo, validateKiloConfiguration } from "./kilo";
 import { prepareGemini, validateGeminiConfiguration } from "./gemini-config";
+import { prepareAntigravity, validateAntigravityConfiguration, antigravityHelperModel } from "./antigravity-config";
+import { prepareJunie, validateJunieConfiguration } from "./junie-config";
 import { geminiBridge } from "./gemini-bridge";
 import { compileModelPolicy } from "./model-policy";
 import { compileNativeModelPolicy } from "./native-model-policy";
@@ -35,8 +37,8 @@ const execute = promisify(execFile);
 const KEY = "SWITCHER_HARNESS_API_KEY";
 const quote = (value: unknown) => JSON.stringify(value);
 export async function detectHarness(harness: HarnessId, override?: string) {
-  const executable = override ?? Bun.which(harness) ?? harness;
   const installation = harnessInstallation(harness);
+  const executable = override ?? Bun.which(installation.executable) ?? installation.executable;
   try {
     const {stdout,stderr} = await execute(executable,["--version"],{timeout:8000,maxBuffer:65536,env:childEnvironment()});
     return {harness,executable,available:true,version:(stdout.trim()||stderr.trim()).slice(0,200),installation};
@@ -46,6 +48,8 @@ export async function validateHarnessConfiguration(harness:HarnessId,cwd:string,
   if(harness==="kilo") await validateKiloConfiguration(cwd,[...args]);
   if(harness==="aider")await validateAiderConfiguration(cwd,args);
   if(harness==="gemini") await validateGeminiConfiguration(cwd);
+  if(harness==="antigravity") await validateAntigravityConfiguration(cwd);
+  if(harness==="junie") await validateJunieConfiguration(cwd);
 }
 const versionAtLeast = (raw: string | undefined, minimum: number[]) => {
   const match = raw?.match(/(\d+)\.(\d+)\.(\d+)/);
@@ -54,6 +58,8 @@ const versionAtLeast = (raw: string | undefined, minimum: number[]) => {
   for(let i=0;i<3;i++){if(actual[i]>minimum[i])return true;if(actual[i]<minimum[i])return false;}return true;
 };
 export function validateHarnessVersion(harness: HarnessId, version: string | undefined): void {
+  if(harness==="antigravity"&&version?.trim()!=="1.2.5") throw new Error("Antigravity CLI 1.2.5 is required by the verified native adapter.");
+  if(harness==="junie"&&!/\b3196\.5\b/.test(version??"")) throw new Error("Junie build 3196.5 is required by the verified custom model adapter.");
   if(harness==="kilo"&&!versionAtLeast(version,[7,5,15])) throw new Error("Kilo >=7.5.15 is required by this scoped provider bridge.");
   if(harness==="omp"&&!versionAtLeast(version,[18,1,11])) throw new Error("OMP >=18.1.11 is required for the native catalog and persistent session adapter.");
   if(harness==="dsh"&&(!versionAtLeast(version,[0,1,2])||(/\b0\.1\.2-/.test(version??"")&&!/\b0\.1\.2-rc\.[1-9]\d*(?:\b|$)/.test(version??"")))) throw new Error("DeepSeek Harness (dsh) >=0.1.2-rc.1 is required for the native profile adapter.");
@@ -533,6 +539,8 @@ async function prepareNativeLaunch(input: HarnessLaunchInput, providerBaseUrl = 
   const missing=input.models.filter(m=>!m.contextWindow).length;
   if(missing) warnings.push(`${missing} catalog models have no declared context limit; native fallback limits may be inaccurate.`);
   if(input.harness==="gemini") return prepareGemini(input);
+  if(input.harness==="antigravity") return prepareAntigravity(input);
+  if(input.harness==="junie") return prepareJunie(input);
   if(input.protocol==="gemini-generate-content") throw new Error("Harness and provider protocol are incompatible.");
   if(input.harness==="aider")return prepareAider(input);
   if(input.harness==="claude") {
@@ -554,7 +562,8 @@ async function prepareNativeLaunch(input: HarnessLaunchInput, providerBaseUrl = 
   }
   if(input.harness==="codex") {
     const rolePolicy=await prepareCodexModelPolicy({home:input.sharedState?.home,cwd:input.cwd,stateDir:input.stateDir,model:input.model,policy:input.modelPolicy?{version:1,...input.modelPolicy}:undefined,switcherProvider:"switcher",switcherBaseUrl:input.baseUrl});
-    const file=await jsonFile(input.stateDir,"codex-models.json",{models:input.models.map((model,index)=>codexModel(model,index,providerBaseUrl,model.id===input.model?input.reasoning:undefined))});
+    const selectableModels=input.models.filter(model=>input.compiledPolicy?.allowedModels.includes(model.id)??true);
+    const file=await jsonFile(input.stateDir,"codex-models.json",{models:selectableModels.map((model,index)=>codexModel(model,index,providerBaseUrl,model.id===input.model?input.reasoning:undefined))});
     configPaths.push(file);
     configPaths.push(...Object.values(rolePolicy.agentConfigPaths));
     env[KEY]=input.credential??"switcher-local-no-auth";
@@ -831,6 +840,7 @@ export async function prepareHarnessLaunch(input: HarnessLaunchInput): Promise<P
   if(!compatible(input.harness,input.protocol))throw new Error("Harness and provider protocol are incompatible.");
   if(!isAbsolute(input.stateDir)||!isAbsolute(input.cwd))throw new Error("Launch state and working directories must be absolute.");
   const compiledPolicy=compileModelPolicy(input.model,input.models,input.modelPolicy);
+  if(input.harness==="antigravity"&&input.model===antigravityHelperModel&&compiledPolicy.roles.fast!==input.model)throw new Error("Antigravity main and helper requests are indistinguishable for this model; the fast role must use the same model.");
   input={...input,models:input.models.filter(model=>!modelExpired(model))};
   const nativePolicy=compileNativeModelPolicy({harness:input.harness,mainModel:input.model,roles:compiledPolicy.roles,version:input.version});
   const specialized=new Set(["opencode","opencode2","gemini","hermes"]);
@@ -842,6 +852,6 @@ export async function prepareHarnessLaunch(input: HarnessLaunchInput): Promise<P
   try {
     const nativeAuth=input.protocol==="gemini-generate-content"?"x-api-key":input.harness==="claude"?(input.authStyle==="x-api-key"?"x-api-key":"bearer"):input.protocol==="anthropic-messages"?"x-api-key":"bearer";
     const prepared=await prepareTransportLaunch({...input,providerBaseUrl:input.baseUrl,baseUrl:bridge.baseUrl,credential:bridge.token,authStyle:nativeAuth,compiledPolicy,nativePolicy});
-    return {...prepared,configPaths:[...prepared.configPaths,catalogPath],warnings:[...prepared.warnings,"Switcher injects model guidance into every managed inference request and permits only the selected model plus explicitly configured role, allowed, and fallback models. The gateway translates the selected credential to the provider authentication header. The full catalog remains discoverable."],cleanup:async()=>{try{await prepared.cleanup?.();}finally{await bridge.cleanup();await rm(catalogPath,{force:true});}}};
+    return {...prepared,configPaths:[...prepared.configPaths,catalogPath],warnings:[...prepared.warnings,"Switcher injects model guidance into every managed inference request and permits only models authorized by the launch policy, including catalog selection when enabled. The gateway translates the selected credential to the provider authentication header. The full catalog remains discoverable."],cleanup:async()=>{try{await prepared.cleanup?.();}finally{await bridge.cleanup();await rm(catalogPath,{force:true});}}};
   }catch(error){await bridge.cleanup();await rm(catalogPath,{force:true});throw error;}
 }

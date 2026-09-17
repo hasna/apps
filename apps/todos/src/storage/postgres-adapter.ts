@@ -184,6 +184,7 @@ export function createPostgresTodosStorageAdapter(
       add: (taskId, dependsOn, context) => addDependency(taskId, dependsOn, store, context),
       remove: (taskId, dependsOn) => removeDependency(taskId, dependsOn, store),
       list: (taskId) => listDependencies(taskId, store),
+      listPage: (page) => store.listDependencyPage(page),
       listAll: () => store.list<TaskDependency>("dependencies"),
     },
     verifications: {
@@ -547,6 +548,59 @@ class PostgresJsonRecordStore {
 
   async list<T>(type: RemoteObjectType): Promise<T[]> {
     return (await this.listRecords<T>(type)).map((record) => record.payload);
+  }
+
+  async listDependencyPage(options: { limit: number; offset: number }): Promise<{ dependencies: TaskDependency[]; total: number }> {
+    const { limit, offset } = options;
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) {
+      throw new Error("Postgres dependency page limit must be an integer from 1 to 500");
+    }
+    if (!Number.isSafeInteger(offset) || offset < 0) {
+      throw new Error("Postgres dependency page offset must be a non-negative integer");
+    }
+    await this.ensureSchema();
+    const result = await this.options.client.query<{ total: unknown; dependencies: unknown }>(
+      `/* todos:list-dependencies-page */ WITH page AS (
+         SELECT payload, updated_at, object_id
+         FROM ${this.tableName}
+         WHERE service = $1 AND object_type = 'dependencies' AND deleted_at IS NULL
+         ORDER BY updated_at ASC, object_id ASC
+         LIMIT $2 OFFSET $3
+       )
+       SELECT
+         (SELECT COUNT(*)::text FROM ${this.tableName}
+          WHERE service = $1 AND object_type = 'dependencies' AND deleted_at IS NULL) AS total,
+         COALESCE(
+           jsonb_agg(page.payload ORDER BY page.updated_at ASC, page.object_id ASC)
+             FILTER (WHERE page.payload IS NOT NULL),
+           '[]'::jsonb
+         ) AS dependencies
+       FROM page`,
+      [this.service, limit, offset],
+    );
+    const row = result.rows[0];
+    const totalText = typeof row?.total === "string"
+      ? row.total
+      : typeof row?.total === "number" && Number.isSafeInteger(row.total)
+        ? String(row.total)
+        : null;
+    if (totalText === null || !/^\d+$/.test(totalText)) {
+      throw new Error("Postgres dependency page returned an invalid total");
+    }
+    const total = Number(totalText);
+    if (!Number.isSafeInteger(total)) {
+      throw new Error("Postgres dependency page total exceeds the safe integer range");
+    }
+    if (!Array.isArray(row?.dependencies)) {
+      throw new Error("Postgres dependency page returned an invalid dependencies array");
+    }
+    if (row.dependencies.length > limit || offset + row.dependencies.length > total) {
+      throw new Error("Postgres dependency page returned rows outside the requested bound");
+    }
+    return {
+      dependencies: row.dependencies.map((value) => payloadRecord<TaskDependency>(value)),
+      total,
+    };
   }
 
   async listComments(taskId: string, options: TodosCommentListOptions = {}): Promise<TaskComment[]> {

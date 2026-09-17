@@ -70,6 +70,22 @@ skills hook install --agent all --selection-profile default --json
 skills hook install --agent all --selection-profile default --apply --json
 ```
 
+Native migration includes the current directory, every ancestor, and the global
+agent directories. Use `--project /path/to/project` to include another project
+and its ancestors. This matches the prompt hook's project discovery, including
+skills inherited from a parent workspace. Preview the JSON inventory before
+applying it; archived copies retain recovery receipts. A drift refusal reports
+the affected paths without printing their skill documents.
+
+Claude hook installation sets `syncClaudeAiSkills: false` in user settings to
+stop [account skill synchronization](https://code.claude.com/docs/en/skills#skills-synced-from-claudeai)
+from recreating native copies. The prompt hook checks that setting. Vendor
+migration also inventories `~/.claude/plugins/synced/` and archives its skill
+documents while preserving other plugin files. Whole-plugin synchronization
+remains unchanged because synced plugins can also provide hooks, MCP servers,
+and language servers. A later plugin download that restores a skill document
+will trigger another drift refusal and require review.
+
 Native hook invocations must use their installed adapter's selection profile.
 An old client command or environment override naming another profile refuses
 before synchronization or context loading. Review the hook installation and
