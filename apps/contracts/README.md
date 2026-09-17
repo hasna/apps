@@ -1331,8 +1331,11 @@ terminal page can therefore have `has_more: false` while remaining
 `complete: false`. Numeric cursors are offsets by default: continuation is
 exactly `cursor + count`, known totals cannot terminate early or continue past
 the population, and a nonzero offset cannot claim completeness. Non-pagination
-numeric cursors require explicit `whole-query` semantics. Local byte clipping
-is recorded as `truncated` with a `byte_budget` reason. JSON is compact by
+numeric cursors require explicit `whole-query` semantics. An initial opaque page
+short of a known total must continue or explicitly declare truncation. Local
+byte clipping is recorded as `truncated` with a `byte_budget` reason; an empty
+page that cannot fit reports `OUTPUT_BUDGET_TOO_SMALL`, never an item error.
+JSON is compact by
 default, record keys are sorted deterministically, and byte counts are UTF-8
 wire bytes.
 The module performs no I/O and does not import CLI, MCP, credential, URL, or

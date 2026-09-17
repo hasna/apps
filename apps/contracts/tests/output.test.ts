@@ -162,6 +162,58 @@ describe("truthful page envelopes", () => {
     expect(truncatedWholeQuery._meta).toMatchObject({ truncated: true, cursor_semantics: "whole-query" });
   });
 
+  test("requires continuation or truncation when an initial opaque page is short of a known total", () => {
+    expect(codeOf(() => createPageEnvelope({
+      items: [{ id: "a" }],
+      limit: 1,
+      cursor: null,
+      nextCursor: null,
+      cursorSemantics: "opaque",
+      hasMore: false,
+      complete: false,
+      total: 2,
+      truncated: false,
+    }))).toBe("OUTPUT_INVALID_PAGE");
+
+    const continued = createPageEnvelope({
+      items: [{ id: "a" }],
+      limit: 1,
+      cursor: null,
+      nextCursor: "page-2",
+      cursorSemantics: "opaque",
+      hasMore: true,
+      complete: false,
+      total: 2,
+    });
+    expect(continued._meta).toMatchObject({ has_more: true, next_cursor: "page-2", cursor_semantics: "opaque" });
+
+    const truncated = createPageEnvelope({
+      items: [{ id: "a" }],
+      limit: 1,
+      cursor: null,
+      nextCursor: null,
+      cursorSemantics: "opaque",
+      hasMore: false,
+      complete: false,
+      total: 2,
+      truncated: true,
+      truncationReasons: ["byte_budget"],
+    });
+    expect(truncated._meta).toMatchObject({ truncated: true, truncation_reasons: ["byte_budget"] });
+
+    const terminalContinuation = createPageEnvelope({
+      items: [{ id: "b" }],
+      limit: 1,
+      cursor: "page-2",
+      nextCursor: null,
+      cursorSemantics: "opaque",
+      hasMore: false,
+      complete: false,
+      total: 2,
+    });
+    expect(terminalContinuation._meta).toMatchObject({ cursor: "page-2", has_more: false });
+  });
+
   test("refuses contradictory pagination and completeness claims", () => {
     expect(codeOf(() => createPageEnvelope({ items: [1, 2], limit: 1, hasMore: false, complete: false }))).toBe("OUTPUT_INVALID_PAGE");
     expect(codeOf(() => createPageEnvelope({ items: [], limit: 1, hasMore: true, complete: false }))).toBe("OUTPUT_INVALID_PAGE");
@@ -350,6 +402,17 @@ describe("JSONL page receipts and byte budgets", () => {
       has_more: true,
       total: 103,
     });
+  });
+
+  test("distinguishes an empty envelope budget failure from an oversized item", () => {
+    const empty = createPageEnvelope({
+      items: [],
+      limit: 1,
+      hasMore: false,
+      complete: true,
+      total: 0,
+    });
+    expect(codeOf(() => fitPageToByteBudget(empty, { maxBytes: 1 }))).toBe("OUTPUT_BUDGET_TOO_SMALL");
   });
 
   test("retains a complete page when it fits and refuses unsafe clipping", () => {

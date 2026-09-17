@@ -15,6 +15,8 @@ A page envelope contains `items` and `_meta`.
   `opaque`, and non-pagination `whole-query` cursors.
 - Numeric offsets require `next_cursor === cursor + count`; they cannot move
   backward, skip rows, terminate before a known total, or continue at/past it.
+- An initial opaque page with a known total larger than its emitted count must
+  provide a continuation or declare truncation; it cannot silently terminate.
 - `has_more` states whether the response provides a usable continuation.
 - `complete` is true only when this envelope contains the whole requested
   population. It is not inferred from a missing cursor, and a nonzero offset
@@ -60,8 +62,10 @@ serialized envelope, including metadata and framing, and keeps the largest
 ordered prefix that fits. It never skips an oversized first item to include
 later items. Numeric-offset continuation is derived as `offset + emitted count`;
 an opaque cursor requires a caller-provided continuation function. Whole-query
-pages refuse clipping because doing so would change their cursor semantics. The
-returned envelope includes stable `byte_length` and `max_bytes` metadata.
+pages refuse clipping because doing so would change their cursor semantics. An
+empty page whose metadata cannot fit returns `OUTPUT_BUDGET_TOO_SMALL`; only a
+nonempty page can return `OUTPUT_ITEM_EXCEEDS_BUDGET`. The returned envelope
+includes stable `byte_length` and `max_bytes` metadata.
 
 ## Advisory fleet declaration
 

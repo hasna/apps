@@ -460,6 +460,12 @@ export function createPageEnvelope<T>(input: CreatePageEnvelopeInput<T>): Output
     if (input.hasMore && total !== null && items.length === total) {
       throw new OutputContractError("OUTPUT_INVALID_PAGE", "has_more=true contradicts count=total");
     }
+    if (cursor === null && !input.hasMore && total !== null && items.length < total && input.truncated !== true) {
+      throw new OutputContractError(
+        "OUTPUT_INVALID_PAGE",
+        "initial opaque page ends before the known total without continuation or declared truncation",
+      );
+    }
   } else {
     if (input.hasMore) {
       throw new OutputContractError("OUTPUT_INVALID_PAGE", "whole-query cursor semantics cannot advertise another page");
@@ -887,6 +893,12 @@ export function fitPageToByteBudget<T>(
       max_bytes: options.maxBytes,
       omitted_items: 0,
     };
+  }
+  if (validated.items.length === 0) {
+    throw new OutputContractError(
+      "OUTPUT_BUDGET_TOO_SMALL",
+      "byte budget cannot contain the empty page envelope",
+    );
   }
 
   if (options.nextCursorForIndex !== undefined && typeof options.nextCursorForIndex !== "function") {
