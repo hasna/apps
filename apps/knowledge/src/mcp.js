@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import pkg from '../package.json' with { type: 'json' };
 import { migrateKnowledgeDb, openKnowledgeDb } from './knowledge-db.ts';
-import { defaultStorePath, itemMatchesSearch } from './store.ts';
+import { itemMatchesSearch } from './store.ts';
 import { resolveItemStore } from './item-store.ts';
 import { usesKnowledgeHttpTransport } from './http-store.ts';
 import {
@@ -32,29 +32,19 @@ function errorText(message) {
   return { content: [{ type: 'text', text: `Error: ${message}` }], isError: true };
 }
 
-function resolveStorePath(storePath, scope) {
-  if (storePath) return storePath;
-  if (scope === 'project' || scope === 'local') {
-    return createKnowledgeService({ scope }).jsonStorePath();
-  }
-  return defaultStorePath();
-}
-
 /**
  * Resolve the unified knowledge-item Store for an MCP item tool. When no
- * explicit `store_path` is given and the shared @hasna/contracts credential
- * chain selects HTTP transport, item reads/writes route to the app API.
- * Otherwise — explicit `store_path`, or the `HASNA_KNOWLEDGE_LOCAL=1` opt-in —
- * the on-box JSON store. With no credential and no opt-in the tool fails
- * closed (an MCP error), never a silent local read.
- * Every MCP item tool routes through this Store — never the JSON file directly.
+ * explicit `store_path` is given, the service resolves HTTP before touching
+ * the workspace; only an explicit local selection may create config.json or
+ * the on-box directory skeleton. An explicit `store_path` remains an explicit
+ * local choice. With no credential and no opt-in the tool fails closed.
  */
 function itemStoreFor(storePath, scope) {
-  // Same stale-selector ratchet the CLI applies. An explicit `store_path`
-  // remains an explicit on-box choice.
   assertNoRetiredKnowledgeStorageSelector(process.env);
-  const resolved = resolveStorePath(storePath, scope);
-  return resolveItemStore({ storePath: resolved, storePathOverridden: Boolean(storePath) });
+  if (storePath) {
+    return resolveItemStore({ storePath, storePathOverridden: true });
+  }
+  return createKnowledgeService({ scope }).itemStore();
 }
 
 function sortItems(items, sort = 'created', desc = false) {

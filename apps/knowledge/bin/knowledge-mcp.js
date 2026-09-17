@@ -22378,18 +22378,12 @@ function compactJsonText(data) {
 function errorText(message) {
   return { content: [{ type: "text", text: `Error: ${message}` }], isError: true };
 }
-function resolveStorePath(storePath, scope) {
-  if (storePath)
-    return storePath;
-  if (scope === "project" || scope === "local") {
-    return createKnowledgeService({ scope }).jsonStorePath();
-  }
-  return defaultStorePath();
-}
 function itemStoreFor(storePath, scope) {
   assertNoRetiredKnowledgeStorageSelector(process.env);
-  const resolved = resolveStorePath(storePath, scope);
-  return resolveItemStore({ storePath: resolved, storePathOverridden: Boolean(storePath) });
+  if (storePath) {
+    return resolveItemStore({ storePath, storePathOverridden: true });
+  }
+  return createKnowledgeService({ scope }).itemStore();
 }
 function activeItems(items, includeArchived) {
   return includeArchived ? items : items.filter((item) => !item.archived);
