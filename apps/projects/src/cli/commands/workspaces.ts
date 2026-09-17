@@ -706,6 +706,23 @@ function mutationAgentId(store: ProjectStore, optAgent?: string): string | undef
 }
 
 /**
+ * Resolve an explicitly selected start actor through the active registry.
+ *
+ * Hosted starts must not consult the on-box SQLite agent table. An omitted
+ * actor remains undefined so the server records no explicit agent identity; an
+ * explicit id or slug is resolved through
+ * GET /v1/agents/{id-or-slug} and the exact returned agent id is sent on every
+ * subsequent start mutation.
+ */
+async function startActorId(store: ProjectStore, actor?: string): Promise<string | undefined> {
+  if (store.transport === "local") return actor ? resolveAgentId(actor) : ensureCliAgent().id;
+  if (!actor) return undefined;
+  const agent = await store.getAgent(actor);
+  if (!agent) throw new Error(`Agent not found: ${actor}`);
+  return agent.id;
+}
+
+/**
  * `--canonical-machine` must name a registered machine slug. The server
  * rejects an unknown slug with HTTP 400 ("Machine not found: <slug>") — the
  * live `update --canonical-machine station03` report — so resolve it against
@@ -1815,12 +1832,10 @@ function registerProjectStartCommand(program: Command): void {
           throw new Error("--session/--name is only supported for a single project start");
         }
 
-        // Local resolves/creates the on-box CLI agent row; the hosted backend
-        // attributes the start to the bearer key server-side and must never
-        // open projects.db to mint a local agent (hasna/apps#1720).
-        const agentId = mutationAgentId(store, opts.actor);
+        const agentId = await startActorId(store, opts.actor);
         const requestedWindows = parseTmuxWindowsJson(opts.windowsJson, "--windows-json");
         const commonOptions = {
+          store,
           agentTool: opts.agent ? parseProjectStartAgent(opts.agent) : undefined,
           toolCommand: opts.command,
           profile: opts.profile,
