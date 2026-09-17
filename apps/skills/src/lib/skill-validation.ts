@@ -139,6 +139,41 @@ function isSafeRelativePath(value: string): boolean {
   return normalized !== ".." && !normalized.startsWith("../") && !normalized.includes("/../");
 }
 
+function validateRuntimeEntry(
+  skillPath: string,
+  entrypoint: unknown,
+  issues: SkillValidationMessage[],
+  warnings: SkillValidationMessage[],
+): void {
+  if (typeof entrypoint !== "string" || !isSafeRelativePath(entrypoint) || /^[a-zA-Z]:/.test(entrypoint)
+      || entrypoint.includes("\\") || entrypoint.split("/").some(part => !part || part === "." || part === "..")) {
+    add(issues, "skill.runtime_entrypoint_unsafe", "runtime.entrypoint must be a canonical relative file path inside the skill directory");
+    return;
+  }
+  const parts = entrypoint.split("/");
+  let current = skillPath;
+  for (let index = 0; index < parts.length; index++) {
+    current = join(current, parts[index]!);
+    let info: ReturnType<typeof lstatSync>;
+    try { info = lstatSync(current); }
+    catch {
+      add(issues, "skill.runtime_entrypoint_missing", "The declared runtime.entrypoint is missing or inaccessible");
+      return;
+    }
+    if (info.isSymbolicLink()) {
+      add(issues, "skill.runtime_entrypoint_symlink", "runtime.entrypoint must not traverse symbolic links");
+      return;
+    }
+    if (index < parts.length - 1 ? !info.isDirectory() : !info.isFile()) {
+      add(issues, "skill.runtime_entrypoint_not_file", "runtime.entrypoint must resolve to a regular file");
+      return;
+    }
+    if (index === parts.length - 1 && info.size < 50) {
+      add(warnings, "skill.runtime_entrypoint_minimal", `Source entry point is very small (${info.size}B)`);
+    }
+  }
+}
+
 function isHostedPackageMetadata(pkg: PackageJson): boolean {
   // Authoritative predicate lives in hosted-skill-set.ts so validation, the
   // packaging guards, and the drift checks cannot disagree about what "hosted"
@@ -390,10 +425,22 @@ export function validateSkillDirectory(
   } else {
     metadata.runtime = hostedMetadata ? "hosted" : "local";
     const srcDir = join(skillPath, "src");
+    let declaredEntrypoint: unknown;
+    const manifestPath = join(skillPath, "skill.json");
+    if (!hostedMetadata && existsSync(manifestPath)) {
+      try {
+        const manifest = asRecord(readJsonFile(manifestPath));
+        declaredEntrypoint = asRecord(manifest?.runtime)?.entrypoint;
+      } catch {
+        add(issues, "skill.manifest_invalid", "skill.json must contain valid JSON");
+      }
+    }
     if (hostedMetadata) {
       if (existsSync(srcDir)) {
         add(issues, "skill.hosted_source_forbidden", "Hosted metadata skills must not include local implementation source");
       }
+    } else if (declaredEntrypoint !== undefined && declaredEntrypoint !== null) {
+      validateRuntimeEntry(skillPath, declaredEntrypoint, issues, warnings);
     } else if (!existsSync(srcDir)) {
       add(issues, "skill.src_missing", "Missing src/ directory");
     } else if (!existsSync(join(srcDir, "index.ts")) && !existsSync(join(srcDir, "index.js"))) {
