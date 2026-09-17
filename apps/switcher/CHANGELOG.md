@@ -9,6 +9,13 @@ status: "active"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
 
+## 0.2.6
+
+### Patch Changes
+
+- Explain provider HTTP 402 refusals with account balance, API-key spending-limit, and output-token budget guidance. Record a distinct billing reason without exposing upstream error text, attempting a fallback, or preventing recovery after funding.
+- Serialize PostgreSQL catalog writers by provider so simultaneous station launches can refresh new or existing catalogs without spurious version conflicts. Preserve checks that reject metadata discovered against a changed provider.
+
 ## 0.2.5
 
 ### Patch Changes

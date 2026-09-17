@@ -119,7 +119,9 @@ export function createHandler(store: Store, authentication: ServiceAuthenticatio
           }
         }
         if (resource === "providers" && id && parts[3] === "refresh" && parts.length === 4 && request.method === "POST") {
-          if (store.engine === "postgresql") await db.unsafe("SELECT id FROM switcher_providers WHERE id = $1 FOR SHARE", [id]);
+          // Serialize catalog writers before reading its version, including
+          // the first snapshot where there is no catalog row to lock yet.
+          if (store.engine === "postgresql") await db.unsafe("SELECT id FROM switcher_providers WHERE id = $1 FOR UPDATE", [id]);
           const provider = await store.get<Provider>("providers", id, db);
           if (!refreshed || provider.version !== refreshed.provider.version) throw new Fault(409, "provider_changed", "Provider changed during discovery; refresh again.");
           const catalog = refreshed.catalog;
@@ -129,7 +131,7 @@ export function createHandler(store: Store, authentication: ServiceAuthenticatio
           return {models:saved.models,refreshedAt:saved.refreshedAt,source:saved.source};
         }
         if (resource === "providers" && id && parts[3] === "catalog" && parts.length === 4 && request.method === "PUT") {
-          if(store.engine==="postgresql")await db.unsafe("SELECT id FROM switcher_providers WHERE id = $1 FOR SHARE",[id]);
+          if(store.engine==="postgresql")await db.unsafe("SELECT id FROM switcher_providers WHERE id = $1 FOR UPDATE",[id]);
           const provider = await store.get<Provider>("providers",id,db);
           if(provider.version!==version())throw new Fault(409,"provider_changed","Provider changed during local discovery; refresh again.");
           const catalog=parse(catalogSchema,body);

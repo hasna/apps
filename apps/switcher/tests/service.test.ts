@@ -98,6 +98,34 @@ for (const engine of ["sqlite","postgresql"] as const) {
       const results=await Promise.all([client.createProvider(input,"concurrent-request"),client.createProvider(input,"concurrent-request")]);
       expect(results[0]).toEqual(results[1]);
     });
+    for (const mode of ["save", "refresh"] as const) test(`concurrent ${mode} catalog writers all succeed for new and existing snapshots`, async () => {
+      const models = [{ id: "concurrent-model", name: "Concurrent model" }];
+      const provider = await client.createProvider({ id: `concurrent-catalog-${mode}`, name: "Concurrent catalog", baseUrl: "https://example.com/v1", protocol: "openai-responses", ...(mode === "refresh" ? { manualModels: models } : {}) });
+      const suffix = crypto.randomUUID().replaceAll("-", "");
+      const fn = `delay_writers_${suffix}`, trigger = `delay_writers_${suffix}`;
+      if (engine === "postgresql") {
+        // Hold each catalog row write long enough for other launchers to reach
+        // the version read. The provider lock must serialize that read too.
+        await store.sql.unsafe(`CREATE FUNCTION ${fn}() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_sleep(0.15); RETURN NEW; END $$`);
+        await store.sql.unsafe(`CREATE TRIGGER ${trigger} BEFORE INSERT OR UPDATE ON switcher_catalogs FOR EACH ROW EXECUTE FUNCTION ${fn}()`);
+      }
+      try {
+        for (const state of ["new", "existing"]) {
+          const catalog = { models, refreshedAt: new Date().toISOString(), source: "remote" as const };
+          const results = await Promise.allSettled(Array.from({ length: 4 }, () => mode === "save"
+            ? client.saveCatalog(provider.id, provider.version, catalog)
+            : client.refreshModels(provider.id)));
+          expect(results.map(result => result.status), state).toEqual(Array(4).fill("fulfilled"));
+          expect((await client.listModels(provider.id)).data.map(model => model.id)).toEqual(["concurrent-model"]);
+          expect((await client.getProvider(provider.id)).version).toBe(provider.version);
+        }
+      } finally {
+        if (engine === "postgresql") {
+          await store.sql.unsafe(`DROP TRIGGER IF EXISTS ${trigger} ON switcher_catalogs`);
+          await store.sql.unsafe(`DROP FUNCTION IF EXISTS ${fn}()`);
+        }
+      }
+    });
     test.skipIf(engine!=="postgresql")("PostgreSQL catalog commit serializes with provider updates and cannot restore stale metadata",async()=>{
       const provider=await client.createProvider({id:"catalog-race",name:"Catalog race",baseUrl:"https://example.com/v1",protocol:"openai-chat"});
       const suffix=crypto.randomUUID().replaceAll("-","");

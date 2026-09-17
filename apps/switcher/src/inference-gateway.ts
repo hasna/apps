@@ -115,9 +115,12 @@ export function createInferenceGateway(input: GatewayInput, timing: ProviderRequ
       if(!response)throw new Error("provider_request_failed");
       if(!response.ok){
         const overflow=await isContextOverflow(response);
+        const paymentRequired=response.status===402;
         if(overflow)current.reason="context_length_exceeded";
+        else if(paymentRequired)current.reason="provider_payment_required";
         release();
         if(overflow)return Response.json({type:"error",error:{type:"invalid_request_error",code:"context_length_exceeded",message:"prompt is too long: the provider context window was exceeded. Compact the conversation or start a new session."}},{status:400});
+        if(paymentRequired)return fail(402,"provider_payment_required","The selected provider rejected this request for billing or credit limits (HTTP 402). Check the account balance, API-key spending limit, and requested output-token budget before retrying.");
         const rejected=fail(response.status>=300&&response.status<400?502:response.status,`upstream_http_${response.status}`);
         const retryAfter=response.headers.get("retry-after");
         if((response.status===429||response.status===503)&&retryAfter&&retryAfter.length<=128&&(/^\d+$/.test(retryAfter)||Number.isFinite(Date.parse(retryAfter))))rejected.headers.set("retry-after",retryAfter);
