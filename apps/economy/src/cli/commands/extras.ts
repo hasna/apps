@@ -1,7 +1,6 @@
 import { Command } from 'commander'
 import chalk from 'chalk'
 import {
-  openDatabase,
   dedupeRequests,
   queryZeroCostTokenizedModels,
 } from '../../db/database.js'
@@ -231,6 +230,9 @@ export function registerExtendedCommands(program: Command): void {
       // operations; the hosted serve owns dedup + pricing for its dataset, so run
       // them only against the local SQLite when that is the resolved transport.
       if (!cloud) {
+        // Local-DB maintenance only (the `if (!cloud)` arm above): ONE gated
+        // dynamic import keeps `bun:sqlite` out of dist/cli.
+        const { openDatabase } = await import('../../db/sqlite-store.js')
         const db = openDatabase()
         ensurePricingSeeded(db)
         const zeroCostBuckets = queryZeroCostTokenizedModels(db, 5)

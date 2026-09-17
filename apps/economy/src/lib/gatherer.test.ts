@@ -9,7 +9,7 @@ import {
   upsertModelPricing,
   upsertRequest,
   upsertSession,
-} from '../db/database.js'
+} from '../db/sqlite-store.js'
 import { resetEconomyCloudStorageCache } from './cloud-storage.js'
 import { gatherTrainingData } from './gatherer.js'
 import type { EconomyRequest, EconomySession } from '../types/index.js'

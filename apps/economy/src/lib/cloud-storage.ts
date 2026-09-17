@@ -258,7 +258,7 @@ export function resolveEconomyStorageClient(
  */
 export function localEconomyNotice(): string {
   return (
-    `economy: local mode (${LOCAL_STORAGE_OPT_IN_KEYS[0]}=1) — reading and writing the on-box ` +
+    `economy: LOCAL mode (${LOCAL_STORAGE_OPT_IN_KEYS[0]}=1) — reading and writing the on-box ` +
     `SQLite store, not the hosted fleet. Data in the shared economy API is NOT included.`
   );
 }

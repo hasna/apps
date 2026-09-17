@@ -24,7 +24,7 @@
 
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs'
 import { dirname, join } from 'path'
-import { cacheDir, openDatabase } from '../db/database.js'
+import { cacheDir } from '../db/database.js'
 import type { SqliteAdapter as Database } from '../db/sqlite-adapter.js'
 import { ensurePricingSeeded } from './pricing.js'
 import { syncAll } from './sync-all.js'
@@ -179,12 +179,17 @@ export interface CloudSyncResult extends SyncAllResult {
  * the local syncAll, plus what the server accepted.
  */
 export async function syncAllToCloud(cloud: ActiveEconomyCloudStorage, opts: CloudSyncOptions = {}): Promise<CloudSyncResult> {
+  // `:memory:` ONLY — the hosted push stages the collectors' rows in a
+  // throwaway in-process handle and writes no file. Loaded through the same
+  // gated dynamic import as the on-box lane, so dist/cli and dist/mcp stay
+  // free of `bun:sqlite`.
+  const { openDatabase } = await import('../db/sqlite-store.js')
   const scratch = openDatabase(':memory:', true)
   ensurePricingSeeded(scratch)
   const cachePath = opts.cachePath ?? getIngestCachePath()
   try {
     loadIngestState(scratch, opts.force ? [] : readIngestCache(cachePath))
-    const result = await syncAll(scratch, opts)
+    const result = await syncAll(scratch, { ...opts, noCrossAppLocalReads: true })
     if (opts.backfillMachine) backfillMachineId(scratch)
     if (opts.recalculate) await recalculateZeroCostRequests(scratch)
     const body = exportIngestRows(scratch)
@@ -224,6 +229,8 @@ export interface CloudBillingSyncResult {
  * from the provider APIs and push the billing_daily rows to the shared API.
  */
 export async function billingSyncToCloud(cloud: ActiveEconomyCloudStorage, opts: CloudBillingSyncOptions = {}): Promise<CloudBillingSyncResult> {
+  // `:memory:` staging only — see syncAllToCloud above.
+  const { openDatabase } = await import('../db/sqlite-store.js')
   const scratch = openDatabase(':memory:', true)
   try {
     const days = opts.days ?? 31

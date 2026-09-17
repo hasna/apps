@@ -13,10 +13,11 @@ import {
   listMachineRegistry,
   queryBillingSummary,
   insertFeedback,
-  openDatabase,
   bulkIngest,
   rollupSession,
 } from '../db/database.js'
+// `economy-serve` owns the SQLite backend: static import (dist/server).
+import { openDatabase } from '../db/sqlite-store.js'
 import { ensurePricingSeeded } from '../lib/pricing.js'
 import { AGENTS, isAgent } from '../lib/agents.js'
 import { syncAll } from '../lib/sync-all.js'

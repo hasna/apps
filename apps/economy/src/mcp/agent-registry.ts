@@ -12,19 +12,25 @@
  * (`HASNA_ECONOMY_LOCAL=1`) the registry is a dedicated `agent-registry.db`
  * beside economy's own store (survives restarts, shared by every MCP process
  * on the box); a HOSTED client keeps it in memory, because a hosted station
- * never writes a SQLite file under the app home (hasna/apps#1720). An explicit
- * `HASNA_AGENT_REGISTRY_DB_PATH` names a file in either lane.
+ * never writes a SQLite file under the app home (hasna/apps#1720).
+ * `HASNA_AGENT_REGISTRY_DB_PATH` is a local-lane path override only; hosted
+ * transport ignores it and always uses the process-local in-memory registry.
  *
  * The original implementation was built on the retired cloud storage kit; this
- * port uses bun:sqlite directly with the same table shape, active window
- * (30 min), conflict semantics, and optional event emission.
+ * port keeps the same table shape, active window (30 min), conflict semantics,
+ * and optional event emission.
+ *
+ * STORAGE LANE (fleet-alignment ruling d, 2026-09-11). The SQL engine lives in
+ * `./agent-registry-store.ts` and is reached through ONE awaited dynamic import
+ * taken on FIRST TOOL USE, never at registration. That is what keeps the MCP
+ * bundle (`dist/mcp`) free of any `bun:sqlite` reference: the engine is emitted
+ * to `dist/chunks/` instead.
  */
-import { Database } from 'bun:sqlite'
-import { dirname, join } from 'path'
-import { existsSync, mkdirSync } from 'fs'
+import { join } from 'path'
 import { z } from 'zod'
 import { getDataDir } from '../db/database.js'
 import { economyCloudStorage } from '../lib/cloud-storage.js'
+import type { RegistryDb, SqlLike } from './agent-registry-store.js'
 
 /**
  * Structural subset of @hasna/events' EventsClient that the registry emits
@@ -60,13 +66,6 @@ export interface Agent {
   created_at: string
 }
 
-interface SqlLike {
-  get(sql: string, ...params: unknown[]): Record<string, unknown> | null
-  all(sql: string, ...params: unknown[]): Array<Record<string, unknown>>
-  run(sql: string, ...params: unknown[]): { changes: number }
-  exec(sql: string): void
-}
-
 function envVar(suffix: string): string | undefined {
   return (
     process.env[`HASNA_AGENT_REGISTRY_${suffix}`] ??
@@ -87,70 +86,46 @@ function envSessionId(): string | null {
   return envVar('SESSION_ID') ?? null
 }
 
-/** bun:sqlite's in-memory database: no file, process-local. */
+/** The in-memory database: no file on disk, process-local. */
 export const MEMORY_REGISTRY_PATH = ':memory:'
 
 /**
- * Where the registry lives. An explicit `HASNA_AGENT_REGISTRY_DB_PATH` always
- * wins. Otherwise the storage seam decides: a hosted client (a credential
- * resolved through the @hasna/contracts chain) gets the in-memory registry —
- * the app home stays free of SQLite files in hosted mode — and only the
- * explicit local opt-in persists `agent-registry.db` beside economy's store.
- * With neither, the seam throws its fail-closed error (the same one the
- * server's own store raised at startup).
+ * Where the registry lives. The storage seam decides first: a hosted client
+ * (a credential resolved through the @hasna/contracts chain) always gets the
+ * in-memory registry, even when `HASNA_AGENT_REGISTRY_DB_PATH` is present.
+ * Only the explicit local opt-in may honor that path override or persist the
+ * default `agent-registry.db` beside economy's store. With neither, the seam
+ * throws its fail-closed error (the same one the server's own store raised at
+ * startup).
  */
 export function resolveRegistryDbPath(): string {
-  const explicit = process.env.HASNA_AGENT_REGISTRY_DB_PATH
-  if (explicit && explicit.trim()) return explicit
+  // Resolve the authority lane before consulting any filesystem path. A stale
+  // or injected registry path must never turn a hosted MCP process into a
+  // persistent local writer. `economyCloudStorage()` returns inactive only for
+  // the explicit HASNA_ECONOMY_LOCAL=1 lane; every unconfigured or malformed
+  // hosted setup refuses before this function can choose a file.
   if (economyCloudStorage().active) return MEMORY_REGISTRY_PATH
-  return join(getDataDir(), 'agent-registry.db')
+  const explicit = process.env.HASNA_AGENT_REGISTRY_DB_PATH?.trim()
+  return explicit || join(getDataDir(), 'agent-registry.db')
 }
 
 let defaultDb: RegistryDb | null = null;
 
 /**
- * Minimal bun:sqlite wrapper exposing the get/all/run/exec surface the
- * registry uses. `Database` itself only has run/exec/query/prepare on bun
- * 1.3.x — the deleted package got get/all from the storage kit's own sqlite
- * wrapper; this keeps the same call shape without the kit.
+ * Resolve the registry engine — ONE awaited, lane-gated dynamic import.
+ *
+ * Importing `./agent-registry-store.js` statically would put `bun:sqlite` back
+ * into `dist/mcp`, which is exactly what the fail-closed ruling forbids for a
+ * client bundle; loading it here means a hosted MCP session that never calls an
+ * agent-lifecycle tool never loads a SQLite engine at all, and when it does the
+ * engine is the process-local `:memory:` one (no file under the app home).
  */
-class RegistryDb implements SqlLike {
-  private db: Database;
-
-  constructor(path: string) {
-    if (path !== MEMORY_REGISTRY_PATH && dirname(path) && !existsSync(dirname(path))) {
-      mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-    }
-    this.db = new Database(path);
-    this.db.exec("PRAGMA journal_mode = WAL");
-    this.db.exec("PRAGMA busy_timeout = 10000");
-  }
-
-  get(sql: string, ...params: unknown[]): Record<string, unknown> | null {
-    return this.db.prepare(sql).get(...(params as any[])) as Record<string, unknown> | null;
-  }
-
-  all(sql: string, ...params: unknown[]): Array<Record<string, unknown>> {
-    return this.db.prepare(sql).all(...(params as any[])) as Array<Record<string, unknown>>;
-  }
-
-  run(sql: string, ...params: unknown[]): { changes: number } {
-    return this.db.prepare(sql).run(...(params as any[]));
-  }
-
-  exec(sql: string): void {
-    this.db.exec(sql);
-  }
-
-  close(): void {
-    this.db.close();
-  }
-}
-
-function getDefaultStore(): SqlLike {
+async function getDefaultStore(): Promise<SqlLike> {
   if (!defaultDb) {
-    defaultDb = new RegistryDb(resolveRegistryDbPath());
-    ensureAgentsTable(defaultDb);
+    const { RegistryDb } = await import('./agent-registry-store.js')
+    const db = new RegistryDb(resolveRegistryDbPath());
+    ensureAgentsTable(db);
+    defaultDb = db;
   }
   return defaultDb;
 }
@@ -521,7 +496,7 @@ export function registerAgentTools(
   // `agent-registry.db` under the app home before any tool was called — in
   // hosted mode too, where no SQLite file may exist (hasna/apps#1720).
   let resolved: SqlLike | undefined
-  const db = (): SqlLike => (resolved ??= opts.db ?? getDefaultStore())
+  const db = async (): Promise<SqlLike> => (resolved ??= opts.db ?? (await getDefaultStore()))
   const events = opts.events
   const focus = opts.agentFocus
   const includeExtended = opts.includeExtendedTools ?? false
@@ -559,7 +534,7 @@ export function registerAgentTools(
           capabilities: args.capabilities,
           force: args.force,
         },
-        db(),
+        await db(),
       )
       if (isAgentConflict(result)) {
         await emitConflictEvent(events, result)
@@ -578,7 +553,7 @@ export function registerAgentTools(
       name: z.string().optional().describe('Agent name (alternative to agent_id)'),
     },
     async (args: { agent_id?: string; name?: string }) => {
-      const agent = heartbeat(args.agent_id ?? args.name, db())
+      const agent = heartbeat(args.agent_id ?? args.name, await db())
       if (!agent)
         return errorText(`Agent not found: ${args.agent_id ?? args.name ?? '(none)'}`)
       await emitAgentEvent(events, 'agent.heartbeat', agent)
@@ -596,7 +571,7 @@ export function registerAgentTools(
     },
     async (args: { agent_id?: string; name?: string; project_id?: string }) => {
       const projectId = args.project_id ?? null
-      const agent = setFocus(args.agent_id ?? args.name, projectId, db())
+      const agent = setFocus(args.agent_id ?? args.name, projectId, await db())
       if (!agent)
         return errorText(`Agent not found: ${args.agent_id ?? args.name ?? '(none)'}`)
       focus?.set(agent.id, { project_id: projectId })
@@ -615,7 +590,7 @@ export function registerAgentTools(
     async (args: { online_only?: boolean; include_archived?: boolean }) => {
       const agents = listAgents(
         { online_only: args.online_only, include_archived: args.include_archived },
-        db(),
+        await db(),
       )
       return jsonText(agents)
     },
@@ -630,7 +605,7 @@ export function registerAgentTools(
         name: z.string().optional(),
       },
       async (args: { agent_id?: string; name?: string }) => {
-        const agent = resolveAgent(args.agent_id ?? args.name, db())
+        const agent = resolveAgent(args.agent_id ?? args.name, await db())
         if (!agent)
           return errorText(`Agent not found: ${args.agent_id ?? args.name ?? '(none)'}`)
         return jsonText({ agent_id: agent.id, project_id: agent.active_project_id })
@@ -645,7 +620,7 @@ export function registerAgentTools(
         name: z.string().optional(),
       },
       async (args: { agent_id?: string; name?: string }) => {
-        const agent = setFocus(args.agent_id ?? args.name, null, db())
+        const agent = setFocus(args.agent_id ?? args.name, null, await db())
         if (!agent)
           return errorText(`Agent not found: ${args.agent_id ?? args.name ?? '(none)'}`)
         focus?.set(agent.id, { project_id: null })

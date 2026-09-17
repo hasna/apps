@@ -3,7 +3,7 @@ import { Database as BunDatabase } from 'bun:sqlite'
 import { existsSync, mkdirSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { openDatabase } from '../db/database.js'
+import { openDatabase } from '../db/sqlite-store.js'
 import { syncAll } from './sync-all.js'
 
 let root: string

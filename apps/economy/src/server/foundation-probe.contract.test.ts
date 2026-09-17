@@ -18,7 +18,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
 import { HealthResponseSchema, ReadyResponseSchema, VersionResponseSchema } from '@hasna/contracts/schemas'
-import { openDatabase } from '../db/database.js'
+import { openDatabase } from '../db/sqlite-store.js'
 import { createHandler } from './serve.js'
 import type { SqliteAdapter as Database } from '../db/sqlite-adapter.js'
 

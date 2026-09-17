@@ -17,7 +17,7 @@ In cloud-client mode, CLI and MCP reads/writes go directly to the shared HTTP AP
 | Cursor | Cursor `/api/usage` and `/api/usage-summary` | Requires `CURSOR_SESSION_TOKEN` (or `CURSOR_API_TOKEN`). Creates daily usage snapshots and a subscription rollup when spend is present. |
 | Pi | `~/.pi/agent/sessions/**/*.json` | Override with `PI_CODING_AGENT_SESSION_DIR`. Uses recorded turn cost; a missing cost remains zero until pricing is repaired or the source records one. |
 | Hermes | `~/.hermes/state.db` | Imports session-level token and cost rollups. |
-| OpenLoops | `~/.hasna/loops/loops.db` | Override with `HASNA_ECONOMY_LOOPS_DB_PATH`; price with `HASNA_ECONOMY_LOOPS_MODEL` or `ECONOMY_LOOPS_MODEL`. Imports orchestration/judge `goal_runs.tokens_used` only, into `loop:*` cost centers. |
+| OpenLoops | `~/.hasna/loops/loops.db` | **Local lane only** — a hosted client refuses this cross-app on-box read (`loops ingest skipped`, one stderr line); pending a hosted loops read. Override with `HASNA_ECONOMY_LOOPS_DB_PATH`; price with `HASNA_ECONOMY_LOOPS_MODEL` or `ECONOMY_LOOPS_MODEL`. Imports orchestration/judge `goal_runs.tokens_used` only, into `loop:*` cost centers. |
 
 Full, unfiltered sync also attempts to import active metadata from `@hasna/projects`. Missing files, optional registries, and unavailable quota credentials are skipped; use `--verbose` to see source-level diagnostics.
 
@@ -32,7 +32,7 @@ File/database state is cached in the `ingest_state` table, and request IDs are u
 
 ## Account and cost-center attribution
 
-Economy first checks agent-specific overrides such as `ECONOMY_CODEX_ACCOUNT`, then generic `ECONOMY_ACCOUNT` overrides, then matching `@hasna/accounts` env-dir/applied/current profiles. An override may be `tool:name`, an email, or separate `*_ACCOUNT_TOOL`, `*_ACCOUNT_NAME`, and `*_ACCOUNT_EMAIL` fields. See [configuration](configuration.md#account-attribution).
+Economy first checks agent-specific overrides such as `ECONOMY_CODEX_ACCOUNT`, then generic `ECONOMY_ACCOUNT` overrides, then matching accounts env-dir/applied/current profiles from the accounts API. The on-box accounts registry (`~/.hasna/accounts/accounts.json`) is consulted **only** under the explicit local opt-in `HASNA_ECONOMY_LOCAL=1`; without an accounts credential and without that flag, attribution is omitted and the refusal is printed once on stderr. An override may be `tool:name`, an email, or separate `*_ACCOUNT_TOOL`, `*_ACCOUNT_NAME`, and `*_ACCOUNT_EMAIL` fields. See [configuration](configuration.md#account-attribution).
 
 Apps and services can report explicit project, repository, account, attribution-tag, and cost-center fields through [`economy-otel`](otel.md). `ECONOMY_TAG` supplies a fallback attribution tag for records written through the local database helpers.
 

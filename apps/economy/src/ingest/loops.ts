@@ -1,7 +1,10 @@
 import { existsSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
-import { Database as BunDatabase } from 'bun:sqlite'
+// TYPE-ONLY: see ../db/third-party-sqlite.js. This collector reads ANOTHER
+// Hasna app's on-box SQLite, so it is additionally refused for a hosted
+// client in src/lib/sync-all.ts (PORT-TO-API: loops /v1).
+import type { Database as BunDatabase } from 'bun:sqlite'
 // --- Local path resolver -------------------------------------------------
 // @hasna/paths was deleted (hasna/apps#1535, 2026-09-03); this in-package
 // implementation preserves the resolver contract (XDG / macOS home layout
@@ -151,12 +154,13 @@ function loopsModel(): string {
   return process.env['HASNA_ECONOMY_LOOPS_MODEL'] ?? process.env['ECONOMY_LOOPS_MODEL'] ?? 'gpt-5.3-codex'
 }
 
-function openLoopsDb(dbPath: string, verbose: boolean): BunDatabase | null {
+async function openLoopsDb(dbPath: string, verbose: boolean): Promise<BunDatabase | null> {
+  const { openThirdPartySqlite } = await import('../db/third-party-sqlite.js')
   let lastError: unknown
   for (const readonly of [true, false]) {
     let loopsDb: BunDatabase | null = null
     try {
-      loopsDb = readonly ? new BunDatabase(dbPath, { readonly: true }) : new BunDatabase(dbPath)
+      loopsDb = openThirdPartySqlite(dbPath, { readonly })
       loopsDb.prepare('PRAGMA schema_version').get()
       return loopsDb
     } catch (error) {
@@ -263,7 +267,7 @@ export async function ingestLoops(db: Database, verbose = false): Promise<{ sess
   const sessions = new Set<string>()
 
   try {
-    loopsDb = openLoopsDb(dbPath, verbose)
+    loopsDb = await openLoopsDb(dbPath, verbose)
     if (!loopsDb) return { sessions: 0, requests: 0 }
 
     for (const row of readLoopGoalRuns(loopsDb)) {
