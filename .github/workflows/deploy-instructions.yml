@@ -504,12 +504,26 @@ jobs:
             --entrypoint sh \
             "${LOCAL_IMAGE}:${SOURCE_SHA}" \
             -c 'set -eu
-              bun dist/cli/index.js storage backup push /backup/instructions-domain-pre.tar.gz --id "${BACKUP_ID}" --json > /backup/s3-backup.json
-              payload_version_id="$(jq -er ".payloadVersionId | strings | select(length > 0 and . != \"null\")" /backup/s3-backup.json)"
-              manifest_version_id="$(jq -er ".manifestVersionId | strings | select(length > 0 and . != \"null\")" /backup/s3-backup.json)"
+              bun dist/cli/index.js storage backup push /backup/instructions-domain-pre.tar.gz --id "${BACKUP_ID}" --json > /backup/s3-backup.json'
+          payload_version_id="$(jq -er '.payloadVersionId | strings | select(length > 0 and . != "null")' "${backup_dir}/s3-backup.json")"
+          manifest_version_id="$(jq -er '.manifestVersionId | strings | select(length > 0 and . != "null")' "${backup_dir}/s3-backup.json")"
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            -e HASNA_INSTRUCTIONS_S3_BUCKET="${EXPECTED_BACKUP_BUCKET}" \
+            -e HASNA_INSTRUCTIONS_AWS_REGION="${AWS_REGION}" \
+            -e AWS_ACCESS_KEY_ID \
+            -e AWS_SECRET_ACCESS_KEY \
+            -e AWS_SESSION_TOKEN \
+            -e BACKUP_ID="${backup_id}" \
+            -e PAYLOAD_VERSION_ID="${payload_version_id}" \
+            -e MANIFEST_VERSION_ID="${manifest_version_id}" \
+            -v "${backup_dir}:/backup" \
+            --entrypoint sh \
+            "${LOCAL_IMAGE}:${SOURCE_SHA}" \
+            -c 'set -eu
               bun dist/cli/index.js storage backup verify "${BACKUP_ID}" \
-                --payload-version-id "${payload_version_id}" \
-                --manifest-version-id "${manifest_version_id}" \
+                --payload-version-id "${PAYLOAD_VERSION_ID}" \
+                --manifest-version-id "${MANIFEST_VERSION_ID}" \
                 --json > /backup/s3-verify.json'
           archive_sha256="$(sha256sum "${PRE_DEPLOY_ARCHIVE}" | awk '{print $1}')"
           archive_size="$(stat -c '%s' "${PRE_DEPLOY_ARCHIVE}")"

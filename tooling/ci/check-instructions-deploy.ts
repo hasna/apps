@@ -680,7 +680,14 @@ export function validateInstructionsDeploy(
     '[[ "${PRE_DEPLOY_ARCHIVE}" == "${backup_dir}/instructions-domain-pre.tar.gz" ]]',
     "pre-deploy archive permissions are not owner-only",
     "storage backup push /backup/instructions-domain-pre.tar.gz",
+    'payload_version_id="$(jq -er',
+    '"${backup_dir}/s3-backup.json")"',
+    'manifest_version_id="$(jq -er',
+    '-e PAYLOAD_VERSION_ID="${payload_version_id}"',
+    '-e MANIFEST_VERSION_ID="${manifest_version_id}"',
     "storage backup verify",
+    '--payload-version-id "${PAYLOAD_VERSION_ID}"',
+    '--manifest-version-id "${MANIFEST_VERSION_ID}"',
     'archive_sha256="$(sha256sum "${PRE_DEPLOY_ARCHIVE}"',
     "archive_size=\"$(stat -c '%s' \"${PRE_DEPLOY_ARCHIVE}\")\"",
     '.sha256 == $sha256 and .sizeBytes == $size_bytes',
@@ -708,6 +715,16 @@ export function validateInstructionsDeploy(
     "pre-deploy-${SOURCE_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}",
   ])
     if (!has(backup, p)) fail(`S3 backup control missing: ${p}`);
+  const pushCommand = backup.indexOf("storage backup push /backup/instructions-domain-pre.tar.gz");
+  const runnerVersionParse = backup.indexOf('payload_version_id="$(jq -er', pushCommand);
+  const verifyCommand = backup.indexOf("storage backup verify", runnerVersionParse);
+  if (pushCommand < 0 || runnerVersionParse < pushCommand || verifyCommand < runnerVersionParse)
+    fail("S3 backup must push in the app image, parse version IDs on the runner, then verify in the app image");
+  const pushContainer = backup.slice(backup.lastIndexOf("docker run --rm", pushCommand), runnerVersionParse);
+  if (pushContainer.includes("jq"))
+    fail("S3 backup push container must not depend on jq");
+  if ((backup.match(/docker run --rm/g) ?? []).length !== 2)
+    fail("S3 backup must use separate push and version-pinned verification containers");
   if (backup.includes("dist/cli/index.js export"))
     fail("S3 backup step must push the previously validated archive without re-exporting");
   const ecr = runOf(steps, NAMES.ecr);
@@ -1064,6 +1081,27 @@ export function selfTestInstructionsDeploy(root = process.cwd()): string[] {
       "S3 backup control missing: storage backup push /backup/instructions-domain-pre.tar.gz",
     ],
     [
+      "backup push container depends on jq",
+      (s) =>
+        s.replace(
+          "> /backup/s3-backup.json'\n          payload_version_id=",
+          "> /backup/s3-backup.json\n              jq --version'\n          payload_version_id=",
+        ),
+      "S3 backup push container must not depend on jq",
+    ],
+    [
+      "backup push and verification share one container",
+      (s) => {
+        const backupStep = s.indexOf("      - name: Create immutable pre-deploy S3 backup");
+        const pushContainer = s.indexOf("docker run --rm", backupStep);
+        const verifyContainer = s.indexOf("docker run --rm", pushContainer + 1);
+        return verifyContainer < 0
+          ? s
+          : `${s.slice(0, verifyContainer)}docker run --reuse${s.slice(verifyContainer + "docker run --rm".length)}`;
+      },
+      "S3 backup must use separate push and version-pinned verification containers",
+    ],
+    [
       "exact archive digest binding removed",
       (s) =>
         s.replaceAll(
@@ -1198,7 +1236,7 @@ if (import.meta.main) {
       process.exit(1);
     }
     console.log(
-      "instructions-deploy self-test: PASS — positive control accepted and 21 negative controls rejected",
+      "instructions-deploy self-test: PASS — positive control accepted and 30 negative controls rejected",
     );
   }
   const errors = validateInstructionsDeploy(

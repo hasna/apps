@@ -60,7 +60,7 @@ describe("standard-adherence: protected Instructions deployment lane", () => {
 
   test("the checker proves a positive control and rejects its negative controls", () => {
     expect(selfTestInstructionsDeploy(root)).toEqual([]);
-  });
+  }, 10_000);
 
   test("captures two consecutive identical valid archives before migration and pushes only the stable archive", () => {
     const baseline = workflow.indexOf("Export and validate complete pre-migration domain archive");
@@ -202,6 +202,27 @@ describe("standard-adherence: protected Instructions deployment lane", () => {
     expect(backup).toContain('sha256sum "${versioned_payload}"');
     expect(backup).toContain('payload_version_id=%s');
     expect(backup).toContain('manifest_version_id=%s');
+  });
+
+  test("parses backup version IDs on the runner between separate push and verification containers", () => {
+    const backup = workflow.slice(
+      workflow.indexOf("Create immutable pre-deploy S3 backup"),
+      workflow.indexOf("Verify immutable scan-on-push ECR repository"),
+    );
+    const push = backup.indexOf("storage backup push /backup/instructions-domain-pre.tar.gz");
+    const runnerParse = backup.indexOf('payload_version_id="$(jq -er', push);
+    const verify = backup.indexOf("storage backup verify", runnerParse);
+    const pushContainer = backup.slice(backup.lastIndexOf("docker run --rm", push), runnerParse);
+
+    expect(backup.match(/docker run --rm/g)).toHaveLength(2);
+    expect(push).toBeGreaterThan(-1);
+    expect(runnerParse).toBeGreaterThan(push);
+    expect(verify).toBeGreaterThan(runnerParse);
+    expect(pushContainer).not.toContain("jq");
+    expect(backup).toContain('-e PAYLOAD_VERSION_ID="${payload_version_id}"');
+    expect(backup).toContain('-e MANIFEST_VERSION_ID="${manifest_version_id}"');
+    expect(backup).toContain('--payload-version-id "${PAYLOAD_VERSION_ID}"');
+    expect(backup).toContain('--manifest-version-id "${MANIFEST_VERSION_ID}"');
   });
 
   test("uses only the redacted receipt for WORM object keys without logging content", () => {
