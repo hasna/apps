@@ -18,7 +18,7 @@ import type {
   CommandRunResult,
 } from "../lib/command-runner.ts";
 import type { CompareResult } from "../lib/compare.ts";
-import type { LogCount } from "../lib/count.ts";
+import type { LogCount, LogStats, StatsLogsInput } from "../lib/count.ts";
 import type { DiagnoseInclude, DiagnosisResult } from "../lib/diagnose.ts";
 import type { EventCatalogEntry, EventCatalogQuery } from "../lib/events.ts";
 import type {
@@ -135,6 +135,11 @@ export interface Store {
   ): Promise<FollowStructuredJsonLinesResult>;
   deleteLog(id: string): Promise<boolean>;
   countLogs(input: CountLogsInput): Promise<LogCount>;
+  /**
+   * Volume overview (totals, level/service/day breakdowns, timestamp bounds).
+   * Computed by the tier that owns the data — never by downloading the corpus.
+   */
+  stats(input: StatsLogsInput): Promise<LogStats>;
   summarize(
     projectId?: string,
     since?: string,

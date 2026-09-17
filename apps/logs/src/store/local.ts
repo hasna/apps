@@ -24,7 +24,8 @@ import {
   runCapturedCommand,
 } from "../lib/command-runner.ts";
 import { type CompareResult, compare } from "../lib/compare.ts";
-import { countLogs } from "../lib/count.ts";
+import { countLogs, statsLogs } from "../lib/count.ts";
+import type { LogStats, StatsLogsInput } from "../lib/count.ts";
 import {
   type DiagnoseInclude,
   type DiagnosisResult,
@@ -156,6 +157,10 @@ export class LocalStore implements Store {
 
   async countLogs(input: CountLogsInput) {
     return countLogs(getDb(), input);
+  }
+
+  async stats(input: StatsLogsInput): Promise<LogStats> {
+    return statsLogs(getDb(), input);
   }
 
   async summarize(

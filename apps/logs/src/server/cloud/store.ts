@@ -11,6 +11,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { TypedQueryClient } from "../../generated/storage-kit/index.ts";
 import type { AlertRule } from "../../lib/alerts.ts";
 import type { CompareResult } from "../../lib/compare.ts";
+import { parseLogStats, statsWindowDays } from "../../lib/count.ts";
 import type { DiagnoseInclude, DiagnosisResult } from "../../lib/diagnose.ts";
 import type { TelemetryEnvelope } from "../../lib/event-store.ts";
 import type { EventCatalogEntry, EventCatalogQuery } from "../../lib/events.ts";
@@ -461,6 +462,93 @@ export class CloudLogStore {
       count: Number(r.count),
       latest: toIso(r.latest),
     }));
+  }
+
+  /**
+   * Volume overview for `/v1/logs/stats`: one snapshot-consistent aggregate
+   * instead of the client-side corpus download used by CLI and MCP.
+   */
+  async statsSummary(
+    filters: { project_id?: string; days?: number } = {},
+  ): Promise<CloudLogStats> {
+    const days = statsWindowDays(filters.days);
+    const scoped = Boolean(filters.project_id);
+    const where = scoped ? "WHERE project_id = $1" : "";
+    const sinceParam = scoped ? 2 : 1;
+    const params: unknown[] = scoped ? [filters.project_id] : [];
+    params.push(new Date(Date.now() - days * 86_400_000).toISOString());
+
+    // Logs historically store timestamps as TEXT. Admit only finite,
+    // explicit-zone calendar values: this excludes PostgreSQL's infinity,
+    // out-of-JavaScript-range years and session-timezone-dependent local
+    // timestamps before the timestamptz cast is evaluated.
+    const row = await this.client.get<{
+      total: string;
+      by_level: Record<string, string | number>;
+      by_service: Record<string, string | number>;
+      by_day: Record<string, string | number>;
+      oldest: string | Date | null;
+      newest: string | Date | null;
+    }>(
+      `WITH scoped_logs AS MATERIALIZED (
+         SELECT level,
+                COALESCE(service, '-') AS service,
+                CASE
+                  WHEN timestamp ~* '^[0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9]{2}:[0-9]{2}:[0-9]{2}([.][0-9]{1,9})?(Z|[+-][0-9]{2}(:[0-9]{2}|[0-9]{2})?)$'
+                   AND pg_input_is_valid(timestamp, 'timestamp with time zone')
+                  THEN timestamp::timestamptz
+                END AS observed_at
+           FROM logs
+          ${where}
+       ),
+       level_counts AS (
+         SELECT level, COUNT(*) AS c
+           FROM scoped_logs
+          GROUP BY level
+       ),
+       service_counts AS (
+         SELECT service, COUNT(*) AS c
+           FROM scoped_logs
+          GROUP BY service
+          ORDER BY c DESC, service ASC
+          LIMIT 5
+       ),
+       day_counts AS (
+         SELECT to_char(observed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day,
+                COUNT(*) AS c
+           FROM scoped_logs
+          WHERE observed_at >= $${sinceParam}::timestamptz
+          GROUP BY day
+       )
+       SELECT
+         (SELECT COUNT(*)::text FROM scoped_logs) AS total,
+         COALESCE((SELECT jsonb_object_agg(level, c::text) FROM level_counts), '{}'::jsonb) AS by_level,
+         COALESCE((SELECT jsonb_object_agg(service, c::text) FROM service_counts), '{}'::jsonb) AS by_service,
+         COALESCE((SELECT jsonb_object_agg(day, c::text) FROM day_counts), '{}'::jsonb) AS by_day,
+         (SELECT MIN(observed_at) FROM scoped_logs) AS oldest,
+         (SELECT MAX(observed_at) FROM scoped_logs) AS newest`,
+      params,
+    );
+    if (!row) throw new Error("Logs stats aggregate returned no row");
+
+    const countMap = (
+      value: Record<string, string | number>,
+    ): Record<string, number> =>
+      Object.fromEntries(
+        Object.entries(value).map(([key, count]) => [key, Number(count)]),
+      );
+    const by_level = countMap(row.by_level);
+    return parseLogStats({
+      total: Number(row.total),
+      errors: by_level.error ?? 0,
+      warns: by_level.warn ?? 0,
+      fatals: by_level.fatal ?? 0,
+      by_level,
+      by_service: countMap(row.by_service),
+      by_day: countMap(row.by_day),
+      oldest: row.oldest ? toIso(row.oldest) : null,
+      newest: row.newest ? toIso(row.newest) : null,
+    });
   }
 
   /** A HealthResult-shaped summary for the cloud tier (logs + projects only). */
@@ -1634,6 +1722,21 @@ export interface CloudLogCount {
   fatals: number;
   by_level: Record<string, number>;
   by_service?: Record<string, number>;
+}
+
+/** `/v1/logs/stats` — the volume overview `logs stats` and `log_stats` read. */
+export interface CloudLogStats {
+  total: number;
+  errors: number;
+  warns: number;
+  fatals: number;
+  by_level: Record<string, number>;
+  /** Counts per service. Logs with no service are keyed `-`, as the CLI renders them. */
+  by_service: Record<string, number>;
+  /** Counts per UTC day (`YYYY-MM-DD`) over the trailing window. */
+  by_day: Record<string, number>;
+  oldest: string | null;
+  newest: string | null;
 }
 
 export interface CloudLogSummary {
