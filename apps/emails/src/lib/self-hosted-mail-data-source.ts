@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { replyHeader, replyMailboxes } from "./reply-headers.js";
 import { assertSendBodyUrlBoundary } from "./send-body-boundary.js";
 import { searchAdmissionError } from "./search-admission-error.js";
@@ -25,7 +26,7 @@ import { normalizeSendMetadata } from "./send-metadata.js";
 
 import { resolveSelfHostedConfig } from "../db/self-hosted-store.js";
 import {
-  EMAILS_SELF_HOSTED_API_KEY_ENV,
+  EMAILS_API_KEY_ENV,
   EMAILS_SESSION_TOKEN_ENV,
   type EmailsClientCredentialCandidate,
 } from "./emails-credentials.js";
@@ -1060,10 +1061,32 @@ function selfHostedTimeoutMs(): number {
   return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 30_000;
 }
 
-export interface SelfHostedMailDataSourceOptions {
+function normalizeSelfHostedDataSourceBaseUrl(configured: string): string {
+  const url = new URL(configured);
+  const loopback =
+    url.hostname === "localhost" ||
+    url.hostname === "127.0.0.1" ||
+    url.hostname === "[::1]" ||
+    url.hostname === "::1";
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) {
+    throw new Error("Self-hosted Emails requires HTTPS except for loopback development URLs.");
+  }
+  return configured.replace(/\/+$/, "");
+}
+
+export interface SelfHostedMailDataSourceBinding {
   baseUrl: string;
   apiKey: string;
   credentials?: readonly EmailsClientCredentialCandidate[];
+}
+
+export type SelfHostedMailDataSourceBindingProvider = () =>
+  | SelfHostedMailDataSourceBinding
+  | Promise<SelfHostedMailDataSourceBinding>;
+
+export interface SelfHostedMailDataSourceOptions extends SelfHostedMailDataSourceBinding {
+  /** Re-resolve the credential for each request; authority drift refuses before fetch. */
+  bindingProvider?: SelfHostedMailDataSourceBindingProvider;
   fetchImpl?: SelfHostedFetch;
   now?: () => number;
   /** Per-request timeout in ms (default: EMAILS_SELF_HOSTED_HTTP_TIMEOUT or 30s). */
@@ -1072,11 +1095,33 @@ export interface SelfHostedMailDataSourceOptions {
   maxResponseBytes?: number;
 }
 
+function selfHostedBindingCredentials(
+  binding: SelfHostedMailDataSourceBinding,
+): readonly EmailsClientCredentialCandidate[] {
+  return binding.credentials?.length
+    ? binding.credentials
+    : [{ setting: EMAILS_API_KEY_ENV, value: binding.apiKey }];
+}
+
+function selfHostedBindingFingerprint(binding: SelfHostedMailDataSourceBinding): string {
+  const hash = createHash("sha256");
+  hash.update(normalizeSelfHostedDataSourceBaseUrl(binding.baseUrl));
+  for (const candidate of selfHostedBindingCredentials(binding)) {
+    hash.update("\0");
+    hash.update(candidate.setting);
+    hash.update("\0");
+    hash.update(candidate.value);
+  }
+  return hash.digest("hex");
+}
+
 export class SelfHostedMailDataSource implements MailDataSource {
   readonly mode = "self_hosted" as const;
   private readonly baseUrl: string;
   private readonly apiKey: string;
   private readonly credentials: readonly EmailsClientCredentialCandidate[];
+  private readonly bindingProvider?: SelfHostedMailDataSourceBindingProvider;
+  private bindingFingerprint: string;
   private readonly fetchImpl: SelfHostedFetch;
   private readonly now: () => number;
   private readonly timeoutMs: number;
@@ -1100,16 +1145,17 @@ export class SelfHostedMailDataSource implements MailDataSource {
   private scopedCountsGeneration = 0;
 
   constructor(options: SelfHostedMailDataSourceOptions) {
-    const url = new URL(options.baseUrl);
-    const loopback = url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "[::1]" || url.hostname === "::1";
-    if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) {
-      throw new Error("Self-hosted Emails requires HTTPS except for loopback development URLs.");
-    }
-    this.baseUrl = options.baseUrl.replace(/\/+$/, "");
+    this.baseUrl = normalizeSelfHostedDataSourceBaseUrl(options.baseUrl);
     this.apiKey = options.apiKey;
     this.credentials = options.credentials?.length
       ? options.credentials
-      : [{ setting: EMAILS_SELF_HOSTED_API_KEY_ENV, value: options.apiKey }];
+      : [{ setting: EMAILS_API_KEY_ENV, value: options.apiKey }];
+    this.bindingProvider = options.bindingProvider;
+    this.bindingFingerprint = selfHostedBindingFingerprint({
+      baseUrl: this.baseUrl,
+      apiKey: this.apiKey,
+      credentials: this.credentials,
+    });
     this.now = options.now ?? Date.now;
     this.timeoutMs = selfHostedTransportLimit(options.timeoutMs, selfHostedTimeoutMs(), "timeoutMs");
     this.maxResponseBytes = selfHostedTransportLimit(
@@ -1123,14 +1169,42 @@ export class SelfHostedMailDataSource implements MailDataSource {
 
   // ── transport (bearer key only in-header, never logged) ──────────────────
 
+  private async currentBinding(method = "CACHE", path = "/cached-data"): Promise<SelfHostedMailDataSourceBinding> {
+    const binding = this.bindingProvider
+      ? await this.bindingProvider()
+      : { baseUrl: this.baseUrl, apiKey: this.apiKey, credentials: this.credentials };
+    const currentBaseUrl = normalizeSelfHostedDataSourceBaseUrl(binding.baseUrl);
+    if (currentBaseUrl !== this.baseUrl) {
+      throw new Error(
+        `self-hosted emails: ${method} ${path} refused because the configured Emails API authority changed; ` +
+          "rebuild the client before sending a credential to the new authority",
+      );
+    }
+    const normalized = {
+      baseUrl: currentBaseUrl,
+      apiKey: binding.apiKey,
+      credentials: selfHostedBindingCredentials(binding),
+    };
+    const fingerprint = selfHostedBindingFingerprint(normalized);
+    if (fingerprint !== this.bindingFingerprint) {
+      throw new Error(
+        `self-hosted emails: ${method} ${path} refused because the configured Emails credential binding changed; ` +
+          "rebuild the client before continuing the logical operation",
+      );
+    }
+    return normalized;
+  }
+
   private async request(method: string, path: string, body?: unknown): Promise<{ status: number; json: unknown }> {
-    for (let index = 0; index < this.credentials.length; index += 1) {
-      const candidate = this.credentials[index]!;
+    const binding = await this.currentBinding(method, path);
+    const credentials = selfHostedBindingCredentials(binding);
+    for (let index = 0; index < credentials.length; index += 1) {
+      const candidate = credentials[index]!;
       const response = await this.requestOnce(candidate.value, method, path, body);
-      if (index < this.credentials.length - 1 && this.shouldTryNextCredential(candidate, response)) continue;
+      if (index < credentials.length - 1 && this.shouldTryNextCredential(candidate, response)) continue;
       return response;
     }
-    return this.requestOnce(this.apiKey, method, path, body);
+    return this.requestOnce(binding.apiKey, method, path, body);
   }
 
   private shouldTryNextCredential(
@@ -1378,6 +1452,7 @@ export class SelfHostedMailDataSource implements MailDataSource {
   // Full, TTL-cached cursor walk. Writes invalidate it. Legacy offset servers
   // fail closed at their 100000-row ceiling inside listPages().
   private async scanAll(): Promise<V1Message[]> {
+    await this.currentBinding();
     const cached = this.scanCache;
     if (cached && this.now() - cached.at < SCAN_TTL_MS) return cached.rows;
     const rows: V1Message[] = [];
@@ -1414,6 +1489,7 @@ export class SelfHostedMailDataSource implements MailDataSource {
   }
 
   private async priorityRules(): Promise<PrioritySenderRule[]> {
+    await this.currentBinding();
     const cached = this.priorityRulesCache;
     if (cached && this.now() - cached.at < SCAN_TTL_MS) return cached.rules;
     let response: { status: number; json: unknown };
@@ -1755,6 +1831,7 @@ export class SelfHostedMailDataSource implements MailDataSource {
    * message of a six-figure mailbox into an array was most of this path's cost.
    */
   private async scopedCounts(scope: SelfHostedScope): Promise<MailboxCounts & { countsComplete: boolean }> {
+    await this.currentBinding();
     const key = scopedCountsKey(scope);
     const generation = this.scopedCountsGeneration;
     const cached = this.scopedCountsCache.get(key);
@@ -2001,6 +2078,7 @@ export class SelfHostedMailDataSource implements MailDataSource {
   // applied to its OUTPUT — so one cached tally serves every caller, whatever
   // options they pass.
   private async labelTally(): Promise<{ tally: Map<string, number> }> {
+    await this.currentBinding();
     const generation = this.labelTallyGeneration;
     const cached = this.labelTallyCache;
     if (cached && this.now() - cached.at < LABEL_TALLY_TTL_MS) return cached;
@@ -2399,9 +2477,20 @@ export function resolveSelfHostedMailDataSource(fetchImpl?: SelfHostedFetch): Se
     baseUrl: config.baseUrl,
     apiKey: config.credential,
     credentials: [
-      { setting: config.credentialSetting ?? EMAILS_SELF_HOSTED_API_KEY_ENV, value: config.credential },
+      { setting: config.credentialSetting ?? EMAILS_API_KEY_ENV, value: config.credential },
       ...(config.credentialFallbacks ?? []),
     ],
+    bindingProvider: () => {
+      const current = resolveSelfHostedConfig(process.env, { selectedMode: "self_hosted" });
+      return {
+        baseUrl: current.baseUrl,
+        apiKey: current.credential,
+        credentials: [
+          { setting: current.credentialSetting ?? EMAILS_API_KEY_ENV, value: current.credential },
+          ...(current.credentialFallbacks ?? []),
+        ],
+      };
+    },
     fetchImpl,
   });
 }

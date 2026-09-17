@@ -15,6 +15,10 @@ const ENV_KEYS = [
   "HASNA_EMAILS_MODE",
   "EMAILS_DB_PATH",
   "HASNA_EMAILS_DB_PATH",
+  "HASNA_EMAILS_LOCAL",
+  "EMAILS_LOCAL",
+  "HASNA_EMAILS_API_URL",
+  "HASNA_EMAILS_API_KEY",
   "EMAILS_SELF_HOSTED_URL",
   "EMAILS_SELF_HOSTED_API_KEY",
   "EMAILS_CLIENT_ENV_SECRET",
@@ -182,8 +186,8 @@ beforeEach(async () => {
   resetEnv();
   tempHome = mkdtempSync(join(tmpdir(), "emails-mcp-domain-address-self-hosted-"));
   process.env["HOME"] = tempHome;
-  process.env["EMAILS_SELF_HOSTED_URL"] = await startApi();
-  process.env["EMAILS_SELF_HOSTED_API_KEY"] = FIXTURE_BEARER;
+  process.env["HASNA_EMAILS_API_URL"] = await startApi();
+  process.env["HASNA_EMAILS_API_KEY"] = FIXTURE_BEARER;
   resetSelfHostedConfigCache();
 });
 

@@ -13,7 +13,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } fr
 import type { Subprocess } from "bun";
 import { resetSelfHostedConfigCache } from "./self-hosted-store.js";
 import { createSendKey } from "./send-keys.js";
-import { DATABASE_PATH_SETTINGS } from "../store-resolution.js";
+import { DATABASE_PATH_SETTINGS, LOCAL_OPT_IN_SETTINGS } from "../store-resolution.js";
 
 let INHERITED_PROCESS_ENV: NodeJS.ProcessEnv;
 function captureInheritedProcessEnv(): void {
@@ -143,21 +143,21 @@ beforeEach(() => {
   // BOOT ERROR with deliberately no precedence rule, and every call through that family
   // would raise it. Named through the resolution's own exported list rather than copied as
   // a literal, so this cannot go stale when the resolution learns another setting.
-  for (const setting of DATABASE_PATH_SETTINGS) delete process.env[setting];
+  for (const setting of [...DATABASE_PATH_SETTINGS, ...LOCAL_OPT_IN_SETTINGS]) delete process.env[setting];
   // Storage configuration alone routes this arm (hasna/apps#1566): the API
   // origin and credential select the self-hosted store — the deployment word
   // is removed, so any inherited spelling is scrubbed rather than set.
   delete process.env.EMAILS_MODE;
   delete process.env.HASNA_EMAILS_MODE;
-  process.env.EMAILS_SELF_HOSTED_URL = baseUrl;
-  process.env.EMAILS_SELF_HOSTED_API_KEY = "test_key";
+  process.env.HASNA_EMAILS_API_URL = baseUrl;
+  process.env.HASNA_EMAILS_API_KEY = "test_key";
   resetSelfHostedConfigCache();
 });
 
 afterEach(() => {
   delete process.env.EMAILS_MODE;
-  delete process.env.EMAILS_SELF_HOSTED_URL;
-  delete process.env.EMAILS_SELF_HOSTED_API_KEY;
+  delete process.env.HASNA_EMAILS_API_URL;
+  delete process.env.HASNA_EMAILS_API_KEY;
   resetSelfHostedConfigCache();
   restoreInheritedProcessEnv();
 });

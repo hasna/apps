@@ -52,6 +52,7 @@ let api: V1StoreApi;
 beforeEach(() => {
   INHERITED_PROCESS_ENV = { ...process.env };
   process.env["EMAILS_DB_PATH"] = ":memory:";
+  process.env["HASNA_EMAILS_LOCAL"] = "1";
   resetDatabase();
   db = getDatabase();
   api = startV1StoreApi({ store: createSqliteEmailStore({ database: db, detail: "ordering fixture" }) });

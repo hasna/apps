@@ -71,6 +71,8 @@ let originalHome: string | undefined;
 let originalMcpToken: string | undefined;
 let originalEmailsDbPath: string | undefined;
 let originalCanonicalDbPath: string | undefined;
+let originalEmailsLocal: string | undefined;
+let originalLocalAlias: string | undefined;
 
 // The MCP HTTP transport requires a bearer token once #68 lands, and ignores one
 // before that. Setting it (and sending it) here keeps this file green whichever
@@ -82,12 +84,16 @@ beforeEach(() => {
   originalMcpToken = process.env["EMAILS_MCP_HTTP_TOKEN"];
   originalEmailsDbPath = process.env["EMAILS_DB_PATH"];
   originalCanonicalDbPath = process.env["HASNA_EMAILS_DB_PATH"];
+  originalEmailsLocal = process.env["HASNA_EMAILS_LOCAL"];
+  originalLocalAlias = process.env["EMAILS_LOCAL"];
   tmpHome = mkdtempSync(join(tmpdir(), "emails-set-config-allowlist-"));
   process.env["HOME"] = tmpHome;
   process.env["EMAILS_MCP_HTTP_TOKEN"] = MCP_HTTP_TOKEN;
   // Configuration tools do not need a mail database.
   delete process.env["EMAILS_DB_PATH"];
   delete process.env["HASNA_EMAILS_DB_PATH"];
+  delete process.env["HASNA_EMAILS_LOCAL"];
+  delete process.env["EMAILS_LOCAL"];
   api.applyEnv();
 });
 
@@ -101,6 +107,10 @@ afterEach(() => {
   else process.env["EMAILS_DB_PATH"] = originalEmailsDbPath;
   if (originalCanonicalDbPath === undefined) delete process.env["HASNA_EMAILS_DB_PATH"];
   else process.env["HASNA_EMAILS_DB_PATH"] = originalCanonicalDbPath;
+  if (originalEmailsLocal === undefined) delete process.env["HASNA_EMAILS_LOCAL"];
+  else process.env["HASNA_EMAILS_LOCAL"] = originalEmailsLocal;
+  if (originalLocalAlias === undefined) delete process.env["EMAILS_LOCAL"];
+  else process.env["EMAILS_LOCAL"] = originalLocalAlias;
   rmSync(tmpHome, { recursive: true, force: true });
 });
 

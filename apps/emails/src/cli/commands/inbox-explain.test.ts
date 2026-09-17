@@ -30,6 +30,7 @@ import {
   API_CREDENTIAL_SETTINGS,
   API_SETTINGS_POINTER,
   DATABASE_PATH_SETTINGS,
+  LOCAL_OPT_IN_SETTINGS,
 } from "../../store-resolution.js";
 import { startV1StoreApi } from "../../test-support/v1-store-api.js";
 import { registerInboxCommands } from "./inbox.local.test-support.js";
@@ -58,8 +59,9 @@ function configureLocalStore(): void {
   for (const setting of [API_BASE_URL_SETTING, API_SETTINGS_POINTER, ...API_CREDENTIAL_SETTINGS]) {
     delete process.env[setting];
   }
-  for (const setting of DATABASE_PATH_SETTINGS) delete process.env[setting];
+  for (const setting of [...DATABASE_PATH_SETTINGS, ...LOCAL_OPT_IN_SETTINGS]) delete process.env[setting];
   process.env["EMAILS_DB_PATH"] = ":memory:";
+  process.env["HASNA_EMAILS_LOCAL"] = "1";
 }
 
 async function runInboxCommand(args: string[]): Promise<{ data: unknown; out: string }> {
@@ -159,7 +161,7 @@ describe("inbox explain (local arm)", () => {
     // a path and an API together are a hard boot error with no precedence rule.
     const other = startV1StoreApi({ store: createSqliteEmailStore({ database: db, detail: "configured" }) });
     try {
-      for (const setting of DATABASE_PATH_SETTINGS) delete process.env[setting];
+      for (const setting of [...DATABASE_PATH_SETTINGS, ...LOCAL_OPT_IN_SETTINGS]) delete process.env[setting];
       process.env[API_BASE_URL_SETTING] = other.baseUrl;
       process.env[API_CREDENTIAL_SETTINGS[2] as string] = other.apiKey;
 

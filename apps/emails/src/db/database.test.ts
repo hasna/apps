@@ -19,12 +19,14 @@ function restoreInheritedProcessEnv(): void {
 beforeEach(() => {
   captureInheritedProcessEnv();
   process.env["EMAILS_DB_PATH"] = ":memory:";
+  process.env["HASNA_EMAILS_LOCAL"] = "1";
   resetDatabase();
 });
 
 afterEach(() => {
   closeDatabase();
   delete process.env["EMAILS_DB_PATH"];
+  delete process.env["HASNA_EMAILS_LOCAL"];
   restoreInheritedProcessEnv();
 });
 
@@ -47,6 +49,7 @@ describe("getDatabase", () => {
     closeDatabase();
     resetDatabase();
     process.env["EMAILS_DB_PATH"] = path;
+    process.env["HASNA_EMAILS_LOCAL"] = "1";
     try {
       const db = getDatabase();
       db.run("CREATE TABLE permission_probe (id INTEGER PRIMARY KEY)");
@@ -73,6 +76,7 @@ describe("getDatabase", () => {
     closeDatabase();
     resetDatabase();
     process.env["EMAILS_DB_PATH"] = path;
+    process.env["HASNA_EMAILS_LOCAL"] = "1";
     try {
       getDatabase();
       closeDatabase();
@@ -333,6 +337,7 @@ describe("getDatabase", () => {
     closeDatabase();
     resetDatabase();
     process.env["EMAILS_DB_PATH"] = path;
+    process.env["HASNA_EMAILS_LOCAL"] = "1";
     let db = getDatabase();
     db.run(
       `INSERT INTO inbound_emails
@@ -371,6 +376,7 @@ describe("getDatabase", () => {
     closeDatabase();
     resetDatabase();
     process.env["EMAILS_DB_PATH"] = path;
+    process.env["HASNA_EMAILS_LOCAL"] = "1";
     let db = getDatabase();
     db.run(
       `INSERT INTO inbound_emails
@@ -592,6 +598,7 @@ describe("mailbox_filters FR-0001 columns", () => {
       closeDatabase();
       resetDatabase();
       process.env["EMAILS_DB_PATH"] = path;
+      process.env["HASNA_EMAILS_LOCAL"] = "1";
       id = uuid();
       const first = getDatabase();
       first.run(
@@ -612,6 +619,7 @@ describe("mailbox_filters FR-0001 columns", () => {
       closeDatabase();
       resetDatabase();
       delete process.env["EMAILS_DB_PATH"];
+      delete process.env["HASNA_EMAILS_LOCAL"];
       rmSync(root, { recursive: true, force: true });
     }
   });
@@ -638,6 +646,7 @@ describe("mailbox_filters FR-0001 columns", () => {
       closeDatabase();
       resetDatabase();
       process.env["EMAILS_DB_PATH"] = path;
+      process.env["HASNA_EMAILS_LOCAL"] = "1";
       const db = getDatabase();
       const cols = (db.query("PRAGMA table_info(mailbox_filters)").all() as Array<{ name: string }>).map((c) => c.name);
       expect(cols).toContain("actions_json");
@@ -647,6 +656,7 @@ describe("mailbox_filters FR-0001 columns", () => {
       closeDatabase();
       resetDatabase();
       delete process.env["EMAILS_DB_PATH"];
+      delete process.env["HASNA_EMAILS_LOCAL"];
       rmSync(root, { recursive: true, force: true });
     }
   });

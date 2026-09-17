@@ -53,6 +53,10 @@ const ISOLATED_ENV_KEYS = [
   `HASNA_${MODE_ENV_KEY}`,
   DB_PATH_ENV_KEY,
   `HASNA_${DB_PATH_ENV_KEY}`,
+  "HASNA_EMAILS_LOCAL",
+  "EMAILS_LOCAL",
+  "HASNA_EMAILS_API_URL",
+  "HASNA_EMAILS_API_KEY",
   "EMAILS_SELF_HOSTED_URL",
   "EMAILS_SELF_HOSTED_API_KEY",
   "EMAILS_CLIENT_ENV_SECRET",
@@ -67,10 +71,10 @@ beforeEach(() => {
   scratchHome = mkdtempSync(join(tmpdir(), "emails-agent-context-local-"));
   for (const key of ISOLATED_ENV_KEYS) delete process.env[key];
   process.env[HOME_ENV_KEY] = scratchHome;
-  // Storage configuration alone routes this arm (hasna/apps#1566): the explicit
-  // database path selects the local database — the deployment word is removed
-  // and never set (a carried-forward value is refused by the retired guard).
+  // The explicit local opt-in selects this arm; the path only names the file.
+  // The deployment word is removed and never set.
   process.env[DB_PATH_ENV_KEY] = ":memory:";
+  process.env["HASNA_EMAILS_LOCAL"] = "1";
   resetDatabase();
 });
 

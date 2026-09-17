@@ -30,7 +30,7 @@ import { resetSelfHostedConfigCache } from "../db/self-hosted-store.js";
 import { resetMailDataSource } from "../lib/mail-data-source.js";
 import { emailsSelfHostedOpenApi } from "../server/self-hosted/openapi.js";
 import { SELF_HOSTED_RESOURCES, resourceListOrderBy } from "../server/self-hosted/resources.js";
-import { DATABASE_PATH_SETTINGS } from "../store-resolution.js";
+import { DATABASE_PATH_SETTINGS, LOCAL_OPT_IN_SETTINGS } from "../store-resolution.js";
 
 /**
  * The ORDER BY the real generic list route applies to each `/v1/<resource>`, parsed
@@ -188,7 +188,7 @@ export interface V1Stub {
   }): Promise<void>;
   /**
    * Make this stub the ONE store this test context is configured to use: the API
-   * origin EMAILS_SELF_HOSTED_URL plus EMAILS_SELF_HOSTED_API_KEY — deployment
+   * origin HASNA_EMAILS_API_URL plus HASNA_EMAILS_API_KEY — deployment
    * modes are removed (hasna/apps#1566), so no mode variable is set or read — the
    * database-path settings UNSET (see `MANAGED_ENV_KEYS`), then the config and
    * mail-data-source caches reset. Call in `beforeEach`.
@@ -1666,7 +1666,7 @@ const KEY_ENV = "EMAILS_SELF_HOSTED_API_KEY";
 const SESSION_ENV = "EMAILS_SESSION_TOKEN";
 const CLIENT_ENV_SECRET_ENV = "EMAILS_CLIENT_ENV_SECRET";
 // CANONICAL client names (hasna/apps#1720): the shared resolver reads the canonical
-// names FIRST and the one-release aliases only beneath them. A sibling test block
+// names FIRST. A sibling test block
 // that pointed the canonical names at an in-process fixture must not out-rank the
 // stub's own configuration for a later block, so applyEnv clears them and clearEnv
 // restores whatever it displaced.
@@ -1677,11 +1677,10 @@ const CANONICAL_KEY_ENV = "HASNA_EMAILS_API_KEY";
  * Every environment key `applyEnv` writes and `clearEnv` puts back, in one list so the
  * snapshot and the restore cannot disagree about which keys they cover.
  *
- * THE DATABASE-PATH SETTINGS ARE IN HERE, AND THAT IS THE POINT. `scripts/run-hermetic-
- * tests.sh` sets a database path for the WHOLE suite — a hermeticity floor, so that no
- * test can ever open the operator's real mail file. For a test that runs against a local
- * store that floor is exactly right. For a test that runs against THIS STUB it is a
- * second store: an installation with both a database path and an API base URL configured
+ * THE DATABASE-PATH AND LOCAL-OPT-IN SETTINGS ARE IN HERE, AND THAT IS THE POINT.
+ * Individual local fixtures select their own isolated store. For a test that runs
+ * against THIS STUB, any inherited local selection would be a second store: an
+ * installation with both a database path and an API base URL configured
  * has two places to keep its mail and no way to tell which one was meant, which
  * `planEmailStore` (src/store-resolution.ts) refuses to boot from — correctly, and by
  * design, because a precedence rule there would silently serve rows from the store the
@@ -1703,6 +1702,7 @@ const MANAGED_ENV_KEYS: readonly string[] = Object.freeze([
   SESSION_ENV,
   CLIENT_ENV_SECRET_ENV,
   ...DATABASE_PATH_SETTINGS,
+  ...LOCAL_OPT_IN_SETTINGS,
 ]);
 
 /**
@@ -1857,17 +1857,18 @@ export async function startV1Stub(options: V1StubOptions = {}): Promise<V1Stub> 
         for (const key of MANAGED_ENV_KEYS) snapshot[key] = process.env[key];
         priorEnv = snapshot;
       }
-      process.env[URL_ENV] = baseUrl;
-      process.env[KEY_ENV] = apiKey;
-      // The canonical names the shared resolver reads FIRST must not point at a
-      // fixture a sibling block left behind — the stub's own authority owns them now.
-      delete process.env[CANONICAL_URL_ENV];
-      delete process.env[CANONICAL_KEY_ENV];
+      // The CANONICAL names are the stub's authority (hasna/apps#1720). The retired
+      // EMAILS_SELF_HOSTED_* aliases are REFUSED by the client, so any
+      // stale export of them is removed for as long as this stub is in force.
+      process.env[CANONICAL_URL_ENV] = baseUrl;
+      process.env[CANONICAL_KEY_ENV] = apiKey;
+      delete process.env[URL_ENV];
+      delete process.env[KEY_ENV];
       delete process.env[SESSION_ENV];
       delete process.env[CLIENT_ENV_SECRET_ENV];
       // The local store's configuration goes away while the API's is in force, so this
       // process is configured with exactly ONE place to keep its mail.
-      for (const key of DATABASE_PATH_SETTINGS) delete process.env[key];
+      for (const key of [...DATABASE_PATH_SETTINGS, ...LOCAL_OPT_IN_SETTINGS]) delete process.env[key];
       resetSelfHostedConfigCache();
       resetMailDataSource();
     },

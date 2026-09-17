@@ -68,6 +68,10 @@ const DB_PATH_ENV = "EMAILS_DB_PATH";
 const TOUCHED_ENV = [
   DB_PATH_ENV,
   "HASNA_EMAILS_DB_PATH",
+  "HASNA_EMAILS_LOCAL",
+  "EMAILS_LOCAL",
+  "HASNA_EMAILS_API_URL",
+  "HASNA_EMAILS_API_KEY",
   "EMAILS_SELF_HOSTED_URL",
   "EMAILS_SELF_HOSTED_API_KEY",
   "EMAILS_CLIENT_ENV_SECRET",
@@ -82,6 +86,7 @@ beforeEach(() => {
   saved = TOUCHED_ENV.map((key) => [key, process.env[key]] as const);
   for (const key of TOUCHED_ENV) delete process.env[key];
   process.env[DB_PATH_ENV] = ":memory:";
+  process.env["HASNA_EMAILS_LOCAL"] = "1";
   resetDatabase();
   // `scheduled_emails.provider_id` is a real foreign key and `PRAGMA foreign_keys` is ON,
   // so every fixture row needs a provider that exists.

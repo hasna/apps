@@ -69,6 +69,7 @@ async function main(): Promise<void> {
  */
 const CONFIGURATION_REFUSALS = new Set([
   "StoreConfigurationError",
+  "ApiClientStorageConfigurationError",
   "ClientTransportConfigurationError",
   "CredentialResolutionError",
 ]);

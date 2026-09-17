@@ -15,6 +15,7 @@ import {
   API_CREDENTIAL_SETTINGS,
   API_SETTINGS_POINTER,
   DATABASE_PATH_SETTINGS,
+  LOCAL_OPT_IN_SETTINGS,
 } from "../store-resolution.js";
 import { getTodaySentCount, getTodaySentCountsByDomain } from "./warming.js";
 
@@ -31,8 +32,9 @@ function configureLocalStoreOnly(): void {
   for (const setting of [API_BASE_URL_SETTING, API_SETTINGS_POINTER, ...API_CREDENTIAL_SETTINGS]) {
     delete process.env[setting];
   }
-  for (const setting of DATABASE_PATH_SETTINGS) delete process.env[setting];
+  for (const setting of [...DATABASE_PATH_SETTINGS, ...LOCAL_OPT_IN_SETTINGS]) delete process.env[setting];
   process.env["EMAILS_DB_PATH"] = ":memory:";
+  process.env["HASNA_EMAILS_LOCAL"] = "1";
 }
 
 beforeEach(() => {

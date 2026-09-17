@@ -94,15 +94,15 @@ beforeEach(() => {
   // is removed, so any inherited spelling is scrubbed rather than set.
   delete process.env.EMAILS_MODE;
   delete process.env.HASNA_EMAILS_MODE;
-  process.env.EMAILS_SELF_HOSTED_URL = baseUrl;
-  process.env.EMAILS_SELF_HOSTED_API_KEY = "test_key";
+  process.env.HASNA_EMAILS_API_URL = baseUrl;
+  process.env.HASNA_EMAILS_API_KEY = "test_key";
   resetSelfHostedConfigCache();
 });
 
 afterEach(() => {
   delete process.env.EMAILS_MODE;
-  delete process.env.EMAILS_SELF_HOSTED_URL;
-  delete process.env.EMAILS_SELF_HOSTED_API_KEY;
+  delete process.env.HASNA_EMAILS_API_URL;
+  delete process.env.HASNA_EMAILS_API_KEY;
   resetSelfHostedConfigCache();
   restoreInheritedProcessEnv();
 });

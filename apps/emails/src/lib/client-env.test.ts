@@ -32,6 +32,8 @@ const ENV_KEYS = [
   EMAILS_CLIENT_ENV_SECRET_ENV,
   EMAILS_SESSION_TOKEN_ENV,
   EMAILS_IDP_TOKEN_ENV,
+  "HASNA_EMAILS_API_URL",
+  "HASNA_EMAILS_API_KEY",
   "EMAILS_SELF_HOSTED_URL",
   "EMAILS_SELF_HOSTED_API_KEY",
   "DATABASE_URL",
@@ -75,7 +77,7 @@ function installCapturingSecretsCommand(): string {
 ENV_PATH=${JSON.stringify(envPath)}
 env | sort > "$ENV_PATH"
 if [ "$1" = "get" ] && [ "$2" = "hasna/test/opensource/emails/prod/client-env" ]; then
-  printf '%s\\n' '{"EMAILS_SELF_HOSTED_URL":"https://emails.example.invalid","EMAILS_SELF_HOSTED_API_KEY":"loaded-client-key","EMAILS_SESSION_TOKEN":"loaded-session-token"}'
+  printf '%s\\n' '{"HASNA_EMAILS_API_URL":"https://emails.example.invalid","HASNA_EMAILS_API_KEY":"loaded-client-key","EMAILS_SESSION_TOKEN":"loaded-session-token"}'
   exit 0
 fi
 exit 2
@@ -214,7 +216,8 @@ describe("Emails client-env loader", () => {
   it("runs secrets get with a scrubbed environment", () => {
     const envPath = installCapturingSecretsCommand();
     process.env[EMAILS_CLIENT_ENV_SECRET_ENV] = "hasna/test/opensource/emails/prod/client-env";
-    process.env["EMAILS_SELF_HOSTED_API_KEY"] = "stale-self-hosted-key-must-not-pass";
+    process.env["HASNA_EMAILS_API_KEY"] = "stale-canonical-key-must-not-pass";
+    process.env["EMAILS_SELF_HOSTED_API_KEY"] = "stale-retired-key-must-not-pass";
     process.env["DATABASE_URL"] = "postgres://database-url-must-not-pass";
     process.env["EMAILS_DATABASE_URL"] = "postgres://emails-database-url-must-not-pass";
     process.env["HASNA_EMAILS_DATABASE_URL"] = "postgres://hasna-emails-database-url-must-not-pass";
@@ -242,8 +245,9 @@ describe("Emails client-env loader", () => {
     // being delivered by this loader (hasna/apps#1720). A pre-existing operator
     // value stays untouched.
     expect(process.env["EMAILS_SESSION_TOKEN"]).toBe("loaded-session-token");
-    expect(process.env["EMAILS_SELF_HOSTED_URL"]).toBeUndefined();
-    expect(process.env["EMAILS_SELF_HOSTED_API_KEY"]).toBe("stale-self-hosted-key-must-not-pass");
+    expect(process.env["HASNA_EMAILS_API_URL"]).toBeUndefined();
+    expect(process.env["HASNA_EMAILS_API_KEY"]).toBe("stale-canonical-key-must-not-pass");
+    expect(process.env["EMAILS_SELF_HOSTED_API_KEY"]).toBe("stale-retired-key-must-not-pass");
 
     const childEnvKeys = new Set(
       readFileSync(envPath, "utf8")
@@ -252,6 +256,7 @@ describe("Emails client-env loader", () => {
         .map((line) => line.split("=", 1)[0]),
     );
     for (const key of [
+      "HASNA_EMAILS_API_KEY",
       "EMAILS_SELF_HOSTED_API_KEY",
       EMAILS_CLIENT_ENV_SECRET_ENV,
       "DATABASE_URL",
@@ -292,8 +297,7 @@ describe("Emails client-env loader", () => {
 
   it("accepts a session-token-only vault entry (no API key required)", () => {
     installStaticSecretsCommand(
-      '{"EMAILS_SELF_HOSTED_URL":"https://emails.example.invalid",' +
-        '"EMAILS_SESSION_TOKEN":"emss_only"}',
+      '{"EMAILS_SESSION_TOKEN":"emss_only"}',
     );
     process.env[EMAILS_CLIENT_ENV_SECRET_ENV] = "hasna/test/opensource/emails/prod/client-env";
 
@@ -309,10 +313,7 @@ describe("Emails client-env loader", () => {
     // principal, but this loader used to reject a vault entry whose only credential
     // was EMAILS_IDP_TOKEN — a valid credential refused at the door.
     installStaticSecretsCommand(
-      JSON.stringify({
-        EMAILS_SELF_HOSTED_URL: "https://emails.example.invalid",
-        [EMAILS_IDP_TOKEN_ENV]: "emid_identity_only",
-      }),
+      JSON.stringify({ [EMAILS_IDP_TOKEN_ENV]: "emid_identity_only" }),
     );
     process.env[EMAILS_CLIENT_ENV_SECRET_ENV] = "hasna/test/opensource/emails/prod/client-env";
 
@@ -325,12 +326,12 @@ describe("Emails client-env loader", () => {
   });
 
   it("accepts a vault entry that no longer carries the legacy URL/key fields", () => {
-    // Existing vault entries still carry EMAILS_SELF_HOSTED_URL /
-    // EMAILS_SELF_HOSTED_API_KEY. They are no longer REQUIRED and are never merged:
+    // A newer vault entry may carry canonical URL/key fields. They are no longer
+    // REQUIRED and are never merged by this principal-only loader:
     // the shared credential resolver owns the authority and the operator key now
     // (hasna/apps#1720), so such an entry simply delivers no principals and is ready.
     installStaticSecretsCommand(
-      '{"EMAILS_SELF_HOSTED_URL":"https://emails.example.invalid"}',
+      '{"HASNA_EMAILS_API_URL":"https://emails.example.invalid"}',
     );
     process.env[EMAILS_CLIENT_ENV_SECRET_ENV] = "hasna/test/opensource/emails/prod/client-env";
 
@@ -338,7 +339,7 @@ describe("Emails client-env loader", () => {
 
     expect(loaded.ready).toBe(true);
     expect(process.env[EMAILS_SESSION_TOKEN_ENV]).toBeUndefined();
-    expect(process.env["EMAILS_SELF_HOSTED_URL"]).toBeUndefined();
+    expect(process.env["HASNA_EMAILS_API_URL"]).toBeUndefined();
   });
 
   it("persists a session token into env and merges it into the vault entry", () => {
@@ -408,15 +409,11 @@ exit 2
     expect(process.env["EMAILS_SESSION_TOKEN"]).toBe("guarded-session-token");
   });
 
-  it("falls back to the legacy argv `set` when the installed secrets predates --stdin", () => {
-    // A pre-0.2.9 `secrets` rejects `set <key> --stdin` with a usage error (the
-    // value positional is missing) but accepts the legacy `set <key> <value>`.
-    // The fallback is gated on that usage error so a genuine write failure on a
-    // current CLI is never retried with the value in argv.
+  it("refuses an old secrets CLI rather than placing the session map in argv", () => {
     const dir = mkdtempSync(join(tmpdir(), "emails-client-env-legacy-"));
     tempDirs.push(dir);
     const storePath = join(dir, "store.json");
-    // Canonical API settings only — the vault entry contract has no mode word.
+    const argvPath = join(dir, "argv.txt");
     writeFileSync(
       storePath,
       JSON.stringify({
@@ -427,17 +424,12 @@ exit 2
     const bin = join(dir, "secrets");
     writeFileSync(bin, `#!/bin/sh
 STORE=${JSON.stringify(storePath)}
-if [ "$1" = "get" ]; then
-  # Pre-0.2.9: --show is an unknown trailing flag, silently ignored.
-  if [ -f "$STORE" ]; then cat "$STORE"; exit 0; else exit 2; fi
-fi
+ARGV=${JSON.stringify(argvPath)}
+printf '%s\n' "$@" >> "$ARGV"
+if [ "$1" = "get" ]; then cat "$STORE"; exit 0; fi
 if [ "$1" = "set" ]; then
-  case "$*" in *--stdin*)
-    echo "Usage: secrets set <key> <value>" >&2
-    exit 1
-  ;; esac
-  printf '%s' "$3" > "$STORE"
-  exit 0
+  echo "Usage: secrets set <key> <value>" >&2
+  exit 1
 fi
 exit 2
 `);
@@ -445,12 +437,12 @@ exit 2
     process.env["PATH"] = `${dir}:${ORIGINAL_PATH ?? ""}`;
     process.env[EMAILS_CLIENT_ENV_SECRET_ENV] = "hasna/test/opensource/emails/prod/client-env";
 
-    const result = persistClientEnvSessionToken("emss_legacy_session");
-
-    expect(result.scope).toBe("vault");
+    expect(() => persistClientEnvSessionToken("emss_legacy_session")).toThrow("safe stdin writes");
     const stored = JSON.parse(readFileSync(storePath, "utf8")) as Record<string, string>;
-    expect(stored[EMAILS_SESSION_TOKEN_ENV]).toBe("emss_legacy_session");
-    expect(stored["EMAILS_SELF_HOSTED_API_KEY"]).toBe("op-key");
+    expect(stored[EMAILS_SESSION_TOKEN_ENV]).toBeUndefined();
+    const argv = readFileSync(argvPath, "utf8");
+    expect(argv).not.toContain("emss_legacy_session");
+    expect(argv).not.toContain("op-key");
   });
 
   it("never retries a genuine --stdin write failure with the value in argv", () => {

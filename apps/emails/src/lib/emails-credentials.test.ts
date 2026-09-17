@@ -24,8 +24,6 @@ import {
   EMAILS_API_KEY_REF_ENV,
   EMAILS_API_URL_ENV,
   EMAILS_PROFILE_ENV,
-  EMAILS_SELF_HOSTED_API_KEY_ENV,
-  EMAILS_SELF_HOSTED_URL_ENV,
   EMAILS_SESSION_TOKEN_ENV,
   configuredEmailsApiUrl,
   emailsCredentialFiles,
@@ -34,6 +32,8 @@ import {
   isEmailsTransportConfigurationError,
   resolveEmailsHostedTransport,
   snapshotEmailsEnvironment,
+  RETIRED_EMAILS_CLIENT_ENV_KEYS,
+  assertNoRetiredEmailsClientAliases,
 } from "./emails-credentials.js";
 import { planEmailStore } from "../store-resolution.js";
 
@@ -88,8 +88,8 @@ const SCRUB_KEYS = [
   EMAILS_API_KEY_OVERRIDE_ENV,
   EMAILS_API_KEY_REF_ENV,
   EMAILS_PROFILE_ENV,
-  EMAILS_SELF_HOSTED_URL_ENV,
-  EMAILS_SELF_HOSTED_API_KEY_ENV,
+  EMAILS_API_URL_ENV,
+  EMAILS_API_KEY_ENV,
   EMAILS_SESSION_TOKEN_ENV,
   "HOME",
   "HASNA_HOME",
@@ -98,6 +98,8 @@ const SCRUB_KEYS = [
   "USER",
   "HASNA_EMAILS_DB_PATH",
   "EMAILS_DB_PATH",
+  "EMAILS_SELF_HOSTED_URL",
+  "EMAILS_SELF_HOSTED_API_KEY",
 ] as const;
 
 let inheritedEnv: Record<string, string | undefined>;
@@ -138,26 +140,98 @@ describe("the shared credential resolver — hermetic tiers", () => {
     expect(resolved.resolution.apiUrlSource).toBe(EMAILS_API_URL_ENV);
   });
 
-  it("accepts the one-release EMAILS_SELF_HOSTED_* aliases beneath the canonical names", () => {
-    process.env[EMAILS_SELF_HOSTED_URL_ENV] = "https://mail-alias.example.test";
-    process.env[EMAILS_SELF_HOSTED_API_KEY_ENV] = "alias-tier-key";
-    const resolved = resolveEmailsHostedTransport(process.env);
-    expect(resolved.baseUrl).toBe("https://mail-alias.example.test/v1");
-    expect(resolved.credential).toBe("alias-tier-key");
-    // The alias resolves onto the canonical name inside the resolver, so the report
-    // names the canonical key — the alias is the compat window, not the vocabulary.
-    expect(resolved.credentialSetting).toBe(EMAILS_API_KEY_ENV);
-    expect(resolved.resolution.apiUrlSource).toBe(EMAILS_API_URL_ENV);
+  it("REFUSES the retired EMAILS_SELF_HOSTED_* aliases by name, never reading them", () => {
+    // The compatibility window closed. A shell that still exports an alias meant to
+    // configure an API; it is refused — naming the alias and the canonical key it
+    // stood in for — rather than silently ignored and resolved around.
+    for (const [retired, canonical] of RETIRED_EMAILS_CLIENT_ENV_KEYS) {
+      const env = { [retired]: "retired-fixture-value" };
+      let thrown: unknown;
+      try {
+        resolveEmailsHostedTransport(env);
+      } catch (error) {
+        thrown = error;
+      }
+      expect(isEmailsTransportConfigurationError(thrown)).toBe(true);
+      const message = (thrown as Error).message;
+      expect(message).toContain(retired);
+      expect(message).toContain(canonical);
+      expect(message).toContain("retired");
+      expect(message).not.toContain("retired-fixture-value");
+      expect((thrown as { sources: readonly string[] }).sources).toEqual([retired, canonical]);
+      // The pure check answers the same way without any resolver call.
+      expect(() => assertNoRetiredEmailsClientAliases(env)).toThrow(retired);
+    }
+    // A declared blank alias is still retired configuration and must be removed.
+    expect(() => assertNoRetiredEmailsClientAliases({ EMAILS_SELF_HOSTED_URL: "   " }))
+      .toThrow("EMAILS_SELF_HOSTED_URL");
   });
 
-  it("prefers canonical names over the aliases", () => {
+  it("a retired alias beside the canonical names is still refused — never a silent no-op", () => {
     process.env[EMAILS_API_URL_ENV] = "https://canonical.example.test";
-    process.env[EMAILS_SELF_HOSTED_URL_ENV] = "https://alias.example.test";
     process.env[EMAILS_API_KEY_ENV] = "canonical-key";
-    process.env[EMAILS_SELF_HOSTED_API_KEY_ENV] = "alias-key";
+    process.env["EMAILS_SELF_HOSTED_URL"] = "https://alias.example.test";
+    expect(() => resolveEmailsHostedTransport(process.env)).toThrow("EMAILS_SELF_HOSTED_URL");
+    delete process.env["EMAILS_SELF_HOSTED_URL"];
     const resolved = resolveEmailsHostedTransport(process.env);
     expect(resolved.baseUrl).toBe("https://canonical.example.test/v1");
     expect(resolved.credential).toBe("canonical-key");
+  });
+
+  it("refuses blank ordinary declarations and conflicting authority aliases", () => {
+    for (const key of ["HASNA_EMAILS_API_URL", "EMAILS_API_URL", "HASNA_EMAILS_API_KEY", "EMAILS_API_KEY"]) {
+      expect(() => resolveEmailsHostedTransport({ [key]: "" }), key).toThrow(key);
+    }
+    expect(() => resolveEmailsHostedTransport({
+      HASNA_EMAILS_API_URL: "https://one.example.test",
+      EMAILS_API_URL: "https://two.example.test",
+      HASNA_EMAILS_API_KEY: "key",
+    })).toThrow("different service authorities");
+  });
+
+  it("accepts equivalent authorities across aliases and disk after canonical /v1 normalization", () => {
+    const { home, cleanup } = fakeHome();
+    try {
+      writeCredentialsFile(home, [
+        "HASNA_EMAILS_API_URL=https://same.example.test/v1/",
+        "HASNA_EMAILS_API_KEY=disk-key",
+      ]);
+      const resolved = resolveEmailsHostedTransport({
+        HOME: home,
+        HASNA_EMAILS_API_URL: "https://same.example.test",
+        EMAILS_API_URL: "https://same.example.test/",
+      });
+      expect(resolved.baseUrl).toBe("https://same.example.test/v1");
+      expect(resolved.credential).toBe("disk-key");
+    } finally {
+      cleanupHome(home);
+    }
+  });
+
+  it("refuses authority disagreement across environment, Keychain, and disk", () => {
+    const { home, cleanup } = fakeHome();
+    try {
+      writeCredentialsFile(home, [
+        "HASNA_EMAILS_API_URL=https://disk.example.test",
+        "HASNA_EMAILS_API_KEY=disk-key",
+      ]);
+      expect(() => resolveEmailsHostedTransport({
+        HOME: home,
+        [EMAILS_API_URL_ENV]: "https://env.example.test",
+        [EMAILS_API_KEY_ENV]: "env-key",
+      })).toThrow("different service authorities");
+
+      const run = fakeSecurity({
+        [keychainItem("api-url") + "@station-01"]: "https://keychain.example.test",
+        [keychainItem("api-key") + "@station-01"]: "keychain-key",
+      });
+      expect(() => resolveEmailsHostedTransport(
+        { HOME: home, HASNA_STATION: "station-01", [EMAILS_API_URL_ENV]: "https://env.example.test" },
+        { credentials: { keychain: { enabled: true, platform: "darwin", run } } },
+      )).toThrow("different service authorities");
+    } finally {
+      cleanupHome(home);
+    }
   });
 
   it("resolves the disk tier from a fake HOME, reading HASNA_<APP>_API_* keys from the credentials file", () => {
@@ -224,11 +298,40 @@ describe("the shared credential resolver — hermetic tiers", () => {
     }
   });
 
+  it("does not escalate a selected session through an IdP identity", () => {
+    const resolved = resolveEmailsHostedTransport({
+      [EMAILS_API_URL_ENV]: "https://mail.example.test",
+      [EMAILS_API_KEY_ENV]: "operator-key",
+      EMAILS_SESSION_TOKEN: "session-key",
+      EMAILS_IDP_TOKEN: "idp-key",
+    });
+    expect(resolved.credentialSetting).toBe("EMAILS_SESSION_TOKEN");
+    expect(resolved.credential).toBe("session-key");
+    expect(resolved.credentialFallbacks).toEqual([
+      { setting: EMAILS_API_KEY_ENV, value: "operator-key" },
+    ]);
+  });
+
   it("uses the default gateway once a credential resolves from any tier", () => {
     process.env[EMAILS_API_KEY_ENV] = "gateway-key";
     const resolved = resolveEmailsHostedTransport(process.env);
     expect(resolved.baseUrl).toBe(defaultGatewayBase);
     expect(resolved.resolution.apiUrlSource).toBe("default");
+  });
+
+  it("re-resolves authority and credential on every call and keeps exactly one /v1", () => {
+    process.env[EMAILS_API_URL_ENV] = "https://first.example.test/v1/";
+    process.env[EMAILS_API_KEY_ENV] = "first-key";
+    const first = resolveEmailsHostedTransport(process.env);
+    expect(first.baseUrl).toBe("https://first.example.test/v1");
+    expect(first.credential).toBe("first-key");
+
+    process.env[EMAILS_API_URL_ENV] = "https://second.example.test";
+    process.env[EMAILS_API_KEY_ENV] = "second-key";
+    const second = resolveEmailsHostedTransport(process.env);
+    expect(second.baseUrl).toBe("https://second.example.test/v1");
+    expect(second.credential).toBe("second-key");
+    expect(second.baseUrl).not.toContain("/v1/v1");
   });
 });
 
@@ -337,13 +440,14 @@ describe("the transport report (checklist transport-report test)", () => {
     expect(JSON.stringify(resolved.resolution)).not.toContain("env-tier-key");
   });
 
-  it("configuredEmailsApiUrl reflects alias-to-canonical env resolution", () => {
+  it("configuredEmailsApiUrl refuses a retired alias instead of translating it", () => {
     const { home, cleanup } = fakeHome();
     try {
-      const env = { HOME: home, [EMAILS_SELF_HOSTED_URL_ENV]: "https://alias.example.test" };
-      const configured = configuredEmailsApiUrl(env);
-      expect(configured?.value).toBe("https://alias.example.test");
-      expect(configured?.source).toBe(EMAILS_API_URL_ENV);
+      expect(() => configuredEmailsApiUrl({ HOME: home, EMAILS_SELF_HOSTED_URL: "https://alias.example.test" }))
+        .toThrow("EMAILS_SELF_HOSTED_URL");
+      const canonical = configuredEmailsApiUrl({ HOME: home, [EMAILS_API_URL_ENV]: "https://canonical.example.test" });
+      expect(canonical?.value).toBe("https://canonical.example.test");
+      expect(canonical?.source).toBe(EMAILS_API_URL_ENV);
     } finally {
       cleanupHome(home);
     }

@@ -32,6 +32,7 @@ let snsSequence = 0;
 beforeEach(() => {
   captureInheritedProcessEnv();
   process.env["EMAILS_DB_PATH"] = ":memory:";
+  process.env["HASNA_EMAILS_LOCAL"] = "1";
   process.env["EMAILS_SNS_TOPIC_ARNS"] = TOPIC_ARN;
   process.env["EMAILS_AWS_ACCOUNT_IDS"] = "123456789012";
   resetDatabase();
@@ -40,6 +41,7 @@ beforeEach(() => {
 afterEach(() => {
   closeDatabase();
   delete process.env["EMAILS_DB_PATH"];
+  delete process.env["HASNA_EMAILS_LOCAL"];
   delete process.env["EMAILS_SNS_TOPIC_ARNS"];
   delete process.env["EMAILS_AWS_ACCOUNT_IDS"];
   restoreInheritedProcessEnv();
