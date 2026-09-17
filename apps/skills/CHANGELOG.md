@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.8.9
+
+### Patch Changes
+
+- Honor the `skills run ... -- <arguments>` boundary. Consume the wrapper separator once and preserve child flags, values and subsequent separators without interpreting them as Skills execution options.
+- Enroll Codex bundled-skill prevention with the managed CLI bridge and check it before loading context. Hook installation disables bundled reseeding while preserving the bridge, unrelated configuration and existing path controls; unsupported TOML rewrites refuse before changes.
+- Reject unsupported `docs --file` aliases before local or hosted reads, and reject
+  missing explicitly requested documentation instead of returning another file.
+  Text and JSON now share the same selection logic. The root SDK's
+  `getSkillBestDoc(name, file?)` accepts the same optional `skill`, `readme`, and
+  `claude` aliases; omitting the file preserves the existing documentation priority.
+
 ## 0.8.8
 
 ### Patch Changes
