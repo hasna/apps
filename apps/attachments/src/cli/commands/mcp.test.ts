@@ -90,7 +90,7 @@ describe("mcp command", () => {
         expect(mockExecSync).toHaveBeenCalledTimes(1);
         const [cmd] = mockExecSync.mock.calls[0] as [string];
         expect(cmd).toBe(
-          "claude mcp add --transport stdio --scope user attachments -- attachments-mcp"
+          "claude mcp add --transport stdio --scope user attachments -- attachments-mcp --stdio"
         );
       } finally {
         capture.restore();
@@ -129,69 +129,35 @@ describe("mcp command", () => {
   // ---- Codex --------------------------------------------------------------
 
   describe("--codex", () => {
-    it("appends the mcp_servers.attachments block to config.toml when it does not exist", async () => {
+    it("delegates registration with --stdio to the native Codex CLI", async () => {
       const capture = captureOutput();
       try {
-        const program = buildProgram();
-        await program.parseAsync(["mcp", "--codex"], { from: "user" });
-        const content = readFileSync(getCodexPath(), "utf-8");
-        expect(content).toContain("[mcp_servers.attachments]");
-        expect(content).toContain('command = "attachments-mcp"');
-        expect(capture.out.join("")).toContain(
-          "\u2713 Installed attachments MCP in Codex"
+        await buildProgram().parseAsync(["mcp", "--codex"], { from: "user" });
+        expect(mockExecSync).toHaveBeenCalledWith(
+          "codex mcp add attachments -- attachments-mcp --stdio", { stdio: "inherit" },
         );
-      } finally {
-        capture.restore();
-      }
+        expect(capture.out.join("")).toContain("Installed attachments MCP in Codex");
+      } finally { capture.restore(); }
     });
 
-    it("replaces an existing mcp_servers.attachments block in config.toml", async () => {
-      const configPath = getCodexPath();
-      mkdirSync(join(tempHome, ".codex"), { recursive: true });
-      const existing = '[other_section]\nfoo = "bar"\n\n[mcp_servers.attachments]\ncommand = "old-cmd"\nargs = []\n';
-      require("fs").writeFileSync(configPath, existing, "utf-8");
-
-      const capture = captureOutput();
-      try {
-        const program = buildProgram();
-        await program.parseAsync(["mcp", "--codex"], { from: "user" });
-        const content = readFileSync(configPath, "utf-8");
-        expect(content).toContain('command = "attachments-mcp"');
-        expect(content).not.toContain('command = "old-cmd"');
-      } finally {
-        capture.restore();
-      }
-    });
-
-    it("removes the mcp_servers.attachments block when --uninstall is used with --codex", async () => {
-      const configPath = getCodexPath();
-      mkdirSync(join(tempHome, ".codex"), { recursive: true });
-      require("fs").writeFileSync(configPath, '[other]\nfoo = "bar"\n\n[mcp_servers.attachments]\ncommand = "attachments-mcp"\nargs = []\n', "utf-8");
-
-      const capture = captureOutput();
-      try {
-        const program = buildProgram();
-        await program.parseAsync(["mcp", "--codex", "--uninstall"], { from: "user" });
-        const content = readFileSync(configPath, "utf-8");
-        expect(content).not.toContain("[mcp_servers.attachments]");
-        expect(capture.out.join("")).toContain(
-          "\u2713 Removed attachments MCP from Codex"
-        );
-      } finally {
-        capture.restore();
-      }
-    });
-
-    it("prints 'not present' message when --uninstall is used with --codex and config does not exist", async () => {
-      const capture = captureOutput();
-      try {
-        const program = buildProgram();
-        await program.parseAsync(["mcp", "--codex", "--uninstall"], { from: "user" });
-        expect(capture.out.join("")).toContain("not present");
-      } finally {
-        capture.restore();
-      }
-    });
+    for (const uninstall of [false, true]) {
+      it(`delegates ${uninstall ? "removal" : "replacement"} without rewriting Codex TOML`, async () => {
+        const file = getCodexPath();
+        mkdirSync(join(tempHome, ".codex"), { recursive: true });
+        const existing = '[mcp_servers.attachments]\ncommand = "old-command"\nargs = ["old-argument"]\n\n[mcp_servers.other]\ncommand = "other-command"\nargs = ["preserve"]\n';
+        writeFileSync(file, existing);
+        const capture = captureOutput();
+        try {
+          await buildProgram().parseAsync(["mcp", "--codex", ...(uninstall ? ["--uninstall"] : [])], { from: "user" });
+          expect(mockExecSync).toHaveBeenCalledWith(uninstall
+            ? "codex mcp remove attachments"
+            : "codex mcp add attachments -- attachments-mcp --stdio", { stdio: "inherit" });
+          // The native CLI owns the edit. The wrapper must not run a second
+          // regex edit that truncates array values or surrounding tables.
+          expect(readFileSync(file, "utf8")).toBe(existing);
+        } finally { capture.restore(); }
+      });
+    }
   });
 
   // ---- Gemini -------------------------------------------------------------
@@ -206,6 +172,7 @@ describe("mcp command", () => {
           mcpServers: { attachments: { command: string } };
         };
         expect(parsed.mcpServers.attachments.command).toBe("attachments-mcp");
+        expect((parsed.mcpServers.attachments as { args?: string[] }).args).toEqual(["--stdio"]);
         expect(capture.out.join("")).toContain(
           "\u2713 Installed attachments MCP in Gemini"
         );
@@ -233,6 +200,7 @@ describe("mcp command", () => {
         expect(parsed.theme).toBe("dark");
         expect(parsed.mcpServers.otherTool).toBeDefined();
         expect(parsed.mcpServers.attachments.command).toBe("attachments-mcp");
+        expect((parsed.mcpServers.attachments as { args?: string[] }).args).toEqual(["--stdio"]);
       } finally {
         capture.restore();
       }
@@ -308,15 +276,15 @@ describe("mcp command", () => {
         const program = buildProgram();
         await program.parseAsync(["mcp", "--all"], { from: "user" });
 
-        expect(mockExecSync).toHaveBeenCalledTimes(1);
+        expect(mockExecSync).toHaveBeenCalledTimes(2);
 
-        const codexContent = readFileSync(getCodexPath(), "utf-8");
-        expect(codexContent).toContain("[mcp_servers.attachments]");
+        expect(mockExecSync.mock.calls[1]?.[0]).toBe("codex mcp add attachments -- attachments-mcp --stdio");
 
         const parsed = JSON.parse(readFileSync(getGeminiPath(), "utf-8")) as {
           mcpServers: { attachments: { command: string } };
         };
         expect(parsed.mcpServers.attachments.command).toBe("attachments-mcp");
+        expect((parsed.mcpServers.attachments as { args?: string[] }).args).toEqual(["--stdio"]);
 
         const combined = capture.out.join("");
         expect(combined).toContain("Claude Code");
@@ -342,11 +310,11 @@ describe("mcp command", () => {
         const program = buildProgram();
         await program.parseAsync(["mcp", "--all", "--uninstall"], { from: "user" });
 
-        expect(mockExecSync).toHaveBeenCalledTimes(1);
+        expect(mockExecSync).toHaveBeenCalledTimes(2);
         const [cmd] = mockExecSync.mock.calls[0] as [string];
         expect(cmd).toBe("claude mcp remove attachments");
 
-        expect(readFileSync(codexPath, "utf-8")).not.toContain("[mcp_servers.attachments]");
+        expect(mockExecSync.mock.calls[1]?.[0]).toBe("codex mcp remove attachments");
 
         const parsed = JSON.parse(readFileSync(geminiPath, "utf-8")) as {
           mcpServers: Record<string, unknown>;

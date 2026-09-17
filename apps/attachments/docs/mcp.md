@@ -19,6 +19,12 @@ HTTP on loopback port 8850 by default (--port or MCP_HTTP_PORT overrides the por
 This local host transport is distinct from the upstream HTTPS attachment API.
 Use --help for transport options and attachments mcp for client installation.
 
+`attachments mcp --claude`, `--codex`, `--gemini` or `--all` registers
+`attachments-mcp --stdio`. Claude Code and Codex registration/removal use
+their native CLIs, which must be installed and available on PATH. Codex owns
+its TOML edits, including its configured home directory and unrelated server
+entries. Gemini registration updates its JSON settings.
+
 Tool profiles use ATTACHMENTS_PROFILE. Tool discovery exposes the schemas for
 upload/download/list/delete, links, presigned uploads, reports and supported
 Todos/Sessions workflows. All attachment mutations go through the remote Store.
