@@ -233,7 +233,10 @@ export function projectRecords(
 }
 
 export type OutputCursor = string | number | null;
+export type OutputCursorSemantics = "offset" | "opaque" | "whole-query";
 export type OutputSortDirection = "asc" | "desc";
+
+const OUTPUT_PAGE_BRAND: unique symbol = Symbol("hasna.output-page.v1");
 
 export interface OutputSort {
   field: string;
@@ -247,6 +250,7 @@ export interface OutputPageMeta {
   limit: number;
   cursor: OutputCursor;
   next_cursor: OutputCursor;
+  cursor_semantics: OutputCursorSemantics;
   has_more: boolean;
   /** True only when this envelope contains the entire requested population. */
   complete: boolean;
@@ -263,6 +267,7 @@ export interface OutputPageMeta {
 export interface OutputPageEnvelope<T> {
   readonly items: readonly T[];
   readonly _meta: Readonly<OutputPageMeta>;
+  readonly [OUTPUT_PAGE_BRAND]: true;
 }
 
 export interface CreatePageEnvelopeInput<T> {
@@ -270,6 +275,8 @@ export interface CreatePageEnvelopeInput<T> {
   limit: number;
   cursor?: OutputCursor;
   nextCursor?: OutputCursor;
+  /** Numeric cursors are offsets unless `whole-query` is explicit. */
+  cursorSemantics?: OutputCursorSemantics;
   hasMore: boolean;
   complete: boolean;
   total?: number | null;
@@ -299,6 +306,39 @@ function usableCursor(value: OutputCursor): value is string | number {
     (typeof value === "string" && value.trim().length > 0) ||
     (typeof value === "number" && Number.isSafeInteger(value) && value >= 0)
   );
+}
+
+function inferCursorSemantics(
+  cursor: OutputCursor,
+  nextCursor: OutputCursor,
+  explicit: OutputCursorSemantics | undefined,
+): OutputCursorSemantics {
+  if (explicit !== undefined && explicit !== "offset" && explicit !== "opaque" && explicit !== "whole-query") {
+    throw new OutputContractError("OUTPUT_INVALID_PAGE", "cursorSemantics must be offset, opaque, or whole-query");
+  }
+  if (explicit !== undefined) return explicit;
+  if (typeof cursor === "number" || typeof nextCursor === "number") return "offset";
+  if (typeof cursor === "string" || typeof nextCursor === "string") return "opaque";
+  return "offset";
+}
+
+function checkedOffsetEnd(offset: number, count: number): number {
+  const end = offset + count;
+  if (!Number.isSafeInteger(end)) {
+    throw new OutputContractError("OUTPUT_INVALID_PAGE", "numeric cursor plus count exceeds the safe integer range");
+  }
+  return end;
+}
+
+function brandPageEnvelope<T>(items: readonly T[], meta: Readonly<OutputPageMeta>): OutputPageEnvelope<T> {
+  const envelope = { items, _meta: meta } as OutputPageEnvelope<T>;
+  Object.defineProperty(envelope, OUTPUT_PAGE_BRAND, {
+    value: true,
+    enumerable: false,
+    configurable: false,
+    writable: false,
+  });
+  return Object.freeze(envelope);
 }
 
 function normalizedReasons(reasons: readonly string[] | undefined): string[] {
@@ -369,11 +409,67 @@ export function createPageEnvelope<T>(input: CreatePageEnvelopeInput<T>): Output
   if (!input.hasMore && nextCursor !== null) {
     throw new OutputContractError("OUTPUT_INVALID_PAGE", "has_more=false requires next_cursor=null");
   }
-  if (input.hasMore && cursor !== null && nextCursor === cursor) {
-    throw new OutputContractError("OUTPUT_INVALID_PAGE", "next_cursor must make progress beyond cursor");
-  }
-  if (input.hasMore && total !== null && items.length === total) {
-    throw new OutputContractError("OUTPUT_INVALID_PAGE", "has_more=true contradicts count=total");
+
+  const cursorSemantics = inferCursorSemantics(cursor, nextCursor, input.cursorSemantics);
+  if (cursorSemantics === "offset") {
+    if ((cursor !== null && typeof cursor !== "number") || (nextCursor !== null && typeof nextCursor !== "number")) {
+      throw new OutputContractError("OUTPUT_INVALID_PAGE", "offset cursors must be non-negative safe integers or null");
+    }
+    const offset = cursor ?? 0;
+    const consumed = checkedOffsetEnd(offset, items.length);
+    if (input.complete && offset !== 0) {
+      throw new OutputContractError(
+        "OUTPUT_INVALID_PAGE",
+        "complete=true from a nonzero offset requires cursorSemantics=whole-query",
+      );
+    }
+    if (input.hasMore) {
+      if (consumed <= offset) {
+        throw new OutputContractError("OUTPUT_INVALID_PAGE", "offset continuation requires at least one emitted item");
+      }
+      if (nextCursor !== consumed) {
+        throw new OutputContractError(
+          "OUTPUT_INVALID_PAGE",
+          `offset next_cursor must equal cursor + count (${consumed})`,
+        );
+      }
+      if (total !== null && consumed >= total) {
+        throw new OutputContractError("OUTPUT_INVALID_PAGE", "has_more=true cannot continue at or past the known total");
+      }
+    } else if (total !== null && consumed !== total) {
+      throw new OutputContractError(
+        "OUTPUT_INVALID_PAGE",
+        consumed < total
+          ? "terminal offset page ends before the known total"
+          : "terminal offset page extends past the known total",
+      );
+    }
+  } else if (cursorSemantics === "opaque") {
+    if ((cursor !== null && typeof cursor !== "string") || (nextCursor !== null && typeof nextCursor !== "string")) {
+      throw new OutputContractError("OUTPUT_INVALID_PAGE", "opaque cursors must be non-empty strings or null");
+    }
+    if (input.hasMore && cursor !== null && nextCursor === cursor) {
+      throw new OutputContractError("OUTPUT_INVALID_PAGE", "opaque next_cursor must differ from cursor");
+    }
+    if (input.complete && cursor !== null) {
+      throw new OutputContractError(
+        "OUTPUT_INVALID_PAGE",
+        "complete=true from a continued opaque cursor requires cursorSemantics=whole-query",
+      );
+    }
+    if (input.hasMore && total !== null && items.length === total) {
+      throw new OutputContractError("OUTPUT_INVALID_PAGE", "has_more=true contradicts count=total");
+    }
+  } else {
+    if (input.hasMore) {
+      throw new OutputContractError("OUTPUT_INVALID_PAGE", "whole-query cursor semantics cannot advertise another page");
+    }
+    if (total !== null && items.length < total && !input.truncated) {
+      throw new OutputContractError(
+        "OUTPUT_INVALID_PAGE",
+        "whole-query page ends before the known total without declaring truncation",
+      );
+    }
   }
 
   const truncated = input.truncated ?? false;
@@ -428,6 +524,7 @@ export function createPageEnvelope<T>(input: CreatePageEnvelopeInput<T>): Output
     limit: input.limit,
     cursor,
     next_cursor: nextCursor,
+    cursor_semantics: cursorSemantics,
     has_more: input.hasMore,
     complete: input.complete,
     truncated,
@@ -440,7 +537,106 @@ export function createPageEnvelope<T>(input: CreatePageEnvelopeInput<T>): Output
   if (input.maxBytes !== undefined) meta.max_bytes = input.maxBytes;
   const frozenItems = Object.freeze(items) as readonly T[];
   const frozenMeta = Object.freeze(meta);
-  return Object.freeze({ items: frozenItems, _meta: frozenMeta });
+  return brandPageEnvelope(frozenItems, frozenMeta);
+}
+
+const PAGE_ENVELOPE_KEYS = new Set(["items", "_meta"]);
+const PAGE_META_KEYS = new Set([
+  "contract_version",
+  "count",
+  "total",
+  "limit",
+  "cursor",
+  "next_cursor",
+  "cursor_semantics",
+  "has_more",
+  "complete",
+  "truncated",
+  "truncation_reasons",
+  "detail",
+  "fields",
+  "sort",
+  "byte_length",
+  "max_bytes",
+]);
+
+function assertOnlyEnumerableKeys(record: Record<string, unknown>, allowed: ReadonlySet<string>, label: string): void {
+  let keys: string[];
+  try {
+    keys = Object.keys(record);
+  } catch {
+    throw new OutputContractError("OUTPUT_INVALID_PAGE", `${label} could not be inspected safely`);
+  }
+  const unexpected = keys.filter((key) => !allowed.has(key));
+  if (unexpected.length > 0) {
+    throw new OutputContractError("OUTPUT_INVALID_PAGE", `${label} contains unknown field ${JSON.stringify(unexpected[0])}`);
+  }
+}
+
+function ownData(record: Record<string, unknown>, key: string, required: boolean): unknown {
+  let descriptor: PropertyDescriptor | undefined;
+  try {
+    descriptor = Object.getOwnPropertyDescriptor(record, key);
+  } catch {
+    throw new OutputContractError("OUTPUT_INVALID_PAGE", `page field ${JSON.stringify(key)} could not be inspected safely`);
+  }
+  if (!descriptor) {
+    if (required) throw new OutputContractError("OUTPUT_INVALID_PAGE", `page field ${JSON.stringify(key)} is required`);
+    return undefined;
+  }
+  if (descriptor.get || descriptor.set) {
+    throw new OutputContractError("OUTPUT_ACCESSOR_PROPERTY", `page field ${JSON.stringify(key)} is an accessor and was not evaluated`);
+  }
+  return descriptor.value;
+}
+
+/**
+ * Runtime validation and canonicalization for JavaScript or cross-package page envelopes.
+ * The returned value is branded and frozen exactly like `createPageEnvelope` output.
+ */
+export function validatePageEnvelope<T = unknown>(value: unknown): OutputPageEnvelope<T> {
+  if (!plainRecord(value)) {
+    throw new OutputContractError("OUTPUT_INVALID_PAGE", "page envelope must be a plain record");
+  }
+  assertOnlyEnumerableKeys(value, PAGE_ENVELOPE_KEYS, "page envelope");
+  const items = ownData(value, "items", true);
+  const metaValue = ownData(value, "_meta", true);
+  if (!Array.isArray(items) || !plainRecord(metaValue)) {
+    throw new OutputContractError("OUTPUT_INVALID_PAGE", "page envelope requires an items array and _meta record");
+  }
+  assertOnlyEnumerableKeys(metaValue, PAGE_META_KEYS, "page metadata");
+  if (ownData(metaValue, "contract_version", true) !== OUTPUT_PAGE_CONTRACT_VERSION) {
+    throw new OutputContractError("OUTPUT_INVALID_PAGE", "page contract_version must equal 1");
+  }
+  const count = ownData(metaValue, "count", true);
+  if (!Number.isSafeInteger(count) || count !== items.length) {
+    throw new OutputContractError("OUTPUT_INVALID_PAGE", "page count must equal items.length");
+  }
+
+  const input: CreatePageEnvelopeInput<unknown> = {
+    items,
+    limit: ownData(metaValue, "limit", true) as number,
+    cursor: ownData(metaValue, "cursor", true) as OutputCursor,
+    nextCursor: ownData(metaValue, "next_cursor", true) as OutputCursor,
+    cursorSemantics: ownData(metaValue, "cursor_semantics", true) as OutputCursorSemantics,
+    hasMore: ownData(metaValue, "has_more", true) as boolean,
+    complete: ownData(metaValue, "complete", true) as boolean,
+    total: ownData(metaValue, "total", true) as number | null,
+    truncated: ownData(metaValue, "truncated", true) as boolean,
+  };
+  const truncationReasons = ownData(metaValue, "truncation_reasons", false);
+  const detail = ownData(metaValue, "detail", false);
+  const fields = ownData(metaValue, "fields", false);
+  const sort = ownData(metaValue, "sort", false);
+  const byteLength = ownData(metaValue, "byte_length", false);
+  const maxBytes = ownData(metaValue, "max_bytes", false);
+  if (truncationReasons !== undefined) input.truncationReasons = truncationReasons as readonly string[];
+  if (detail !== undefined) input.detail = detail as string;
+  if (fields !== undefined) input.fields = fields as readonly string[];
+  if (sort !== undefined) input.sort = sort as OutputSort;
+  if (byteLength !== undefined) input.byteLength = byteLength as number;
+  if (maxBytes !== undefined) input.maxBytes = maxBytes as number;
+  return createPageEnvelope(input) as OutputPageEnvelope<T>;
 }
 
 export interface JsonSerializationOptions {
@@ -591,43 +787,30 @@ export function measureJsonLines(values: readonly unknown[]): JsonMeasurement {
   return { text, bytes: utf8ByteLength(text) };
 }
 
-export interface PageJsonLinesOptions {
-  /** Include a final typed page receipt. Enabled by default. */
-  includeReceipt?: boolean;
-}
-
-/** JSONL framing that never places an untyped receipt among ordinary records. */
-export function serializePageJsonLines<T>(
-  envelope: OutputPageEnvelope<T>,
-  options: PageJsonLinesOptions = {},
-): string {
-  if (options.includeReceipt !== undefined && typeof options.includeReceipt !== "boolean") {
-    throw new OutputContractError("OUTPUT_INVALID_PAGE", "includeReceipt must be a boolean");
-  }
-  const includeReceipt = options.includeReceipt ?? true;
-  if (!includeReceipt && (!envelope._meta.complete || envelope._meta.has_more || envelope._meta.truncated)) {
-    throw new OutputContractError(
-      "OUTPUT_INVALID_PAGE",
-      "a partial, pageable, or truncated JSONL page cannot omit its receipt",
-    );
-  }
+/**
+ * Typed JSONL page framing. The final receipt is mandatory because omitting it
+ * would make pagination, completeness, total, and truncation claims unknowable.
+ * Structural inputs are revalidated and canonicalized before any item is emitted.
+ */
+export function serializePageJsonLines<T>(envelope: OutputPageEnvelope<T>): string {
+  const validated = validatePageEnvelope<T>(envelope);
   const records: unknown[] = [];
-  for (let index = 0; index < envelope.items.length; index += 1) {
-    const descriptor = Object.getOwnPropertyDescriptor(envelope.items, index);
+  for (let index = 0; index < validated.items.length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(validated.items, index);
     if (!descriptor || descriptor.get || descriptor.set) {
       throw new OutputContractError("OUTPUT_ACCESSOR_PROPERTY", `page item at index ${index} is not a data property`);
     }
     records.push({ _type: "item", item: descriptor.value });
   }
-  if (includeReceipt) records.push({ _type: "page_receipt", _meta: envelope._meta });
+  records.push({ _type: "page_receipt", _meta: validated._meta });
   return serializeJsonLines(records);
 }
 
 export interface FitPageToByteBudgetOptions {
   maxBytes: number;
   /**
-   * Cursor for the first omitted item when local byte clipping occurs.
-   * Required only when the full envelope exceeds the budget.
+   * Opaque cursor for the first omitted item when local byte clipping occurs.
+   * Required only for `cursorSemantics="opaque"`; offset cursors are derived.
    */
   nextCursorForIndex?: (firstOmittedIndex: number) => Exclude<OutputCursor, null>;
   serialization?: JsonSerializationOptions;
@@ -652,6 +835,7 @@ function envelopeInput<T>(
     limit: meta.limit,
     cursor: meta.cursor,
     nextCursor: meta.next_cursor,
+    cursorSemantics: meta.cursor_semantics,
     hasMore: meta.has_more,
     complete: meta.complete,
     total: meta.total,
@@ -673,7 +857,7 @@ function serializeEnvelopeWithMetrics<T>(
   let byteLength = 0;
   for (let attempt = 0; attempt < 12; attempt += 1) {
     const meta = Object.freeze({ ...base._meta, byte_length: byteLength, max_bytes: maxBytes });
-    const envelope = Object.freeze({ items: base.items, _meta: meta });
+    const envelope = brandPageEnvelope(base.items, meta);
     const text = serializeJson(envelope, options);
     const bytes = utf8ByteLength(text);
     if (bytes === byteLength) return { envelope, text, bytes };
@@ -694,8 +878,9 @@ export function fitPageToByteBudget<T>(
   options: FitPageToByteBudgetOptions,
 ): BudgetedPage<T> {
   assertPositiveSafeInteger(options.maxBytes, "OUTPUT_INVALID_BUDGET", "maxBytes");
+  const validated = validatePageEnvelope<T>(envelope);
   const serialization = options.serialization ?? {};
-  const full = serializeEnvelopeWithMetrics(envelopeInput(envelope, envelope.items), options.maxBytes, serialization);
+  const full = serializeEnvelopeWithMetrics(envelopeInput(validated, validated.items), options.maxBytes, serialization);
   if (full.bytes <= options.maxBytes) {
     return {
       ...full,
@@ -707,19 +892,30 @@ export function fitPageToByteBudget<T>(
   if (options.nextCursorForIndex !== undefined && typeof options.nextCursorForIndex !== "function") {
     throw new OutputContractError("OUTPUT_CONTINUATION_REQUIRED", "nextCursorForIndex must be a function");
   }
-  if (!options.nextCursorForIndex) {
+  if (validated._meta.cursor_semantics === "whole-query") {
     throw new OutputContractError(
       "OUTPUT_CONTINUATION_REQUIRED",
-      "byte clipping requires nextCursorForIndex so omitted items remain reachable",
+      "a whole-query page cannot be byte-clipped without changing its declared cursor semantics",
+    );
+  }
+  if (validated._meta.cursor_semantics === "opaque" && !options.nextCursorForIndex) {
+    throw new OutputContractError(
+      "OUTPUT_CONTINUATION_REQUIRED",
+      "byte clipping an opaque page requires nextCursorForIndex so omitted items remain reachable",
     );
   }
 
-  const originalReasons = envelope._meta.truncation_reasons ?? [];
+  const originalReasons = validated._meta.truncation_reasons ?? [];
   const reasons = [...new Set([...originalReasons, "byte_budget"])];
-  for (let count = envelope.items.length - 1; count >= 1; count -= 1) {
-    const nextCursor = options.nextCursorForIndex(count);
+  const offset = validated._meta.cursor_semantics === "offset"
+    ? (validated._meta.cursor as number | null) ?? 0
+    : null;
+  for (let count = validated.items.length - 1; count >= 1; count -= 1) {
+    const nextCursor = offset === null
+      ? options.nextCursorForIndex!(count)
+      : checkedOffsetEnd(offset, count);
     const candidate = serializeEnvelopeWithMetrics(
-      envelopeInput(envelope, envelope.items.slice(0, count), {
+      envelopeInput(validated, validated.items.slice(0, count), {
         nextCursor,
         hasMore: true,
         complete: false,
@@ -733,26 +929,11 @@ export function fitPageToByteBudget<T>(
       return {
         ...candidate,
         max_bytes: options.maxBytes,
-        omitted_items: envelope.items.length - count,
+        omitted_items: validated.items.length - count,
       };
     }
   }
 
-  const emptyCursor = options.nextCursorForIndex(0);
-  const empty = serializeEnvelopeWithMetrics(
-    envelopeInput(envelope, [], {
-      nextCursor: emptyCursor,
-      hasMore: true,
-      complete: false,
-      truncated: true,
-      truncationReasons: reasons,
-    }),
-    options.maxBytes,
-    serialization,
-  );
-  if (empty.bytes > options.maxBytes) {
-    throw new OutputContractError("OUTPUT_BUDGET_TOO_SMALL", "byte budget cannot contain the empty page envelope");
-  }
   throw new OutputContractError(
     "OUTPUT_ITEM_EXCEEDS_BUDGET",
     "the first page item cannot fit without being split or skipped",

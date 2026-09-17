@@ -11,9 +11,14 @@ A page envelope contains `items` and `_meta`.
 
 - `count` is derived from the emitted page.
 - `total` is the whole requested population when known, otherwise `null`.
+- `cursor_semantics` explicitly distinguishes numeric `offset`, string
+  `opaque`, and non-pagination `whole-query` cursors.
+- Numeric offsets require `next_cursor === cursor + count`; they cannot move
+  backward, skip rows, terminate before a known total, or continue at/past it.
 - `has_more` states whether the response provides a usable continuation.
 - `complete` is true only when this envelope contains the whole requested
-  population. It is not inferred from a missing cursor.
+  population. It is not inferred from a missing cursor, and a nonzero offset
+  cannot claim completeness unless `whole-query` semantics are explicit.
 - `truncated` records representation-level omission and requires one or more
   `truncation_reasons`.
 - `complete: true` cannot coexist with `has_more: true` or `truncated: true`.
@@ -42,8 +47,10 @@ not execute caller code.
 - a trailing newline is explicit.
 
 `serializeJsonLines` emits one compact JSON value per line with exactly one LF
-per record. `serializePageJsonLines` emits typed `item` rows and an optional
-typed `page_receipt`, so metadata is never mistaken for a domain item.
+per record. `serializePageJsonLines` structurally revalidates its envelope,
+emits typed `item` rows, and always emits a final typed `page_receipt`. The
+receipt is mandatory because otherwise pagination, completeness, totals, and
+truncation cannot be proven from the JSONL stream.
 
 ## Byte budgets
 
@@ -51,8 +58,10 @@ typed `page_receipt`, so metadata is never mistaken for a domain item.
 than JavaScript UTF-16 code units. `fitPageToByteBudget` measures the complete
 serialized envelope, including metadata and framing, and keeps the largest
 ordered prefix that fits. It never skips an oversized first item to include
-later items, and it never clips without a caller-provided continuation cursor.
-The returned envelope includes stable `byte_length` and `max_bytes` metadata.
+later items. Numeric-offset continuation is derived as `offset + emitted count`;
+an opaque cursor requires a caller-provided continuation function. Whole-query
+pages refuse clipping because doing so would change their cursor semantics. The
+returned envelope includes stable `byte_length` and `max_bytes` metadata.
 
 ## Advisory fleet declaration
 
@@ -89,13 +98,14 @@ still fails because inability to measure is not a clean result.
 ### Trusted callback boundary
 
 The module does not perform ambient I/O or invoke object accessors, `toJSON`, or
-arbitrary iterators. `fitPageToByteBudget` does invoke the explicit
-`nextCursorForIndex` callback supplied by the adapter. That callback must be
-deterministic, side-effect-free, and return the cursor for the first omitted
-item. The budget applies to the serialized JSON envelope produced by this
+arbitrary iterators. For opaque cursors, `fitPageToByteBudget` invokes the
+explicit `nextCursorForIndex` callback supplied by the adapter. That callback
+must be deterministic, side-effect-free, and return the cursor for the first
+omitted item. Numeric offset cursors are derived internally and never trust the
+callback. The budget applies to the serialized JSON envelope produced by this
 module; adapters that add an MCP wrapper or other framing must reserve or
 measure those wrapper bytes separately.
 
-Page envelopes and their metadata arrays are frozen after validation (item
-objects remain caller-owned). JSONL receipts may be omitted only for a proven
-complete, non-truncated page.
+Page envelopes and their metadata arrays are branded and frozen after
+validation (item objects remain caller-owned). JSONL always carries its final
+page receipt; structural JavaScript inputs are revalidated before emission.

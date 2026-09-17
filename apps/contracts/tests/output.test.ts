@@ -13,6 +13,7 @@ import {
   serializeJsonLines,
   serializePageJsonLines,
   utf8ByteLength,
+  validatePageEnvelope,
 } from "../src/output";
 
 function codeOf(fn: () => unknown): string | undefined {
@@ -93,6 +94,74 @@ describe("truthful page envelopes", () => {
     expect(createPageEnvelope({ items: [1, 2], limit: 2, hasMore: false, complete: true, total: 2 })._meta.complete).toBe(true);
   });
 
+  test("enforces numeric offset progress and known-total boundaries", () => {
+    const valid = createPageEnvelope({
+      items: [{ id: 11 }],
+      limit: 1,
+      cursor: 10,
+      nextCursor: 11,
+      hasMore: true,
+      complete: false,
+      total: 20,
+    });
+    expect(valid._meta).toMatchObject({ cursor: 10, next_cursor: 11, cursor_semantics: "offset" });
+
+    expect(codeOf(() => createPageEnvelope({
+      items: [{ id: 11 }], limit: 1, cursor: 10, nextCursor: 5, hasMore: true, complete: false, total: 20,
+    }))).toBe("OUTPUT_INVALID_PAGE");
+    expect(codeOf(() => createPageEnvelope({
+      items: [{ id: 11 }], limit: 1, cursor: 10, nextCursor: 12, hasMore: true, complete: false, total: 20,
+    }))).toBe("OUTPUT_INVALID_PAGE");
+    expect(codeOf(() => createPageEnvelope({
+      items: [{ id: 1 }], limit: 1, cursor: 0, nextCursor: null, hasMore: false, complete: false, total: 2,
+    }))).toBe("OUTPUT_INVALID_PAGE");
+    expect(codeOf(() => createPageEnvelope({
+      items: [{ id: 2 }], limit: 1, cursor: 1, nextCursor: 2, hasMore: true, complete: false, total: 2,
+    }))).toBe("OUTPUT_INVALID_PAGE");
+    expect(codeOf(() => createPageEnvelope({
+      items: [{ id: 2 }], limit: 1, cursor: 1, nextCursor: null, hasMore: false, complete: true,
+    }))).toBe("OUTPUT_INVALID_PAGE");
+
+    const terminal = createPageEnvelope({
+      items: [{ id: 2 }], limit: 1, cursor: 1, nextCursor: null, hasMore: false, complete: false, total: 2,
+    });
+    expect(terminal._meta).toMatchObject({ cursor: 1, has_more: false, complete: false, total: 2 });
+    const wholeQuery = createPageEnvelope({
+      items: [{ id: 2 }],
+      limit: 1,
+      cursor: 1,
+      cursorSemantics: "whole-query",
+      nextCursor: null,
+      hasMore: false,
+      complete: true,
+      total: 1,
+    });
+    expect(wholeQuery._meta).toMatchObject({ complete: true, cursor: 1, cursor_semantics: "whole-query" });
+    expect(codeOf(() => createPageEnvelope({
+      items: [{ id: 1 }],
+      limit: 1,
+      cursor: 99,
+      cursorSemantics: "whole-query",
+      nextCursor: null,
+      hasMore: false,
+      complete: false,
+      total: 2,
+    }))).toBe("OUTPUT_INVALID_PAGE");
+    const truncatedWholeQuery = createPageEnvelope({
+      items: [{ id: 1 }],
+      limit: 1,
+      cursor: 99,
+      cursorSemantics: "whole-query",
+      nextCursor: null,
+      hasMore: false,
+      complete: false,
+      total: 2,
+      truncated: true,
+      truncationReasons: ["byte_budget"],
+    });
+    expect(truncatedWholeQuery._meta).toMatchObject({ truncated: true, cursor_semantics: "whole-query" });
+  });
+
   test("refuses contradictory pagination and completeness claims", () => {
     expect(codeOf(() => createPageEnvelope({ items: [1, 2], limit: 1, hasMore: false, complete: false }))).toBe("OUTPUT_INVALID_PAGE");
     expect(codeOf(() => createPageEnvelope({ items: [], limit: 1, hasMore: true, complete: false }))).toBe("OUTPUT_INVALID_PAGE");
@@ -170,17 +239,38 @@ describe("strict deterministic serialization", () => {
 });
 
 describe("JSONL page receipts and byte budgets", () => {
-  test("types JSONL items and the final receipt", () => {
+  test("validates page structure and always emits the final receipt", () => {
     const page = createPageEnvelope({ items: [{ id: "a" }], limit: 1, hasMore: false, complete: true, total: 1 });
     const lines = serializePageJsonLines(page).trimEnd().split("\n").map((line) => JSON.parse(line));
     expect(lines).toHaveLength(2);
     expect(lines[0]).toEqual({ _type: "item", item: { id: "a" } });
     expect(lines[1]._type).toBe("page_receipt");
     expect(lines[1]._meta.complete).toBe(true);
-    expect(serializePageJsonLines(page, { includeReceipt: false }).trimEnd().split("\n")).toHaveLength(1);
-    const partial = createPageEnvelope({ items: [{ id: "a" }], limit: 1, nextCursor: 1, hasMore: true, complete: false, total: 2 });
-    expect(codeOf(() => serializePageJsonLines(partial, { includeReceipt: false }))).toBe("OUTPUT_INVALID_PAGE");
-    expect(codeOf(() => serializePageJsonLines(page, { includeReceipt: "no" as unknown as boolean }))).toBe("OUTPUT_INVALID_PAGE");
+
+    const unbranded = JSON.parse(serializeJson(page));
+    const canonical = validatePageEnvelope(unbranded);
+    expect(Object.isFrozen(canonical)).toBe(true);
+    expect(serializePageJsonLines(unbranded as typeof page).trimEnd().split("\n")).toHaveLength(2);
+
+    const forged = {
+      items: [{ id: "a" }, { id: "b" }],
+      _meta: {
+        contract_version: 1,
+        count: 999,
+        total: 1,
+        limit: 1,
+        cursor: null,
+        next_cursor: null,
+        cursor_semantics: "offset",
+        has_more: false,
+        complete: true,
+        truncated: false,
+      },
+    };
+    expect(codeOf(() => serializePageJsonLines(forged as unknown as typeof page))).toBe("OUTPUT_INVALID_PAGE");
+
+    const calledWithRemovedOption = serializePageJsonLines as unknown as (value: typeof page, options: unknown) => string;
+    expect(calledWithRemovedOption(page, { includeReceipt: false }).trimEnd().split("\n")).toHaveLength(2);
   });
 
   test("fits the largest ordered prefix and embeds exact byte metrics", () => {
@@ -218,12 +308,56 @@ describe("JSONL page receipts and byte budgets", () => {
     expect(fitted.envelope._meta.truncation_reasons).toContain("byte_budget");
   });
 
+  test("derives numeric continuation from the current offset when byte clipping", () => {
+    const page = createPageEnvelope({
+      items: [
+        { id: 101, text: "a".repeat(80) },
+        { id: 102, text: "b".repeat(80) },
+        { id: 103, text: "c".repeat(80) },
+      ],
+      limit: 3,
+      cursor: 100,
+      nextCursor: null,
+      hasMore: false,
+      complete: false,
+      total: 103,
+      detail: "compact",
+    });
+    const twoItemCandidate = createPageEnvelope({
+      items: page.items.slice(0, 2),
+      limit: 3,
+      cursor: 100,
+      nextCursor: 102,
+      hasMore: true,
+      complete: false,
+      total: 103,
+      truncated: true,
+      truncationReasons: ["byte_budget"],
+      detail: "compact",
+      byteLength: 999,
+      maxBytes: 9999,
+    });
+    const budget = measureJson(twoItemCandidate).bytes + 20;
+    const fitted = fitPageToByteBudget(page, {
+      maxBytes: budget,
+      nextCursorForIndex: (index) => index,
+    });
+    expect(fitted.envelope.items.map((item) => item.id)).toEqual([101, 102]);
+    expect(fitted.envelope._meta).toMatchObject({
+      cursor: 100,
+      next_cursor: 102,
+      cursor_semantics: "offset",
+      has_more: true,
+      total: 103,
+    });
+  });
+
   test("retains a complete page when it fits and refuses unsafe clipping", () => {
     const page = createPageEnvelope({ items: [{ id: 1 }], limit: 1, hasMore: false, complete: true, total: 1 });
     const fitted = fitPageToByteBudget(page, { maxBytes: 4096 });
     expect(fitted.omitted_items).toBe(0);
     expect(fitted.envelope._meta.complete).toBe(true);
-    expect(codeOf(() => fitPageToByteBudget(page, { maxBytes: 1 }))).toBe("OUTPUT_CONTINUATION_REQUIRED");
+    expect(codeOf(() => fitPageToByteBudget(page, { maxBytes: 1 }))).toBe("OUTPUT_ITEM_EXCEEDS_BUDGET");
     const oversized = createPageEnvelope({
       items: [{ id: 1, text: "x".repeat(2_000) }],
       limit: 1,

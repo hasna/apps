@@ -1328,9 +1328,13 @@ process.stdout.write(bounded.text);
 
 `complete` means the envelope contains the entire requested population; a
 terminal page can therefore have `has_more: false` while remaining
-`complete: false`. Local byte clipping requires a continuation cursor and is
-recorded as `truncated` with a `byte_budget` reason. JSON is compact by default,
-record keys are sorted deterministically, and byte counts are UTF-8 wire bytes.
+`complete: false`. Numeric cursors are offsets by default: continuation is
+exactly `cursor + count`, known totals cannot terminate early or continue past
+the population, and a nonzero offset cannot claim completeness. Non-pagination
+numeric cursors require explicit `whole-query` semantics. Local byte clipping
+is recorded as `truncated` with a `byte_budget` reason. JSON is compact by
+default, record keys are sorted deterministically, and byte counts are UTF-8
+wire bytes.
 The module performs no I/O and does not import CLI, MCP, credential, URL, or
 hosted-transport code.
 
@@ -1338,8 +1342,9 @@ The fleet output-efficiency census is advisory at first. A report-only result is
 an adoption measurement, not proof that an application is efficient at runtime.
 See [`docs/OUTPUT_EFFICIENCY.md`](docs/OUTPUT_EFFICIENCY.md).
 
-The returned page structure is frozen after validation. Byte fitting measures
-this module's JSON envelope; an adapter adding an MCP or other transport wrapper
-must budget that wrapper separately. Its explicit cursor callback must be
-side-effect-free and deterministic. A JSONL receipt can be omitted only for a
-proven complete, non-truncated page.
+The returned page structure is branded and frozen after validation. Byte
+fitting measures this module's JSON envelope; an adapter adding an MCP or other
+transport wrapper must budget that wrapper separately. Opaque cursor callbacks
+must be side-effect-free and deterministic; numeric offset continuation is
+derived internally. JSONL envelopes are structurally revalidated and always
+include the final page receipt.
