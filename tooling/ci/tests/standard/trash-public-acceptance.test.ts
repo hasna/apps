@@ -6,7 +6,7 @@ import { spawnSync } from "node:child_process";
 const root = resolve(import.meta.dir, "../../../..");
 const script = join(root, "apps/trash/scripts/ci/verify-public-api.sh");
 const ready = { status: "ready", storage: "postgresql", version: "0.1.1" };
-const accepted = [[200, ready], [200, {version:"0.1.1"}], [401, {error:{code:"auth_required"}}]];
+const accepted = [[200, ready], [200, {version:"0.1.1"}], [401, {error:{code:"missing_token"}}]];
 function run(responses: unknown[], waiting = true, timeout = "5") {
   const dir=mkdtempSync(join(tmpdir(),"trash-public-acceptance-"));
   try {
@@ -80,7 +80,7 @@ test("workflow waits only after exact ECS and direct proof, and keeps rollback",
 for (const [name,responses] of [
   ["readiness", [[200,{raw:JSON.stringify({...ready,status:"unavailable"})+"\n"+JSON.stringify(ready)}],accepted[1],accepted[2]]],
   ["version", [accepted[0],[200,{raw:'{"version":"0.1.0"}\n{"version":"0.1.1"}'}],accepted[2]]],
-  ["auth", [accepted[0],accepted[1],[401,{raw:'{}\n{"error":{"code":"auth_required"}}'}]]],
+  ["auth", [accepted[0],accepted[1],[401,{raw:'{}\n{"error":{"code":"missing_token"}}'}]]],
   ["unknown_app", [[404,{raw:'{}\n{"error":"unknown_app"}'}],...accepted]],
   ["malformed readiness", [[200,{raw:'{'}]]],
 ] as const) test(`rejects malformed or multi-document ${name}`,()=>{

@@ -27,7 +27,7 @@ export async function verifyClientCredential(key: string, version: string, fetch
       const body = await boundedJson(response);
       if (token === key) {
         if (response.status !== 200 || body.app !== "trash" || body.version !== version || body.listLimit?.default !== 20 || body.listLimit?.max !== 100) throw new Error();
-      } else if (![401, 403].includes(response.status) || typeof body.error?.code !== "string" || !body.error.code.startsWith("auth_")) throw new Error();
+      } else if (response.status !== 401 || body.error?.code !== (token === undefined ? "missing_token" : "malformed")) throw new Error();
     }
     return { app: "trash", version, authenticated: true, anonymousDenied: true, invalidDenied: true };
   } catch { throw new Error("Client acceptance failed."); }

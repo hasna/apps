@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lchmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
@@ -8,6 +8,39 @@ import { createCapsule, discardStagedPayload, inspectCapsule, inspectCapsuleStre
 const fixtures: string[] = [];
 function fixture() { const path = realpathSync(mkdtempSync(join(tmpdir(), "trash-capsule-"))); fixtures.push(path); return path; }
 afterEach(() => { for (const path of fixtures.splice(0)) rmSync(path, { recursive: true, force: true }); });
+
+test("restoration preserves symlink modes across process umasks without chmod of the referent", () => {
+  const root = fixture(); const source = join(root, "source"); const target = join(root, "target");
+  const referent = join(root, "referent"); writeFileSync(referent, "untouched", { mode: 0o600 });
+  const oldMask = process.umask(0o077);
+  try {
+    mkdirSync(source); symlinkSync(referent, join(source, "link"));
+    if (process.platform === "darwin") lchmodSync(join(source, "link"), 0o700);
+    const capsule = join(root, "capsule"); const receipt = createCapsule(source, capsule);
+    process.umask(0o022);
+    restoreCapsule(capsule, target, receipt);
+    expect(lstatSync(join(target, "link")).mode & 0o777).toBe(lstatSync(join(source, "link")).mode & 0o777);
+    expect(createCapsule(target, join(root, "restored-capsule"))).toEqual(receipt);
+    expect(lstatSync(referent).mode & 0o777).toBe(0o600);
+    expect(readFileSync(referent, "utf8")).toBe("untouched");
+  } finally { process.umask(oldMask); }
+});
+
+test("a macOS symlink mode restores exactly or refuses before any destination is created", () => {
+  const root = fixture(); const path = join(root, "macos-capsule"); const target = join(root, "restored");
+  const manifest = Buffer.from(JSON.stringify({ version: 1, entries: [{ path: ".", kind: "symlink", mode: 0o700, target: "missing" }] }));
+  const header = Buffer.alloc(12); header.write("HTRASH1\n"); header.writeUInt32BE(manifest.length, 8);
+  writeFileSync(path, Buffer.concat([header, manifest]));
+  const receipt = inspectCapsule(path);
+  if (process.platform === "darwin") {
+    restoreCapsule(path, target, receipt);
+    expect(lstatSync(target).mode & 0o777).toBe(0o700);
+    expect(readlinkSync(target)).toBe("missing");
+  } else {
+    expect(() => restoreCapsule(path, target, receipt)).toThrow(/station that supports symlink/);
+    expect(() => lstatSync(target)).toThrow();
+  }
+});
 
 test("capsules preserve binary bytes, Unicode, empty directories, modes and links without following them", () => {
   const root = fixture(); const source = join(root, "source"); mkdirSync(source);

@@ -1,5 +1,5 @@
 import { createHash, type Hash } from "node:crypto";
-import { constants, closeSync, fchmodSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readSync, readdirSync, readlinkSync, rmdirSync, symlinkSync, unlinkSync, writeSync, type Stats } from "node:fs";
+import { constants, closeSync, fchmodSync, fstatSync, fsyncSync, lchmodSync, lstatSync, mkdirSync, openSync, readSync, readdirSync, readlinkSync, rmdirSync, symlinkSync, unlinkSync, writeSync, type Stats } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { z } from "zod";
 import { ApiError, canonicalJson, digestSchema, MAX_CAPSULE_BYTES, MAX_MANIFEST_BYTES, MAX_PAYLOAD_BYTES, requestDigest } from "./api/domain.js";
@@ -312,6 +312,11 @@ export function restoreCapsule(path: string, destination: string, expected: Caps
   try {
     const data = inspectFd(fd);
     if (canonicalJson(data.receipt) !== canonicalJson(expected)) invalid("The capsule does not match its recovery receipt.");
+    // Linux links have fixed 0777 permissions; macOS can preserve other modes
+    // with lchmod. Refuse an incompatible cross-platform restore before writes.
+    if (process.platform !== "darwin" && data.manifest.entries.some((member) => member.kind === "symlink" && member.mode !== 0o777)) {
+      throw new ApiError(422, "unsupported_symlink_mode", "This capsule requires a station that supports symlink permission modes (macOS).");
+    }
     let offset = data.offset; const artifact = createHash("sha256").update(data.prefix);
     const directories: Array<{ path: string; mode: number }> = [];
     for (const member of data.manifest.entries) {
@@ -319,7 +324,12 @@ export function restoreCapsule(path: string, destination: string, expected: Caps
       safeAncestors(output);
       if (member.kind === "dir") {
         mkdirSync(output, { mode: 0o700 }); directories.push({ path: output, mode: member.mode });
-      } else if (member.kind === "symlink") symlinkSync(member.target, output);
+      } else if (member.kind === "symlink") {
+        symlinkSync(member.target, output);
+        if ((lstatSync(output).mode & 0o777) !== member.mode) lchmodSync(output, member.mode);
+        const link = lstatSync(output);
+        if (!link.isSymbolicLink() || (link.mode & 0o777) !== member.mode || readlinkSync(output) !== member.target) invalid("The restored symlink changed or its mode could not be preserved.");
+      }
       else {
         const out = openSync(output, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
         try {

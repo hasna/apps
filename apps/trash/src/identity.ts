@@ -55,8 +55,9 @@ export function detectStation(options: {
   const explicit = env.HASNA_TRASH_STATION ?? env.HASNA_STATION;
   if (explicit !== undefined) return { ...base, name: stationName(explicit), source: "environment" };
   const self = (options.tailscale ?? readTailscaleSelf)();
-  const name = self?.HostName || self?.DNSName?.split(".")[0];
-  if (name) {
+  const names = [typeof self?.DNSName === "string" ? self.DNSName.split(".")[0] : null, self?.HostName];
+  for (const name of names) {
+    if (typeof name !== "string" || !name) continue;
     try { return { ...base, name: stationName(name), source: "tailscale" }; }
     catch { /* An invalid daemon label never becomes a station identity. */ }
   }

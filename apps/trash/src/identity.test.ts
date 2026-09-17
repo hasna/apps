@@ -11,6 +11,11 @@ test("explicit station identity wins and malformed configuration never falls bac
   expect(() => detectStation({ env: { HASNA_STATION: "../../another-station" }, hostname: () => "Mac" })).toThrow(/station/);
 });
 
+test("Tailscale administrative DNS names take precedence over generic device hostnames", () => {
+  expect(detectStation({ env: {}, hostname: () => "Mac", tailscale: () => ({ HostName: "Mac", DNSName: "station04.example.ts.net." }) }).name).toBe("station04");
+  expect(detectStation({ env: {}, hostname: () => "Mac", tailscale: () => ({ HostName: "station04", DNSName: "invalid/name.example.ts.net." }) }).name).toBe("station04");
+});
+
 test("offline detection has an explicit hostname source, never a guessed fleet alias", () => {
   const value = detectStation({ env: {}, hostname: () => "Mac.local", tailscale: () => null });
   expect(value.name).toBe("mac");

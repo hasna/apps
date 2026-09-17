@@ -9,6 +9,8 @@ import { createTrashHandler } from "../src/api/service.js";
 import { ApiError } from "../src/api/domain.js";
 import type { TrashObjects } from "../src/api/objects.js";
 import { createCapsule, inspectCapsule } from "../src/capsule.js";
+import { verifyClientCredential } from "./ci/verify-client-key.js";
+import { VERSION } from "../src/version.js";
 
 const databaseUrl = process.env.TRASH_TEST_DATABASE_URL;
 if (!databaseUrl) throw new Error("TRASH_TEST_DATABASE_URL must identify an explicitly disposable PostgreSQL database.");
@@ -45,6 +47,8 @@ try {
   const reader = await key("read-only", ["trash:read"]);
   const worker = await key("backup-worker", ["trash:read", "trash:backup"]);
   const foreign = await key("foreign", ["trash:read"], `${tenant}-other`);
+  assert.equal((await verifyClientCredential(first.token, VERSION, (url, init) =>
+    handler(new Request(url.replace("/trash/v1/", "/v1/"), init)))).authenticated, true);
   await request(null, "/health"); await request(null, "/ready");
   await request(null, "/v1/entries", { status: 401 });
   await request("invalid", "/v1/entries", { status: 401 });

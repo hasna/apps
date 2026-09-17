@@ -74,7 +74,7 @@ while true; do
   }
   request /v1/status
   if wait_after_transient_route_failure; then continue; fi
-  [[ "$status" == 401 || "$status" == 403 ]] && jq -es 'length == 1 and (.[0] | type == "object" and (.error.code | type == "string" and startswith("auth_")))' "$body" >/dev/null 2>&1 || {
+  [[ "$status" == 401 ]] && jq -es 'length == 1 and (.[0] | type == "object" and .error.code == "missing_token")' "$body" >/dev/null 2>&1 || {
     fail_verification "anonymous Trash API request was not denied by authentication" anonymous_auth_denial_mismatch
   }
   break

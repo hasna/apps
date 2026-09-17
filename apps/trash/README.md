@@ -86,3 +86,7 @@ TRASH_TEST_DATABASE_URL=postgresql://.../disposable_trash_test bun run test:post
 ```
 
 The PostgreSQL gate exercises real metadata/authentication/HTTP/retention and CLI/MCP filesystem flows with a clearly labeled fixture object adapter. It is not live S3 or deployment acceptance. Release acceptance separately requires real object transfer, canonical API authentication denial, native station capture/restore, Backup handoff and exact package/image receipts.
+
+Symlink permission modes are preserved on macOS. Linux supports only 0777
+symlink modes; a capsule containing other link modes must be restored on macOS.
+An incompatible restore is rejected before creating its destination.
