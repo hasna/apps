@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { getStore, getStoreResolution, isCloudStore, LocalStore } from "./store.js";
+import { getStore, getStoreResolution, isCloudStore } from "./store.js";
+import { LocalStore } from "./local-store.js";
 
 // -- Store selection through the ONE shared resolver --------------------------
 //

@@ -1,6 +1,6 @@
 // Isolated read-only API fixture for real CLI subprocess tests. SQLite belongs
 // to this fixture server only; tested clients receive saved HTTP credentials.
-import { LocalStore } from "../db/store.js";
+import { LocalStore } from "../db/local-store.js";
 const store = new LocalStore();
 await store.getDomainStats();
 const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(req) {

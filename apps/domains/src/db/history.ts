@@ -1,10 +1,16 @@
 /**
  * Routed domain-history facade. All reads/writes go through the resolved
- * {@link DomainsStore} (LocalStore or ApiStore); the sqlite-backed
- * `domain-history` module is only reached via LocalStore.
+ * {@link DomainsStore} (always ApiStore for clients); the sqlite-backed
+ * `domain-history` module is only reached from the LocalStore fixture.
+ *
+ * `HISTORY_TYPES` is imported STATICALLY so the bundler can tree-shake the
+ * sqlite functions out of the client bundles; a dynamic
+ * `import("./domain-history.js")` materialises the namespace and drags
+ * `bun:sqlite` into dist/cli.
  */
 
 import { getStore } from "./store.js";
+import { HISTORY_TYPES } from "./domain-history.js";
 
 export type {
   DomainHistory,
@@ -41,7 +47,6 @@ export async function getLatestByDomainName(domainName: string, type?: DomainHis
   const store = getStore();
   const domain = await store.getDomainByIdentifier(domainName);
   if (!domain) return null;
-  const { HISTORY_TYPES } = await import("./domain-history.js");
   return store.getLatestSnapshot(domain.id, type ?? (HISTORY_TYPES[0] as DomainHistoryType));
 }
 export function deleteHistoryEntry(id: string): Promise<boolean> {

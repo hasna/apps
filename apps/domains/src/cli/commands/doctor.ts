@@ -2,6 +2,11 @@ import type { Command } from "commander";
 import { getAvailableProviders, getRegistrarProvider, getDnsProvider } from "../../lib/registrar.js";
 import { loadConfig } from "../../lib/config.js";
 import { countDomains } from "../../db/domains.js";
+// Static, NOT `await import("../../db/store.js")`: a dynamic import
+// materialises the module namespace, which disables per-export tree-shaking
+// and used to pull LocalStore → db/database.ts → `bun:sqlite` into
+// dist/cli/index.js. Guarded by the no-sqlite-in-client-bundles ratchet test.
+import { getStoreResolution } from "../../db/store.js";
 import { execSync } from "node:child_process";
 
 import { printLine } from "../../lib/stdout.js";
@@ -47,7 +52,6 @@ export function registerDoctorCommand(program: Command): void {
       // credential tier; never a credential value, and never a URL.
       section("Store");
       try {
-        const { getStoreResolution } = await import("../../db/store.js");
         const resolution = getStoreResolution(process.env);
         ok("Resolved store: http — shared account portfolio");
         if (resolution.apiUrlSource) ok(`API URL from ${resolution.apiUrlSource}`);
