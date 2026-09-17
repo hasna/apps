@@ -141,14 +141,14 @@ export async function connectAndWatch(
   sleepFn: (ms: number) => Promise<void> = (ms) =>
     new Promise((resolve) => setTimeout(resolve, ms))
 ): Promise<void> {
-  withTodosAuth(url, { signal });
-  const authority = serviceConfig("TODOS").url;
+  await withTodosAuth(url, { signal });
+  const authority = (await serviceConfig("TODOS")).url;
   let backoffMs = 5000;
   const maxBackoffMs = 60_000;
 
   while (!signal?.aborted) {
-    if (serviceConfig("TODOS").url !== authority) throw new Error("Todos authority changed; restart the watch explicitly.");
-    const requestInit = withTodosAuth(url, { signal });
+    if ((await serviceConfig("TODOS")).url !== authority) throw new Error("Todos authority changed; restart the watch explicitly.");
+    const requestInit = await withTodosAuth(url, { signal });
     try {
       if (opts.verbose) {
         process.stdout.write(`[watch] Connecting to ${url}\n`);
@@ -247,7 +247,7 @@ export function registerWatch(program: Command): void {
     )
     .option("--verbose", "Log all events received, not just ones with attachments", false)
     .action(async (options: WatchOptions) => {
-      const todosUrl = options.todosUrl ?? serviceConfig("TODOS").url;
+      const todosUrl = options.todosUrl ?? (await serviceConfig("TODOS")).url;
       const events = options.events ?? "task.completed";
       const verbose = !!options.verbose;
 

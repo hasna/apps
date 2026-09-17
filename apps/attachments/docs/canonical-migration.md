@@ -26,7 +26,7 @@ in its README; it is not falsely labeled an unmodified generated kit.
 No unpublished Contracts source was copied or consumed.
 
 Client credentials and authorities resolve through the published
-@hasna/contracts 1.0.2 seam (owner directive 2026-09-04, hasna/apps#1720) —
+@hasna/contracts 1.1.0 seam (owner directive 2026-09-04, hasna/apps#1720) —
 the CLI, MCP server and ./sdk all call `resolveClientTransport` /
 `resolveCredential` fresh per request, and the per-app env chain is deleted:
 no `*_MODE` / `*_STORAGE_MODE` selector, no client database URLs or DB_PATH,
@@ -34,10 +34,10 @@ no `~/.hasna/fleet-env` / `~/.hasna/cloud` / `~/.config/hasna` /
 `$XDG_CONFIG_HOME` reads, no `~/.attachments/config.json` key store, and no
 DEPRECATED legacy-notice machinery. Hosted mode with no resolvable credential
 fails loud (non-zero exit, no SQLite, no local-fallback event). @hasna/contracts
-is a devDependency pinned exactly to 1.0.2 and inlined by `bun build --target
+is a devDependency pinned exactly to 1.1.0 and inlined by `bun build --target
 bun`; the published .d.ts files never import it, and the packed-artifact scan
 gate proves that on every release. The artifact scanner (`repo-conformance` /
-`artifact-scan`) is pinned to the same published 1.0.2.
+`artifact-scan`) is pinned to the same published 1.1.0.
 
 Configuration uses @hasna/paths; agent attribution uses its state directory.
 Explicit input files and download destinations are not an application dataset.

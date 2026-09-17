@@ -32,7 +32,7 @@ export async function resolveEvidence(
   },
   fetchFn: typeof fetch = fetch
 ): Promise<ResolvedAttachment[]> {
-  const todosUrl = options.todosUrl ?? serviceConfig("TODOS").url;
+  const todosUrl = options.todosUrl ?? (await serviceConfig("TODOS")).url;
   const task = await readTodosTask(taskId, todosUrl, fetchFn);
   const metadata = taskMetadata(task);
   const evidence = metadata._evidence === undefined ? undefined : todoRecord(metadata._evidence, "evidence");
@@ -90,7 +90,7 @@ export function registerResolveEvidence(program: Command): void {
       "compact"
     )
     .action(async (taskId: string, options: ResolveEvidenceOptions) => {
-      const todosUrl = options.todosUrl ?? serviceConfig("TODOS").url;
+      const todosUrl = options.todosUrl ?? (await serviceConfig("TODOS")).url;
       const format = options.format ?? "compact";
 
       try {

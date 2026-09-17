@@ -93,7 +93,7 @@ export async function buildTaskJournal(
   fetchFn: typeof fetch = fetch,
   storeFactory?: () => Store
 ): Promise<{ journal: TaskJournal; todosReachable: boolean }> {
-  const todosUrl = options.todosUrl ?? serviceConfig("TODOS").url;
+  const todosUrl = options.todosUrl ?? (await serviceConfig("TODOS")).url;
 
   // Resolve short references once, then use the canonical identity throughout.
   const task = await fetchTaskMeta(taskId, todosUrl, fetchFn);
@@ -232,7 +232,7 @@ export function registerTaskJournal(program: Command): void {
       "markdown"
     )
     .action(async (taskId: string, options: TaskJournalOptions) => {
-      const todosUrl = options.todosUrl ?? serviceConfig("TODOS").url;
+      const todosUrl = options.todosUrl ?? (await serviceConfig("TODOS")).url;
       const format = options.format ?? "markdown";
 
       try {

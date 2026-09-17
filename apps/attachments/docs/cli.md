@@ -1,7 +1,7 @@
 # CLI reference
 
 Credentials and the service authority resolve through the ONE shared
-`@hasna/contracts` client chain (pinned exact `1.0.2`), fresh per invocation:
+`@hasna/contracts` client chain (pinned exact `1.1.0`), fresh per invocation:
 `HASNA_ATTACHMENTS_API_KEY_OVERRIDE` / `HASNA_PROFILE` /
 `HASNA_ATTACHMENTS_API_KEY_REF`, the macOS Keychain item
 `hasna.credentials.attachments.api-key`, `~/.hasna/attachments/config/credentials`

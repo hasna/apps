@@ -2,7 +2,7 @@
 
 attachments-mcp bridges MCP tools to the authenticated HTTPS attachment service.
 Its credential and authority resolve through the shared @hasna/contracts chain
-(1.0.2) fresh on EVERY tool call — the same ladder the CLI uses:
+(1.1.0) fresh on EVERY tool call — the same ladder the CLI uses:
 `HASNA_ATTACHMENTS_API_KEY_OVERRIDE` / `HASNA_PROFILE` /
 `HASNA_ATTACHMENTS_API_KEY_REF`, the macOS Keychain item
 `hasna.credentials.attachments.api-key`, `~/.hasna/attachments/config/credentials`,

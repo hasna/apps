@@ -47,7 +47,7 @@ export async function completeTaskWithFiles(
   storeFactory: () => Store = () => resolveStore(),
   fetchFn: typeof fetch = fetch
 ): Promise<CompleteTaskResult> {
-  const todosUrl = options.todosUrl ?? serviceConfig("TODOS").url;
+  const todosUrl = options.todosUrl ?? (await serviceConfig("TODOS")).url;
 
   // Preflight the task and writable metadata before uploading any bytes.
   const task = await readTodosTask(taskId, todosUrl, fetchFn);
@@ -139,7 +139,7 @@ export function registerCompleteTask(program: Command): void {
         process.exit(1);
       }
 
-      const todosUrl = options.todosUrl ?? serviceConfig("TODOS").url;
+      const todosUrl = options.todosUrl ?? (await serviceConfig("TODOS")).url;
 
       try {
         const result = await completeTaskWithFiles(taskId, files, {
