@@ -150,13 +150,20 @@ describe("release bin artifacts", () => {
         expect(code).not.toContain("class LocalStore");
         expect(code).not.toContain("installDomainFixture");
       }
-      // Fleet storage doctrine: the api-mode CLI entry must not carry the
-      // SQLite layer at all — the legacy `db-migrate` path lives in a
-      // separately built chunk (--splitting) that only a local-mode run can
-      // load. Drift = any emitted cli chunk OTHER than the single named
-      // legacy chunk containing "bun:sqlite".
-      const cliChunks = readdirSync(join(repoRoot, "dist", "cli")).filter((f) => f.endsWith(".js") && f !== "index.js");
-      const sqliteChunks = cliChunks.filter((f) => readFileSync(join(repoRoot, "dist", "cli", f), "utf8").includes("bun:sqlite"));
+      // Fleet storage doctrine (ruling d, hasna/apps#1720): the api-mode CLI
+      // and MCP bundle directories must not carry the SQLite layer at all —
+      // the legacy `db-migrate` path lives in a separately built chunk
+      // (--splitting, emitted under dist/chunks/) that only a local-mode run
+      // can load. Drift = ANY .js under dist/cli or dist/mcp containing
+      // "bun:sqlite", or anything but the single named legacy chunk under
+      // dist/chunks carrying it.
+      for (const dir of ["cli", "mcp"]) {
+        const files = readdirSync(join(repoRoot, "dist", dir)).filter((f) => f.endsWith(".js"));
+        const leaking = files.filter((f) => readFileSync(join(repoRoot, "dist", dir, f), "utf8").includes("bun:sqlite"));
+        expect(leaking).toEqual([]);
+      }
+      const chunks = readdirSync(join(repoRoot, "dist", "chunks")).filter((f) => f.endsWith(".js"));
+      const sqliteChunks = chunks.filter((f) => readFileSync(join(repoRoot, "dist", "chunks", f), "utf8").includes("bun:sqlite"));
       expect(sqliteChunks).toHaveLength(1);
       expect(sqliteChunks[0]).toMatch(/^database-[a-z0-9]+\.js$/);
       const binEntries = Object.entries(pkg.bin ?? {});
