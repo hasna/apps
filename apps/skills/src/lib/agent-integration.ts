@@ -7,6 +7,7 @@ import { requiresCliSkillLoading, readManagedSkillPolicySnapshot, serializeManag
 import { CLI_BRIDGE_NAME, CLI_BRIDGE_FILES, CLI_BRIDGE_DIGEST, CLI_BRIDGE_VERSION, isOwnedCliBridge } from "./agent-bridge.js";
 import { assertProjectDiscovery, resolveAgentDiscovery, verifyAgentDiscovery, rebindAgentDiscovery, type AgentDiscoveryBinding, type ReviewedDiscoveryInputs } from "./agent-discovery.js";
 import { AGENT_ADAPTERS, INTEGRATION_AGENTS, renderOpenCodePlugin, type IntegrationAgent } from "./agent-adapters.js";
+import { assertCodexPathConfigEditable, CODEX_SKILL_CONFIG_SECTIONS, disableCodexBundledSkills } from "./agent-codex.js";
 
 import { HERMES_OPT_OUT, parseHermesConfig, configureHermesHooks, assertHermesProtection, renderHermesSupervisor, assertNoHermesLegacyShadow, type HermesSupervisorBinding } from "./agent-hermes.js";
 
@@ -279,20 +280,25 @@ function configureHooks(config: Record<string, any>, agent: IntegrationAgent, co
 }
 
 function disableCodexSkills(text: string, skills: NativeSkillEntry[], aliases: AgentRootAlias[], bridgePath: string): string {
-  Bun.TOML.parse(text);
-  let result = text;
+  const bundled = disableCodexBundledSkills(text);
+  let result = bundled;
+  const bridgeSelector = (entry: { path?: string; name?: string }) => (typeof entry.name === "string" && entry.name.trim() === CLI_BRIDGE_NAME) || (typeof entry.path === "string" && [resolve(bridgePath), resolve(join(bridgePath, "SKILL.md"))].includes(canonicalAgentPath(entry.path, aliases)));
+  const previousConfig = (Bun.TOML.parse(bundled) as { skills?: { config?: Array<{ path?: string; name?: string; enabled?: boolean }> } }).skills?.config;
+  if (previousConfig !== undefined && (!Array.isArray(previousConfig) || previousConfig.some(entry => !entry || typeof entry !== "object" || (entry.path !== undefined && entry.name !== undefined)))) throw new Error("Codex skill controls require one path or name selector per [[skills.config]] entry; review ambiguous entries before running skills hook install");
+  const bridgeNeedsRepair = previousConfig?.some(entry => entry.enabled === false && bridgeSelector(entry));
   const selections = [...skills.filter(entry => entry.agent === "codex" && !entry.bridge).map(skill => ({ path: skill.path, enabled: false })), { path: bridgePath, enabled: true }];
   for (const skill of selections) {
     const path = join(skill.path, "SKILL.md"); let found = false;
-    result = result.replace(/^\[\[skills\.config\]\][^\n]*(?:\n(?!\s*\[)[^\n]*)*/gm, section => {
-      const parsed = Bun.TOML.parse(section) as { skills?: { config?: Array<{ path?: string }> } };
-      const declared = parsed.skills?.config?.[0]?.path;
-      if (!declared || ![resolve(path), resolve(skill.path)].includes(canonicalAgentPath(declared, aliases))) return section;
+    result = result.replace(CODEX_SKILL_CONFIG_SECTIONS, section => {
+      const parsed = Bun.TOML.parse(section) as { skills?: { config?: Array<{ path?: string; name?: string }> } };
+      const declared = parsed.skills?.config?.[0];
+      if (!declared || !(skill.enabled && bridgeSelector(declared)) && !(typeof declared.path === "string" && [resolve(path), resolve(skill.path)].includes(canonicalAgentPath(declared.path, aliases)))) return section;
       found = true;
       return /^\s*enabled\s*=/m.test(section) ? section.replace(/^\s*enabled\s*=.*$/m, `enabled = ${skill.enabled}`) : `${section.trimEnd()}\nenabled = ${skill.enabled}\n`;
     });
     if (!found && !skill.enabled) result = `${result.trimEnd()}\n\n[[skills.config]]\npath = ${JSON.stringify(path)}\nenabled = false\n`;
   }
+  if (result !== bundled || bridgeNeedsRepair) assertCodexPathConfigEditable(bundled);
   Bun.TOML.parse(result); return result;
 }
 
@@ -573,9 +579,10 @@ export function assertManagedAgentBridge(agent: IntegrationAgent, options: { hom
     if (agent === "gemini" && (config.hooksConfig?.enabled === false || config.skills?.enabled !== true || !["antigravity-support", "skill-creator"].every(name => config.skills?.disabled?.includes(name)) || config.skills?.disabled?.includes(CLI_BRIDGE_NAME))) throw new Error("NATIVE_SKILL_DRIFT: Gemini bridge or bundled-skill protection changed; run skills hook install");
   }
   const codexPath = canonicalAgentPath(join(home, ".codex", "config.toml"), aliases);
-  const codexConfig = agent === "codex" ? Bun.TOML.parse(readOptional(codexPath) ?? "") as { skills?: { config?: Array<{ path?: string; enabled?: boolean }> } } : {};
+  const codexConfig = agent === "codex" ? Bun.TOML.parse(readOptional(codexPath) ?? "") as { skills?: { bundled?: { enabled?: boolean }; config?: Array<{ path?: string; name?: string; enabled?: boolean }> } } : {};
+  if (agent === "codex" && codexConfig.skills?.bundled?.enabled !== false) throw new Error("NATIVE_SKILL_DRIFT: Codex bundled skill reseeding is not disabled (skills.bundled.enabled); run skills hook install");
   const setting = (path: string) => (codexConfig.skills?.config ?? []).filter(entry => typeof entry.path === "string" && [path, join(path, "SKILL.md")].includes(canonicalAgentPath(entry.path, aliases)));
-  if (agent === "codex" && setting(expected).some(entry => entry.enabled === false)) throw new Error("NATIVE_SKILL_DRIFT: the Codex CLI bridge is disabled; run skills hook install");
+  if (agent === "codex" && [...setting(expected), ...(codexConfig.skills?.config ?? []).filter(entry => typeof entry.name === "string" && entry.name.trim() === CLI_BRIDGE_NAME)].some(entry => entry.enabled === false)) throw new Error("NATIVE_SKILL_DRIFT: the Codex CLI bridge is disabled; run skills hook install");
   const disabledBuiltin = (entry: NativeSkillEntry): boolean => {
     if (agent !== "codex" || !entry.vendor || !entry.path.startsWith(canonicalAgentPath(join(home, ".codex", "skills", ".system"), aliases) + sep)) return false;
     const matched = Array.isArray(binding.disabledBuiltins) && binding.disabledBuiltins.some((item: any) => item.path === entry.path && item.hash === entry.hash);
