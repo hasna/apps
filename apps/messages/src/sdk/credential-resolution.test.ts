@@ -269,6 +269,23 @@ describe("nothing resolves — fail closed, and leave no store behind", () => {
     expect(report.apiKeyTier).toBe("argument");
   });
 
+  test("an explicit API key outranks local while the ambient authority ladder remains intentional", () => {
+    const home = tempHome("explicit-local-authority");
+    writeCredentialsFile(
+      home,
+      `HASNA_MESSAGES_API_URL=https://messages.example.com/tenant\nHASNA_MESSAGES_API_KEY=${DISK_KEY}\n`,
+    );
+    const report = resolveMessagesClientTransport(
+      { HOME: home, HASNA_MESSAGES_LOCAL: "1" },
+      { apiKey: "fixture-explicit-key" },
+    );
+    expect(report.transport).toBe("http");
+    expect(report.apiKeyTier).toBe("argument");
+    expect(report.baseUrl).toBe("https://messages.example.com/tenant/v1");
+    expect(report.apiUrlSource).toContain("credentials");
+    expect(report.localOptIn).toBe(false);
+  });
+
   test("the unhosted opt-in serves sqlite WITHOUT reading the Keychain or disk", () => {
     // The isolation guarantee, asserted rather than assumed: a resolvable
     // credential exists in both stores and neither is touched.
