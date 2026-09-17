@@ -1,6 +1,11 @@
 import { runSynthesis, rollbackSynthesis, getSynthesisStatus } from "../../lib/synthesis/index.js";
 import { listSynthesisRuns } from "../../db/synthesis.js";
-import { synthesizeProfile } from "../../lib/profile-synthesizer.js";
+import {
+  PROFILE_SYNTHESIS_CONTRACT,
+  ProfileScopeError,
+  ProfileSynthesisError,
+  synthesizeProfile,
+} from "../../lib/profile-synthesizer.js";
 import { addRoute } from "../router.js";
 import { json, readJson } from "../helpers.js";
 
@@ -49,20 +54,37 @@ export function registerSystemSynthesisRoutes(): void {
   // state-changing origin/Host and auth gates instead.
   addRoute("POST", "/api/profile/synthesize", async (req) => {
     const body = ((await readJson(req)) ?? {}) as Record<string, unknown>;
+    const scope = body["scope"];
+    if (scope !== undefined && !["agent", "project", "global"].includes(String(scope))) {
+      return json({ error: "scope must be one of: agent, project, global" }, 400);
+    }
     try {
       const result = await synthesizeProfile({
         project_id: body["project_id"] as string | undefined,
         agent_id: body["agent_id"] as string | undefined,
+        scope: scope as "agent" | "project" | "global" | undefined,
         force_refresh: body["force_refresh"] === true,
+        fail_on_provider_error: true,
       });
 
       if (!result) {
-        return json({ profile: null, message: "No preference/fact memories found to synthesize" });
+        return json({
+          contract: PROFILE_SYNTHESIS_CONTRACT,
+          profile: null,
+          reason: "no_memories",
+          message: "No preference/fact memories found to synthesize",
+        });
       }
 
-      return json(result);
-    } catch (e) {
-      return json({ error: e instanceof Error ? e.message : String(e) }, 500);
+      return json({ contract: PROFILE_SYNTHESIS_CONTRACT, ...result });
+    } catch (error) {
+      if (error instanceof ProfileScopeError) {
+        return json({ error: error.message, code: error.code }, 400);
+      }
+      if (error instanceof ProfileSynthesisError) {
+        return json({ error: error.message, code: error.code }, 502);
+      }
+      return json({ error: "Profile synthesis failed" }, 500);
     }
   });
 }

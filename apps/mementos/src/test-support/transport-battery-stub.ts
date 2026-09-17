@@ -6,12 +6,23 @@ import type { MemoriesPageStubProcess } from "./memories-page-stub.js";
 
 export interface TransportBatteryStubProcess extends MemoriesPageStubProcess {}
 
+function freePort(): number {
+  const probe = Bun.listen({
+    hostname: "127.0.0.1",
+    port: 0,
+    socket: { data() {} },
+  });
+  const port = probe.port;
+  probe.stop(true);
+  return port;
+}
+
 export function apiModeTestEnv(baseUrl: string): Record<string, string> {
   return _apiModeTestEnv(baseUrl);
 }
 
 export function startTransportBatteryStubProcess(): TransportBatteryStubProcess {
-  const port = 39000 + Math.floor(Math.random() * 2000);
+  const port = freePort();
   const proc = Bun.spawn(
     [
       "bun",

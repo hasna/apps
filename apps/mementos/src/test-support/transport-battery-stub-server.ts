@@ -74,11 +74,29 @@ const server = Bun.serve({
     }
 
     if (req.method === "POST" && u.pathname === "/v1/sessions/ingest") {
-      return Response.json(
-        { job_id: "stub-job-0001", status: "queued", message: "Session queued for memory extraction" },
-        { status: 202 },
-      );
+      return Response.json({
+        contract: "mementos.sessions.ingest.v2",
+        job_id: "stub-job-0001",
+        status: "queued",
+        message: "Session queued for memory extraction",
+        job: {
+          id: "stub-job-0001",
+          session_id: "tb-session",
+          agent_id: null,
+          project_id: null,
+          source: "manual",
+          status: "pending",
+          chunk_count: 0,
+          memories_extracted: 0,
+          error: null,
+          metadata: {},
+          created_at: "2026-09-17T00:00:00.000Z",
+          started_at: null,
+          completed_at: null,
+        },
+      }, { status: 202 });
     }
+
 
     return Response.json({ error: "not found" }, { status: 404 });
   },

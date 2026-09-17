@@ -3,7 +3,10 @@ process.env["MEMENTOS_DB_PATH"] = ":memory:";
 
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { projectAuthorityTestEnv } from "../test-support/project-authority-identity.js";
-import { isolatedStoreEnv } from "../test-support/store-isolation.js";
+import {
+  blankLlmProviderEnv,
+  isolatedStoreEnv,
+} from "../test-support/store-isolation.js";
 
 const PORT = 19400 + Math.floor(Math.random() * 100);
 const BASE = `http://localhost:${PORT}`;
@@ -17,6 +20,7 @@ beforeAll(async () => {
       env: isolatedStoreEnv(":memory:", {
         extra: {
           ...projectAuthorityTestEnv(),
+          ...blankLlmProviderEnv(),
           // This suite exercises route behaviour with no API key configured.
           // The server now fails closed on state-changing requests without a
           // key, so opt in to unauthenticated writes explicitly (security P1,
@@ -852,6 +856,79 @@ describe("GET /api/inject format", () => {
     if (data.memories_count > 0) {
       expect(data.context).toContain("<agent-memories>");
     }
+  });
+});
+
+describe("Hosted session/profile route contracts", () => {
+  test("session job pagination preserves limit and offset with a truthful continuation", async () => {
+    const prefix = `route-page-${Date.now()}`;
+    const agentId = `route-agent-${Date.now()}`;
+    for (let index = 0; index < 3; index += 1) {
+      const created = await api("/api/sessions/ingest", {
+        method: "POST",
+        body: JSON.stringify({
+          session_id: `${prefix}-${index}`,
+          transcript: `transcript ${index}`,
+          source: "manual",
+          agent_id: agentId,
+        }),
+      });
+      expect(created.status).toBe(202);
+    }
+
+    const { status, data } = await api(
+      `/api/sessions/jobs?agent_id=${encodeURIComponent(agentId)}&limit=1&offset=1`,
+    );
+    expect(status).toBe(200);
+    expect(data.limit).toBe(1);
+    expect(data.offset).toBe(1);
+    expect(data.count).toBe(1);
+    expect(data.jobs).toHaveLength(1);
+    expect(data.jobs[0].agent_id).toBe(agentId);
+    expect(data.has_more).toBe(true);
+    expect(data.next_offset).toBe(2);
+
+    const sessionFiltered = await api(
+      `/api/sessions/jobs?session_id=${encodeURIComponent(`${prefix}-1`)}&limit=5&offset=0`,
+    );
+    expect(sessionFiltered.status).toBe(200);
+    expect(sessionFiltered.data.jobs).toHaveLength(1);
+    expect(sessionFiltered.data.jobs[0].session_id).toBe(`${prefix}-1`);
+
+    const invalid = await api("/api/sessions/jobs?limit=0&offset=-1");
+    expect(invalid.status).toBe(400);
+  });
+
+  test("profile synthesis preserves an explicit scope", async () => {
+    const agentId = `scope-agent-${Date.now()}`;
+    const profile = "scope-preserved-profile";
+    const cached = await api("/api/memories", {
+      method: "POST",
+      body: JSON.stringify({
+        key: "_profile_global_global",
+        value: profile,
+        category: "resource",
+        scope: "shared",
+        importance: 10,
+        metadata: { stale: false },
+      }),
+    });
+    expect(cached.status).toBe(201);
+
+    const { status, data } = await api("/api/profile/synthesize", {
+      method: "POST",
+      body: JSON.stringify({ agent_id: agentId, scope: "global" }),
+    });
+    expect(status).toBe(200);
+    expect(data.contract).toBe("mementos.profile.synthesize.v2");
+    expect(data.profile).toBe(profile);
+    expect(data.from_cache).toBe(true);
+
+    const invalid = await api("/api/profile/synthesize", {
+      method: "POST",
+      body: JSON.stringify({ scope: "workspace" }),
+    });
+    expect(invalid.status).toBe(400);
   });
 });
 

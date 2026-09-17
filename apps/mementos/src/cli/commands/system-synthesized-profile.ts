@@ -15,6 +15,7 @@ export function registerSynthesizedProfileCommand(program: Command): void {
     .command("synthesized-profile")
     .description("Show or refresh the synthesized agent/project profile")
     .option("--project-id <id>", "Project ID")
+    .option("--scope <scope>", "Profile scope: agent, project, or global")
     .option("--refresh", "Force refresh the profile (re-synthesize from memories)")
     .action(async (opts) => {
       try {
@@ -31,6 +32,7 @@ export function registerSynthesizedProfileCommand(program: Command): void {
         const result = await synthesizeProfile({
           project_id: projectId,
           agent_id: globalOpts.agent,
+          scope: opts.scope as "agent" | "project" | "global" | undefined,
           force_refresh: !!opts.refresh,
         });
 
