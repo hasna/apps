@@ -128,7 +128,7 @@
     "@hasna/events": "^0.1.16",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@openrouter/ai-sdk-provider": "2.9.1",
-    "ai": "6.0.204",
+    "ai": "6.0.277",
     "commander": "^13.1.0",
     "pg": "^8.13.1",
     "zod": "4.4.3"
