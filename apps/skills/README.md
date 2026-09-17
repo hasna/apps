@@ -394,6 +394,18 @@ skills grants set default --file ./reviewed-policy.json --if-match <policy-revis
 skills grants show default --revision <prior-policy-revision> --json
 ```
 
+For executable arguments, use `--` after the skill and Skills options:
+
+```bash
+skills run --target local --selection-profile default --json \
+  your-skill@1.0.0 -- prepare --input child-input.json --json
+```
+
+Everything after that separator belongs to the executable, including flags such
+as `--input`, `--json` and any further `--`. Cloud execution accepts structured
+Skills `--input` only and rejects executable arguments. Existing calls without a
+separator retain their option parsing behavior.
+
 Updating a policy appends a revision and atomically changes its current pointer.
 An empty `grants` array revokes shared execution access. Historical policies remain
 readable and can be submitted as a new reviewed revision for rollback; they cannot
@@ -632,7 +644,7 @@ of app folders, and `XDG_CONFIG_HOME` is not consulted at all.
 | `skills search <query>` | `s` | Search by name, description, or tags |
 | `skills info <name>` | | Show metadata, env vars, and system dependencies |
 | `skills show <name>` | | Show account or owned portable skill details |
-| `skills docs <name>` | | Show documentation (SKILL.md > README.md > CLAUDE.md) |
+| `skills docs <name>` | `--file skill\|readme\|claude` | Show preferred documentation; an explicit file must exist and unknown aliases fail |
 | `skills requires <name>` | | Show env vars, system deps, and npm dependencies |
 | `skills profiles show <id>` / `skills profiles set <id> --file <json>` | | Read an exact shared selection or update it with writer authorization |
 | `skills install [name@version] --selection-profile <id>` | | Cache selected immutable bundles; without names, sync the profile |

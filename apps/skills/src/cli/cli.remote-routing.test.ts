@@ -127,6 +127,45 @@ test("unmanaged explicit cloud still selects the execution endpoint", async () =
   });
 });
 
+for (const managed of [false, true]) test(`remote separator preserves child execution-looking flags (managed=${managed})`, async () => {
+  await fixture(managed, true, async ({ cli, calls, prefix }) => {
+    const args = ["--target", "child-only", "--input", "child data", "--json", "--no-color", "--secret-bindings", "child-file", "", "--", "--remote"];
+    const result = await cli(["run", "--remote", "--yes", "--json", "owned-paid-skill", "--", ...args]);
+    expect(result.exitCode, result.stdout + result.stderr).toBe(0);
+    expect(calls[0]!.path).toBe(`${prefix}/skills/owned-paid-skill/quote`);
+    expect(calls[0]!.body.args).toEqual(args);
+    expect(calls[2]!.body.args).toEqual(args);
+    expect(JSON.parse(result.stdout).remote).toBe(true);
+  });
+});
+
+test("cloud permits an empty separator but refuses child arguments without reinterpreting them", async () => {
+  await fixture(false, true, async ({ cli, calls, prefix }) => {
+    const wrapper = ["run", "owned-paid-skill@1.0.0", "--target", "cloud", "--input", '{"wrapper":true}', "--json", "--"];
+    await cli(wrapper);
+    expect(calls.map(c => `${c.method} ${c.path}`)).toEqual([`POST ${prefix}/executions/owned-paid-skill`]);
+    expect(calls[0]!.body.input).toEqual({ wrapper: true });
+    calls.length = 0;
+    const result = await cli([...wrapper, "--input", "child data", "--json"]);
+    expect(result.exitCode).toBe(1);
+    expect(JSON.parse(result.stdout).error).toBe("Cloud execution accepts structured --input only");
+    expect(calls).toEqual([]);
+  });
+});
+
+test("literal option values do not become separators or global color flags", async () => {
+  await fixture(true, true, async ({ cli, calls }) => {
+    for (const key of ["--", "--no-color"]) for (const beforeSkill of [false, true]) {
+      calls.length = 0;
+      const args = ["prepare", "--no-color", "--", "--json"];
+      const result = await cli(["run", "--remote", "--yes", "--json", "--idempotency-key", key, "--no-color", ...(beforeSkill ? ["--"] : []), "owned-paid-skill", ...(beforeSkill ? [] : ["--"]), ...args]);
+      expect(result.exitCode, result.stdout + result.stderr).toBe(0);
+      expect(calls[0]!.body.args).toEqual(args);
+      expect(calls[2]!.body).toMatchObject({ idempotencyKey: key, args });
+    }
+  });
+});
+
 test("malformed managed policy still refuses remote and default execution without transport", async () => {
   await fixture(true, true, async ({ cli, calls, project }) => {
     for (const remote of [false, true]) {

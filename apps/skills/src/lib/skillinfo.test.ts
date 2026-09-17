@@ -98,6 +98,21 @@ describe("skillinfo", () => {
   });
 
   describe("getSkillBestDoc", () => {
+    test("SDK documentation aliases select exactly, with fallback only when omitted", () => {
+      customSkill("exact-docs-fixture", { skillMd: "skill", readme: "readme", claudeMd: "claude" });
+      expect(getSkillBestDoc("exact-docs-fixture")).toBe("skill");
+      for (const file of ["skill", "readme", "claude"]) expect(getSkillBestDoc("exact-docs-fixture", file)).toBe(file);
+      for (const file of ["unknown-file", "toString", "../SKILL.md", "SKILL.md"]) {
+        expect(() => getSkillBestDoc("exact-docs-fixture", file)).toThrow("Unsupported documentation file");
+      }
+      customSkill("missing-docs-fixture", { claudeMd: "guidance" });
+      expect(getSkillBestDoc("missing-docs-fixture")).toBe("guidance");
+      expect(() => getSkillBestDoc("missing-docs-fixture", "skill")).toThrow("Documentation file SKILL.md was not found");
+      customSkill("empty-docs-fixture", { skillMd: "", readme: "readme" });
+      expect(getSkillBestDoc("empty-docs-fixture")).toBe("readme");
+      expect(getSkillBestDoc("empty-docs-fixture", "skill")).toBe("");
+    });
+
     test("returns SKILL.md when available", () => {
       const doc = getSkillBestDoc("owned-design");
       expect(doc).toBeTruthy();

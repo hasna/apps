@@ -56,6 +56,9 @@ describe("verified bundle documentation", () => {
     expect(readSelectedDocument(entries)).toEqual({ file: "SKILL.md", content: "skill" });
     expect(readSelectedDocument(entries.filter((entry) => entry.path !== "SKILL.md"))).toEqual({ file: "README.md", content: "readme" });
     expect(readSelectedDocument(entries, "CLAUDE.md")).toEqual({ file: "CLAUDE.md", content: "claude" });
+    expect(() => readSelectedDocument(entries, "unknown-file")).toThrow("does not contain that file");
+    await syncSelectionProfile("docs-profile", f);
+    await expect(loadSelectedSkill("executable-docs", "docs-profile", { cacheDir: f.cacheDir, cached: true, file: "unknown-file" })).rejects.toMatchObject({ code: "SKILL_FILE_MISSING" });
     expect(readSelectedDocument(entries.map((entry) => entry.path === "SKILL.md" ? { ...entry, bytes: new Uint8Array() } : entry)).file).toBe("README.md");
   });
 
