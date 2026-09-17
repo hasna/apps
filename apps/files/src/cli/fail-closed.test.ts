@@ -11,7 +11,7 @@
  * empty hosted one.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
@@ -132,6 +132,214 @@ describe("files CLI transport gate (fail closed)", () => {
     // Opted-in local mode opens the on-box SQLite index as before.
     expect(stdout).toContain("No sources configured");
     await expect(Bun.file(join(dataDir, "files.db")).exists()).resolves.toBe(true);
+  });
+
+  test("explicit local mode refuses before creating a canonical database beside stranded XDG data", async () => {
+    const home = makeDataDir();
+    const env = { ...process.env };
+    for (const key of [
+      "HASNA_FILES_API_URL",
+      "FILES_API_URL",
+      "HASNA_FILES_API_KEY",
+      "FILES_API_KEY",
+      "HASNA_FILES_API_KEY_OVERRIDE",
+      "HASNA_FILES_API_KEY_REF",
+      "HASNA_PROFILE",
+      "HASNA_HOME",
+      "HASNA_DATA_HOME",
+      "HASNA_FILES_DATA_DIR",
+      "FILES_DATA_DIR",
+      "HASNA_FILES_HOME",
+      "FILES_HOME",
+      "HASNA_FILES_DB_PATH",
+      "FILES_DB_PATH",
+      "FILES_LOCAL",
+    ]) {
+      delete env[key];
+    }
+    env.HOME = home;
+    env.HASNA_FILES_LOCAL = "1";
+    const retired = join(home, ".local", "share", "hasna", "files");
+    mkdirSync(retired, { recursive: true });
+    writeFileSync(join(retired, "files.db"), "existing-store");
+
+    const proc = Bun.spawn({
+      cmd: ["bun", "run", cliPath, "sources", "list"],
+      cwd: repoRoot,
+      env,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+
+    expect(exitCode).not.toBe(0);
+    expect(stdout).toBe("");
+    expect(stderr).toContain("FILES_STRANDED_XDG_DATA");
+    expect(stderr).toContain("HASNA_FILES_DATA_DIR");
+    await expect(Bun.file(join(home, ".hasna", "files", "files.db")).exists()).resolves.toBe(false);
+  });
+
+  test("an explicit DB path cannot bypass the canonical stranded-data interlock", async () => {
+    const home = makeDataDir();
+    const env = { ...process.env };
+    for (const key of [
+      "HASNA_FILES_API_URL",
+      "FILES_API_URL",
+      "HASNA_FILES_API_KEY",
+      "FILES_API_KEY",
+      "HASNA_FILES_API_KEY_OVERRIDE",
+      "HASNA_FILES_API_KEY_REF",
+      "HASNA_PROFILE",
+      "HASNA_HOME",
+      "HASNA_DATA_HOME",
+      "HASNA_FILES_DATA_DIR",
+      "FILES_DATA_DIR",
+      "HASNA_FILES_HOME",
+      "FILES_HOME",
+      "FILES_DB_PATH",
+      "FILES_LOCAL",
+    ]) {
+      delete env[key];
+    }
+    env.HOME = home;
+    env.HASNA_FILES_LOCAL = "1";
+    env.HASNA_FILES_DB_PATH = join(home, ".hasna", "files", "files.db");
+    // This unrelated root selection must not disable the guard for the final,
+    // explicitly selected canonical DB path.
+    env.HASNA_FILES_DATA_DIR = join(home, "irrelevant-selected-root");
+    const retired = join(home, ".local", "share", "hasna", "files");
+    mkdirSync(retired, { recursive: true });
+    writeFileSync(join(retired, "files.db"), "existing-store");
+
+    const proc = Bun.spawn({
+      cmd: ["bun", "run", cliPath, "sources", "list"],
+      cwd: repoRoot,
+      env,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+
+    expect(exitCode).not.toBe(0);
+    expect(stdout).toBe("");
+    expect(stderr).toContain("FILES_STRANDED_XDG_DATA");
+    await expect(Bun.file(env.HASNA_FILES_DB_PATH).exists()).resolves.toBe(false);
+  });
+
+  test("stranded local data cannot block an explicitly hosted command", async () => {
+    const home = makeDataDir();
+    const retired = join(home, ".local", "share", "hasna", "files");
+    mkdirSync(retired, { recursive: true });
+    writeFileSync(join(retired, "files.db"), "existing-store");
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url);
+        expect(url.pathname).toBe("/v1/sources");
+        expect(request.headers.get("authorization")).toBe("Bearer hosted-fixture-key");
+        return Response.json([]);
+      },
+    });
+    try {
+      const env = { ...process.env };
+      for (const key of [
+        "HASNA_FILES_LOCAL",
+        "FILES_LOCAL",
+        "HASNA_HOME",
+        "HASNA_DATA_HOME",
+        "HASNA_FILES_DATA_DIR",
+        "FILES_DATA_DIR",
+        "HASNA_FILES_HOME",
+        "FILES_HOME",
+        "HASNA_FILES_DB_PATH",
+        "FILES_DB_PATH",
+        "HASNA_FILES_API_KEY_OVERRIDE",
+        "HASNA_FILES_API_KEY_REF",
+        "HASNA_PROFILE",
+      ]) {
+        delete env[key];
+      }
+      env.HOME = home;
+      env.HASNA_FILES_API_URL = `http://127.0.0.1:${server.port}`;
+      env.HASNA_FILES_API_KEY = "hosted-fixture-key";
+
+      const proc = Bun.spawn({
+        cmd: ["bun", "run", cliPath, "sources", "list"],
+        cwd: repoRoot,
+        env,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [stdout, stderr, exitCode] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ]);
+
+      expect(exitCode).toBe(0);
+      expect(stdout).toContain("No sources configured");
+      expect(stderr).not.toContain("FILES_STRANDED_XDG_DATA");
+      await expect(Bun.file(join(home, ".hasna", "files", "files.db")).exists()).resolves.toBe(false);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("S3 evidence configuration stays pure when retired local data exists", async () => {
+    const home = makeDataDir();
+    const retired = join(home, ".local", "share", "hasna", "files");
+    mkdirSync(retired, { recursive: true });
+    writeFileSync(join(retired, "files.db"), "existing-store");
+    const env = { ...process.env };
+    for (const key of [
+      "HASNA_FILES_API_URL",
+      "FILES_API_URL",
+      "HASNA_FILES_API_KEY",
+      "FILES_API_KEY",
+      "HASNA_FILES_LOCAL",
+      "FILES_LOCAL",
+      "HASNA_HOME",
+      "HASNA_DATA_HOME",
+      "HASNA_FILES_DATA_DIR",
+      "FILES_DATA_DIR",
+      "HASNA_FILES_HOME",
+      "FILES_HOME",
+      "HASNA_FILES_DB_PATH",
+      "FILES_DB_PATH",
+    ]) {
+      delete env[key];
+    }
+    env.HOME = home;
+    env.HASNA_FILES_API_URL = "https://api.hasna.com/files";
+    env.HASNA_FILES_API_KEY = "hosted-evidence-fixture-key";
+
+    const proc = Bun.spawn({
+      cmd: ["bun", "run", cliPath, "evidence", "configure-prod", "--json"],
+      cwd: repoRoot,
+      env,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+
+    expect(exitCode).toBe(0);
+    expect(JSON.parse(stdout)).toMatchObject({ provider: "s3" });
+    expect(stderr).not.toContain("FILES_STRANDED_XDG_DATA");
+    await expect(Bun.file(join(home, ".hasna", "files", "files.db")).exists()).resolves.toBe(false);
   });
 
   test("refuses when the local opt-in is explicitly falsy", async () => {

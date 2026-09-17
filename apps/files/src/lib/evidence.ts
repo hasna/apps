@@ -2,7 +2,7 @@ import { createReadStream, copyFileSync, existsSync, mkdirSync, statSync, rename
 import { dirname, join, basename } from "path";
 import { pathToFileURL } from "url";
 import { lookup as mimeLookup } from "mime-types";
-import { getDataDir } from "../db/database.js";
+import { getFilesDataDir } from "./paths.js";
 import {
   createFileAccessEvent,
   createFileAssetConvergent,
@@ -198,7 +198,9 @@ export function getEvidenceStorageOptions(overrides: EvidenceStorageOptions = {}
     endpoint: overrides.endpoint ?? process.env.HASNA_FILES_S3_ENDPOINT ?? process.env.HASNA_FILES_EVIDENCE_S3_ENDPOINT ?? "",
     forcePathStyle: overrides.forcePathStyle ?? envBoolean("HASNA_FILES_S3_FORCE_PATH_STYLE") ?? envBoolean("HASNA_FILES_EVIDENCE_S3_FORCE_PATH_STYLE") ?? false,
     prefix: trimSlashes(overrides.prefix ?? process.env.HASNA_FILES_S3_PREFIX ?? process.env.HASNA_FILES_EVIDENCE_PREFIX ?? ""),
-    localRoot: overrides.localRoot ?? process.env.HASNA_FILES_EVIDENCE_LOCAL_ROOT ?? join(getDataDir(), "evidence"),
+    // Pure path selection: S3 configuration and hosted imports must not
+    // provision, migrate, or inspect the local Files database.
+    localRoot: overrides.localRoot ?? process.env.HASNA_FILES_EVIDENCE_LOCAL_ROOT ?? join(getFilesDataDir(), "evidence"),
   };
 }
 
