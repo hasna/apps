@@ -23,10 +23,10 @@ import { z } from "zod";
 import {
   createMessagesClient,
   resolveMessagesClientTransport,
-  MessagesClient,
 } from "../sdk";
-import { MessagesService } from "../service";
-import { SqliteMessagesStore } from "../server/sqlite-store";
+import type { MessagesClient } from "../sdk";
+import type { MessagesService } from "../service";
+import { loadLocalMessagesService } from "../local-store-loader";
 import { version } from "../version";
 
 // Binds-before-version: --version/-V/--help answer before the stdio framing
@@ -66,34 +66,77 @@ try {
   process.exit(1);
 }
 
-type Service = MessagesService | MessagesClient;
+type Service =
+  | { transport: "http"; client: MessagesClient }
+  | { transport: "local"; service: MessagesService };
 
 /**
  * The service for ONE tool call, resolved fresh — the resolver consults the
  * Keychain and the credential file at every call, so a rotation heals a
- * long-lived server without a restart.
+ * long-lived server without a restart. The local service is loaded through
+ * the same explicit-opt-in gate as the CLI and SDK, keeping SQLite out of the
+ * MCP client bundle.
  */
-function service(): Service {
+async function service(): Promise<Service> {
   const report = resolveMessagesClientTransport(process.env);
   if (report.transport === "http") {
     const client = createMessagesClient(process.env);
     if (!client)
       throw new Error("HTTP transport resolved but no client could be created");
-    return client;
+    return { transport: "http", client };
   }
-  return new MessagesService(new SqliteMessagesStore());
+  return {
+    transport: "local",
+    service: await loadLocalMessagesService(process.env),
+  };
+}
+
+async function discoverAgents(
+  svc: Service,
+  args: Parameters<MessagesClient["discoverAgents"]>[0],
+) {
+  return svc.transport === "local"
+    ? svc.service.discoverAgents(args)
+    : svc.client.discoverAgents(args);
+}
+
+async function heartbeat(
+  svc: Service,
+  args: Parameters<MessagesClient["heartbeat"]>[0],
+) {
+  return svc.transport === "local"
+    ? svc.service.heartbeat(args)
+    : svc.client.heartbeat(args);
+}
+
+async function runtimeInbox(svc: Service, runtimeId: string, limit?: number) {
+  return svc.transport === "local"
+    ? svc.service.runtimeInbox(runtimeId, limit)
+    : svc.client.runtimeInbox(runtimeId, limit);
+}
+
+async function acknowledge(
+  svc: Service,
+  runtimeId: string,
+  messageIds: string[],
+) {
+  return svc.transport === "local"
+    ? svc.service.acknowledge(runtimeId, messageIds)
+    : svc.client.acknowledge(runtimeId, messageIds);
 }
 
 async function registerAgent(svc: Service, name: string, displayName?: string) {
-  if (svc instanceof MessagesService) {
-    return { agent: await svc.registerAgent(name, displayName) };
+  if (svc.transport === "local") {
+    return { agent: await svc.service.registerAgent(name, displayName) };
   }
-  return svc.registerAgent(name, displayName);
+  return svc.client.registerAgent(name, displayName);
 }
 
 async function listAgents(svc: Service) {
-  if (svc instanceof MessagesService) return { agents: await svc.listAgents() };
-  return svc.listAgents();
+  if (svc.transport === "local") {
+    return { agents: await svc.service.listAgents() };
+  }
+  return svc.client.listAgents();
 }
 
 async function send(
@@ -106,8 +149,8 @@ async function send(
     idempotencyKey?: string;
   },
 ) {
-  if (svc instanceof MessagesService) {
-    return svc.send({
+  if (svc.transport === "local") {
+    return svc.service.send({
       from_agent: args.from,
       to_agent: args.to,
       content: args.content,
@@ -115,7 +158,7 @@ async function send(
       idempotency_key: args.idempotencyKey,
     });
   }
-  return svc.send(
+  return svc.client.send(
     args.from,
     args.to,
     args.content,
@@ -125,54 +168,63 @@ async function send(
 }
 
 async function threads(svc: Service, agent: string, openOnly: boolean) {
-  if (svc instanceof MessagesService)
-    return { threads: await svc.threads(agent, { openOnly }) };
-  return svc.threads(agent, openOnly);
+  if (svc.transport === "local") {
+    return { threads: await svc.service.threads(agent, { openOnly }) };
+  }
+  return svc.client.threads(agent, openOnly);
 }
 
 async function expandThread(svc: Service, threadId: string, agent: string) {
-  if (svc instanceof MessagesService) return svc.expandThread(threadId, agent);
-  return svc.thread(threadId, agent);
+  if (svc.transport === "local") {
+    return svc.service.expandThread(threadId, agent);
+  }
+  return svc.client.thread(threadId, agent);
 }
 
 async function unread(svc: Service, agent: string) {
-  if (svc instanceof MessagesService) {
-    const list = await svc.unreadThreads(agent);
+  if (svc.transport === "local") {
+    const list = await svc.service.unreadThreads(agent);
     return {
       threads: list,
-      total: list.reduce((sum, t) => sum + t.unread_count, 0),
+      total: list.reduce((sum, thread) => sum + thread.unread_count, 0),
     };
   }
-  return svc.unread(agent);
+  return svc.client.unread(agent);
 }
 
 async function closeThread(svc: Service, threadId: string, agent: string) {
-  if (svc instanceof MessagesService)
-    return { thread: await svc.closeThread(threadId, agent) };
-  return svc.closeThread(threadId, agent);
+  if (svc.transport === "local") {
+    return { thread: await svc.service.closeThread(threadId, agent) };
+  }
+  return svc.client.closeThread(threadId, agent);
 }
 
 async function reopenThread(svc: Service, threadId: string, agent: string) {
-  if (svc instanceof MessagesService)
-    return { thread: await svc.reopenThread(threadId, agent) };
-  return svc.reopenThread(threadId, agent);
+  if (svc.transport === "local") {
+    return { thread: await svc.service.reopenThread(threadId, agent) };
+  }
+  return svc.client.reopenThread(threadId, agent);
 }
 
 async function markRead(svc: Service, threadId: string, agent: string) {
-  if (svc instanceof MessagesService) return svc.markRead(threadId, agent);
-  return svc.markRead(threadId, agent);
+  if (svc.transport === "local") {
+    return svc.service.markRead(threadId, agent);
+  }
+  return svc.client.markRead(threadId, agent);
 }
 
 async function receive(svc: Service, agent: string) {
-  if (svc instanceof MessagesService)
-    return { messages: await svc.receive(agent) };
-  return svc.receive(agent);
+  if (svc.transport === "local") {
+    return { messages: await svc.service.receive(agent) };
+  }
+  return svc.client.receive(agent);
 }
 
 async function deliveryStatus(svc: Service, threadId: string) {
-  if (svc instanceof MessagesService)
-    return { deliveries: await svc.deliveryStatus(threadId) };
-  return svc.deliveryStatus(threadId);
+  if (svc.transport === "local") {
+    return { deliveries: await svc.service.deliveryStatus(threadId) };
+  }
+  return svc.client.deliveryStatus(threadId);
 }
 
 const server = new McpServer({
@@ -199,7 +251,7 @@ server.registerTool(
     content: [
       {
         type: "text" as const,
-        text: JSON.stringify(await service().discoverAgents(args)),
+        text: JSON.stringify(await discoverAgents(await service(), args)),
       },
     ],
   }),
@@ -227,7 +279,7 @@ server.registerTool(
     content: [
       {
         type: "text" as const,
-        text: JSON.stringify(await service().heartbeat(args)),
+        text: JSON.stringify(await heartbeat(await service(), args)),
       },
     ],
   }),
@@ -249,7 +301,7 @@ server.registerTool(
       {
         type: "text" as const,
         text: JSON.stringify(
-          await service().runtimeInbox(args.runtime_id, args.limit),
+          await runtimeInbox(await service(), args.runtime_id, args.limit),
         ),
       },
     ],
@@ -272,7 +324,7 @@ server.registerTool(
       {
         type: "text" as const,
         text: JSON.stringify(
-          await service().acknowledge(args.runtime_id, args.message_ids),
+          await acknowledge(await service(), args.runtime_id, args.message_ids),
         ),
       },
     ],
@@ -291,7 +343,7 @@ server.registerTool(
     },
   },
   async (args) => {
-    const result = await registerAgent(service(), args.name, args.displayName);
+    const result = await registerAgent(await service(), args.name, args.displayName);
     return {
       content: [{ type: "text" as const, text: JSON.stringify(result) }],
     };
@@ -306,7 +358,7 @@ server.registerTool(
     inputSchema: {},
   },
   async () => {
-    const result = await listAgents(service());
+    const result = await listAgents(await service());
     return {
       content: [{ type: "text" as const, text: JSON.stringify(result) }],
     };
@@ -336,7 +388,7 @@ server.registerTool(
     },
   },
   async (args) => {
-    const result = await send(service(), args);
+    const result = await send(await service(), args);
     return {
       content: [{ type: "text" as const, text: JSON.stringify(result) }],
     };
@@ -358,7 +410,7 @@ server.registerTool(
     },
   },
   async (args) => {
-    const result = await threads(service(), args.agent, args.openOnly ?? true);
+    const result = await threads(await service(), args.agent, args.openOnly ?? true);
     return {
       content: [{ type: "text" as const, text: JSON.stringify(result) }],
     };
@@ -377,7 +429,7 @@ server.registerTool(
     },
   },
   async (args) => {
-    const result = await expandThread(service(), args.threadId, args.agent);
+    const result = await expandThread(await service(), args.threadId, args.agent);
     return {
       content: [{ type: "text" as const, text: JSON.stringify(result) }],
     };
@@ -393,7 +445,7 @@ server.registerTool(
     inputSchema: { agent: z.string().describe("The agent") },
   },
   async (args) => {
-    const result = await unread(service(), args.agent);
+    const result = await unread(await service(), args.agent);
     return {
       content: [{ type: "text" as const, text: JSON.stringify(result) }],
     };
@@ -412,7 +464,7 @@ server.registerTool(
     },
   },
   async (args) => {
-    const result = await closeThread(service(), args.threadId, args.agent);
+    const result = await closeThread(await service(), args.threadId, args.agent);
     return {
       content: [{ type: "text" as const, text: JSON.stringify(result) }],
     };
@@ -430,7 +482,7 @@ server.registerTool(
     },
   },
   async (args) => {
-    const result = await reopenThread(service(), args.threadId, args.agent);
+    const result = await reopenThread(await service(), args.threadId, args.agent);
     return {
       content: [{ type: "text" as const, text: JSON.stringify(result) }],
     };
@@ -449,7 +501,7 @@ server.registerTool(
     },
   },
   async (args) => {
-    await markRead(service(), args.threadId, args.agent);
+    await markRead(await service(), args.threadId, args.agent);
     return {
       content: [{ type: "text" as const, text: JSON.stringify({ ok: true }) }],
     };
@@ -465,7 +517,7 @@ server.registerTool(
     inputSchema: { agent: z.string().describe("The agent receiving") },
   },
   async (args) => {
-    const result = await receive(service(), args.agent);
+    const result = await receive(await service(), args.agent);
     return {
       content: [{ type: "text" as const, text: JSON.stringify(result) }],
     };
@@ -481,7 +533,7 @@ server.registerTool(
     inputSchema: { threadId: z.string().describe("Thread id") },
   },
   async (args) => {
-    const result = await deliveryStatus(service(), args.threadId);
+    const result = await deliveryStatus(await service(), args.threadId);
     return {
       content: [{ type: "text" as const, text: JSON.stringify(result) }],
     };
