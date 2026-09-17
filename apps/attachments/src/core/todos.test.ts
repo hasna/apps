@@ -22,18 +22,18 @@ afterEach(() => {
 });
 describe("Todos integration HTTPS boundary", () => {
  test("attaches credentials with redirects disabled", () => {
-   const init = withTodosAuth(base + "/api/tasks/id", { method: "POST", headers: { "content-type": "application/json" }, redirect: "follow" });
+   const init = withTodosAuth(base + "/v1/tasks/id", { method: "POST", headers: { "content-type": "application/json" }, redirect: "follow" });
    expect(new Headers(init.headers).get("x-api-key")).toBe("test-key"); expect(init.redirect).toBe("error");
  });
  for (const url of ["http://localhost:3000", "https://evil.example.test/api", "https://todos.example.test/prefix-other/api", "https://todos.example.test/other"]) test("rejects out-of-bound URL " + url, () => { expect(() => withTodosAuth(url)).toThrow(); });
- test("missing credential rejects", () => { delete process.env.HASNA_TODOS_API_KEY; expect(() => withTodosAuth(base + "/api/tasks")).toThrow(); });
- test("blank canonical key never falls back", () => { process.env.HASNA_TODOS_API_KEY = " "; process.env.TODOS_API_KEY = "test-key"; expect(() => withTodosAuth(base + "/api/tasks")).toThrow(); });
- test("conflicting aliases reject", () => { process.env.TODOS_API_KEY = "other"; expect(() => withTodosAuth(base + "/api/tasks")).toThrow(); });
- test("matching aliases and same-authority rotation work", () => { process.env.TODOS_API_KEY = "test-key"; expect(new Headers(withTodosAuth(base + "/api/tasks").headers).get("x-api-key")).toBe("test-key"); process.env.TODOS_API_KEY = process.env.HASNA_TODOS_API_KEY = "rotated"; expect(new Headers(withTodosAuth(base + "/api/tasks").headers).get("x-api-key")).toBe("rotated"); });
+ test("missing credential rejects", () => { delete process.env.HASNA_TODOS_API_KEY; expect(() => withTodosAuth(base + "/v1/tasks")).toThrow(); });
+ test("blank canonical key never falls back", () => { process.env.HASNA_TODOS_API_KEY = " "; process.env.TODOS_API_KEY = "test-key"; expect(() => withTodosAuth(base + "/v1/tasks")).toThrow(); });
+ test("conflicting aliases reject", () => { process.env.TODOS_API_KEY = "other"; expect(() => withTodosAuth(base + "/v1/tasks")).toThrow(); });
+ test("matching aliases and same-authority rotation work", () => { process.env.TODOS_API_KEY = "test-key"; expect(new Headers(withTodosAuth(base + "/v1/tasks").headers).get("x-api-key")).toBe("test-key"); process.env.TODOS_API_KEY = process.env.HASNA_TODOS_API_KEY = "rotated"; expect(new Headers(withTodosAuth(base + "/v1/tasks").headers).get("x-api-key")).toBe("rotated"); });
  test("a todos key on disk inside the scratch HASNA_HOME is used, env tier falls below disk", () => {
    const dir = join(scratchHome, "todos", "config");
    mkdirSync(dir, { recursive: true });
    writeFileSync(join(dir, "credentials"), `HASNA_TODOS_API_KEY=disk-key\n`, { mode: 0o600 });
-   expect(new Headers(withTodosAuth(base + "/api/tasks").headers).get("x-api-key")).toBe("disk-key");
+   expect(new Headers(withTodosAuth(base + "/v1/tasks").headers).get("x-api-key")).toBe("disk-key");
  });
 });

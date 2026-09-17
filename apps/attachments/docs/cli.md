@@ -50,6 +50,22 @@ endpoint, no local database, no client DSN and no fallback. Run
   Todos HTTPS configuration resolved through the shared seam; snapshot-session
   requires the Sessions equivalent. URL overrides must match the configured
   authority and prefix.
+- Todos task commands use `/v1/tasks` and the current `{task}` and
+  `{history, count}` responses. A failed or malformed task/history read exits
+  nonzero; journals never silently omit unavailable history. Journal attachment
+  discovery uses the canonical task ID's `task:<id>` tag.
+- link-task preserves unrelated metadata and previously linked attachments.
+  complete-task checks the task before uploading, then merges evidence using the
+  observed task version and verifies the completion acknowledgement. These are
+  separate service operations. On a conflict, interruption or partial failure,
+  inspect the task and any reported uploaded attachment IDs before retrying.
+  No write is automatically retried.
+- resolve-evidence resolves each evidence attachment on the configured service.
+  A missing attachment is an error; stale links stored in task metadata are not
+  used as a fallback.
+- watch requires a server exposing `/v1/tasks/stream`. The current Todos v1 server
+  does not expose this stream. Unsupported-route and authentication responses
+  terminate the command; it never falls back to legacy `/api/tasks` routes.
 
 ### Diagnostic transport contract
 

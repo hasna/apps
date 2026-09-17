@@ -66,7 +66,7 @@ const { completeTaskWithFiles, registerCompleteTask } = await import("./complete
 // ---------------------------------------------------------------------------
 
 interface FetchSequenceOptions {
-  /** Task object returned by the initial GET /api/tasks/:id. */
+  /** Task object returned by the initial GET /v1/tasks/:id. */
   task?: Record<string, unknown>;
   getStatus?: number;
   patchStatus?: number;
@@ -81,7 +81,7 @@ interface FetchSequenceOptions {
  * command performs. Routes each call by method + URL suffix.
  */
 function makeFetch(opts: FetchSequenceOptions = {}): typeof fetch {
-  const task = opts.task ?? { id: "TASK-001", version: 1, metadata: {} };
+  let task = opts.task ?? { id: "TASK-001", version: 1, metadata: {} };
   const getStatus = opts.getStatus ?? 200;
   const patchStatus = opts.patchStatus ?? 200;
   const completeStatus = opts.completeStatus ?? 200;
@@ -91,27 +91,30 @@ function makeFetch(opts: FetchSequenceOptions = {}): typeof fetch {
     const u = String(url);
 
     if (method === "GET") {
+      if (!opts.task) task = { ...task, id: u.split("/").at(-1) };
       return {
         ok: getStatus >= 200 && getStatus < 300,
         status: getStatus,
-        json: async () => task,
+        json: async () => ({ task }),
         text: async () => opts.getBody ?? JSON.stringify(task),
       };
     }
     if (method === "PATCH") {
+      task = { ...task, ...JSON.parse(String((init as RequestInit).body)), version: Number(task.version) + 1 };
       return {
         ok: patchStatus >= 200 && patchStatus < 300,
         status: patchStatus,
-        json: async () => ({ ...task, ...JSON.parse(((init as RequestInit).body as string) || "{}") }),
+        json: async () => ({ task }),
         text: async () => opts.patchBody ?? "",
       };
     }
     // POST /complete
     if (u.endsWith("/complete")) {
+      task = { ...task, status: "completed", version: Number(task.version) + 1 };
       return {
         ok: completeStatus >= 200 && completeStatus < 300,
         status: completeStatus,
-        json: async () => task,
+        json: async () => ({ task }),
         text: async () => opts.completeBody ?? "",
       };
     }
@@ -213,11 +216,11 @@ describe("completeTaskWithFiles", () => {
     // GET -> PATCH -> POST /complete
     expect(calls).toHaveLength(3);
     expect(calls.every(([, init]) => new Headers(init?.headers).get("x-api-key") === "remote-key")).toBe(true);
-    expect(calls[0][0]).toBe("https://todos.example.test/api/tasks/TASK-001");
+    expect(calls[0][0]).toBe("https://todos.example.test/v1/tasks/TASK-001");
     expect((calls[0][1]?.method ?? "GET").toUpperCase()).toBe("GET");
-    expect(calls[1][0]).toBe("https://todos.example.test/api/tasks/TASK-001");
+    expect(calls[1][0]).toBe("https://todos.example.test/v1/tasks/TASK-001");
     expect(calls[1][1]?.method).toBe("PATCH");
-    expect(calls[2][0]).toBe("https://todos.example.test/api/tasks/TASK-001/complete");
+    expect(calls[2][0]).toBe("https://todos.example.test/v1/tasks/TASK-001/complete");
     expect(calls[2][1]?.method).toBe("POST");
 
     // Evidence persisted in the exact shape resolve-evidence reads.
@@ -421,7 +424,7 @@ describe("completeTaskWithFiles", () => {
     expect((evidence.attachments as any[])[0].link).toBeNull();
   });
 
-  it("throws if upload fails before touching the todos API", async () => {
+  it("does not write Todos if upload fails after task preflight", async () => {
     const upload = mock(async () => {
       throw new Error("S3 upload failed");
     });
@@ -437,8 +440,9 @@ describe("completeTaskWithFiles", () => {
       )
     ).rejects.toThrow("S3 upload failed");
 
-    // fetch should not be called if upload fails
-    expect(fakeFetch).not.toHaveBeenCalled();
+    // Only the preflight GET is allowed after an upload failure.
+    expect(fakeFetch).toHaveBeenCalledTimes(1);
+    expect((fakeFetch as ReturnType<typeof mock>).mock.calls[0][1]?.method).toBeUndefined();
   });
 });
 

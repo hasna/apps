@@ -44,7 +44,7 @@ function makeFetch(status: number, body: unknown = {}): typeof fetch {
   return mock(async () => ({
     ok: status >= 200 && status < 300,
     status,
-    json: async () => body,
+    json: async () => Array.isArray(body) ? { history: body, count: body.length } : { task: body },
     text: async () => (typeof body === "string" ? body : JSON.stringify(body)),
   })) as unknown as typeof fetch;
 }
@@ -109,9 +109,10 @@ function buildProgram() {
 describe("fetchTaskMeta", () => {
   it("returns task metadata on 200", async () => {
     const fakeFetch = makeFetch(200, {
-      subject: "Fix auth bug",
+      id: "TASK-001",
+      title: "Fix auth bug",
       status: "completed",
-      assignee: "aurelius",
+      assigned_to: "aurelius",
       created_at: "2026-03-14T10:23:00Z",
     });
     // fetchTaskMeta prefers HASNA_TODOS_API_KEY over TODOS_API_KEY
@@ -130,16 +131,14 @@ describe("fetchTaskMeta", () => {
     expect(meta?.id).toBe("TASK-001");
   });
 
-  it("returns null on 404", async () => {
+  it("rejects on 404", async () => {
     const fakeFetch = makeFetch(404);
-    const meta = await fetchTaskMeta("TASK-999", "https://todos.example.test", fakeFetch);
-    expect(meta).toBeNull();
+    await expect(fetchTaskMeta("TASK-999", "https://todos.example.test", fakeFetch)).rejects.toThrow("HTTP 404");
   });
 
-  it("returns null when todos is unreachable (network error)", async () => {
+  it("rejects when todos is unreachable (network error)", async () => {
     const fakeFetch = mock(async () => { throw new Error("ECONNREFUSED"); }) as unknown as typeof fetch;
-    const meta = await fetchTaskMeta("TASK-001", "https://todos.example.test", fakeFetch);
-    expect(meta).toBeNull();
+    await expect(fetchTaskMeta("TASK-001", "https://todos.example.test", fakeFetch)).rejects.toThrow("transport error");
   });
 });
 
@@ -150,9 +149,9 @@ describe("fetchTaskMeta", () => {
 describe("fetchTaskHistory", () => {
   it("returns history entries on 200", async () => {
     const fakeFetch = makeFetch(200, [
-      { timestamp: "2026-03-14T10:23:00Z", action: "created", actor: "julius" },
-      { timestamp: "2026-03-14T10:45:00Z", action: "started", actor: "aurelius" },
-      { timestamp: "2026-03-14T11:30:00Z", action: "completed", actor: "aurelius", progress: 100 },
+      { created_at: "2026-03-14T10:23:00Z", action: "created", agent_id: "julius" },
+      { created_at: "2026-03-14T10:45:00Z", action: "started", agent_id: "aurelius" },
+      { created_at: "2026-03-14T11:30:00Z", action: "completed", agent_id: "aurelius", field: "status", old_value: "in_progress", new_value: "completed" },
     ]);
     process.env["HASNA_TODOS_API_KEY"] = "remote-key";
     const history = await fetchTaskHistory("TASK-001", "https://todos.example.test", fakeFetch);
@@ -162,19 +161,17 @@ describe("fetchTaskHistory", () => {
     expect(history).toHaveLength(3);
     expect(history[0].action).toBe("created");
     expect(history[0].actor).toBe("julius");
-    expect(history[2].progress).toBe(100);
+    expect(history[2].details).toBe("status: in_progress → completed");
   });
 
-  it("returns empty array when todos is unreachable", async () => {
+  it("rejects when todos is unreachable", async () => {
     const fakeFetch = mock(async () => { throw new Error("ECONNREFUSED"); }) as unknown as typeof fetch;
-    const history = await fetchTaskHistory("TASK-001", "https://todos.example.test", fakeFetch);
-    expect(history).toEqual([]);
+    await expect(fetchTaskHistory("TASK-001", "https://todos.example.test", fakeFetch)).rejects.toThrow();
   });
 
-  it("returns empty array on non-200 response", async () => {
+  it("rejects on non-200 response", async () => {
     const fakeFetch = makeFetch(500);
-    const history = await fetchTaskHistory("TASK-001", "https://todos.example.test", fakeFetch);
-    expect(history).toEqual([]);
+    await expect(fetchTaskHistory("TASK-001", "https://todos.example.test", fakeFetch)).rejects.toThrow();
   });
 });
 
@@ -192,15 +189,15 @@ describe("buildTaskJournal", () => {
         return {
           ok: true,
           status: 200,
-          json: async () => [
-            { timestamp: "2026-03-14T10:23:00Z", action: "created", actor: "julius" },
-          ],
+          json: async () => ({ history: [
+            { created_at: "2026-03-14T10:23:00Z", action: "created", agent_id: "julius" },
+          ], count: 1 }),
         };
       }
       return {
         ok: true,
         status: 200,
-        json: async () => ({ subject: "Fix auth bug", status: "completed", assignee: "aurelius" }),
+        json: async () => ({ task: { id: "TASK-001", title: "Fix auth bug", status: "completed", assigned_to: "aurelius" } }),
       };
     }) as unknown as typeof fetch;
 
@@ -220,20 +217,14 @@ describe("buildTaskJournal", () => {
     expect(journal.attachments[0].id).toBe("att_abc123");
   });
 
-  it("falls back gracefully when todos is unreachable", async () => {
+  it("rejects without reading attachments when todos is unreachable", async () => {
     const fakeFetch = mock(async () => { throw new Error("ECONNREFUSED"); }) as unknown as typeof fetch;
     const store = makeStore([makeAttachment()]);
 
-    const { journal, todosReachable } = await buildTaskJournal(
-      "TASK-001",
-      { todosUrl: "https://todos.example.test" },
-      fakeFetch,
-      () => store
-    );
-
-    expect(todosReachable).toBe(false);
-    expect(journal.history).toEqual([]);
-    expect(journal.attachments).toHaveLength(1);
+    await expect(buildTaskJournal(
+      "TASK-001", { todosUrl: "https://todos.example.test" }, fakeFetch, () => store
+    )).rejects.toThrow("transport error");
+    expect(store.list).not.toHaveBeenCalled();
   });
 });
 
@@ -323,13 +314,13 @@ describe("task-journal CLI command", () => {
         return {
           ok: true,
           status: 200,
-          json: async () => [{ timestamp: "2026-03-14T10:23:00Z", action: "created", actor: "julius" }],
+          json: async () => ({ history: [{ created_at: "2026-03-14T10:23:00Z", action: "created", agent_id: "julius" }], count: 1 }),
         };
       }
       return {
         ok: true,
         status: 200,
-        json: async () => ({ subject: "Fix auth bug", status: "completed", assignee: "aurelius" }),
+        json: async () => ({ task: { id: "TASK-001", title: "Fix auth bug", status: "completed", assigned_to: "aurelius" } }),
       };
     }) as unknown as typeof fetch;
 
