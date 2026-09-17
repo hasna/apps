@@ -856,6 +856,21 @@ describe("SESAdapter.sendEmail", () => {
     expect(input.ReplyToAddresses).toEqual(["reply@example.com"]);
   });
 
+  it("splits Reply-To mailboxes without splitting a quoted display-name comma", async () => {
+    const adapter = new SESAdapter(makeProvider());
+    await adapter.sendEmail({from:"sender@example.com",to:"to@example.com",reply_to:'"Doe, Jane" <jane@example.com>, second@example.com',subject:"Reply-To",text:"Body"});
+    const cmd = mockSend.mock.calls[0]![0] as MockSendEmailCommand;
+    expect((cmd.input as {ReplyToAddresses:string[]}).ReplyToAddresses).toEqual(["jane@example.com","second@example.com"]);
+  });
+  it("writes one From, Reply-To, In-Reply-To and References in raw MIME without adding recipients", async () => {
+    const adapter = new SESAdapter(makeProvider());
+    await adapter.sendEmail({from:'"Sender Name" <sender@example.com>',to:"to@example.com",reply_to:"reply@example.com",subject:"Re: Topic",text:"Reply",headers:{"In-Reply-To":"<parent@example.net>",References:"<root@example.net> <parent@example.net>"}});
+    const cmd = mockSend.mock.calls[0]![0] as MockSendEmailCommand;
+    const input=cmd.input as {Content:{Raw:{Data:Uint8Array}},Destination:{ToAddresses:string[],CcAddresses?:string[],BccAddresses?:string[]}};
+    const mime=Buffer.from(input.Content.Raw.Data).toString();
+    for(const header of ['From: "Sender Name" <sender@example.com>','Reply-To: reply@example.com','In-Reply-To: <parent@example.net>','References: <root@example.net> <parent@example.net>']) expect(mime.split("\r\n").filter(line=>line===header)).toHaveLength(1);
+    expect(input.Destination).toEqual({ToAddresses:["to@example.com"],CcAddresses:undefined,BccAddresses:undefined});
+  });
   it("handles array 'to' field", async () => {
     const adapter = new SESAdapter(makeProvider());
     await adapter.sendEmail({

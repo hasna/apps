@@ -162,6 +162,24 @@ NOTES_TEST_DATABASE_URL=<throwaway-dsn> bun run test:pg
 Inject DSNs through the runtime credential mechanism; never place them in
 source, command history, logs, or client environments.
 
+## Server write request budget
+
+The server allows **12,000 authenticated note creates or updates per minute
+per client address**, per process. `POST /v1/notes` and `PATCH /v1/notes/:id`
+share that budget. Set `HASNA_NOTES_SERVER_NOTE_WRITE_RATE_LIMIT_MAX` to an
+integer from `1` to `1000000` to choose a different finite allowance. Absent
+or blank configuration uses the default; invalid values refuse startup.
+
+Bearer authentication and the `notes_write` scope are still required. The
+server returns `429` with the existing `rate_limited` error when the write
+budget is exceeded. Reads keep their existing behavior. OTP login and device
+authentication budgets are separate and unchanged. The counter uses one
+count and expiry per address rather than storing every request timestamp.
+
+Callers behind the same proxy can share a budget, depending on the operator's
+trusted-proxy configuration. Choose a deployment allowance using observed
+latency and database load; the configured number is not a throughput guarantee.
+
 ## Development
 
 ```sh

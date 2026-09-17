@@ -83,15 +83,15 @@ describe("portable skill creation names", () => {
     mkdirSync(source);
     const bytes = "---\nname: BrandKit\nkind: instruction\ndescription: Owned fixture\n---\n# Keep this prose\n";
     writeFileSync(join(source, "SKILL.md"), bytes);
-    expect(() => portPortableSkill(source, { rootDir: root })).toThrow("shadow");
-    expect(() => portPortableSkill(source, { rootDir: root, name: "brand_kit" })).toThrow("shadow");
+    expect(portPortableSkill(source, { rootDir: root }).name).toBe("brand-kit");
+    expect(() => portPortableSkill(source, { rootDir: root, name: "brand_kit" })).toThrow("already exists");
     expect(() => portPortableSkill(source, { rootDir: root, name: "._-" })).toThrow("Invalid skill name");
     const renamed = portPortableSkill(source, { rootDir: root, name: "OwnedReport" });
     const manifest = readFileSync(join(renamed.path, "skill.json"));
     expect(() => portPortableSkill(source, { rootDir: root, name: "owned_report" })).toThrow("already exists");
     expect(readFileSync(join(renamed.path, "skill.json"))).toEqual(manifest);
     expect(readFileSync(join(source, "SKILL.md"), "utf8")).toBe(bytes);
-    expect(portPortableSkill(source, { rootDir: root, allowShadow: true }).name).toBe("brand-kit");
+    expect(() => portPortableSkill(source, { rootDir: root, allowShadow: true })).toThrow("already exists");
   }));
 
   test("bulk creation applies the same naming without changing collision accounting", () => fixture((root, sources) => {

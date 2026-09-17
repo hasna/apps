@@ -16,7 +16,7 @@ import { buildV1OpenApiDocument } from "../src/server/openapi.js";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const spec = buildV1OpenApiDocument();
 const { code, operations, warnings } = generateSdkFromOpenApi(spec as never, {
-  className: "InstructionsV1Client",
+  className: "GeneratedInstructionsV1Client",
   apiKeyHeader: "x-api-key",
 });
 

@@ -67,9 +67,9 @@ describe("built CLI portable naming and validation status", () => {
     expect(added.exitCode).toBe(0);
     expect(added.stdout).toContain("'custom-http-reader'");
     const shadow = await cli(fixture, ["port", source, "--name", "BrandKit", "--json"]);
-    expect(shadow.exitCode).toBe(1);
-    expect(JSON.parse(shadow.stdout).error).toContain("shadow");
-    expect(existsSync(join(fixture.root, "brand-kit"))).toBe(false);
+    expect(shadow.exitCode).toBe(0);
+    expect(JSON.parse(shadow.stdout).name).toBe("brand-kit");
+    expect(existsSync(join(fixture.root, "brand-kit"))).toBe(true);
     expect(readFileSync(join(source, "SKILL.md"), "utf8")).toBe(prose);
     expect(readdirSync(source)).toEqual(["SKILL.md"]);
   });

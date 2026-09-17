@@ -6,7 +6,7 @@ Authenticated HTTPS attachment clients and a PostgreSQL-backed service.
 
 Every hosted surface — the `attachments` CLI, `attachments-mcp`, the package
 root and `@hasna/attachments/sdk` — resolves its credential and service
-authority through the ONE shared resolver in `@hasna/contracts` (1.0.2),
+authority through the ONE shared resolver in `@hasna/contracts` (1.1.0),
 fresh on every call. There is no per-app chain, no local database and no
 fallback: hosted mode with no resolvable credential fails loudly.
 

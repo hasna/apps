@@ -1,5 +1,7 @@
 import type { SkillMeta } from "./registry.js";
 import { REMOTE_CUSTOMER_OPERATIONS } from "./remote-customer-operations.js";
+import { z } from "zod/v4";
+import { recurringMcpSchema, recurringSurfaceOperations } from "./recurring-surface.js";
 
 export const MCP_CONTRACT_SCHEMA_VERSION = 1 as const;
 
@@ -38,6 +40,8 @@ export type McpToolCategory =
 
 export type McpToolSideEffect =
   | "filesystem"
+  | "remote-state"
+  | "remote-state-and-filesystem"
   | "local-process-or-remote-run"
   | "none"
   | "schedule-state";
@@ -903,7 +907,15 @@ const privatePublicationContracts: McpToolContract[] = [
     state: { type: "string" }, versionId: { oneOf: [publicationUuidSchema, { type: "null" }] }, committed: { type: "boolean" }, executionEnabled: { oneOf: [{ type: "boolean" }, { type: "null" }] }, nextAction: { type: "string" },
   }, ["recoveryDirectory", "skillId", "intentId", "state", "versionId", "committed", "executionEnabled", "nextAction"]),
 }));
-const contracts: McpToolContract[] = [...toolContracts, ...remoteCustomerContracts, ...privatePublicationContracts].sort((a, b) => a.name.localeCompare(b.name));
+const recurringContracts: McpToolContract[] = recurringSurfaceOperations.map(operation => ({
+  name: operation.name, title: operation.title,
+  description: "Hosted recurring consent through the configured server. Original immutable terms, fresh human OTP and explicit acceptance are required for activation. Unknown mutations retain their original recovery identity. Revocation reports residual authorized exposure; cancellation is separate.",
+  params: Object.keys(recurringMcpSchema(operation.action).shape), category: "scheduling", stable: true,
+  sideEffects: operation.read ? "none" : operation.recovery ? "remote-state-and-filesystem" : "remote-state",
+  inputSchema: z.toJSONSchema(recurringMcpSchema(operation.action), { io: "input" }) as JsonSchemaObject,
+  outputSchema: objectSchema({}, [], "Complete validated recurring wire result, recovery result, or typed error with outcomeUnknown. Null draft/consent means unavailable for this caller.", true),
+}));
+const contracts: McpToolContract[] = [...toolContracts, ...remoteCustomerContracts, ...privatePublicationContracts, ...recurringContracts].sort((a, b) => a.name.localeCompare(b.name));
 
 const resourceContracts: McpResourceContract[] = [
   {

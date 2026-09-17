@@ -2,6 +2,7 @@ import type { ApplyResult, Config, Profile } from "../types/index.js";
 
 export const DEFAULT_LIST_LIMIT = 20;
 export const MAX_LIST_LIMIT = 100;
+export const MAX_LIST_CURSOR = 100_000;
 
 export interface Page<T> {
   items: T[];
@@ -25,7 +26,7 @@ export function parseLimit(value: unknown, fallback = DEFAULT_LIST_LIMIT, max = 
 export function parseCursor(value: unknown): number {
   const parsed = typeof value === "number" ? value : Number.parseInt(String(value ?? ""), 10);
   if (!Number.isFinite(parsed) || parsed < 0) return 0;
-  return Math.floor(parsed);
+  return Math.min(Math.floor(parsed), MAX_LIST_CURSOR);
 }
 
 export function paginate<T>(

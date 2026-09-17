@@ -1,5 +1,5 @@
-// One expensive message search per API process. Admission happens in the store
-// so saved-filter and other listMessages callers share the same database budget.
+// Bounded expensive message searches share admission across tenant stores.
+// Ordinary reads bypass it; PostgreSQL still cancels each search after 30s.
 import type { TypedQueryClient, PoolQueryClient } from "../../storage-kit/index.js";
 
 export class MessageSearchBusyError extends Error {
@@ -10,38 +10,74 @@ export class MessageSearchTimeoutError extends Error {
   constructor() { super("Message search exceeded its time limit."); this.name = "MessageSearchTimeoutError"; }
 }
 
-let activeSearches = 0;
+export const DEFAULT_SEARCH_CONCURRENCY = 8;
+export const MAX_SEARCH_CONCURRENCY = 64;
+
+/** No queue: overload refuses before acquiring a connection or starting SQL. */
+export class MessageSearchAdmission {
+  private active = 0;
+  constructor(readonly limit = DEFAULT_SEARCH_CONCURRENCY) {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_SEARCH_CONCURRENCY) {
+      throw new Error(`Message search concurrency must be an integer from 1 to ${MAX_SEARCH_CONCURRENCY}.`);
+    }
+  }
+  async run<T>(query: () => Promise<T>): Promise<T> {
+    if (this.active >= this.limit) throw new MessageSearchBusyError();
+    this.active++;
+    try { return await query(); } finally { this.active--; }
+  }
+}
+
+/** Resolve once at boot against the actual pool, reserving an ordinary slot. */
+export function createMessageSearchAdmission(env: NodeJS.ProcessEnv, poolMax: number): MessageSearchAdmission {
+  if (!Number.isSafeInteger(poolMax) || poolMax < 1) {
+    throw new Error("EMAILS_PG_POOL_MAX must resolve to a positive integer.");
+  }
+  const poolBudget = Math.max(1, poolMax - 1);
+  const configured = env["EMAILS_SEARCH_CONCURRENCY"];
+  if (configured !== undefined && !/^[1-9][0-9]*$/.test(configured)) {
+    throw new Error("EMAILS_SEARCH_CONCURRENCY must be a positive integer.");
+  }
+  const limit = configured === undefined ? Math.min(DEFAULT_SEARCH_CONCURRENCY, poolBudget) : Number(configured);
+  if (!Number.isSafeInteger(limit) || limit > MAX_SEARCH_CONCURRENCY || limit > poolBudget) {
+    throw new Error(`EMAILS_SEARCH_CONCURRENCY must not exceed ${MAX_SEARCH_CONCURRENCY} or the PostgreSQL search budget (pool size minus one; a single-connection pool permits one search).`);
+  }
+  return new MessageSearchAdmission(limit);
+}
+
+// Explicit low-level stores retain a shared bounded default. The API bootstrap
+// supplies its own configured instance to every tenant using that pool.
+const defaultAdmission = new MessageSearchAdmission();
 
 export async function runMessageListQuery<T>(options: {
   search?: string;
   tenantId: string;
   scopedClient: TypedQueryClient;
   atomicClient?: PoolQueryClient;
+  admission?: MessageSearchAdmission;
   query: (client: TypedQueryClient) => Promise<T>;
 }): Promise<T> {
   // Match listMessages' existing search predicate exactly. Ordinary reads never
   // acquire this permit and continue using their existing tenant-scoped client.
   if (!options.search?.trim()) return options.query(options.scopedClient);
-  if (activeSearches >= 1) throw new MessageSearchBusyError();
-  activeSearches++;
-  try {
-    if (!options.atomicClient) return await options.query(options.scopedClient);
-    return await options.atomicClient.transaction(async (tx) => {
-      await tx.execute("SELECT set_config('app.current_tenant', $1, true)", [options.tenantId]);
-      // PostgreSQL cancels the actual work; a client-side Promise timeout would
-      // release admission while its expensive query still consumed database CPU.
-      // SET LOCAL resets on commit/rollback and never changes a later send/read.
-      await tx.execute("SET LOCAL statement_timeout = '30s'");
-      return options.query(tx);
-    });
-  } catch (error) {
-    if (error && typeof error === "object" && "code" in error && error.code === "57014") {
-      throw new MessageSearchTimeoutError();
+  return (options.admission ?? defaultAdmission).run(async () => {
+    try {
+      if (!options.atomicClient) return await options.query(options.scopedClient);
+      return await options.atomicClient.transaction(async (tx) => {
+        await tx.execute("SELECT set_config('app.current_tenant', $1, true)", [options.tenantId]);
+        // PostgreSQL cancels the actual work; a client-side Promise timeout would
+        // release admission while its expensive query still consumed database CPU.
+        // SET LOCAL resets on commit/rollback and never changes a later send/read.
+        await tx.execute("SET LOCAL statement_timeout = '30s'");
+        return options.query(tx);
+      });
+    } catch (error) {
+      if (error && typeof error === "object" && "code" in error && error.code === "57014") {
+        throw new MessageSearchTimeoutError();
+      }
+      throw error;
     }
-    throw error;
-  } finally {
-    activeSearches--;
-  }
+  });
 }
 
 export function messageSearchErrorResponse(error: unknown): Response | null {

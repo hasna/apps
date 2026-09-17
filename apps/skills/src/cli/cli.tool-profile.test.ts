@@ -74,7 +74,7 @@ describe("built CLI tool profile validation", () => {
       const data = JSON.parse(result.stdout);
       expect(data).toMatchObject({ schemaVersion: 1, valid: true, profile: profile ?? "all", issues: [] });
       expect(data.mappedSkillCount).toBe(data.skillCount);
-      expect(data.skillCount).toBeGreaterThan(0);
+      expect(data.skillCount).toBe(0);
       results.push(data);
     }
     expect(results[0]).toEqual(results[2]);

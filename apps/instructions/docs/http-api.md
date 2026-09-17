@@ -14,10 +14,11 @@ The default listener is `localhost:3457`. `PORT` overrides
 
 ## Server modes
 
-The process reports `local` mode when no database URL is configured and
-`cloud` mode when one is configured. The `/v1` surface requires cloud mode: a
-database URL and API signing secret. In local mode, probes and static files can
-still be served, but `/v1` fails closed rather than exposing SQLite.
+The process reports `backend: "postgresql"` when a database URL is configured
+and `backend: "unconfigured"` otherwise. The `/v1` surface requires PostgreSQL
+and an API signing secret. In the unconfigured state `/health` remains a process
+liveness signal, while `/ready` returns 503 and `/v1` fails closed rather than
+exposing SQLite.
 
 Database URL priority:
 
@@ -71,7 +72,7 @@ rejected by the auth middleware.
 | --- | --- | --- |
 | GET | `/health` | Process liveness: `{ status, version, mode, name }`. |
 | GET | `/version` | Same current payload shape as `/health`. |
-| GET | `/ready` | Local mode returns ready; cloud mode verifies Postgres and returns 503 when unavailable. |
+| GET | `/ready` | Returns 503 when the backend is unconfigured; otherwise verifies PostgreSQL and returns 503 with a stable code when unavailable. |
 | GET | `/openapi.json` | OpenAPI 3.1 document. |
 | GET | `/v1/openapi.json` | Same OpenAPI document. |
 
@@ -121,8 +122,10 @@ and template state according to the shared TypeScript model.
 
 Unknown resources/actions return 404. Known routes reject unsupported methods
 with 405. Invalid JSON returns 400 where the handler reads a request body.
-Database errors otherwise return 500; initial schema/database failures return
-503.
+Unexpected request failures return a stable 500 error without database detail;
+initial schema/database failures return a stable 503 code. JSON request bodies
+are streamed through a 1 MiB hard limit and config search strings are capped at
+512 characters before they reach PostgreSQL.
 
 ## OpenAPI and generated SDK coverage
 

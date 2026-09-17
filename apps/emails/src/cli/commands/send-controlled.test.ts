@@ -471,3 +471,36 @@ darwinCase("Darwin receipt parent replacement during provider call cannot redire
   expect(existsSync(join(moved,"receipt.json"))).toBe(false);expect(readdirSync(moved).some(name=>name.endsWith(".pending"))).toBe(true);
   expect(await stub.sendStats()).toEqual({providerCalls:1});
 });
+
+
+describe("controlled send URL boundary validation", () => {
+  for (const field of ["text", "html", "text_file", "html_file"]) {
+    it(`rejects malformed ${field} before any API send and records not_attempted`, async () => {
+      const files = fixture();
+      const malformed = String.raw`BODY_PRIVATE_SENTINEL https://example.test/private-link\nRegards`;
+      const descriptor = { ...files.descriptor } as Record<string, unknown>;
+      delete descriptor.text_file;
+      delete descriptor.html;
+      if (field.endsWith("_file")) {
+        const path = join(files.dir, "malformed-body.txt");
+        writeFileSync(path, malformed, { mode: 0o600 });
+        descriptor[field] = path;
+      } else descriptor[field] = malformed;
+      writePrivateJson(files.descriptorPath, descriptor);
+      const result = runCli([
+        "send-controlled", "apply", "--descriptor", files.descriptorPath,
+        "--request-id", files.requestId, "--receipt", files.receiptPath,
+      ]).result;
+      expect(result.exitCode).toBe(1);
+      expect(parseReceipt(files.receiptPath)).toMatchObject({
+        terminal_state: "rejected", provider_result_state: "not_attempted", message_id: null,
+      });
+      const output = text(result.stdout) + text(result.stderr);
+      expect(output).toContain("invalid_body_url_boundary");
+      expect(output).not.toContain("private-link");
+      assertNoPrivateSentinel(output);
+      expect(await stub.sendStats()).toEqual({ providerCalls: 0 });
+      expect(await stub.list("messages")).toHaveLength(0);
+    });
+  }
+});

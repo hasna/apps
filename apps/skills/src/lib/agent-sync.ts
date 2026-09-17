@@ -26,6 +26,7 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
+import { assertNativeExportAllowed } from "./agent-integration.js";
 
 import {
   listPortableSkills,
@@ -299,6 +300,7 @@ function isDirectory(path: string): boolean {
 }
 
 export function syncSkillsToAgents(options: SyncSkillsOptions = {}): SyncSkillsResult {
+  assertNativeExportAllowed();
   const requested = normalizeRequested(options.names);
   const agents = options.agents?.length ? options.agents : [...SYNC_AGENTS];
   const homeDir = options.homeDir ?? homedir();

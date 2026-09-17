@@ -43,12 +43,13 @@ const ANY_SEGMENT_COPY_EXCLUDES = new Set([
   "node_modules",
 ]);
 
-// Build-output directories excluded only at the FIRST path segment (the skill root).
+// Build output and local runtime state excluded only at the FIRST path segment (the skill root).
 // A nested `references/build/` or `docs/dist/` is legitimate content and must survive.
 const FIRST_SEGMENT_COPY_EXCLUDES = new Set([
   "dist",
   "build",
   ".turbo",
+  ".skills-dependency-preparation",
 ]);
 
 const DEFAULT_INPUTS: PortableSkillInput[] = [
@@ -226,6 +227,7 @@ export function createPortableManifest(name: string, options: { description: str
     displayName: displayName(name),
     category: options.category ?? "Development Tools",
     tags: options.tags ?? ["custom", name],
+    kind: "executable",
     inputs: DEFAULT_INPUTS,
     commands: [{
       name,
@@ -470,7 +472,7 @@ export function copySkillDirectory(source: string, destination: string): void {
 
 function isExcludedCopyEntry(name: string, isFirstSegment: boolean): boolean {
   if (ANY_SEGMENT_COPY_EXCLUDES.has(name)) return true;
-  // Build output only counts as junk at the skill root; nested copies are real content.
+  // Root build output/runtime state is not portable; nested copies are real content.
   if (isFirstSegment && FIRST_SEGMENT_COPY_EXCLUDES.has(name)) return true;
   // AppleDouble sidecar files (`._SKILL.md`, `._foo`) written by macOS — any depth.
   if (name.startsWith("._")) return true;
@@ -562,7 +564,7 @@ function renderEntrypoint(manifest: PortableSkillManifest): string {
 function renderAgentsMd(manifest: PortableSkillManifest): string {
   const command = manifest.commands[0];
   const entry = command?.entry ?? "src/index.ts";
-  return `# Agent Build Instructions: ${manifest.name}\n\nThis folder is a portable @hasna/skills skill. Build it in place and keep it valid against the portable skill standard.\n\n## Contract\n\n- Skill name: \`${manifest.name}\`\n- Description: ${manifest.description}\n- Portable metadata: \`skill.json\` (standard \`hasna.skill.v1\`) — the source of truth\n- Consumer frontmatter: \`SKILL.md\` keeps \`name\` + \`description\` only\n- Runtime entrypoint: \`${entry}\`\n- User command: \`skills run ${manifest.name} [args]\`\n\n## Build Rules\n\n1. Put executable logic in \`${entry}\` or files imported by it.\n2. Keep \`skill.json\` updated when inputs, commands, version, or the runtime contract change. Any content change requires a version bump.\n3. Keep \`SKILL.md\` concise: \`name\` + \`description\` frontmatter only.\n4. Add tests under \`tests/\` when behavior is non-trivial, then run \`bun test\` from this folder if tests exist.\n5. Verify with \`skills validate ${manifest.name}\` (checks the schema and the canonical \`content_hash\`) and smoke-test with \`skills run ${manifest.name} --help\`.\n6. Do not commit secrets, generated credentials, \`.env\`, \`node_modules\`, or build output.\n`;
+  return `# Agent Build Instructions: ${manifest.name}\n\nThis folder is a portable @hasna/skills skill. Build it in place and keep it valid against the portable skill standard.\n\n## Contract\n\n- Skill name: \`${manifest.name}\`\n- Description: ${manifest.description}\n- Portable metadata: \`skill.json\` (standard \`hasna.skill.v1\`) — the source of truth\n- Consumer frontmatter: \`SKILL.md\` keeps \`name\` + \`description\` only\n- Runtime entrypoint: \`${entry}\`\n- User command: \`skills run ${manifest.name} [args]\`\n\n## Build Rules\n\n1. Put executable logic in \`${entry}\` or files imported by it.\n2. Review metadata and source edits, then run \`skills prepare ${manifest.name} --version <new-semver>\` to validate the draft and refresh its manifest version and content hash. Any content change requires a version bump.\n3. Keep \`SKILL.md\` concise: \`name\` + \`description\` frontmatter only.\n4. Add tests under \`tests/\` when behavior is non-trivial, then run \`bun test\` from this folder if tests exist.\n5. Verify with \`skills validate ${manifest.name}\` (checks the schema and the canonical \`content_hash\`) and smoke-test with \`skills run ${manifest.name} --help\`.\n6. Do not commit secrets, generated credentials, \`.env\`, \`node_modules\`, or build output.\n`;
 }
 
 function ensureSkillMdFrontmatter(content: string, manifest: PortableSkillManifest): string {

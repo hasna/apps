@@ -119,12 +119,18 @@ describe("resolveTrashRoots — the store layout", () => {
   });
 
   test("empty and whitespace-only overrides are ignored, not adopted", () => {
+    const home = sandbox.path("home");
+    const defaults = resolveTrashRoots({ HOME: home });
     const roots = resolveTrashRoots(
-      { HOME: sandbox.path("home"), HASNA_DATA_HOME: "", HASNA_STATE_HOME: "   " },
+      { HOME: home, HASNA_DATA_HOME: "", HASNA_STATE_HOME: "   " },
       { root: "", files: "  " },
     );
-    expect(roots.state).toBe(`${sandbox.path("home")}/.local/state/hasna/trash`);
-    expect(roots.files).toBe(`${sandbox.path("home")}/.local/share/hasna/trash/files`);
+
+    // This assertion is deliberately platform-relative. The darwin/linux
+    // shapes are pinned independently above; this test's contract is that an
+    // empty override is indistinguishable from an absent one on the platform
+    // actually executing the publish guard.
+    expect(roots).toEqual(defaults);
   });
 
   test("every resolved root is ABSOLUTE — a relative root lands in an arbitrary cwd", () => {

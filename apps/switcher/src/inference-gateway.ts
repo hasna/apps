@@ -13,6 +13,16 @@ import { injectModelGuidance, renderModelGuidance, resolvePolicyModel, type Comp
 export type RoutingEvent = {at:string;requestId:string;requestedModel:string;resolvedModel?:string;reportedModel?:string;reasoningEffort?:ReasoningEffort;decision:"allow"|"alias"|"reject"|"fallback";reason?:string;upstreamStatus?:number};
 type GatewayInput = HarnessLaunchInput & {compiledPolicy:CompiledModelPolicy;catalogPath:string;onRoutingEvent?:(event:RoutingEvent)=>void};
 const routingFields = ["models", "fallbacks", "model_list", "deployment_id", "deployment", "router", "route", "extra_body", "plugins"];
+const MIN_REQUEST_BODY_BYTES = 4 * 1024 * 1024;
+const MAX_REQUEST_BODY_BYTES = 64 * 1024 * 1024;
+const REQUEST_BYTES_PER_CONTEXT_TOKEN = 16;
+
+/** Keep loopback buffering bounded while allowing large-context text/tool requests. */
+function requestBodyLimit(models: GatewayInput["models"], policy: CompiledModelPolicy): number {
+  const allowed = new Set(policy.allowedModels);
+  const contextWindow = Math.max(0, ...models.filter(model => allowed.has(model.id)).map(model => Number.isSafeInteger(model.contextWindow) && model.contextWindow! > 0 ? model.contextWindow! : 0));
+  return Math.min(MAX_REQUEST_BODY_BYTES, Math.max(MIN_REQUEST_BODY_BYTES, contextWindow * REQUEST_BYTES_PER_CONTEXT_TOKEN));
+}
 
 /** A per-launch credential boundary: the native client never receives the provider key. */
 export function createInferenceGateway(input: GatewayInput, timing: ProviderRequestTiming = {}) {
@@ -26,7 +36,7 @@ export function createInferenceGateway(input: GatewayInput, timing: ProviderRequ
   const fail=(status:number,code:string,message?:string)=>Response.json({error:{type:"switcher_model_policy",code,message:message??(code==="model_not_allowed"?"This model is outside the launch policy. Select it with switcher launch --model or explicitly assign an allowed role model.":`Switcher inference gateway: ${code}.`)}},{status});
   let closing=false,stopped:Promise<void>|undefined;
   const active=new Set<{abort:AbortController;done:Promise<void>;cancel?:()=>Promise<void>}>();
-  const server=Bun.serve({hostname:"127.0.0.1",port:0,maxRequestBodySize:4*1024*1024,idleTimeout:255,async fetch(request, server) {
+  const server=Bun.serve({hostname:"127.0.0.1",port:0,maxRequestBodySize:requestBodyLimit(input.models,input.compiledPolicy),idleTimeout:255,async fetch(request, server) {
     if(closing)return fail(503,"closing");
     const credential=request.headers.get("x-goog-api-key")??request.headers.get("x-api-key")??request.headers.get("authorization")?.replace(/^Bearer /,"")??"";
     if(!timingSafeEqual(expected,digest(credential)))return fail(401,"unauthorized");
@@ -91,7 +101,12 @@ export function createInferenceGateway(input: GatewayInput, timing: ProviderRequ
         const upstreamHeaders={...headers};
         if(translated){delete upstreamHeaders["x-api-key"];delete upstreamHeaders.authorization;delete upstreamHeaders["anthropic-version"];delete upstreamHeaders["anthropic-beta"];Object.assign(upstreamHeaders,translated.auth);}
         try {response=await activity.run(()=>fetch(endpoint(input.baseUrl)+path,{method:"POST",headers:upstreamHeaders,body:JSON.stringify(translated?.body??outgoing),redirect:"manual",...activity.fetchOptions}));}
-        catch {current.reason=activity.timedOut()?"provider_idle_timeout":signal.aborted?"request_cancelled":"network_error";if(!signal.aborted&&attempt+1<candidates.length)continue;throw new Error("provider_request_failed");}
+        catch {
+          current.reason=activity.timedOut()?"provider_idle_timeout":signal.aborted?"request_cancelled":"network_error";
+          // A transport failure is ambiguous: the provider may have accepted
+          // and billed the POST before the connection failed. Never replay it.
+          throw new Error("provider_request_failed");
+        }
         current.upstreamStatus=response.status;
         if((response.status===429||response.status>=500)&&attempt+1<candidates.length){void response.body?.cancel().catch(() => undefined);response=undefined;continue;}
         if(translated)response=await activity.run(()=>translated.response(response!));
@@ -122,7 +137,14 @@ export function createInferenceGateway(input: GatewayInput, timing: ProviderRequ
       const {stream,cancel}=proxyProviderStream({response,protocol:input.protocol,requestSignal:request.signal,abort,closing:()=>closing,release,activity,inspect,interrupted:reason=>{current.reason=reason;}});
       record.cancel=cancel;
       return new Response(stream,{status:response.status,headers:{"content-type":response.headers.get("content-type")??"application/json","cache-control":"no-store"}});
-    }catch(error) {if(error instanceof Fault)current.reason=error.code;else if(activity.timedOut())current.reason="provider_idle_timeout";release();return fail(error instanceof Fault?error.status:activity.timedOut()?504:502,error instanceof Fault?error.code:activity.timedOut()?"provider_idle_timeout":"provider_request_failed",error instanceof Fault&&error.code==="opencode_translation_unsupported"?error.message:undefined);}
+    }catch(error) {
+      if(error instanceof Fault)current.reason=error.code;else if(activity.timedOut())current.reason="provider_idle_timeout";
+      const networkError=!(error instanceof Fault)&&current.reason==="network_error";
+      release();
+      return fail(error instanceof Fault?error.status:activity.timedOut()?504:502,
+        error instanceof Fault?error.code:activity.timedOut()?"provider_idle_timeout":networkError?"provider_network_error":"provider_request_failed",
+        error instanceof Fault&&error.code==="opencode_translation_unsupported"?error.message:networkError?"The upstream provider connection ended before response headers. Switcher did not attempt a fallback because delivery is uncertain.":undefined);
+    }
   }});
   return {baseUrl:new URL(input.protocol==="gemini-generate-content"?"v1beta":"v1",server.url).href,token,cleanup:()=>stopped??=(async()=>{closing=true;const pending=[...active];for(const request of pending)request.abort.abort();await Promise.allSettled(pending.map(async request=>{await request.cancel?.();await request.done;}));await server.stop(true);})()};
 }

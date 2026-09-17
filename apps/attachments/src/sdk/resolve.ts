@@ -16,10 +16,8 @@
  * gateway `https://api.hasna.com/attachments`), resolved FRESH on every call.
  */
 import {
-  resolveClientTransport,
-  resolveCredential,
-} from "@hasna/contracts/client";
-import {
+  resolveAttachmentsTransport,
+  resolveServiceRequestTransport,
   stripV1,
   type AttachmentsCredentialChainOptions,
   type AttachmentsCredentialTier,
@@ -27,15 +25,13 @@ import {
 } from "../core/client-config";
 import { AttachmentsApiClient, type AttachmentsApiClientOptions } from "./generated.js";
 
-type FetchInput = Parameters<typeof fetch>[0];
-
 /** The `./sdk` surface's resolution answer. Locally spelled: published types never import @hasna/contracts. */
 export interface AttachmentsSdkTransport {
   /** `"http"` — the SDK is hosted-only; there is no local store to select. */
   mode: "http";
   /** Origin (plus any gateway path prefix) WITHOUT `/v1`, exactly what the generated client expects. */
   baseUrl: string;
-  /** The credential, or `null` when only an explicit `baseUrl` was given. */
+  /** The literal credential, empty for a deferred reference, or null for an explicit URL without a key. */
   apiKey: string | null;
   /** WHERE the credential came from — an env key NAME, a Keychain reference, a path. Never a value. */
   apiKeySource: string | null;
@@ -84,37 +80,20 @@ export function resolveAttachmentsSdkTransport(
     };
   }
 
-  // ONE pass down the credential chain, handed to the transport as tier 1 so
-  // the authority pass does not re-read the Keychain for the credential item.
-  const credential = resolveCredential("attachments", env, requestedCredentials);
-  const chainOptions = credential
-    ? { credentials: { ...requestedCredentials, apiKey: credential.apiKey } }
-    : { credentials: requestedCredentials };
-  const resolution = resolveClientTransport("attachments", env, chainOptions);
-  if (!credential) {
-    throw new Error(
-      "ATTACHMENTS_CREDENTIAL_MISSING: no Hasna Attachments credential resolved. " +
-        "Looked at HASNA_ATTACHMENTS_API_KEY_OVERRIDE / HASNA_PROFILE / HASNA_ATTACHMENTS_API_KEY_REF, " +
-        "the Keychain item hasna.credentials.attachments.api-key, ~/.hasna/attachments/config/credentials, " +
-        "then HASNA_ATTACHMENTS_API_KEY.",
-    );
-  }
+  const resolution = resolveAttachmentsTransport(env, { credentials: requestedCredentials });
   return {
     mode: "http",
-    baseUrl: stripV1(resolution.baseUrl),
-    apiKey: credential.apiKey,
-    // The TRUE tier and source, not the tier-1 spelling the transport was
-    // handed, so a diagnostic names the Keychain/disk/env origin.
-    apiKeySource: credential.source,
-    apiKeyTier: credential.tier,
+    baseUrl: resolution.url,
+    apiKey: resolution.apiKey,
+    apiKeySource: resolution.apiKeySource,
+    apiKeyTier: resolution.apiKeyTier,
     apiUrlSource: resolution.apiUrlSource ?? "default",
   };
 }
 
 /**
  * Build the hosted `/v1` client with the shared resolver behind it. The
- * generated client stores whatever `apiKey` it is handed for its lifetime, so
- * the credential is refreshed inside a `fetch` wrapper on EVERY request — a
+ * generated client awaits its credential provider on EVERY request, so a
  * key rotation heals a long-lived SDK client without rebuilding it.
  *
  * Throws when no credential resolves: this client speaks only to the hosted
@@ -124,35 +103,35 @@ export function createAttachmentsApiClient(
   options: ResolveAttachmentsSdkTransportOptions & Pick<AttachmentsApiClientOptions, "fetch" | "headers"> = {},
 ): AttachmentsApiClient {
   const resolved = resolveAttachmentsSdkTransport(options);
-  if (!resolved.apiKey) {
+  if (!resolved.apiKey && resolved.apiKeyTier !== "pointer") {
     throw new Error(
       "ATTACHMENTS_CREDENTIAL_MISSING: the /v1 client is hosted-only and no Hasna Attachments credential " +
         "resolved. An explicit baseUrl never borrows the ambient fleet key — pass apiKey, or let the shared " +
         "chain resolve both.",
     );
   }
-  const baseFetch =
-    options.fetch ?? ((input: FetchInput, init?: RequestInit) => fetch(input, init));
   // The per-request re-resolution must not TALK: it re-runs the resolution
   // that already succeeded above against the same inputs.
   const refreshOptions: ResolveAttachmentsSdkTransportOptions = { ...options };
-  const fetchWithFreshCredential = ((input: FetchInput, init?: RequestInit) => {
-    const headers: Record<string, string> = {};
-    new Headers(init?.headers ?? {}).forEach((value, key) => {
-      headers[key] = value;
-    });
-    try {
-      const fresh = resolveAttachmentsSdkTransport(refreshOptions).apiKey;
-      if (fresh) headers["x-api-key"] = fresh;
-    } catch {
-      // keep the credential the client was constructed with
+  const currentKey = async (): Promise<string> => {
+    if (refreshOptions.baseUrl) {
+      const fresh = resolveAttachmentsSdkTransport(refreshOptions);
+      if (fresh.baseUrl !== resolved.baseUrl) throw new Error("Attachments API authority changed; construct a new client explicitly.");
+      if (!fresh.apiKey) throw new Error("ATTACHMENTS_CREDENTIAL_MISSING: no current API key resolved.");
+      return fresh.apiKey;
     }
-    return baseFetch(input, { ...init, headers });
-  }) as typeof fetch;
+    const fresh = await resolveServiceRequestTransport("attachments", refreshOptions.env ?? process.env, {
+      credentials: {
+        ...refreshOptions.credentials,
+        ...(refreshOptions.apiKey !== undefined ? { apiKey: refreshOptions.apiKey } : {}),
+      },
+    }, resolved.baseUrl);
+    return fresh.apiKey;
+  };
   return new AttachmentsApiClient({
     baseUrl: resolved.baseUrl,
-    apiKey: resolved.apiKey,
-    fetch: fetchWithFreshCredential,
+    apiKey: currentKey,
+    ...(options.fetch ? { fetch: options.fetch } : {}),
     ...(options.headers ? { headers: options.headers } : {}),
   });
 }

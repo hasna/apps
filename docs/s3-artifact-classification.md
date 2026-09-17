@@ -43,7 +43,7 @@ Classes:
 | 9 | attachments | B (live) | production S3 today; keys `attachments/<yyyy-MM-dd>/<id>/<filename>` (`src/api/routes/attachments.ts`), versioning off, no lifecycle, grandfathered bucket | keep bucket (grandfathered), align layout + versioning + lifecycle | bucket ops in infra-live #41; no kit needed (non-versioned bytes) | #1650 |
 | 10 | files | B (live) | production S3 with **two key layouts** and a second `EVIDENCE` bucket (`HASNA_FILES_S3_BUCKET` + `HASNA_FILES_EVIDENCE_BUCKET`, `src/lib/evidence.ts`, `src/server/pg-store.ts` object_key rows) | keep bucket, collapse to one layout + one bucket | bucket ops in infra-live #41 | #1650 |
 | 11 | emails | B (live) | inbound MIME in the mail-plane S3 (`EMAILS_INGEST_S3_BUCKET`/prefix, `hasna-emails-prod-inbound-<acct>`); attachments addressed by `object_key` columns into the MIME (`src/server/self-hosted/migrations.ts`, `ingest-worker.ts`); Postgres holds metadata rows | keep; retire copies in other accounts | bucket already exists; cleanup sequenced via infra-live #41 | #1589/#41 |
-| 12 | instructions | C | `configs` + `config_snapshots.content TEXT` + `profiles` JSONB in Postgres (`migrations/0001_instructions.sql`) | — | — | — |
+| 12 | instructions | A | `configs` + snapshots/profiles remain rows in PostgreSQL; native immutable export-backup payload + SHA-256 manifest support lives in `src/storage/s3-{config,object-store,backup}.ts` and the `instructions storage backup` CLI | per-app private backup bucket · `instructions/backups/<backup-id>/` | native Bun S3 client; bucket and task-role grant; PostgreSQL/SQLite remain authoritative | — |
 | 13 | hooks | C | `hooks`/`hook_versions` rows: `manifest_json`, `script_sha256`, `artifact_key` text only (D1/SQLite, `src/cf/d1-migrations.sql`) | — | — | — |
 | 14 | loops | C | `loops`/`loop_runs`/`daemon_lease` rows; `tenant-backfill-s3.ts` is a one-off restore tool (approved `sha256-*` bundles), not a storage dependency | — (template bundles could join A later) | — | — |
 | 15 | mementos | C | notes graph rows (SQLite/Postgres, `src/storage.ts`) | — | — | — |
@@ -58,7 +58,7 @@ Classes:
 | 24 | identities | C | (source in hasna-internal/internal-apps) JSONB identity store + audit rows; voice/avatar media generated **on stations** (`src/media.ts` → home-dir writes), nothing hosted | — | — | — |
 | 25 | subscriptions | C | (source in hasna-internal/internal-apps) `subscriptions`/`custom_tools` JSONB rows, aliases, auth status (migrations 0001–0008); no bytes | — | — | — |
 
-**Totals: A = 6 · B = 5 · C = 14 (25 hosted).** No other hosted app stores bytes today.
+**Totals: A = 7 · B = 5 · C = 13 (25 hosted).** No other hosted app stores bytes today.
 
 ## Unhosted packages (20)
 

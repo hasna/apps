@@ -396,7 +396,7 @@ describe("connectAndWatch reconnect logic", () => {
 
     try {
       await connectAndWatch(
-        "https://todos.example.test/api/tasks/stream",
+        "https://todos.example.test/v1/tasks/stream",
         { verbose: false },
         controller.signal,
         mockFetch as unknown as typeof fetch,
@@ -440,7 +440,7 @@ describe("connectAndWatch reconnect logic", () => {
 
     try {
       await connectAndWatch(
-        "https://todos.example.test/api/tasks/stream",
+        "https://todos.example.test/v1/tasks/stream",
         {},
         controller.signal,
         mockFetch as unknown as typeof fetch,
@@ -507,7 +507,7 @@ describe("connectAndWatch reconnect logic", () => {
 
     try {
       await connectAndWatch(
-        "https://todos.example.test/api/tasks/stream",
+        "https://todos.example.test/v1/tasks/stream",
         { verbose: true },
         controller.signal,
         customFetch as unknown as typeof fetch,
@@ -565,7 +565,7 @@ describe("connectAndWatch reconnect logic", () => {
 
     try {
       await connectAndWatch(
-        "https://todos.example.test/api/tasks/stream",
+        "https://todos.example.test/v1/tasks/stream",
         {},
         controller.signal,
         customFetch as unknown as typeof fetch,
@@ -581,4 +581,13 @@ describe("connectAndWatch reconnect logic", () => {
     const output = out.join("");
     expect(output).not.toContain("TASK-ASSIGN-001");
   });
+});
+
+for (const status of [401, 403, 404, 405, 410, 501]) it(`refuses terminal stream status ${status} without reconnect or legacy fallback`, async () => {
+  const controller = new AbortController();
+  const request = mock(async () => new Response("private-error-marker", { status }));
+  const sleep = mock(async () => { controller.abort(); });
+  await expect(connectAndWatch("https://todos.example.test/v1/tasks/stream", {}, controller.signal, request as unknown as typeof fetch, makeStoreFactory(), sleep)).rejects.toThrow(`HTTP ${status}`);
+  expect(request).toHaveBeenCalledTimes(1);
+  expect(sleep).not.toHaveBeenCalled();
 });

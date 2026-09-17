@@ -86,9 +86,9 @@ describe("executeRun terminal transitions", () => {
     const outcome = await executeRun(store, base);
 
     expect(outcome.status).toBe("failed");
-    expect(outcome.errorCode).toBe("WORKER_ERROR");
+    expect(outcome.errorCode).toBe("LEGACY_EXECUTION_RETIRED");
     expect(transitions).toHaveLength(1);
-    expect(transitions[0]).toMatchObject({ status: "failed", errorCode: "WORKER_ERROR" });
+    expect(transitions[0]).toMatchObject({ status: "failed", errorCode: "LEGACY_EXECUTION_RETIRED" });
   });
 
   test("a refused fenced transition whose late-write warning fails still resolves", async () => {
@@ -104,14 +104,14 @@ describe("executeRun terminal transitions", () => {
     expect(outcome.status).toBe("running");
   });
 
-  test("the happy path is unchanged: a successful run reaches 'succeeded'", async () => {
+  test("a claimed legacy run reaches the terminal retirement refusal", async () => {
     const { store, transitions } = stubStore({ appendLogRejects: false });
     const base = runRecord();
 
     const outcome = await executeRun(store, base);
 
-    expect(outcome.status).toBe("succeeded");
+    expect(outcome.status).toBe("failed");
     expect(transitions).toHaveLength(1);
-    expect(transitions[0]).toMatchObject({ status: "succeeded" });
+    expect(transitions[0]).toMatchObject({ status: "failed", errorCode: "LEGACY_EXECUTION_RETIRED" });
   });
 });

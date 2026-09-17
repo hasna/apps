@@ -115,10 +115,10 @@ describe("MCP Server management and resources", () => {
       expect(response.result).toBeDefined();
       const result = JSON.parse(response.result.content[0].text);
       expect(result.category).toBe("Development Tools");
-      // 5 instruction + 24 restored credential-free executable skills.
-      expect(result.count).toBe(29);
+      // Both owned Development Tools fixtures are discoverable.
+      expect(result.count).toBe(2);
       expect(Array.isArray(result.results)).toBe(true);
-      expect(result.results.length).toBe(29);
+      expect(result.results.length).toBe(2);
     } finally {
       await client.close();
     }
@@ -136,7 +136,7 @@ describe("MCP Server management and resources", () => {
       const skills = JSON.parse(response.result.contents[0].text);
       expect(Array.isArray(skills)).toBe(true);
       expect(skills.length).toBe(EXPECTED_BASIC_SKILL_COUNT);
-      expect(skills.map((s: any) => s.name)).not.toContain("brand-kit");
+      expect(skills.map((s: any) => s.name)).toContain("brand-kit");
       expect(skills[0]).not.toHaveProperty("pricing");
       for (const s of skills) {
         expect(typeof s.description).toBe("string");

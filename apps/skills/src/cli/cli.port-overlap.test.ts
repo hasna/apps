@@ -64,7 +64,7 @@ test("port overwrite replaces only its disjoint target and allows prefix-sharing
 });
 
 
-test("disjoint port still migrates legacy skills into the corpus", async () => {
+test("disjoint port admits only the selected source and leaves legacy siblings dormant", async () => {
   const root = mkdtempSync(join(tmpdir(), "skills-port-legacy-"));
   const data = join(root, "data"), home = join(root, "home"), cwd = join(root, "project");
   const source = join(root, "source"), legacy = join(data, "legacy-child");
@@ -76,7 +76,7 @@ test("disjoint port still migrates legacy skills into the corpus", async () => {
       { HOME: home, HASNA_SKILLS_DIR: data, SKILLS_DATA_DIR: data });
     expect(result.exitCode).toBe(0);
     expect(JSON.parse(result.stdout).valid).toBe(true);
-    expect(readFileSync(join(data, "installed/legacy-child/SKILL.md"))).toEqual(readFileSync(join(legacy, "SKILL.md")));
+    expect(existsSync(join(data, "installed/legacy-child/SKILL.md"))).toBe(false);
     expect(readFileSync(join(data, "installed/owned-overlap/SKILL.md"), "utf8")).toContain("New import");
     expect(snapshot(legacy)).toEqual(before);
   } finally { rmSync(root, { recursive: true, force: true }); }

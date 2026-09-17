@@ -381,7 +381,7 @@ export function shouldDeleteIngestResult(result: IngestResult): boolean {
   return result.status === "ingested" || result.status === "duplicate" || result.status === "quarantined";
 }
 
-// ── Progress-based liveness + queue-age alarm (incident 2026-08-31) ─────────
+// ── Progress-based liveness + queue visibility (incident 2026-08-31) ─────────
 // The ingest worker is a headless long-poll loop with no HTTP surface, so a
 // wedged poll (a connection that silently stops answering instead of erroring)
 // left the ECS task RUNNING but useless for days. Three guards close that gap:
@@ -392,10 +392,9 @@ export function shouldDeleteIngestResult(result: IngestResult): boolean {
 //     recently — failing while the queue is non-empty — so ECS container
 //     health checks replace a task whose loop stopped making progress, no
 //     matter where inside the batch it wedged (S3/DB calls included);
-//  3. a queue-age sampling pass reads ApproximateAgeOfOldestMessage on a
-//     schedule — independently of the poll loop, so it stays honest when the
-//     loop stalls — and emits an alarm event when the oldest queued message
-//     crosses its threshold, so a stalled drain is loud within minutes.
+//  3. an independent SQS visibility sample keeps stale-loop decisions honest.
+//     Oldest-message age is a CloudWatch metric, not a queue attribute; the
+//     deployment must monitor that metric separately.
 export const INGEST_RECEIVE_DEADLINE_MS = 35_000; // > WaitTimeSeconds (20 s) + margin
 export const INGEST_PROGRESS_STALE_DEFAULT_MS = 5 * 60_000;
 export const INGEST_HEALTH_PORT_DEFAULT = 9487;
@@ -416,14 +415,14 @@ export function parseIngestProgressStaleMs(raw: string | undefined): number {
   return Number.isFinite(n) && n > 0 ? Math.trunc(n) : INGEST_PROGRESS_STALE_DEFAULT_MS;
 }
 
-/** Oldest-message age (seconds) that emits the queue-age alarm event. */
+/** Legacy age threshold retained for diagnostics; runtime age requires CloudWatch. */
 export function parseIngestQueueAgeAlarmSeconds(raw: string | undefined): number {
   if (raw === undefined || raw.trim() === "") return INGEST_QUEUE_AGE_DEFAULT_ALARM_SECONDS;
   const n = Number(raw);
   return Number.isFinite(n) && n > 0 ? Math.trunc(n) : INGEST_QUEUE_AGE_DEFAULT_ALARM_SECONDS;
 }
 
-/** Cadence (seconds) of the queue-age sampling pass. */
+/** Cadence (seconds) of SQS visibility samples; retains the legacy env name. */
 export function parseIngestQueueAgePollSeconds(raw: string | undefined): number {
   if (raw === undefined || raw.trim() === "") return INGEST_QUEUE_AGE_DEFAULT_POLL_SECONDS;
   const n = Number(raw);
@@ -438,7 +437,7 @@ export interface IngestHealthServer {
 
 /**
  * Shared, testable picture of ingest progress and queue state. The poll loop
- * and the queue-age sampling pass both write here; the health endpoints only
+ * and the queue visibility sampling pass both write here; the health endpoints only
  * read, through the closures below.
  */
 export interface IngestWorkerStatus {
@@ -451,9 +450,9 @@ export interface IngestWorkerStatus {
   counts: { ingested: number; duplicate: number; quarantined: number; error: number };
   /** Completion time of the last successful SQS queue-attributes sample. */
   lastQueueSampleMs: number | null;
-  /** SQS ApproximateNumberOfMessagesVisible at the last sample. */
+  /** SQS ApproximateNumberOfMessages at the last sample. */
   queueVisible: number | null;
-  /** SQS ApproximateAgeOfOldestMessage at the last sample. */
+  /** Unknown without a separate CloudWatch metric source; SQS cannot supply age. */
   oldestMessageAgeSeconds: number | null;
   queueSampleFailures: number;
 }
@@ -496,10 +495,10 @@ export interface IngestLivenessOptions {
   lastProgressAt: () => number;
   /**
    * Queue-state provider. Absent ⇒ progress-only liveness (stale always
-   * fails). Present ⇒ the queue-age sampling pass keeps it fresh even when the
+   * fails). Present ⇒ the queue visibility sampling pass keeps it fresh even when the
    * poll loop stalls, so a stale loop over a provably empty queue stays
-   * healthy (there is no work it is failing to do) and the queue itself is
-   * guarded by the age alarm. When the queue state cannot be proven fresh the
+   * healthy (there is no observed work it is failing to do). Queue age requires
+   * a separate deployment-owned CloudWatch alarm. When state is not fresh the
    * loop fails closed: a stalled loop over an unobserved queue is precisely the
    * incident this guard exists for.
    */
@@ -540,13 +539,16 @@ export function evaluateIngestLiveness(
     return { ok: false, reason: "queue_state_unknown", progressAgeSeconds, queueStateAgeSeconds };
   }
   const visible = options.queueState.visible();
-  if (visible !== null && visible > 0) {
+  if (visible === null || !Number.isSafeInteger(visible) || visible < 0) {
+    return { ok: false, reason: "queue_state_unknown", progressAgeSeconds, queueStateAgeSeconds };
+  }
+  if (visible > 0) {
     return { ok: false, reason: "stale_with_work", progressAgeSeconds, queueStateAgeSeconds };
   }
   return { ok: true, reason: "stale_idle", progressAgeSeconds, queueStateAgeSeconds };
 }
 
-/** One scheduled pass over the queue: sample age/visibility and alarm on age. */
+/** Compatibility helper for callers that supply an actual age measurement. */
 export function shouldEmitQueueAgeAlarm(
   ageSeconds: number | null,
   thresholdSeconds: number,
@@ -571,38 +573,48 @@ export interface QueueAgeSamplerDeps {
   fetchAttributes: () => Promise<Record<string, string>>;
 }
 
+/** Fetch only the visibility attribute supported by the SQS API. */
+export async function fetchIngestQueueAttributes(
+  sqs: import("@aws-sdk/client-sqs").SQSClient,
+  queueUrl: string,
+): Promise<Record<string, string>> {
+  const { GetQueueAttributesCommand } = await import("@aws-sdk/client-sqs");
+  const out = await sqs.send(new GetQueueAttributesCommand({
+    QueueUrl: queueUrl,
+    AttributeNames: ["ApproximateNumberOfMessages"],
+  }), { abortSignal: AbortSignal.timeout(INGEST_RECEIVE_DEADLINE_MS) });
+  return out.Attributes ?? {};
+}
+
 /**
- * One queue-age sample. Updates the shared status so the health probes always
- * see the freshest known queue state, and emits the alarm event when the
- * oldest queued message is at or beyond the threshold. A failed fetch is
- * recorded and retried by the caller on the next pass — never thrown.
+ * Historical function name retained for callers. Samples SQS visibility only;
+ * age remains unknown because GetQueueAttributes cannot return CloudWatch age.
+ * Missing/malformed counts invalidate previous empty-queue knowledge.
  */
 export async function sampleQueueAgeOnce(
   deps: QueueAgeSamplerDeps,
   status: IngestWorkerStatus,
-  thresholdSeconds: number,
+  _thresholdSeconds: number,
   emit: (line: string) => void = (line) => console.error(line),
   nowMs = Date.now(),
 ): Promise<void> {
+  status.oldestMessageAgeSeconds = null;
   let attributes: Record<string, string>;
   try {
     attributes = await deps.fetchAttributes();
-  } catch (err) {
+  } catch {
+    status.queueVisible = null;
     status.queueSampleFailures += 1;
-    emit(`[ingest] queue-age poll failed: ${err instanceof Error ? err.message : String(err)}`);
+    emit("[ingest] queue visibility poll failed");
     return;
   }
-  const age = Number(attributes["ApproximateAgeOfOldestMessage"] ?? "0");
-  const visible = Number(attributes["ApproximateNumberOfMessagesVisible"] ?? "0");
-  status.oldestMessageAgeSeconds = Number.isFinite(age) ? age : 0;
-  status.queueVisible = Number.isFinite(visible) ? visible : 0;
+  const raw = attributes["ApproximateNumberOfMessages"];
+  const visible = typeof raw === "string" && /^(0|[1-9][0-9]*)$/.test(raw) ? Number(raw) : NaN;
+  status.queueVisible = Number.isSafeInteger(visible) ? visible : null;
   status.lastQueueSampleMs = nowMs;
-  if (shouldEmitQueueAgeAlarm(status.oldestMessageAgeSeconds, thresholdSeconds)) {
-    emit(formatQueueAgeAlarmEvent({
-      ageSeconds: status.oldestMessageAgeSeconds,
-      thresholdSeconds,
-      visible: status.queueVisible,
-    }));
+  if (status.queueVisible === null) {
+    status.queueSampleFailures += 1;
+    emit("[ingest] queue visibility sample invalid");
   }
 }
 
@@ -691,8 +703,8 @@ export function startIngestProgressHealthServer(options: {
  *   EMAILS_DATABASE_URL        (required) — self-hosted Postgres DSN
  *   EMAILS_WORKER_HEALTH_PORT  progress-liveness endpoint port (default 9487; 0 disables)
  *   EMAILS_WORKER_PROGRESS_STALE_MS — ms without a completed receive/ack cycle before /ready 503s
- *   EMAILS_INGEST_QUEUE_AGE_ALARM_SECONDS — oldest-message age (s) that emits the queue-age alarm event (default 900)
- *   EMAILS_INGEST_QUEUE_AGE_POLL_SECONDS — queue-age sampling cadence in seconds (default 60)
+ *   EMAILS_INGEST_QUEUE_AGE_ALARM_SECONDS — legacy diagnostic threshold (default 900); no local age source
+ *   EMAILS_INGEST_QUEUE_AGE_POLL_SECONDS — SQS visibility sampling cadence in seconds (default 60)
  */
 export async function runIngestWorker(options: WorkerOptions = {}): Promise<void> {
   const region = options.region ?? process.env["AWS_REGION"] ?? "us-east-1";
@@ -719,7 +731,7 @@ export async function runIngestWorker(options: WorkerOptions = {}): Promise<void
   await assertServingRoleCannotBypassRls(client);
   const store = new EmailsSelfHostedStore(client);
 
-  const [{ SQSClient, ReceiveMessageCommand, DeleteMessageCommand, GetQueueAttributesCommand }, { S3Client, GetObjectCommand }] =
+  const [{ SQSClient, ReceiveMessageCommand, DeleteMessageCommand }, { S3Client, GetObjectCommand }] =
     await Promise.all([import("@aws-sdk/client-sqs"), import("@aws-sdk/client-s3")]);
   const sqs = new SQSClient({ region });
   const s3 = new S3Client({ region });
@@ -751,15 +763,9 @@ export async function runIngestWorker(options: WorkerOptions = {}): Promise<void
   const counts = status.counts;
   let lastReport = Date.now();
 
-  // Progress-based liveness + queue-age alarm: the long-poll receive is
-  // deadline-bounded (a dead connection must error, not hang) and a local
-  // health endpoint reports whether the loop is still completing receive/ack
-  // cycles — failing once progress goes stale while the queue is non-empty —
-  // so ECS can replace a wedged task. The queue-age sampling pass below keeps
-  // the /ready decision honest about queue state even when the loop stalls,
-  // and emits the alarm event for the deployment-side queue-age alarm to
-  // route (the CloudWatch alarm on the SQS metric is provisioned by the
-  // deployment module, not by this worker).
+  // Independent SQS visibility sampling keeps /ready honest when the loop
+  // stalls. Queue age is unknown here: deployment-owned CloudWatch alarms
+  // must monitor ApproximateAgeOfOldestMessage separately.
   const healthPort = parseIngestHealthPort(process.env["EMAILS_WORKER_HEALTH_PORT"]);
   const progressStaleMs = parseIngestProgressStaleMs(process.env["EMAILS_WORKER_PROGRESS_STALE_MS"]);
   const queueAgeAlarmSeconds = parseIngestQueueAgeAlarmSeconds(
@@ -788,32 +794,17 @@ export async function runIngestWorker(options: WorkerOptions = {}): Promise<void
     });
     console.log(
       `[ingest] progress liveness: ${health.url}/ready (stale after ${progressStaleMs} ms; ` +
-        `queue-age alarm at ${queueAgeAlarmSeconds} s, sampled every ${queueAgePollSeconds} s)`,
+        `queue visibility sampled every ${queueAgePollSeconds} s; queue age requires CloudWatch)`,
     );
   } else {
     console.log(
       `[ingest] progress liveness: disabled (EMAILS_WORKER_HEALTH_PORT is 0); ` +
-        `queue-age alarm at ${queueAgeAlarmSeconds} s, sampled every ${queueAgePollSeconds} s`,
+        `queue visibility sampled every ${queueAgePollSeconds} s; queue age requires CloudWatch`,
     );
   }
 
-  const fetchQueueAttributes = async (): Promise<Record<string, string>> => {
-    // The SDK's QueueAttributeName union omits ApproximateAgeOfOldestMessage
-    // even though SQS supports it (a known SDK gap); the two literals we need
-    // are cast through the type deliberately.
-    const attributeNames: import("@aws-sdk/client-sqs").QueueAttributeName[] = [
-      "ApproximateAgeOfOldestMessage",
-      "ApproximateNumberOfMessagesVisible",
-    ] as unknown as import("@aws-sdk/client-sqs").QueueAttributeName[];
-    const out = await sqs.send(new GetQueueAttributesCommand({
-      QueueUrl: configuredQueueUrl,
-      AttributeNames: attributeNames,
-    }));
-    return out.Attributes ?? {};
-  };
-  // Independent sampling pass: it keeps queue-state knowledge fresh even when
-  // the poll loop itself is wedged, and it is the scheduled pass that emits
-  // the queue-age alarm event.
+  const fetchQueueAttributes = () => fetchIngestQueueAttributes(sqs, configuredQueueUrl);
+  // Independent visibility sampling continues even when the poll loop stalls.
   void runIngestQueueAgeSampler({
     fetchAttributes: fetchQueueAttributes,
     status,
@@ -893,7 +884,7 @@ export async function runIngestWorker(options: WorkerOptions = {}): Promise<void
 }
 
 /**
- * Scheduled queue-age pass. Samples once per tick, and on each failure logs
+ * Scheduled visibility pass. Samples once per tick, and on each failure logs
  * and retries at the next tick; never crashes the worker.
  */
 async function runIngestQueueAgeSampler(args: {
@@ -907,8 +898,8 @@ async function runIngestQueueAgeSampler(args: {
   while (isRunning()) {
     try {
       await sampleQueueAgeOnce({ fetchAttributes }, status, thresholdSeconds);
-    } catch (err) {
-      console.error(`[ingest] queue-age pass failed: ${err instanceof Error ? err.message : String(err)}`);
+    } catch {
+      console.error("[ingest] queue visibility pass failed");
     }
     for (let waited = 0; waited < pollSeconds && isRunning(); waited += 1) {
       await sleep(1000);

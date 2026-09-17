@@ -226,7 +226,7 @@ switcher launch codex --provider openrouter --model anthropic/claude-sonnet-4.6
 
 An interactive terminal can choose or search the catalog when `--model` is omitted. Noninteractive launches require an explicit model. `--dry-run` resolves and saves the provider/profile and fresh catalog, then prints the launch plan without starting the harness or creating a run record. Existing `switcher launch PROFILE` commands remain supported. Direct launches create or reuse records without overwriting customized providers or profiles.
 
-With no Switcher API credential configured, the CLI and `switcher-mcp` exit non-zero and name the sources they consulted (Keychain item `hasna.credentials.switcher.api-key`, `~/.hasna/switcher/config/credentials`, `HASNA_SWITCHER_API_KEY`); they never open local data by default. Set `HASNA_SWITCHER_LOCAL=1` (alias `SWITCHER_LOCAL=1`) to deliberately run on the box: each invocation then starts an authenticated loopback API on an allocated port, stores SQLite data in `~/.hasna/switcher`, prints one `switcher: LOCAL mode` line on stderr, and closes its own listener on completion. Its random operator key remains in memory. Under that opt-in, use `HASNA_SWITCHER_HOME` to choose another owner-only home, `HASNA_SWITCHER_SQLITE_PATH` for an explicit database, or `HASNA_SWITCHER_DATABASE_URL` for PostgreSQL. A configured API URL or key outranks the flag. API and SDK data access remains HTTP.
+With no Switcher API credential configured, the CLI and `switcher-mcp` exit non-zero and name the sources they consulted (Keychain item `hasna.credentials.switcher.api-key`, `~/.hasna/switcher/config/credentials`, `HASNA_SWITCHER_API_KEY`); they never open local data by default. Set `HASNA_SWITCHER_LOCAL=1` (alias `SWITCHER_LOCAL=1`; affirmative values are `1`, `true`, `yes`, or `on`) to deliberately run on the box: each invocation then starts an authenticated loopback API on an allocated port, stores SQLite data in `~/.hasna/switcher`, prints one `switcher: LOCAL mode` line on stderr, and closes its own listener on completion. Its random operator key remains in memory. Under that opt-in, use `HASNA_SWITCHER_HOME` to choose another owner-only home, `HASNA_SWITCHER_SQLITE_PATH` for an explicit database, or `HASNA_SWITCHER_DATABASE_URL` for PostgreSQL. A configured API URL or key outranks the flag. API and SDK data access remains HTTP.
 
 Remote API configuration is resolved through Contracts, including canonical credential stores and the default gateway URL. Invalid, unavailable or unauthorized remote services fail without opening local SQLite.
 
@@ -297,16 +297,41 @@ Configured but missing, unsafe, conflicting or inaccessible remote credentials f
 
 ## Credential bindings
 
-Bind an existing vault key once, then launch without an external wrapper. New bindings use the installed `secrets` CLI and resolve its operator key and API URL through `@hasna/contracts/client`. A configured Keychain item or canonical `~/.hasna/secrets/config/credentials` supplies the operator without shell exports. The default Secrets API URL is `https://api.hasna.com/secrets`; `--vault-url` can select a custom vault but must agree with any configured Secrets authority.
+Bind an existing vault key once, then launch without an external wrapper. New bindings resolve the Secrets operator key and API URL through `@hasna/contracts/client`. A configured Keychain item or canonical `~/.hasna/secrets/config/credentials` supplies the operator without shell exports. The default Secrets API URL is `https://api.hasna.com/secrets`; `--vault-url` can select a custom vault but must agree with any configured Secrets authority.
+
+Real launches now preflight the local inference credential before catalog refresh and before an interactive model picker. An existing environment credential is preserved without creating a binding. An existing binding remains authoritative, including its exact Secrets operator account and allowed provider origins; a locked source, an unauthorized destination, or rejected provider credential is terminal and never falls through to another account.
+
+When a provider credential is missing in an interactive terminal, Switcher uses the trusted `secrets` executable on `PATH` to search metadata only. It displays the selected Secrets account/source and matching vault key references, asks which reference to bind, saves that reference through the existing immutable binding store, resolves the value through the authenticated loopback delivery path, and performs a bounded, non-inference provider authentication check before continuing the original launch. OpenRouter uses its authenticated `GET /api/v1/key` metadata endpoint; its public model catalog is never treated as proof that a key works. Custom providers may declare a relative `credentialCheck` (`GET` or `HEAD`) in provider JSON. Catalog configuration alone is never inferred to validate a credential because a catalog may be public or ignore invalid authorization.
+
+If no matching key exists, Secrets is unavailable, the selected Keychain/vault cannot be read, or the provider rejects the credential, the structured error names the exact recovery without changing accounts. The first-run binding pins the exact Contracts source and vault authority that were displayed; if that Keychain account, environment tier, profile, or canonical file changes, later launches stop rather than selecting another account. First-run bindings also retain a requirement for a supported provider authentication check, so an unsupported check cannot be bypassed by retrying. Older explicit bindings remain compatible when no safe check is declared; adding `credentialCheck` upgrades them to authenticated preflight without changing their account or origins. Noninteractive launches never prompt and return `credential_setup_required` with explicit binding syntax or the provider environment reference. `--dry-run` preserves its planning contract: it does not search Secrets, create a binding, retrieve a provider credential, or perform provider authentication merely to describe a launch plan. Public and credentialless catalogs may refresh. Authenticated catalogs are read from the saved Switcher snapshot; if none exists, the error names the explicit `switcher models PROVIDER --refresh` command that performs the credential-consuming refresh.
+
+For stations that update global tools with Bun, give the vault binding a private, version-pinned npm installation. A later global Bun installation can reset the permissions of its `secrets` executable, including one already repaired, and break every provider using it. The private installation keeps that update path separate. This example uses Secrets `0.4.2`; choose an exact verified release and a **new, unused prefix** for each upgrade:
+
+```sh
+SWITCHER_VAULT_PREFIX="$HOME/.hasna/switcher/vault-runtimes/secrets-0.4.2-private"
+(
+  set -e
+  umask 077
+  test ! -e "$SWITCHER_VAULT_PREFIX"
+  mkdir -p "$SWITCHER_VAULT_PREFIX"
+  npm install --prefix "$SWITCHER_VAULT_PREFIX" --save-exact \
+    --ignore-scripts --no-audit --no-fund --umask=077 @hasna/secrets@0.4.2
+)
+```
+
+Both the shell and npm umasks matter: a shell umask of `0002` can leave npm package directories group-writable, which the vault guard also rejects. `--ignore-scripts` prevents lifecycle scripts from running during this installation. Verify the installed package against its integrity-checked release archive before binding it, as described below. Do not run Bun installs inside this prefix. Preserve the previous runtime until the new binding passes a real provider launch.
+
+To migrate an existing binding, record its locator with `credentials list`, then explicitly remove and recreate that same reference with the new `--vault-cli`. Preserve its vault key, URL, operator/account and authorized origins; only the executable path should change. Keep the original locator available to restore if verification fails.
 
 ```sh
 switcher credentials bind deepseek \
-  --vault-key providers/deepseek/live/api_key
+  --vault-key providers/deepseek/live/api_key \
+  --vault-cli "$SWITCHER_VAULT_PREFIX/node_modules/@hasna/secrets/dist/index.js"
 switcher credentials check deepseek
 switcher launch claude --provider deepseek --model deepseek-v4-pro
 ```
 
-`--vault-cli /absolute/path/to/secrets` selects a particular installation. Vault lookup uses `secrets exec` to inject the value into a short-lived receiver, which delivers it over an authenticated loopback connection. Values stay in process memory. The lookup has a 20-second deadline and owns a separate process group; it finishes before the native harness starts. Each lookup reads the vault again. Conflicting Secrets service URL configuration fails explicitly. Vault CLI bindings currently require POSIX; Windows callers can inject provider environment variables.
+`--vault-cli /absolute/path/to/secrets` selects a particular installation; omitting it binds the current `secrets` on `PATH`, which may be replaced by a global tool update. Vault lookup uses `secrets exec` to inject the value into a short-lived receiver, which delivers it over an authenticated loopback connection. Values stay in process memory. The lookup has a 20-second deadline and owns a separate process group; it finishes before the native harness starts. Each lookup reads the vault again. Conflicting Secrets service URL configuration fails explicitly. Vault CLI bindings currently require POSIX; Windows callers can inject provider environment variables.
 
 If launch reports `vault_exec_permissions`, verify the installed Secrets package against its trusted release artifact before repairing it. Bun 1.3.14's [bin-link installer](https://github.com/oven-sh/bun/blob/bun-v1.3.14/src/install/bin.zig#L731-L735) can change an executable member from mode `0755` to `0777`, including with `--ignore-scripts`. Changing the shell umask does not correct that installer behavior.
 
@@ -322,7 +347,7 @@ The digest is a release-artifact checksum, not a credential. Do not substitute t
 
 For provider keys already stored in macOS Keychain, use `--keychain-service SERVICE --keychain-account ACCOUNT` instead of vault options. Bindings contain only references and authorized origins under `~/.hasna/switcher/config/credential-bindings`, in owner-only files. They remain local even when Switcher uses a remote API. A configured binding takes precedence over environment aliases; an unavailable binding never falls back to another account.
 
-`credentials list` displays bindings; `credentials remove PRESET_OR_REFERENCE` removes only the locator. Replacement requires explicit removal. Custom credential references require `--origin URL` (repeatable); preset bindings authorize their documented origins by default. `credentials check` reports availability, length and hash, not successful provider authentication. Provider credentials needed by a remote API's catalog discovery must still be configured on that server independently.
+`credentials list` displays bindings; `credentials remove PRESET_OR_REFERENCE` removes only the locator. Replacement requires explicit removal. Custom credential references require `--origin URL` (repeatable); preset bindings authorize their documented origins by default. `credentials check` reports availability, length and hash, not successful provider authentication. When the selected Switcher API is hosted, catalog discovery still runs in the local launcher after credential authentication; only validated catalog metadata is committed to the API. Provider values are never sent to or stored by the hosted Switcher service.
 
 Explicit `--vault-account ACCOUNT` pins one macOS Keychain account and requires `--vault-url`; it never falls back when that account is missing or locked. `--vault-operator env` preserves the per-process `HASNA_SECRETS_API_KEY` mode and also requires `--vault-url`. Existing bindings keep their original operator mode. To adopt canonical resolution for an old binding, explicitly remove and rebind its same provider key reference. A Secrets operator cannot bootstrap itself through `HASNA_SECRETS_API_KEY_REF`; use a literal operator from its canonical store or explicit override. On Linux the shared resolver reads the owner-only canonical credentials file or process environment. The binding stores only the locator and optional vault authority. Alternatively, let the authenticated `secrets` CLI inject a provider credential for one command:
 
@@ -331,7 +356,7 @@ secrets exec providers/deepseek/live/api_key --as DEEPSEEK_API_KEY -- \
   switcher launch claude --provider deepseek --model deepseek-v4-flash --dry-run
 ```
 
-Authenticate that Secrets process through your existing secret manager or service environment. `--dry-run` performs authenticated model discovery, creates provider/profile records as needed and returns a launch plan without starting the native harness or inference; remove it to launch. Every new process needs its own runtime injection. `credentials check` inspects configured bindings, not environment aliases. Keychain bindings are macOS-only; on Linux they fail with `keychain_unavailable` and recommend a vault binding or runtime environment. Native subscription/OAuth login is separate from Switcher's provider-key mode; Switcher does not import or reuse it.
+Authenticate that Secrets process through your existing secret manager or service environment. `--dry-run` refreshes public/credentialless catalogs, reuses saved authenticated catalog snapshots, creates provider/profile records as needed and returns a launch plan without starting the native harness or inference. It never retrieves a provider credential solely for planning. Every new process needs its own runtime injection. `credentials check` inspects configured bindings, not environment aliases. Keychain bindings are macOS-only; on Linux they fail with `keychain_unavailable` and recommend a vault binding or runtime environment. Native subscription/OAuth login is separate from Switcher's provider-key mode; Switcher does not import or reuse it.
 
 ## OpenCode 2 configuration
 
@@ -430,19 +455,24 @@ Cline uses its native ACP backend with per-launch configuration, durable session
 
 ## Run a persistent service
 
-Inject a random operator token of at least 24 characters as `HASNA_SWITCHER_API_KEY` through your secret manager. Inject provider credentials separately, using names beginning `SWITCHER_PROVIDER_`. Only environment references are persisted. Explicitly hosted servers read `SWITCHER_PROVIDER_*` references; the local launcher also accepts the standard aliases declared by each built-in preset.
+For a private local/self-hosted service, inject a random operator token of at least 24 characters as `HASNA_SWITCHER_API_KEY`. For a hosted PostgreSQL service, inject `HASNA_SWITCHER_API_SIGNING_KEY` (or the shared `HASNA_API_SIGNING_KEY` / `API_KEY_SIGNING_SECRET`) and issue revocable, scoped `switcher:read` / `switcher:write` client keys through `@hasna/contracts`. Exactly one authentication mode is accepted. Provider credentials stay in each launcher process; hosted catalog refresh uploads metadata only.
 
 ```sh
-# SQLite: persistent hosted service and database.
+# SQLite: private persistent API with a static operator token.
 switcher-serve --data-dir ~/.hasna/switcher --port 8080
 
-# PostgreSQL: inject HASNA_SWITCHER_DATABASE_URL, then:
+# PostgreSQL self-hosting with the same private token:
 switcher-serve --port 8080
+
+# Hosted PostgreSQL: inject HASNA_SWITCHER_DATABASE_URL and
+# HASNA_SWITCHER_API_SIGNING_KEY. Apply the terminating migration first:
+switcher-serve migrate
+switcher-serve --host 0.0.0.0 --port 8080
 ```
 
-Choose exactly one backend. There is no automatic fallback. Both backends run migrations and the same behavioral tests. SQLite HTTP hosting is an explicit switcher-specific product requirement; clients always use HTTP. Use PostgreSQL for multiple service instances.
+Choose exactly one backend. There is no automatic fallback. SQLite HTTP hosting is an explicit switcher-specific product requirement; clients always use HTTP. Hosted signed-key mode requires PostgreSQL and refuses a SQLite path. The migration command applies the domain and API-key lifecycle schema with the owner DSN and exits. The long-running hosted service validates that exact schema with its application DSN and performs no DDL.
 
-Set `HASNA_SWITCHER_API_URL=http://127.0.0.1:8080` for clients and inject the operator token into each process. Remote URLs require HTTPS. The service binds loopback by default; put a TLS reverse proxy in front of an explicitly hosted listener. This release has one operator authority per service, not tenant isolation.
+Set `HASNA_SWITCHER_API_URL=http://127.0.0.1:8080` for a self-hosted client and inject its operator token. A configured client key with no URL selects `https://api.hasna.com/switcher`; remote URLs require HTTPS. A selected hosted authority that is missing, unreachable or unauthorized fails closed and never opens local SQLite. Values `0`, `false`, `no`, and `off` do not enable local mode; unknown nonblank local-flag values are rejected. The service binds loopback by default; put a TLS reverse proxy in front of an explicitly hosted listener.
 
 For containers, build the package first, then use `docker compose --profile sqlite up --build`. For PostgreSQL, inject `SWITCHER_POSTGRES_PASSWORD` and a matching URI in `HASNA_SWITCHER_DATABASE_URL` using hostname `postgres`, database/user `switcher`; run `docker compose --profile postgres up --build`. URI-encode password characters. Choose one profile. Compose exposes only loopback port 8080 and persists named volumes.
 
@@ -464,7 +494,7 @@ The model ID is an example; choose an exact ID from the current catalog and veri
 
 For Claude use `--harness claude` with `anthropic-messages`; for Grok, Hermes or OpenCode 2 use their supported protocol. Pass native arguments after `--`, such as `switcher launch coding -- exec "Reply with exactly: connected"`. `--backend direct` is the default; the optional `--backend ori` is OpenRouter-only and accepts `--ori-executable PATH`, while `--executable` remains the direct adapter option. `--cwd`, `--state-dir`, and `--timeout SECONDS` are local launcher options. Native approval and sandbox settings remain in effect. See [the Ori backend contract](https://github.com/hasna/apps/blob/main/apps/switcher/docs/ori-backend-integration.md) for its supported target and catalog boundaries.
 
-When the API runs remotely, inject the provider credential into the API process for authenticated catalog discovery and into the local launcher for direct inference. The API never returns a provider key. An external compatible gateway can be the configured provider. Switcher does not translate between wire protocols.
+When the API runs remotely, provider authentication and model discovery happen in the local launcher. The launcher commits the resulting validated catalog through the versioned API, then uses the same prepared credential for direct inference. The hosted service never receives or stores the provider key and refuses server-side provider refreshes; authenticated callers cannot make the hosted service contact provider URLs. An external compatible gateway can be the configured provider. Switcher does not translate between wire protocols.
 
 ## Catalog refresh and offline use
 
@@ -566,7 +596,7 @@ The SDK supports Node and Bun. It has no database or launcher imports. Explicit 
 
 SDK and CLI API-error diagnostics validate code/request-ID fields, bound message length, remove terminal control characters, and redact the operator credential actually sent with that request. Redaction covers raw, JSON-string-escaped, URL-encoded and Base64/Base64url representations. Native harness stdout and terminal output remain under the native client's control.
 
-Public lifecycle endpoints: `GET /health`, `/ready`, `/version`. Authenticated OpenAPI: `GET /v1/openapi.json`. Provider/profile CRUD, `/v1/provider-presets`, catalog list/refresh, launch-plan validation and run metadata are under `/v1`. The SDK includes `listProviderPresets()`, `getProviderPreset()`, `health()`, `ready()`, and `version()`. SDK types are generated from that OpenAPI document. API errors include code, message and request ID.
+Public lifecycle endpoints: `GET /health`, `/ready`, `/version`, `/openapi.json`, and `/v1/openapi.json`. Provider/profile CRUD, `/v1/provider-presets`, catalog list/refresh, version-checked catalog metadata commits, launch-plan validation and run metadata are under `/v1`. The SDK includes `listProviderPresets()`, `getProviderPreset()`, `health()`, `ready()`, and `version()`. SDK types are generated from that OpenAPI document. API errors include code, message and request ID.
 
 All mutations require `Idempotency-Key`. Reuse the same key and payload after an uncertain response; changing the payload returns 409. Updates/deletes also require the numeric record version in `If-Match`. SDK methods supply these headers and accept a caller-provided idempotency key. Run creation requires the `planToken` from a launch plan; a changed provider, profile or catalog rejects the stale plan with 409 before local execution. List endpoints accept `limit` (1–1000), `offset` and `search`. Referenced providers/profiles cannot be deleted while children exist.
 

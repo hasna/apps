@@ -180,6 +180,89 @@ describe("isLinkAlive", () => {
     fetchMock.mockImplementation(async () => new Response(null, { status: 301 }));
     expect(await isLinkAlive("https://example.com/redirect")).toBe(true);
   });
+
+  it("checks a signed GET download without misclassifying its rejected HEAD", async () => {
+    const cancelled = mock(() => {});
+    fetchMock.mockImplementation(async (_url, options) => {
+      const request = options as RequestInit;
+      if (request.method === "HEAD") return new Response(null, { status: 403 });
+      expect(request.method).toBe("GET");
+      expect(new Headers(request.headers).get("range")).toBe("bytes=0-0");
+      expect(request.redirect).toBe("error");
+      expect(request.signal).toBeInstanceOf(AbortSignal);
+      return new Response(new ReadableStream({ cancel: cancelled }), { status: 206 });
+    });
+    const link = "https://objects.example.test/file?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-SignedHeaders=host&X-Amz-Signature=test-only";
+    expect(await isLinkAlive(link)).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(cancelled).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels a signed-download response when the server ignores Range", async () => {
+    const cancelled = mock(() => {});
+    fetchMock.mockImplementation(async () => new Response(new ReadableStream({ cancel: cancelled }), { status: 200 }));
+    expect(await isLinkAlive("https://objects.example.test/file?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-SignedHeaders=host&X-Amz-Signature=test-only")).toBe(true);
+    expect(cancelled).toHaveBeenCalledTimes(1);
+  });
+
+  it("aborts the transport after checking headers, including when Range is ignored", async () => {
+    let requestSignal: AbortSignal | null | undefined;
+    const cancelled = mock(() => {});
+    fetchMock.mockImplementation(async (_url, options) => {
+      requestSignal = (options as RequestInit).signal;
+      return new Response(new ReadableStream({ cancel: cancelled }), { status: 200 });
+    });
+    expect(await isLinkAlive("https://objects.example.test/file?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=test-only")).toBe(true);
+    expect(cancelled).toHaveBeenCalledTimes(1);
+    expect(requestSignal?.aborted).toBe(true);
+  });
+
+  it("keeps a failed signed GET unhealthy and cancels its error body", async () => {
+    const cancelled = mock(() => {});
+    fetchMock.mockImplementation(async () => new Response(new ReadableStream({ cancel: cancelled }), { status: 403 }));
+    expect(await isLinkAlive("https://objects.example.test/file?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-SignedHeaders=host&X-Amz-Signature=test-only")).toBe(false);
+    expect(cancelled).toHaveBeenCalledTimes(1);
+  });
+
+  it("checks an empty signed object after its unsatisfiable one-byte range", async () => {
+    const cancelled = mock(() => {});
+    let firstSignal: AbortSignal | null | undefined;
+    fetchMock.mockImplementation(async (_url, options) => {
+      const request = options as RequestInit;
+      expect(request.method).toBe("GET");
+      expect(request.redirect).toBe("error");
+      if (new Headers(request.headers).has("range")) {
+        firstSignal = request.signal;
+        return new Response(new ReadableStream({ cancel: cancelled }), { status: 416 });
+      }
+      expect(cancelled).toHaveBeenCalledTimes(1);
+      expect(request.signal).toBe(firstSignal);
+      return new Response(new ReadableStream({ cancel: cancelled }), { status: 200 });
+    });
+    expect(await isLinkAlive("https://objects.example.test/empty?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=test-only")).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(cancelled).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not treat an unsatisfiable signed range as proof of a healthy object", async () => {
+    const cancelled = mock(() => {});
+    fetchMock.mockImplementation(async (_url, options) => new Response(
+      new ReadableStream({ cancel: cancelled }),
+      { status: new Headers((options as RequestInit).headers).has("range") ? 416 : 403 },
+    ));
+    expect(await isLinkAlive("https://objects.example.test/missing?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=test-only")).toBe(false);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(cancelled).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps ordinary constrained share links on HEAD without a GET fallback", async () => {
+    fetchMock.mockImplementation(async (_url, options) => {
+      expect((options as RequestInit).method).toBe("HEAD");
+      return new Response(null, { status: 403 });
+    });
+    expect(await isLinkAlive("https://share.example.test/a/limited-share")).toBe(false);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -483,6 +566,21 @@ describe("health-check command", () => {
       expect(output).toContain("Dead:");
       expect(output).toContain("expired.pdf");
       expect(output).toContain("dead.zip");
+    } finally {
+      capture.restore();
+      exitSpy.mockRestore();
+    }
+  });
+
+  it("does not invent a 404 status for an unreachable link", async () => {
+    mockFindAll.mockImplementation(() => [makeAttachment({ id: "att_forbidden" })]);
+    fetchMock.mockImplementation(async () => new Response(null, { status: 403 }));
+    const capture = captureOutput();
+    const exitSpy = spyOn(process, "exit").mockImplementation(() => { throw new Error("exit"); });
+    try {
+      await buildHealthCheckCmd().parseAsync(["health-check"], { from: "user" }).catch(() => {});
+      expect(capture.out.join("")).toContain("Dead: att_forbidden");
+      expect(capture.out.join("")).not.toContain("404");
     } finally {
       capture.restore();
       exitSpy.mockRestore();

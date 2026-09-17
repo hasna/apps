@@ -357,6 +357,24 @@ kind: instruction
     });
   });
 
+  test.each(["failed", "pending"])("port excludes local %s dependency preparation state but preserves nested source", status => {
+    withDirs((home, sourceRoot) => {
+      const source = join(sourceRoot, "marker-example");
+      const marker = ".skills-dependency-preparation";
+      mkdirSync(join(source, marker), { recursive: true });
+      mkdirSync(join(source, "references", marker), { recursive: true });
+      writeFileSync(join(source, "SKILL.md"), "---\nname: marker-example\ndescription: Marker portability example.\nkind: instruction\n---\n");
+      const state = JSON.stringify({ version: 1, status });
+      writeFileSync(join(source, marker, "state.json"), state);
+      if (status === "pending") mkdirSync(join(source, marker, "active"));
+      writeFileSync(join(source, "references", marker, "state.json"), "authored nested reference\n");
+      const result = portPortableSkill(source, { rootDir: getPortableSkillsRoot({ homeDir: home }) });
+      expect(existsSync(join(result.path, marker))).toBe(false);
+      expect(readFileSync(join(result.path, "references", marker, "state.json"), "utf8")).toBe("authored nested reference\n");
+      expect(readFileSync(join(source, marker, "state.json"), "utf8")).toBe(state);
+    });
+  });
+
   test("drops build output only at the skill root, keeping nested build/dist content", () => {
     withDirs((home, sourceRoot) => {
       const source = join(sourceRoot, "layered-skill");
@@ -428,9 +446,9 @@ kind: instruction
 
   // ---- I3: guard inferred name against the official corpus ----
 
-  test("blocks a silent shadow of a bundled official skill via inferred name", () => {
+  test("does not reserve a formerly bundled name against explicit owner imports", () => {
     withDirs((home, sourceRoot) => {
-      expect(isOfficialSkillName("brand-kit")).toBe(true);
+      expect(isOfficialSkillName("brand-kit")).toBe(false);
       const source = join(sourceRoot, "skill-image");
       mkdirSync(source, { recursive: true });
       // Folder is 'skill-image' but frontmatter name is the official 'brand-kit'.
@@ -443,15 +461,14 @@ kind: instruction
 # Brand Kit
 `);
 
-      expect(() =>
-        portPortableSkill(source, { rootDir: getPortableSkillsRoot({ homeDir: home }) }),
-      ).toThrow(/shadow/i);
-      // Nothing was written.
-      expect(existsSync(join(getPortableSkillsRoot({ homeDir: home }), "brand-kit"))).toBe(false);
+      const imported = portPortableSkill(source, { rootDir: getPortableSkillsRoot({ homeDir: home }) });
+      expect(imported.name).toBe("brand-kit");
+      expect(existsSync(join(imported.path, "SKILL.md"))).toBe(true);
+      expect(() => portPortableSkill(source, { rootDir: getPortableSkillsRoot({ homeDir: home }) })).toThrow("already exists");
     });
   });
 
-  test("allows shadowing an official skill only with an explicit opt-in", () => {
+  test("retains the deprecated allowShadow option for explicit imports", () => {
     withDirs((home, sourceRoot) => {
       const source = join(sourceRoot, "skill-image");
       mkdirSync(source, { recursive: true });
@@ -471,7 +488,7 @@ kind: instruction
     });
   });
 
-  test("renaming to a non-official name avoids the shadow guard", () => {
+  test("explicitly renames an import without any reserved corpus names", () => {
     withDirs((home, sourceRoot) => {
       const source = join(sourceRoot, "skill-image");
       mkdirSync(source, { recursive: true });

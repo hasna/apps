@@ -118,6 +118,29 @@ EMAILS_DATABASE_URL=postgres://... EMAILS_API_SIGNING_KEY=... emails db migrate
 EMAILS_DATABASE_URL=postgres://... EMAILS_API_SIGNING_KEY=... emails self-hosted key create
 ```
 
+## Message body files
+
+For multiline mail, write a UTF-8 file with actual line breaks, review the complete
+file, then use `emails send --body-file /absolute/path/body.txt --dry-run` with the
+sender, recipients, and subject. Send the same reviewed file after authorization.
+For a private structured message and durable receipt, `send-controlled apply`
+accepts `text_file` and `html_file` body sources in its descriptor.
+
+The CLI (including dry-run), SDK send paths, and API send/enqueue routes reject
+`invalid_body_url_boundary` when an HTTP(S) token contains literal backslash-plus-`n`
+or backslash-plus-`r`, such as `https://example.com/file\nRegards`. The API refuses
+before reserving a send intent, enqueueing, or calling a provider. The diagnostic
+contains no body or URL. Body bytes are never unescaped or repaired automatically.
+Actual LF/CRLF, percent-encoded URL data such as `%5Cn`, and ordinary backslashes
+outside URLs remain valid. Tokens end at whitespace or `<`, `>`, double quote,
+single quote, or backtick. Literal malformed-URL examples inside prose or code are
+also rejected; use a valid encoded URL or describe the example without an HTTP(S)
+token. This check does not prove that a link exists or that its recipient can open it.
+
+A shared link is not a MIME attachment: use the attachment option or descriptor
+when promising an attached file, and verify the send receipt rather than treating
+a dry run as delivery proof.
+
 ## Domains and readiness
 
 Emails is a multi-domain aggregator. DNS, inbound routing, outbound permission,
@@ -440,6 +463,25 @@ Full-text search over `/v1/messages` is passed as the `q` query parameter
 return an unfiltered page instead of a search — callers should use `q` (or
 `search`).
 
+Message searches share a bounded concurrency budget across all tenants and saved
+filters in each API process. The default admits eight simultaneous searches with
+the default ten-connection PostgreSQL pool. Set `EMAILS_SEARCH_CONCURRENCY` to a
+positive integer from 1 to 64 to change it; `EMAILS_PG_POOL_MAX` must leave at least
+one additional connection for ordinary operations. An unconfigured search budget
+shrinks to fit a smaller pool; a single-connection pool permits one search and
+cannot reserve a separate connection. Invalid explicit budgets refuse startup.
+For example, concurrency 16 requires a pool of at least 17 connections. Size the
+pool and replica count against measured database and task capacity before raising
+these settings.
+
+Excess searches refuse immediately with HTTP 429 `search_busy` and
+`Retry-After: 5`; admitted searches retain PostgreSQL's 30-second statement limit
+and return HTTP 504 `search_timeout` on cancellation. Ordinary list/read requests
+do not acquire search slots. This is a concurrency budget, not a requests-per-minute
+quota. Authentication throttles, daily send limits, provider quotas and warming
+limits remain separate. The CLI/SDK report search retry advice without automatically
+replaying a send or other write.
+
 ### Standalone compatibility surfaces
 
 The package still includes a legacy SQLite dashboard under `/api/*` and explicit
@@ -547,6 +589,16 @@ Keychain, or `~/.hasna/emails/config/credentials`. The service requires `EMAILS_
 deployment IAM role; Resend uses `RESEND_API_KEY`. See
 [docs/AUTHENTICATION.md](docs/AUTHENTICATION.md) for signup, sessions,
 tenant-scoped keys, and optional IdP verification.
+
+The ingest worker's `/ready` probe checks receive-cycle progress and independently
+samples SQS `ApproximateNumberOfMessages`. A stalled loop stays ready only when a
+fresh, valid sample proves no visible work; missing or malformed visibility fails
+closed. `/health` reports `oldest_age_seconds: null`: oldest-message age is a
+CloudWatch metric, not a `GetQueueAttributes` field. Operators must configure and
+verify a separate `AWS/SQS` `ApproximateAgeOfOldestMessage` alarm; the worker does
+not provision or evaluate that alarm. `EMAILS_INGEST_QUEUE_AGE_POLL_SECONDS` keeps
+its legacy name but controls visibility sampling. The legacy
+`EMAILS_INGEST_QUEUE_AGE_ALARM_SECONDS` value is diagnostic only.
 
 Self-hosted client commands fail closed when the URL or credential is missing
 or invalid — a configured authority with no credential refuses rather than
@@ -710,3 +762,15 @@ new StreamableHTTPClientTransport(new URL("http://127.0.0.1:8861/mcp"), {
 ## License
 
 Apache-2.0 — see [LICENSE](LICENSE)
+
+### Reply-To and threaded replies
+
+`emails reply <message-id> --body "Reply text"` and `emails send --in-reply-to <message-id>` send the parent record as the typed API field `reply_to_message_id`. The API derives `In-Reply-To` and `References`; custom `X-*` headers cannot override them. The parent must belong to the authenticated tenant, the sender must be the original outbound sender or an inbound recipient, and the subject must retain the parent's subject with an optional `Re:` prefix. Scheduled sends persist the parent and validate it again when executing. An older API that cannot advertise this field refuses before sending.
+
+Incoming `Reply-To` takes precedence over `From` when choosing a reply target. Reply-all adds the visible To/CC recipients, removes the sender and deduplicates canonical addresses, including quoted display names. Explicit `--reply-to` controls the header on a new outgoing message; it does not identify a parent. Configure sender names on the address's `display_name` field through the address API/SDK; the provider renders the configured name while authorization retains the canonical address.
+
+A provider receipt ID is distinct from an RFC Message-ID. A reply requires the latter. Resend can read the actual `message_id` through its normal retrieval API, bounded to five seconds and a 1 MiB response. The parent provider binding is used even if the reply selects a different provider. Identity admission compares tenant, parent/provider identity and sent state, preserves concurrent header changes, and stores provenance. An unavailable, unbound legacy or conflicting parent identity refuses before a new send intent or queue entry.
+
+SES rewrites Message-ID. No suffix is guessed from the sending region, custom MAIL FROM domain or opaque receipt. Operators may configure `EMAILS_SES_MESSAGE_ID_DOMAINS` as a JSON object keyed by exact SES region. Each entry must contain `domain`, `evidence_sha256` (64 lowercase hex characters) and `verified_at` (UTC ISO timestamp). First observe a received message's original headers, compare its full RFC Message-ID to the corresponding SES send receipt, and retain that evidence. The map is an explicit operator attestation, not a provider readback; its provenance remains attached to the recorded identity. It applies only to the named region, including managed SES bindings. Leave it unset when no mapping has been verified. The map is limited to 8 KiB and 32 entries; unsupported entries fail at startup.
+
+Replies with malformed or oversized References refuse rather than silently dropping ancestry (the supported joined header is at most 900 characters). Recipient applications decide conversation grouping. A local subject-based conversation ID is not the recipient's Gmail thread ID, and correct headers alone do not prove how an inbox displays a message.

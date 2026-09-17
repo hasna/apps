@@ -45,6 +45,8 @@ describe("service contract helpers", () => {
     expect(allowedBinsForName("todos")).not.toContain("todos-sync");
     expect(allowedBinsForName("deployment")).toContain("hasna-deploy");
     expect(allowedBinsForName("deployment")).not.toContain("hasna-deployment");
+    expect(allowedBinsForName("instructions")).toEqual(expect.arrayContaining(["configs", "configs-mcp"]));
+    expect(allowedBinsForName("todos")).not.toContain("configs");
     expect(allowedBinsForName("todos")).not.toContain("hasna-deploy");
     expect(databaseUrlSecretRefFor("todos")).toBe("hasna/oss/todos/database-url");
     expect(defaultSqlitePathFor("todos")).toBe("~/.hasna/todos/todos.db");

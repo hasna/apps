@@ -23,7 +23,8 @@ import {
 } from "../../lib/portable-skills.js";
 import { RemoteSkillsClient, createRemoteSkillsClient } from "../../lib/remote-client.js";
 import pkg from "../../../package.json" with { type: "json" };
-import { collectSkillBundleEntries, packSkillBundle, sha256Hex, type PackedSkillBundle } from "../../lib/skill-bundle.js";
+import { collectSkillBundleEntries, packSkillBundle, sha256Hex, type PackedSkillBundle, unpackSkillBundle } from "../../lib/skill-bundle.js";
+import { verifyContentHashFromEntries } from "../../lib/skill-hash.js";
 
 /**
  * Client-side ceiling on the *unpacked* sources.
@@ -134,7 +135,12 @@ export async function pushSkill(name: string, options: PushSkillOptions = {}): P
   if (!validation.valid) {
     throw new PushSkillError(
       `Skill '${skill.name}' is not valid and was not published.`,
-      validation.issues.map((issue) => `${issue.code}: ${issue.message}`),
+      [
+        ...validation.issues.map((issue) => `${issue.code}: ${issue.message}`),
+        ...(validation.issues.some(issue => issue.code === "contract.content_hash_mismatch")
+          ? [`Review the edited draft, then run skills prepare ${skill.name} --version <new-semver> (add --kind for a legacy kind-less manifest). Push never rewrites your source.`]
+          : []),
+      ],
     );
   }
 
@@ -152,6 +158,7 @@ export async function pushSkill(name: string, options: PushSkillOptions = {}): P
     );
   }
   const packed = packSkillBundle(skill.path, { maxUnpackedBytes: MAX_UNPACKED_BYTES });
+  await verifyPackedCanonicalHash(skill.name, packed);
   const versionManifest = buildVersionManifest(skill.path, packed);
   const skillMdPath = join(skill.path, "SKILL.md");
   const skillMd = existsSync(skillMdPath) ? readFileSync(skillMdPath, "utf-8") : undefined;
@@ -243,6 +250,22 @@ export async function pushSkill(name: string, options: PushSkillOptions = {}): P
     version,
     ...(alreadyPublished ? { alreadyPublished: true } : {}),
   };
+}
+
+/** Verify the hash declared by a portable manifest against the entries in the exact archive. */
+async function verifyPackedCanonicalHash(name: string, packed: PackedSkillBundle): Promise<void> {
+  const verification = await verifyContentHashFromEntries(unpackSkillBundle(packed.bytes));
+  // SKILL.md-only legacy skills have no packed skill.json and therefore no canonical hash
+  // declaration. Preserve their established push behavior while enforcing declared hashes.
+  if (!verification.declared || verification.valid) return;
+  throw new PushSkillError(
+    `Skill '${name}' was not published because its packed archive does not match the declared canonical content hash.`,
+    [
+      `Declared canonical hash: ${verification.declaredHash ?? "missing"}`,
+      `Packed archive entry hash: ${verification.computedHash ?? "unavailable"}`,
+      "Repair the source and run skills prepare <name> --version <new-semver> before pushing again.",
+    ],
+  );
 }
 
 /** Absence or an exact usable revision is required before any upload, including a bump. */

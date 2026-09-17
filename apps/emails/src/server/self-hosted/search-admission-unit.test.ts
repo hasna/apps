@@ -1,9 +1,10 @@
 import { createQueryClient } from "../../storage-kit/query.js";
 import { describe, expect, test } from "bun:test";
-import { runMessageListQuery, MessageSearchBusyError, MessageSearchTimeoutError, messageSearchErrorResponse } from "./search-admission.js";
+import { runMessageListQuery, MessageSearchAdmission, MessageSearchBusyError, MessageSearchTimeoutError, messageSearchErrorResponse } from "./search-admission.js";
 
 const scoped = {} as any;
-const ordinary = (query: (client: any) => Promise<any>, search?: string, tenantId = "tenant-a", atomicClient?: any) => runMessageListQuery({search,tenantId,scopedClient:scoped,atomicClient,query});
+const admission = new MessageSearchAdmission(1);
+const ordinary = (query: (client: any) => Promise<any>, search?: string, tenantId = "tenant-a", atomicClient?: any) => runMessageListQuery({search,tenantId,scopedClient:scoped,atomicClient,admission,query});
 function deferred<T>() { let resolve!: (value:T)=>void; let reject!: (error:unknown)=>void; const promise=new Promise<T>((yes,no)=>{resolve=yes;reject=no;}); return {promise,resolve,reject}; }
 
 describe("message search isolation", () => {

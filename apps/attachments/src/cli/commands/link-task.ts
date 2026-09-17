@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import { resolveStore } from "../../core/store";
-import { withTodosAuth, serviceConfig } from "../../core/todos";
+import { serviceConfig, readTodosTask, requestTodosJson, todosTaskUrl, taskWriteVersion, taskMetadata, taskFromEnvelope } from "../../core/todos";
+import { isDeepStrictEqual } from "node:util";
 
 export interface LinkTaskOptions {
   todosUrl?: string;
@@ -42,25 +43,21 @@ export async function linkAttachmentToTask(
     size: att.size,
   };
 
-  const url = `${todosUrl}/api/tasks/${taskId}`;
-  const response = await fetchFn(url, withTodosAuth(url, {
+  const task = await readTodosTask(taskId, todosUrl, fetchFn);
+  const version = taskWriteVersion(task);
+  const metadata = taskMetadata(task);
+  if (metadata._attachments !== undefined && !Array.isArray(metadata._attachments)) throw new Error("Invalid Todos attachment metadata.");
+  const prior = (metadata._attachments as unknown[] | undefined) ?? [];
+  // Re-linking one attachment replaces only that entry; it never drops siblings.
+  const merged = { ...metadata, _attachments: [...prior.filter(item => !(item && typeof item === "object" && "id" in item && item.id === entry.id)), entry] };
+  const result = await requestTodosJson(todosTaskUrl(todosUrl, task.id), task.id, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      metadata: {
-        _attachments: [entry],
-      },
-    }),
-  }));
-
-  if (!response.ok) {
-    if (response.status === 404) {
-      throw new Error(`Task not found: ${taskId}`);
-    }
-    // Error bodies may contain credentials or private records; report status only.
-    throw new Error(
-      `Failed to update task ${taskId}: HTTP ${response.status}`
-    );
+    body: JSON.stringify({ version, metadata: merged }),
+  }, fetchFn);
+  const saved = taskFromEnvelope(result);
+  if (saved.id !== task.id || taskWriteVersion(saved) <= version || !isDeepStrictEqual(saved.metadata, merged)) {
+    throw new Error("Todos attachment write acknowledgement does not match; reconcile before retrying.");
   }
 }
 
@@ -76,7 +73,7 @@ export function registerLinkTask(program: Command): void {
       undefined
     )
     .action(async (attachmentId: string, taskId: string, options: LinkTaskOptions) => {
-      const todosUrl = options.todosUrl ?? serviceConfig("TODOS").url;
+      const todosUrl = options.todosUrl ?? (await serviceConfig("TODOS")).url;
 
       try {
         await linkAttachmentToTask(attachmentId, taskId, todosUrl);

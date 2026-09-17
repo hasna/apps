@@ -48,6 +48,15 @@ public-estate imports are tracked by the import wave (todos `28ac4516`).
    `Agent: <registered-name>`. Never `Co-Authored-By`. Never override git
    identity.
 
+## Skill content boundary
+
+This repository contains Skills software, never operational skill payloads.
+Keep internal and user-authored skill documents, executable bundles, and catalog
+entries in the owner's private storage. Use the Skills CLI to author, validate,
+publish and sync them. Do not add SKILL.md files or native-agent skill folders
+here. Tests may generate small synthetic fixtures in temporary directories.
+`bun run check:skill-content` enforces this boundary in local checks and CI.
+
 ## Verification
 
 Sync before you work this repo — never at the cost of local changes:

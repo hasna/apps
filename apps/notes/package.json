@@ -47,6 +47,7 @@
     "server/http.mjs",
     "server/notes.mjs",
     "server/env.mjs",
+    "server/write-rate-config.mjs",
     "server/pg-adapter.mjs",
     "server/pg-migrations.ts",
     "server/storage.mjs",

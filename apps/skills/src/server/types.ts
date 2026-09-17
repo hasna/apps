@@ -1,4 +1,6 @@
 import type { OwnedBytes } from "../lib/skill-bundle.js";
+import type { ExecutionGrantStore } from "./execution-grant-store.js";
+import type { SkillSelectionStore } from "./selection-store.js";
 
 export const SERVER_RUN_STATUSES = [
   "queued",
@@ -358,6 +360,9 @@ export interface SkillsProductStore {
    * actually being closed is our own default, which is now SQLite on disk.
    */
   readonly backend?: StoreBackendInfo;
+  /** Optional for third-party stores; profile APIs fail closed when absent. */
+  readonly selectionStore?: SkillSelectionStore;
+  readonly executionGrantStore?: ExecutionGrantStore;
   /** Release connections and file handles. Optional; not every backend holds any. */
   close?(): Promise<void>;
   /**

@@ -13,23 +13,27 @@ import { privateDirectory, switcherHome } from "./runtime";
 const execute = promisify(execFile);
 const reference = z.string().regex(/^SWITCHER_PROVIDER_[A-Z0-9_]+$/).max(120);
 const item = z.string().min(1).max(500).regex(/^[^\x00-\x1f\x7f]+$/);
-const vaultKey = z.string().max(500).regex(/^[A-Za-z0-9][A-Za-z0-9_.-]*(?:\/[A-Za-z0-9][A-Za-z0-9_.-]*)*$/, "Use a vault key path, not an option or secret value");
+export const vaultKeySchema = z.string().max(500).regex(/^[A-Za-z0-9][A-Za-z0-9_.-]*(?:\/[A-Za-z0-9][A-Za-z0-9_.-]*)*$/, "Use a vault key path, not an option or secret value");
 const keychain = z.object({kind:z.literal("keychain"), service:item, account:item}).strict();
+const credentialTier = z.enum(["argument","override","pointer","profile","keychain","disk","env"]);
 const operator = z.discriminatedUnion("kind", [
-  z.object({kind:z.literal("contracts")}).strict(),
+  z.object({kind:z.literal("contracts"),expectedSource:item.optional(),expectedTier:credentialTier.optional()}).strict(),
   z.object({kind:z.literal("env")}).strict(),
   z.object({kind:z.literal("keychain"), account:item.refine(value=>value.trim().length>0 && value===value.trim(),"Vault account must be nonblank without surrounding whitespace")}).strict(),
 ]);
 const origin = z.string().transform(value => new URL(endpoint(value)).origin);
 export const credentialBindingSchema = z.object({
   schema:z.literal(1), credentialEnv:reference, origins:z.array(origin).min(1).max(30),
+  requireProviderAuthentication:z.literal(true).optional(),
   source:z.discriminatedUnion("kind", [keychain, z.object({
-    kind:z.literal("vault"), key:vaultKey, url:z.string().max(2000).transform(endpoint).optional(),
+    kind:z.literal("vault"), key:vaultKeySchema, url:z.string().max(2000).transform(endpoint).optional(),
     executable:z.string().max(4096).regex(/^[^\x00-\x1f\x7f]+$/).refine(isAbsolute,"Secrets executable must be an absolute path"), operator,
   }).strict()]),
 }).strict().superRefine((binding,ctx)=>{
   if (binding.source.kind === "vault" && binding.source.operator.kind !== "contracts" && !binding.source.url)
     ctx.addIssue({code:"custom",path:["source","url"],message:"An explicit env or Keychain operator binding requires a vault URL."});
+  if(binding.source.kind==="vault"&&binding.source.operator.kind==="contracts"&&Boolean(binding.source.operator.expectedSource)!==Boolean(binding.source.operator.expectedTier))
+    ctx.addIssue({code:"custom",path:["source","operator"],message:"A pinned Contracts operator requires both expectedSource and expectedTier."});
 });
 export type CredentialBinding = z.infer<typeof credentialBindingSchema>;
 const fingerprint = (binding: CredentialBinding) => createHash("sha256").update(JSON.stringify(binding)).digest("hex");
@@ -242,7 +246,9 @@ export class CredentialResolver {
     const binding = await this.bindings.get(name);
     if (!binding) throw new Fault(404,"credential_binding_missing","No local credential binding exists for this reference.");
     if (binding.source.kind === "vault") {
-      const output = await runVaultCommand(binding,["get",binding.source.key,"--check"],this.env,{},true);
+      const output = await runVaultCommand(binding,["get",binding.source.key,"--check"],this.env,{}, {
+        captureBytes:4096,oversizeCode:"vault_check_failed",oversizeMessage:"The secrets CLI returned an oversized check result.",
+      });
       const match = /^key=\S+ length=(\d+) sha256=([a-f0-9]{64})\s*$/.exec(output);
       if (!match) throw new Fault(422,"vault_check_failed","The secrets CLI did not return a supported credential check result.");
       return {credentialEnv:name,source:"vault",available:true,length:Number(match[1]),sha256:match[2],providerAuthentication:"not tested"};
@@ -259,8 +265,10 @@ export class CredentialInterrupted extends CommandInterrupted {
   constructor(exitCode: number) { super(exitCode,"Credential lookup was interrupted; no harness was started."); }
 }
 
+export type VaultOperatorResolution = {environment:NodeJS.ProcessEnv;source:string;tier:z.infer<typeof credentialTier>;url:string};
+
 /** Select an operator through the shared credential seam, then pin that choice. */
-export async function vaultEnvironment(binding: CredentialBinding, env: NodeJS.ProcessEnv, options: Pick<CredentialChainOptions,"keychain"> = {}): Promise<NodeJS.ProcessEnv> {
+export async function resolveVaultOperatorEnvironment(binding: CredentialBinding, env: NodeJS.ProcessEnv, options: Pick<CredentialChainOptions,"keychain"> = {}): Promise<VaultOperatorResolution> {
   if (binding.source.kind !== "vault") throw new Fault(500,"credential_resolution","Unexpected credential source.");
   const source = binding.source;
   let credential, url = source.url;
@@ -290,6 +298,8 @@ export async function vaultEnvironment(binding: CredentialBinding, env: NodeJS.P
       const first = pair(), second = pair();
       if (first.key.apiKey !== second.key.apiKey || first.key.source !== second.key.source || first.key.tier !== second.key.tier || first.url !== second.url)
         throw new Fault(422,"vault_operator_changed","The vault operator or authority changed during resolution; no credential was sent. Retry after configuration is stable.");
+      if(source.operator.expectedSource&&(second.key.source!==source.operator.expectedSource||second.key.tier!==source.operator.expectedTier))
+        throw new Fault(422,"vault_operator_changed",`The selected Secrets account/source changed from ${source.operator.expectedSource}; no alternate account was selected. Restore that source or rebind explicitly.`);
       credential = second.key; url = second.url;
     } else {
       // Legacy bindings deliberately select one exact source. Never reinterpret
@@ -301,7 +311,9 @@ export async function vaultEnvironment(binding: CredentialBinding, env: NodeJS.P
   } catch (error) {
     if (error instanceof Fault) throw error;
     const kind = error instanceof Error ? error.name : "";
-    const reason = kind === "CredentialFileUnsafeError" ? "unsafe canonical config/credentials file"
+    const detail = error instanceof Error ? error.message : "";
+    const reason = /keychain|security exited/i.test(detail) ? "selected Secrets Keychain source is locked or inaccessible"
+      : kind === "CredentialFileUnsafeError" ? "unsafe canonical config/credentials file"
       : kind === "ClientTransportConfigurationError" ? "invalid or missing canonical API URL/key"
       : source.operator.kind === "keychain" ? "unavailable pinned Keychain account"
       : "credential selection refused by Contracts (Keychain, canonical file, profile, or environment)";
@@ -318,19 +330,28 @@ export async function vaultEnvironment(binding: CredentialBinding, env: NodeJS.P
   next.HASNA_SECRETS_API_KEY = credential.apiKey;
   next.HASNA_SECRETS_API_KEY_OVERRIDE = credential.apiKey;
   if (binding.source.operator.kind === "keychain") next.HASNA_STATION = binding.source.operator.account;
-  return next;
+  return {environment:next,source:credential.source,tier:credential.tier,url:url!};
+}
+
+/** Select an operator through the shared credential seam, then pin that choice. */
+export async function vaultEnvironment(binding: CredentialBinding, env: NodeJS.ProcessEnv, options: Pick<CredentialChainOptions,"keychain"> = {}): Promise<NodeJS.ProcessEnv> {
+  return (await resolveVaultOperatorEnvironment(binding,env,options)).environment;
 }
 
 /** Vault children never own a harness or a TTY; their entire process group is bounded. */
-async function runVaultCommand(binding: CredentialBinding, args: string[], env: NodeJS.ProcessEnv, delivery: NodeJS.ProcessEnv = {}, captureCheck = false): Promise<string> {
+export async function runVaultCommand(binding: CredentialBinding, args: string[], env: NodeJS.ProcessEnv, delivery: NodeJS.ProcessEnv = {}, options: {
+  captureBytes?:number;oversizeCode?:string;oversizeMessage?:string;lookupCode?:string;lookupMessage?:string;operator?:VaultOperatorResolution;
+} = {}): Promise<string> {
   if (binding.source.kind !== "vault") throw new Fault(500,"credential_resolution","Unexpected credential source.");
   if (process.platform === "win32") throw new Fault(422,"vault_exec_unavailable","Vault CLI bindings currently require POSIX process groups; use runtime environment injection on Windows.");
   const executable = await validateVaultExecutable(binding.source.executable);
-  const childEnv = {...await vaultEnvironment(binding,env),...delivery};
+  const operator = options.operator ?? await resolveVaultOperatorEnvironment(binding,env);
+  const childEnv = {...operator.environment,...delivery};
   return new Promise((resolveResult,reject) => {
-    const child = spawn(executable,args,{env:childEnv,stdio:["ignore",captureCheck ? "pipe" : "ignore","ignore"],detached:true,shell:false});
+    const child = spawn(executable,args,{env:childEnv,stdio:["ignore",options.captureBytes ? "pipe" : "ignore","ignore"],detached:true,shell:false});
     let failure: Fault | undefined;
     let output = "";
+    let outputBytes = 0;
     let cleaned = false;
     const kill = () => { if (child.pid) { try { process.kill(-child.pid,"SIGKILL"); } catch {} } };
     const interrupt = (signal: "SIGINT" | "SIGTERM") => { failure = new CredentialInterrupted(signal === "SIGINT" ? 130 : 143); process.exitCode = signal === "SIGINT" ? 130 : 143; kill(); };
@@ -339,14 +360,15 @@ async function runVaultCommand(binding: CredentialBinding, args: string[], env: 
     const timeout = setTimeout(()=>{ failure = new Fault(504,"vault_timeout","Credential lookup exceeded 20 seconds; no alternate credential was selected."); kill(); },20_000);
     const cleanup = () => { if (cleaned) return; cleaned = true; clearTimeout(timeout); process.off("SIGINT",onInt); process.off("SIGTERM",onTerm); kill(); };
     child.stdout?.on("data",(chunk: Buffer) => {
-      if (output.length + chunk.length > 4096) { failure = new Fault(422,"vault_check_failed","The secrets CLI returned an oversized check result."); kill(); }
+      outputBytes += chunk.length;
+      if (outputBytes > (options.captureBytes ?? 0)) { failure = new Fault(422,options.oversizeCode??"vault_check_failed",options.oversizeMessage??"The secrets CLI returned an oversized result."); kill(); }
       else output += chunk.toString("utf8");
     });
     child.once("error",()=>{ cleanup(); reject(new Fault(422,"vault_exec_failed","The configured secrets CLI could not start; check its executable and permissions.")); });
     child.once("exit",cleanup);
     child.once("close",code=>{
       if (failure) reject(failure);
-      else if (code !== 0) reject(new Fault(422,"vault_lookup_failed","The secrets CLI could not read the configured key. Check vault access and conflicting local vault URL settings; no alternate account was selected."));
+      else if (code !== 0) reject(new Fault(422,options.lookupCode??"vault_lookup_failed",options.lookupMessage??"The secrets CLI could not read the configured key. Check vault access and conflicting local vault URL settings; no alternate account was selected."));
       else resolveResult(output);
     });
   });

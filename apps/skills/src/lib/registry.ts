@@ -4,7 +4,7 @@
 
 import { existsSync, readFileSync, readdirSync } from "fs";
 import { join } from "path";
-import { DATA_DIR_ENV, getDataDir, loadConfig } from "./config.js";
+import { getDataDirReadOnly, loadConfig } from "./config.js";
 import { listPortableSkillMetas } from "./portable-skills.js";
 import { isHostedMetadataSkillDir } from "./hosted-skill-set.js";
 import { mergeSkillRegistryLists } from "./registry-merge.js";
@@ -115,41 +115,12 @@ let registryCacheTime = 0;
 let registryCacheKey: string | null = null;
 const REGISTRY_CACHE_TTL = 5000;
 
-/**
- * Identifies the roots getDataDir() would resolve from, without calling it.
- *
- * Deliberately a string compare over the ambient inputs rather than the resolved
- * path: getDataDir() mkdirs, stats, and walks the legacy ~/.skills tree on every
- * call, so resolving it before the cache check would put that work on every cache
- * *hit* and defeat the cache entirely.
- *
- * Must list every variable getDataDir() reads, or the key degenerates and serves
- * entries discovered under a root the caller has already moved away from.
- *
- * JSON rather than a delimiter-joined string: no path can make it ambiguous, and
- * it keeps this file plain ASCII. An earlier revision used a raw NUL as the
- * delimiter, which made the file binary to git and therefore unreviewable.
- */
+/** Bind the cache to the effective app home and project without adopting or migrating either. */
 function registryRootKey(): string {
-  return JSON.stringify([
-    process.env[DATA_DIR_ENV] ?? "",
-    process.env["HOME"] ?? "",
-    process.env["USERPROFILE"] ?? "",
-  ]);
+  return JSON.stringify([getDataDirReadOnly(), process.cwd()]);
 }
 
-/**
- * Load the full registry: official skills merged with a configured private
- * extension checkout and global custom skills from the canonical local corpus
- * — <app folder>/installed/<name>/ before the owner-layout migration, <app
- * folder>/skills/<name>/ after it (resolveCorpusRoot(), the one resolution
- * every discovery path shares) — plus the legacy ~/.hasna/skills/custom/<name>/
- * migration safety net.
- *
- * Custom skills take precedence over extensions, which take precedence over
- * official skills. Extension skills are read in place and never copied into the
- * corpus. Results are cached for 5 seconds.
- */
+/** Discover the Skills-owned cache and explicitly configured authoring sources. */
 export function loadRegistry(cwd?: string): SkillMeta[] {
   const now = Date.now();
   // Key the cache on where the data dir resolves from, not just elapsed time: a
@@ -161,37 +132,20 @@ export function loadRegistry(cwd?: string): SkillMeta[] {
     return registryCache;
   }
 
-  const dataDir = getDataDir();
   const config = loadConfig();
-  const official = SKILLS.map((s) => ({ ...s, source: "official" as const }));
   const extensions = config.extensionsDir
     ? discoverSkillsInDir(config.extensionsDir, "extension")
     : [];
-  // No rootDir: let getPortableSkillsRoot() resolve the canonical corpus
-  // (<dataDir>/skills when the layout migration ran, else <dataDir>/installed
-  // with the legacy auto-copy). Passing the app folder as rootDir would read
-  // app data as if it were the corpus.
-  const portableCustom = listPortableSkillMetas();
-  // Kept as a safety net, not as a second home: migration copies custom/<name>
-  // into installed/, but if it ever fails (unreadable, out of space) those skills
-  // must still be discoverable. mergeCustomSkills() dedupes by name and the
-  // installed/ copy is merged last, so it wins.
-  const legacyCustom = discoverSkillsInDir(join(dataDir, "custom"));
-  const globalCustom = mergeCustomSkills([...legacyCustom, ...portableCustom]);
-
-  registryCache = mergeSkillRegistryLists(official, extensions, globalCustom);
+  const owned = listPortableSkillMetas();
+  registryCache = mergeSkillRegistryLists(extensions, owned);
   registryCacheTime = now;
   registryCacheKey = rootKey;
   return registryCache;
 }
 
+/** Compatibility name for the caller's own catalog; no baked-in default selection. */
 export function loadBasicRegistry(cwd?: string): SkillMeta[] {
-  const registry = loadRegistry(cwd);
-  const byName = new Map(registry.map((skill) => [skill.name, skill]));
-  // The basic profile is a curated, compact set. Custom/imported skills are gated
-  // out of the default `list` so bulk imports (e.g. 140 skills) cannot flood it;
-  // they remain discoverable via the "all" profile (`skills list --all`).
-  return BASIC_SKILL_NAMES.map((name) => byName.get(name)).filter((skill): skill is SkillMeta => skill !== undefined);
+  return loadRegistry(cwd);
 }
 
 export function loadRegistryProfile(profile: SkillRegistryProfile = "basic", cwd?: string): SkillMeta[] {
@@ -217,12 +171,6 @@ export function getSkill(name: string): SkillMeta | undefined {
   const slug = normalizeSkillSlug(name);
   return registry.find((s) => s.name === slug)
     ?? registry.find((s) => s.name === resolveSkillAlias(slug));
-}
-
-function mergeCustomSkills(skills: SkillMeta[]): SkillMeta[] {
-  const byName = new Map<string, SkillMeta>();
-  for (const skill of skills) byName.set(skill.name, skill);
-  return Array.from(byName.values()).sort((a, b) => a.name.localeCompare(b.name));
 }
 
 export function getSkillsByTag(tag: string): SkillMeta[] {

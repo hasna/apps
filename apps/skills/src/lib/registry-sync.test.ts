@@ -1,9 +1,11 @@
-import { describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "fs";
 import { tmpdir } from "os";
-import { join } from "path";
+import { join, relative } from "path";
 import pkg from "../../package.json" with { type: "json" };
-import { BASIC_SKILL_NAMES, SKILLS, clearRegistryCache } from "./registry.js";
+import { writeOwnedFixture } from "./private-corpus-test-utils.js";
+import { getSkillPath } from "./installer.js";
+import { clearRegistryCache } from "./registry.js";
 import {
   createRegistrySyncArtifact,
   writeRegistrySyncArtifact,
@@ -12,6 +14,10 @@ import {
 import { useDefaultTestTimeout } from "../test-preload.js";
 
 useDefaultTestTimeout();
+beforeEach(() => {
+  writeOwnedFixture("owner-report", { displayName: "Owner Report", category: "Research & Writing" });
+  writeOwnedFixture("owner-workflow");
+});
 
 function withCleanHome<T>(fn: () => T): T {
   const originalHome = process.env["HOME"];
@@ -44,10 +50,10 @@ describe("registry sync artifact", () => {
       repository: "hasna/skills",
       profile: "basic",
     });
-    expect(artifact.summary.skillCount).toBe(BASIC_SKILL_NAMES.length);
+    expect(artifact.summary.skillCount).toBe(2);
     expect(artifact.summary.validSkillCount).toBeNull();
     expect(artifact.skills.map((skill) => skill.name)).toEqual(
-      [...BASIC_SKILL_NAMES].sort(),
+      ["owner-report", "owner-workflow"],
     );
     expect(artifact.skills[0].docs).toBeUndefined();
     expect(artifact.skills[0].requirements).toBeUndefined();
@@ -56,16 +62,16 @@ describe("registry sync artifact", () => {
 
   test("includes docs, requirements, validation, and provenance by default", () => {
     const artifact = withCleanHome(() => createRegistrySyncArtifact({ profile: "basic" }));
-    const image = artifact.skills.find((skill) => skill.name === "market-research-report");
+    const image = artifact.skills.find((skill) => skill.name === "owner-report");
 
     expect(image).toBeDefined();
     expect(image?.source).toMatchObject({
       packageName: "@hasna/skills",
       packageVersion: pkg.version,
       repository: "hasna/skills",
-      directory: "skills/market-research-report",
+      directory: relative(process.cwd(), getSkillPath("owner-report")),
     });
-    expect(image?.docs?.best).toContain("Market Research");
+    expect(image?.docs?.best).toContain("Owner Report");
     expect(Array.isArray(image?.requirements?.envVars)).toBe(true);
     expect(image?.validation?.valid).toBe(true);
     expect(artifact.summary.invalidSkillCount).toBe(0);
@@ -79,8 +85,8 @@ describe("registry sync artifact", () => {
       includeValidation: false,
     }));
 
-    expect(artifact.summary.skillCount).toBe(SKILLS.length);
-    expect(artifact.skills.length).toBe(SKILLS.length);
+    expect(artifact.summary.skillCount).toBe(2);
+    expect(artifact.skills.length).toBe(2);
     expect(artifact.summary.categories.length).toBeGreaterThan(1);
   });
 

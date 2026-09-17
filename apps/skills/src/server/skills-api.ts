@@ -1,25 +1,14 @@
 /**
- * The published-skill half of /api/v1/skills.
- *
- * GET was already served entirely from the bundled corpus (src/server/registry.ts). This
- * module adds the rows an organization publishes to its own instance and merges the two
- * for every read, so one endpoint answers "what skills does this instance have" rather
- * than making a client ask twice and reconcile.
- *
- * Every read here takes the authenticated principal and is scoped to its org. That is not
- * a convention to be maintained by care: `store.listSkills`/`getSkill`/`getSkillBundle`
- * take a principal and have no unscoped variant, so there is no shape this module could
- * be written in that reads another tenant's rows.
+ * Authenticated, organization-scoped skill publication and reads.
+ * The server never merges its process-local CLI catalog into a tenant's data.
  */
 import { createHash } from "node:crypto";
 import { ownBytes, type OwnedBytes } from "../lib/skill-bundle.js";
 import type { SkillMeta } from "../lib/registry-types.js";
-import { mergeSkillRegistryLists } from "../lib/registry-merge.js";
 import { REVISION_ID_PATTERN } from "../lib/revision.js";
 import { isValidSkillVersion, SKILL_VERSION_RULE } from "../lib/skill-version.js";
 import type { ArtifactStorage } from "./artifact-storage.js";
 import type { SkillsServerConfig } from "./config.js";
-import { getServerSkill, getServerSkillMd, listServerSkills } from "./registry.js";
 import { SkillRevisionConflictError, SkillVersionExistsError, type ApiPrincipal, type PublishSkillInput, type ServerPin, type ServerSkillRecord, type ServerSkillVersion, type SkillsProductStore } from "./types.js";
 
 /**
@@ -182,47 +171,17 @@ export async function tombstoneStatus(
   };
 }
 
-/**
- * Bundled corpus plus this org's published skills, published winning on a slug collision.
- *
- * Same rule as the CLI-side merge in src/lib/registry-merge.ts and for the same reason: an
- * organization that published `deploy-notes` on their own instance meant to override the
- * bundled `deploy-notes` there.
- */
+/** List only records belonging to the authenticated organization. */
 export async function listMergedSkills(store: SkillsProductStore, principal: ApiPrincipal): Promise<Record<string, unknown>[]> {
-  const published = await store.listSkills(principal);
-  return mergedSkillPayloads(published, listServerSkills());
-}
-
-/**
- * Merge a set of published records with the bundled corpus into the wire shape
- * of GET /api/v1/skills: published wins on a slug collision, and published
- * rows carry the full publishedPayload while bundled rows pass through.
- *
- * Shared by the plain listing and the tag-filtered listing so the two can
- * never drift apart in precedence or payload shape.
- */
-function mergedSkillPayloads(published: ServerSkillRecord[], bundled: SkillMeta[]): Record<string, unknown>[] {
-  const publishedBySlug = new Map(published.map((record) => [record.slug, record]));
-  // The bundled list is handed over WHOLE, colliding slugs included, so the precedence
-  // table is what resolves them. Pre-filtering the collisions out first made the merge
-  // call a no-op over two disjoint sets - the right answer, produced by the filter rather
-  // than by the rule any test was aiming at.
-  const merged = mergeSkillRegistryLists(
-    bundled,
-    published.map(publishedSkillMeta),
-  );
-  return merged.map((skill) => {
-    const record = publishedBySlug.get(skill.name);
-    return record ? publishedPayload(record) : (skill as unknown as Record<string, unknown>);
-  });
+  return (await store.listSkills(principal))
+    .sort((a, b) => a.slug.localeCompare(b.slug))
+    .map((record) => publishedPayload(record));
 }
 
 /**
  * What a read of one slug resolves to: the org's published row (live or tombstoned) or
- * nothing. The bundled-corpus fallback is the callers' decision, not this resolver's —
- * a tombstoned slug must answer 410 even when a bundled skill of the same name exists,
- * because the caller asked for the skill this instance serves under that slug.
+ * nothing. Tombstones retain their 410 response until expiry; no machine-local
+ * content can substitute for an absent or deleted organization record.
  */
 export type SkillReadResolution =
   | { kind: "published"; record: ServerSkillRecord }
@@ -243,53 +202,20 @@ export async function resolvePublishedSkill(
   return { kind: "published", record };
 }
 
-/**
- * Distinct tags across the org's registry view: the org's published tags (the
- * indexed store query over the skills_tags projection, in both backends) plus
- * the bundled corpus's, which is a fixed in-process set. The route serves the
- * same universe GET /api/v1/skills serves, so a client can take any tag this
- * list returns and filter with it. Sorted, de-duplicated, and emptied of blank
- * entries to match the client contract (non-empty tag names).
- */
+/** Distinct, non-empty tags in the authenticated organization's published catalog. */
 export async function listOrgTags(store: SkillsProductStore, principal: ApiPrincipal): Promise<string[]> {
-  // The org's published tags (indexed projection query) plus the bundled
-  // corpus's - except bundled skills whose slug a published row occupies: the
-  // published row wins the slug in the merged view, so its bundled twin's tags
-  // must not resurface in /tags (the same collision rule as listMergedSkills).
-  const publishedSlugs = await store.listPublishedSlugs(principal);
-  const tags = new Set<string>();
-  for (const tag of await store.listTags(principal)) {
-    if (tag.trim()) tags.add(tag);
-  }
-  for (const skill of listServerSkills()) {
-    if (publishedSlugs.includes(skill.name)) continue;
-    for (const tag of skill.tags) {
-      if (tag.trim()) tags.add(tag);
-    }
-  }
-  return [...tags].sort();
+  return [...new Set((await store.listTags(principal)).filter((tag) => tag.trim()))].sort();
 }
 
-/**
- * The merged registry view (bundled + published) filtered to skills carrying an
- * exact tag. Same merge rules and payloads as listMergedSkills - the tag filter
- * narrows what GET /api/v1/skills would have returned, it does not switch to a
- * different universe. The published half comes from the indexed store query;
- * only the static bundled corpus is filtered in-process, and a bundled skill
- * whose slug a published row occupies is excluded so published-wins precedence
- * holds for tag reads exactly as it does for the unfiltered view.
- */
+/** The same organization catalog filtered through the store's indexed tag query. */
 export async function listMergedSkillsByTag(
   store: SkillsProductStore,
   principal: ApiPrincipal,
   tag: string,
 ): Promise<Record<string, unknown>[]> {
-  const published = await store.listSkillsByTag(principal, tag);
-  const publishedSlugs = await store.listPublishedSlugs(principal);
-  const bundled = listServerSkills().filter(
-    (skill) => skill.tags.includes(tag) && !publishedSlugs.includes(skill.name),
-  );
-  return mergedSkillPayloads(published, bundled);
+  return (await store.listSkillsByTag(principal, tag))
+    .sort((a, b) => a.slug.localeCompare(b.slug))
+    .map((record) => publishedPayload(record));
 }
 
 /**
@@ -305,32 +231,13 @@ export function skillSummary(skill: Record<string, unknown>): Record<string, unk
   };
 }
 
-/**
- * The principal's pins filtered to slugs whose skill (bundled or published, in
- * this org's merged view) carries the exact tag. A pin carries no tag of its
- * own - the filter resolves each pinned slug against the registry view, the
- * same way the rest of the surface treats a pin as a fact about a skill.
- *
- * Published pins come from the indexed store query (skills_tags projection);
- * the bundled-corpus half is resolved in-process against the static corpus and
- * excludes slugs a published row occupies, so every pinned slug resolves
- * through exactly one path (published wins) and no pin can appear twice.
- */
+/** Only published skills in this organization can contribute tags to its pins. */
 export async function listPinsByTag(
   store: SkillsProductStore,
   principal: ApiPrincipal,
   tag: string,
 ): Promise<Record<string, unknown>[]> {
-  const publishedSlugs = await store.listPublishedSlugs(principal);
-  const bundledTaggedSlugs = new Set<string>();
-  for (const skill of listServerSkills()) {
-    if (skill.tags.includes(tag) && !publishedSlugs.includes(skill.name)) bundledTaggedSlugs.add(skill.name);
-  }
-  const publishedPins = await store.listPinsByTag(principal, tag);
-  const bundledPins = bundledTaggedSlugs.size
-    ? (await store.listPins(principal)).filter((pin) => bundledTaggedSlugs.has(pin.slug))
-    : [];
-  return [...publishedPins, ...bundledPins]
+  return (await store.listPinsByTag(principal, tag))
     .sort((a, b) => a.slug.localeCompare(b.slug))
     .map(pinPayload);
 }
@@ -344,10 +251,7 @@ export async function getMergedSkill(
   const resolved = await resolvePublishedSkill(store, artifactStorage, principal, slug);
   if (resolved.kind === "tombstone") return resolved.payload;
   if (resolved.kind === "published") return publishedPayload(resolved.record);
-  const bundled = getServerSkill(slug);
-  // This is an explicit absence statement about this organization's published
-  // row, not an inference a client should make from catalogue provenance.
-  return bundled ? { ...bundled, publicationState: "catalogue-only", revisionId: null } : null;
+  return null;
 }
 
 /**
@@ -365,7 +269,7 @@ export async function getMergedSkillMd(
   const resolved = await resolvePublishedSkill(store, artifactStorage, principal, slug);
   if (resolved.kind === "tombstone") return null;
   if (resolved.kind === "published") return resolved.record.skillMd ?? null;
-  return getServerSkillMd(slug);
+  return null;
 }
 
 interface ParsedPublish {

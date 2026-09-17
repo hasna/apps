@@ -18,9 +18,15 @@ bun add --global @hasna/instructions
 
 ```bash
 instructions --help
-instructions init
+
+# Hosted-by-default: resolves the approved key and uses
+# https://api.hasna.com/instructions/v1.
+instructions status
 instructions list
-instructions profile resolve
+
+# Explicit on-box SQLite mode; there is never an implicit fallback.
+HASNA_INSTRUCTIONS_LOCAL=1 instructions init
+HASNA_INSTRUCTIONS_LOCAL=1 instructions list
 ```
 
 ## Migrating from `@hasna/configs`
@@ -28,6 +34,19 @@ instructions profile resolve
 This package was formerly `@hasna/configs`. The `configs` CLI alias and
 `configs-mcp` alias remain available for existing integrations; new usage can
 use the `instructions` names.
+
+Historical on-box rows can be migrated without overwriting the current store:
+
+```bash
+export HASNA_INSTRUCTIONS_LOCAL=1
+instructions migrate-legacy --confirm-local --json          # no-write plan
+instructions migrate-legacy --confirm-local --apply --json  # backup + transaction
+```
+
+The source defaults to `~/.hasna/configs/configs.db`; the destination defaults
+to the current `instructions.db`. A non-empty destination is refused unless
+`--merge-preserve-destination` is explicit, and that merge never overwrites an
+existing row.
 
 ## CLI Usage
 
@@ -109,8 +128,9 @@ instructions-mcp --http          # http://127.0.0.1:8807/mcp
 MCP_HTTP=1 instructions-mcp
 ```
 
-Health: `GET http://127.0.0.1:8807/health`. MCP is also mounted on
-`instructions-serve` at `/mcp`.
+Health: `GET http://127.0.0.1:8807/health`. The production
+`instructions-serve` process deliberately does **not** mount MCP; local MCP and
+the authenticated `/v1` service remain separate authorities.
 
 ## HTTP API server (`instructions-serve`)
 
@@ -120,14 +140,20 @@ instructions-serve
 
 Surfaces:
 
-- `GET /health`, `GET /ready`, `GET /version` → `{ status, version, mode }`
+- `GET /health`, `GET /ready`, `GET /version` → `{ status, version, backend }`
 - `GET /openapi.json`, `GET /v1/openapi.json` → the OpenAPI 3.1 document the SDK
   is generated from.
 - `/v1/*` — versioned cloud API (configs, profiles, snapshots, stats).
 - No `/api/*` — the former local REST surface is not mounted (the removed
   bundled dashboard was its only consumer).
 
-### Server data backend (postgresql)
+### Server data backend (PostgreSQL, fail closed)
+
+`instructions-serve` requires `HASNA_INSTRUCTIONS_DATABASE_URL` (or its documented
+alias) for a usable `/v1` service. Without a DSN, `/health` remains a liveness
+probe but reports `backend: "unconfigured"`; `/ready` returns 503 and `/v1`
+returns a stable unavailable error. It never exposes local SQLite over the
+service boundary.
 
 When `HASNA_INSTRUCTIONS_DATABASE_URL` is set the `/v1` API reads/writes the
 shared Postgres **directly** (no local sync/cache in the service) and every
@@ -149,6 +175,16 @@ and `API_KEY_SIGNING_SECRET` are also accepted). Client apps never carry a DSN �
 they resolve `HASNA_INSTRUCTIONS_API_KEY` (or the Keychain / credentials-file
 tiers) through the one `@hasna/contracts` client resolver, and the authority
 defaults to the fleet gateway `https://api.hasna.com/instructions`.
+
+Collection responses are producer-bounded with `limit`/`cursor` envelopes.
+Current clients follow every page; `view=identity` returns an allowlisted
+metadata-only projection for configs, profiles, and machines, without loading
+instruction content or private profile fields. Retryable create and binding
+writes may send `Idempotency-Key`; PostgreSQL stores the authenticated
+principal, operation, canonical request digest, and first committed response in
+the same transaction as the domain mutation. A same-body retry replays that
+response, while key reuse with different bytes returns
+`409 IDEMPOTENCY_KEY_REUSED`.
 
 ## SDK
 
@@ -215,6 +251,87 @@ transport is decided by what resolves, never by a mode word.
 Clients never hold a database DSN. The raw Postgres connection is a server-only
 concern (`instructions-serve`), selected by `HASNA_INSTRUCTIONS_DATABASE_URL`.
 
+
+
+## Domain export and import
+
+`instructions export` writes a restorable Instructions domain archive v2. The
+archive contains config content and every retained config snapshot, profiles,
+ordered profile membership and config-binding metadata, profile asset bindings,
+and registered machines. Relationships are recorded by stable config/profile
+slugs and machine hostnames, so import can map them safely onto destination IDs.
+
+```bash
+instructions export --output ./instructions-domain.tar.gz
+instructions import ./instructions-domain.tar.gz # exact recovery into an empty destination
+```
+
+V2 is deliberately a recovery format, not a merge format. Import validates the
+complete archive and requires a destination with zero configs, profiles, and
+machines before the first mutation. `--overwrite` is rejected for v2 before
+destination inspection or mutation. Any validation, mutation, or readback
+failure throws and makes the CLI exit nonzero; discard that attempted
+destination and retry from a newly empty database.
+
+The manifest contains deterministic per-collection counts and SHA-256 logical
+hashes for pre/post deployment comparison without placing instruction content
+in logs. Exact deployment integrity includes config `created_at`, `updated_at`,
+and `synced_at`; snapshot `created_at`; profile `created_at` and `updated_at`;
+and machine `created_at` plus the exact `last_applied_at` value. After recovery,
+import reads the complete domain back through `ConfigStore` and verifies every
+field that interface can reproduce: config data and versions, retained snapshot
+contents, profiles, ordered bindings, asset mappings, machines, and whether a
+machine was ever applied.
+
+`ConfigStore` cannot assign archived config/profile/snapshot/machine creation or
+update timestamps, nor an exact machine `last_applied_at`; generated destination
+IDs are also intentionally remapped by stable slugs and hostnames. These values
+remain protected in the archive's exact integrity hashes but are not recreated
+by recovery. ConfigStore also has no cross-entity transaction, so an operational
+failure may leave a partial destination; the nonzero result is terminal and that
+destination must not be reused. Legacy v1 config-only archives remain importable,
+including their historical skip/overwrite conflict behavior.
+
+API keys and idempotency receipts are intentionally excluded: they are security
+and transport state that must be provisioned independently. Feedback is also
+excluded because it is product telemetry, not part of the Instructions
+configuration domain.
+
+## Native S3 backup storage
+
+S3 is an **adjunct immutable backup plane**, never a database selector. SQLite
+remains the explicit local authority and PostgreSQL remains the hosted `/v1`
+authority. Setting S3 variables alone never opens SQLite, never selects HTTP,
+and never changes CRUD routing.
+
+```bash
+export HASNA_INSTRUCTIONS_S3_BUCKET=your-private-bucket
+export HASNA_INSTRUCTIONS_AWS_REGION=us-east-1
+# Optional: HASNA_INSTRUCTIONS_S3_PREFIX (default: instructions/)
+# Optional local/S3-compatible endpoint and explicit static credentials.
+
+instructions storage status --json
+instructions export --output ./instructions-backup.tar.gz
+instructions storage backup push ./instructions-backup.tar.gz   --id 2026-09-15-pre-deploy --dry-run --json
+instructions storage backup push ./instructions-backup.tar.gz   --id 2026-09-15-pre-deploy --json
+instructions storage backup verify 2026-09-15-pre-deploy --json
+instructions storage backup pull 2026-09-15-pre-deploy   --output ./restored-instructions.tar.gz --json
+```
+
+Each backup uses traversal-safe deterministic keys, an atomically created
+payload, and an atomically created manifest containing SHA-256, byte size,
+content type, and creation time. Native S3 creation uses `If-None-Match: *`;
+concurrent different-byte writers cannot replace the winner, identical replay
+is idempotent, and an injected store without conditional-create support fails
+closed. Pulls verify the payload before an owner-only local file is written.
+Production backup buckets must enable versioning, encryption, public-access
+blocking, and S3 Object Lock with a default retention period. AWS runtime
+credentials may come from Bun's standard AWS chain (including an ECS task role);
+explicit static credentials are optional and must be a complete pair. Status
+never prints credential values or the bucket name.
+
+The public importable surface is available at `@hasna/instructions/storage`.
+
 ## Data Directory
 
 Local data (the SQLite store and backups) lives under the configs store home,
@@ -264,6 +381,28 @@ is passed. Apply writes generated manifests with file hashes, checks previous
 manifests for drift, refuses unmanaged file conflicts unless `--force` is
 passed, removes stale managed mirrors only when safe, and writes local snapshots
 before mutating managed files.
+
+Grok Build and Devin CLI can render global instructions into an explicitly
+selected native home. Pass Grok's `GROK_HOME` directory or Devin's resolved user
+config directory as `--target-home`; the renderer writes a flattened `AGENTS.md`
+and its ownership manifest there. Devin's target is the `devin` config directory,
+not its parent `XDG_CONFIG_HOME` or its credential-data directory.
+
+```bash
+instructions session plan --tool grok --profile work \
+  --target-home "$GROK_HOME" --identity-export ./instructions.json --json
+instructions session apply --tool devin --profile work \
+  --target-home /absolute/isolated/config/devin --identity-export ./instructions.json
+```
+
+An explicit `--project-root` keeps the project renderer: Grok writes repository
+`AGENTS.md`; Devin writes `.devin/rules/*.md`. Without either explicit target,
+these providers remain blocked. Compiled native profiles select the
+`native-profile` capability (Grok 1.0.13+, Devin 3000.10.21+); conditional bindings
+require an explicit supported fallback because global `AGENTS.md` is always on.
+The existing conflict, drift, symlink and snapshot checks also apply to native homes.
+See [Devin global rules](https://docs.devin.ai/cli/extensibility/rules) and
+[Grok settings](https://docs.x.ai/build/settings) for native home configuration.
 
 ### Session renderer ownership
 

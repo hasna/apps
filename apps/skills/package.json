@@ -1,6 +1,6 @@
 {
   "name": "@hasna/skills",
-  "version": "0.5.11",
+  "version": "0.8.5",
   "description": "Skills library for AI coding agents",
   "type": "module",
   "bin": {
@@ -63,7 +63,8 @@
     "verify:consumer-types": "bun run scripts/consumer-types.ts",
     "prepare": "bun run build:js",
     "prepack": "bun run build && bun run verify:release && bun run verify:consumer-types",
-    "prepublishOnly": "bun run typecheck && bun run test"
+    "prepublishOnly": "bun run verify:producer && bun run typecheck && bun run test",
+    "verify:producer": "bun run scripts/release-dependencies.ts"
   },
   "keywords": [
     "skills",
@@ -84,7 +85,8 @@
   "author": "Hasna",
   "license": "Apache-2.0",
   "devDependencies": {
-    "@hasna/contracts": "1.0.2",
+    "@hasna/contracts": "1.1.0",
+    "@hasna/secrets": "0.4.2",
     "@types/bun": "1.3.14",
     "@types/node": "25.2.3",
     "@types/react": "^18.2.0",
@@ -119,8 +121,8 @@
     "url": "https://github.com/hasna/apps.git",
     "directory": "apps/skills"
   },
-  "homepage": "https://github.com/hasna/skills",
+  "homepage": "https://github.com/hasna/apps/tree/main/apps/skills",
   "bugs": {
-    "url": "https://github.com/hasna/skills/issues"
+    "url": "https://github.com/hasna/apps/issues"
   }
 }

@@ -63,20 +63,17 @@ describe("CLI tags and brief output", () => {
           SKILLS_API_KEY: "fixture-remote-read",
         });
         expect(exitCode).toBe(0);
-        // Merged, so the instance's tags are added to the bundled corpus's rather than
-        // standing in for them. "remote" is the tag only the instance supplies; "audio"
-        // exists in both, and its count is the sum.
+        // The configured authority owns discovery; bundled authoring tags cannot leak in.
         const data = JSON.parse(stdout);
         const counts = new Map<string, number>(data.map((entry: any) => [entry.name, entry.count]));
-        // Counts are sums across both halves, not the instance's alone, so they are
-        // asserted as lower bounds against a baseline taken without --remote. Asserting
-        // the exact numbers would re-encode the bundled corpus's whole tag census here
-        // and break on every skill added.
         const { stdout: localOnly } = await runCli(["tags", "--json"]);
         const baseline = new Map<string, number>(JSON.parse(localOnly).map((entry: any) => [entry.name, entry.count]));
-        expect(counts.get("remote")).toBe((baseline.get("remote") ?? 0) + 2);
-        expect(counts.get("audio")).toBe((baseline.get("audio") ?? 0) + 1);
-        expect(data.length).toBeGreaterThanOrEqual(baseline.size);
+        expect(counts.get("remote")).toBe(2);
+        expect(counts.get("audio")).toBe(1);
+        expect(data.length).toBe(2);
+        const localOnlyTag = [...baseline.keys()].find(tag => tag !== "audio" && tag !== "remote");
+        expect(localOnlyTag).toBeDefined();
+        expect(counts.has(localOnlyTag!)).toBe(false);
       } finally {
         server.stop(true);
       }

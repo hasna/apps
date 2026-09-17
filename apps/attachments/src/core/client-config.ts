@@ -40,9 +40,11 @@
 import {
   ClientTransportConfigurationError,
   clientTransportEnvKeys,
+  completePointerCredential,
   resolveClientTransport,
   resolveCredential,
   type ResolveClientTransportOptions,
+  type ResolvedCredential,
 } from "@hasna/contracts/client";
 
 /** Process-environment shape accepted by the shared seam. */
@@ -102,7 +104,9 @@ export interface AttachmentsTransportResolution {
   /** The resolver's `<origin>/v1` base. */
   baseUrl: string;
   /**
-   * The credential. NON-ENUMERABLE on the returned object — enumeration,
+   * The literal credential, or an empty string for a deferred vault reference.
+   * Request callers complete references through resolveServiceRequestTransport.
+   * NON-ENUMERABLE on the returned object — enumeration,
    * spread and JSON serialization cannot spill it (property access works).
    */
   apiKey: string;
@@ -145,37 +149,58 @@ export function resolveAttachmentsTransport(
   env: Env = process.env,
   options: ResolveAttachmentsTransportOptions = {},
 ): AttachmentsTransportResolution {
+  return resolveServiceTransport("attachments", env, options);
+}
+
+/** Synchronous admission and diagnostics; vault values are resolved per request. */
+export function resolveServiceTransport(
+  name: string,
+  env: Env = process.env,
+  options: ResolveAttachmentsTransportOptions = {},
+): AttachmentsTransportResolution {
+  return resolveServiceSnapshot(name, env, options).report;
+}
+
+interface ServiceSnapshot {
+  report: AttachmentsTransportResolution;
+  credential: ResolvedCredential;
+}
+
+function resolveServiceSnapshot(
+  name: string,
+  env: Env,
+  options: ResolveAttachmentsTransportOptions,
+): ServiceSnapshot {
   const credentials: AttachmentsCredentialChainOptions = options.credentials ?? {};
 
-  // ONE Keychain pass, not two. Resolution would otherwise spawn
-  // `/usr/bin/security` once for the credential value and again inside the
-  // transport pass for the same item; handing the resolved value down as
-  // tier 1 makes the second pass return it immediately. The transport still
-  // decides the authority exactly as before. This also closes a TOCTOU: the
-  // key the transport validated and the key we send are the same read.
-  const credential = resolveCredential("attachments", env, credentials);
-  const chainOptions: ResolveClientTransportOptions = credential
+  // Hand a resolved literal to the authority pass without rereading its
+  // Keychain value. A reference must remain a pointer; its empty value is
+  // never a tier-1 literal. The request boundary revalidates this binding
+  // before and after any asynchronous vault lookup.
+  const credential = resolveCredential(name, env, credentials);
+  const chainOptions: ResolveClientTransportOptions = credential && credential.tier !== "pointer"
     ? { credentials: { ...credentials, apiKey: credential.apiKey } }
     : { credentials };
-  const resolution = resolveClientTransport("attachments", env, chainOptions);
+  const resolution = resolveClientTransport(name, env, chainOptions);
 
-  const apiKey = credential?.apiKey;
-  if (!apiKey) {
+  if (!credential || (!credential.apiKey && credential.tier !== "pointer")) {
     // Unreachable: the transport throws whenever no credential resolves. The
     // guard is the loud local refusal that keeps an unauthenticated client
     // from ever being constructed if the two calls drift apart.
-    const [urlKey] = clientTransportEnvKeys("attachments").apiUrlKeys;
+    const [urlKey] = clientTransportEnvKeys(name).apiUrlKeys;
     throw new ClientTransportConfigurationError(
-      "attachments",
-      `${urlKey} is not set and no API key could be resolved for 'attachments'; ` +
-        `refusing to construct an unauthenticated client. Looked at ` +
-        `HASNA_ATTACHMENTS_API_KEY_OVERRIDE / HASNA_PROFILE / HASNA_ATTACHMENTS_API_KEY_REF, the Keychain ` +
-        `item hasna.credentials.attachments.api-key, ~/.hasna/attachments/config/credentials, then ` +
-        `HASNA_ATTACHMENTS_API_KEY.`,
+      name,
+      `${urlKey} is not set and no API key could be resolved for '${name}'; ` +
+        "refusing to construct an unauthenticated client.",
       [resolution.transportSource],
     );
   }
+  if (credential.tier === "pointer" &&
+      (resolution.apiKeyTier !== credential.tier || resolution.apiKeySource !== credential.source)) {
+    throw new ClientTransportConfigurationError(name, "The credential selection changed during resolution.");
+  }
 
+  const apiKey = credential.apiKey;
   const report = {
     url: stripV1(resolution.baseUrl),
     baseUrl: resolution.baseUrl,
@@ -195,5 +220,34 @@ export function resolveAttachmentsTransport(
     writable: false,
     configurable: false,
   });
+  return { report, credential };
+}
+
+/** Complete the shared provider and revalidate the binding before dispatch. */
+export async function resolveServiceRequestTransport(
+  name: string,
+  env: Env = process.env,
+  options: ResolveAttachmentsTransportOptions = {},
+  pinnedUrl?: string,
+): Promise<AttachmentsTransportResolution> {
+  const first = resolveServiceSnapshot(name, env, options);
+  const reviewed = resolveServiceSnapshot(name, env, options);
+  const same = (left: ServiceSnapshot, right: ServiceSnapshot) =>
+    left.report.url === right.report.url &&
+    left.credential.apiKey === right.credential.apiKey &&
+    left.credential.pointerVaultKey === right.credential.pointerVaultKey &&
+    left.credential.source === right.credential.source && left.credential.tier === right.credential.tier;
+  const changed = () => new ClientTransportConfigurationError(name,
+    "The configured authority or credential changed while preparing the request; no authenticated request was sent.");
+  if (pinnedUrl !== undefined && reviewed.report.url !== pinnedUrl) {
+    throw new ClientTransportConfigurationError(name, "API authority changed; construct a new client explicitly.");
+  }
+  if (!same(first, reviewed)) throw changed();
+  const completed = reviewed.credential.tier === "pointer"
+    ? await completePointerCredential(name, reviewed.credential, env)
+    : reviewed.credential;
+  if (!same(reviewed, resolveServiceSnapshot(name, env, options))) throw changed();
+  const report = { ...reviewed.report, apiKeySource: completed.source };
+  Object.defineProperty(report, "apiKey", { value: completed.apiKey, enumerable: false, writable: false, configurable: false });
   return report;
 }

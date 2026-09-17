@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { TEST_CATALOG } from "../lib/private-corpus-test-utils.js";
 import { runCli } from "./cli.test-utils";
 
 import { useDefaultTestTimeout } from "../test-preload.js";
@@ -32,6 +33,6 @@ describe("CLI tool primitives", () => {
     expect(data.valid).toBe(true);
     expect(data.mappedSkillCount).toBe(data.skillCount);
     // OSS catalog: 20 instruction + 66 executable = 86 shipped skills.
-    expect(data.skillCount).toBe(86);
+    expect(data.skillCount).toBe(TEST_CATALOG.length);
   });
 });

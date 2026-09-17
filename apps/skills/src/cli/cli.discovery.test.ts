@@ -12,7 +12,7 @@ import {
   stderrWithoutLocalNotice,
 } from "./cli.test-utils";
 
-import { useDefaultTestTimeout } from "../test-preload.js";
+import { useDefaultTestTimeout, withoutDataDirOverrideEnv } from "../test-preload.js";
 
 useDefaultTestTimeout();
 
@@ -151,7 +151,7 @@ describe("CLI discovery", () => {
       const proc = Bun.spawn(["bash", "-c", command], {
         stdout: "pipe",
         stderr: "pipe",
-        env: { ...process.env, HOME: CLEAN_CLI_HOME, NO_COLOR: "1", SKILLS_TEST_MODE: "1", HASNA_SKILLS_LOCAL: "1" },
+        env: { ...withoutDataDirOverrideEnv({ ...process.env }), HOME: CLEAN_CLI_HOME, NO_COLOR: "1", SKILLS_TEST_MODE: "1", HASNA_SKILLS_LOCAL: "1" },
       });
       const stdout = await new Response(proc.stdout).text();
       const stderr = await new Response(proc.stderr).text();
@@ -208,13 +208,9 @@ describe("CLI discovery", () => {
           SKILLS_API_KEY: "fixture-remote-read",
         });
         expect(exitCode).toBe(0);
-        // Merged: the instance's categories appear ALONGSIDE the bundled ones rather than
-        // replacing them. Asserting the exact list would just re-encode the whole bundled
-        // taxonomy into this test, so it asserts the property that changed.
+        // The authenticated API owns discovery; local categories cannot shadow it.
         const data = JSON.parse(stdout);
-        expect(data).toContainEqual({ name: "Remote Tools", count: 2 });
-        expect(data.map((entry: any) => entry.name)).toContain("Development Tools");
-        expect(data.length).toBeGreaterThan(1);
+        expect(data).toEqual([{ name: "Remote Tools", count: 2 }]);
       } finally {
         server.stop(true);
       }
@@ -262,8 +258,8 @@ describe("CLI discovery", () => {
 
     test("lists full-registry categories with --all", async () => {
       const { stdout } = await runCli(["list", "--category", "Development Tools", "--all"]);
-      // 5 instruction + 24 restored credential-free executable skills.
-      expect(stdout).toContain("Development Tools (29)");
+      // Both owned Development Tools fixtures are discoverable.
+      expect(stdout).toContain("Development Tools (2)");
       expect(stdout).toContain("repo-onboarding-report");
     });
 
@@ -337,15 +333,12 @@ describe("CLI discovery", () => {
         });
         const data = JSON.parse(stdout);
         expect(exitCode).toBe(0);
-        // MERGED, not replaced. `--remote` used to return exactly what the instance
-        // served, so pointing the CLI at your own server made the bundled corpus and
-        // every locally written skill vanish from the listing. Both halves are present
-        // now, resolved by the precedence rule in src/lib/registry-merge.ts.
+        // Remote discovery is authoritative even where local names collide.
         const names = data.map((skill: any) => skill.name);
         expect(names).toContain("market-research-report");
         expect(names).toContain("logo-design");
-        expect(names).toContain("blog-article");
-        expect(data.length).toBeGreaterThan(2);
+        expect(names).not.toContain("blog-article");
+        expect(data.length).toBe(2);
         const image = data.find((skill: any) => skill.name === "market-research-report");
         const logo = data.find((skill: any) => skill.name === "logo-design");
         expect(image).toMatchObject({
@@ -403,7 +396,7 @@ describe("CLI discovery", () => {
         expect(exitCode).toBe(0);
         const names = data.map((skill: any) => skill.name);
         expect(names).toContain("remote-only-skill");
-        expect(names).toContain("blog-article");
+        expect(names).not.toContain("blog-article");
         const remote = data.find((skill: any) => skill.name === "remote-only-skill");
         expect(remote).toMatchObject({
           source: "remote",
@@ -575,7 +568,7 @@ describe("CLI discovery", () => {
       const proc = Bun.spawn(["bash", "-c", command], {
         stdout: "pipe",
         stderr: "pipe",
-        env: { ...process.env, HOME: CLEAN_CLI_HOME, NO_COLOR: "1", SKILLS_TEST_MODE: "1", HASNA_SKILLS_LOCAL: "1" },
+        env: { ...withoutDataDirOverrideEnv({ ...process.env }), HOME: CLEAN_CLI_HOME, NO_COLOR: "1", SKILLS_TEST_MODE: "1", HASNA_SKILLS_LOCAL: "1" },
       });
       const stdout = await new Response(proc.stdout).text();
       const stderr = await new Response(proc.stderr).text();

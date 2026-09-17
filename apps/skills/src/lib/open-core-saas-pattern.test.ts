@@ -25,20 +25,17 @@ describe("open-core hosted service pattern", () => {
     expect(content).toContain("no billing or credits command namespaces");
   });
 
-  test("documents the browse/list registry merge accurately", () => {
-    // P1 fix: getBrowseRegistry() (src/cli/commands/list.ts) merges the
-    // configured API registry on the default read path via mergeRemoteRegistry()
-    // (src/lib/remote-registry.ts) whenever an origin and credential are
-    // configured, and fails closed (local only) otherwise. The doc must
-    // classify browse/list (list/ls, search/s, categories, tags) as
-    // server-aware, never as local-only.
-    expect(content).toContain("getBrowseRegistry");
-    expect(content).toContain("mergeRemoteRegistry");
-    expect(content).toContain("fail closed");
-    expect(content).toContain("UNION cloud");
-    // Negative control: the terminated candidate's false claim — that
-    // browse/list "run on this machine and require no API origin" — must not
-    // reappear.
+  test("documents hosted discovery authority and explicit local authoring", () => {
+    expect(content).toContain("getBrowseRegistry()");
+    expect(content).toContain("src/lib/read-access.ts");
+    expect(content).toContain("A configured API is authoritative");
+    expect(content).toContain("including with `--all` or `--remote`");
+    expect(content).toContain("Local drafts and extension folders cannot shadow or join hosted metadata");
+    expect(content).toContain("HASNA_SKILLS_LOCAL=1");
+    expect(content).toContain("environment variables outrank the local opt-in");
+    expect(content).toContain("never fall back to local content");
+    expect(content).not.toContain("UNION cloud");
+    expect(content).not.toContain("mergeRemoteRegistry()");
     expect(content).not.toContain("browse/list) run on this machine and require no API origin");
   });
 

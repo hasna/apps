@@ -12,7 +12,7 @@ The owner-directed HTTPS/PostgreSQL boundary and independently reviewed Contract
 Contracts files or invented registry version are used. The published Contracts
 dependency remains for authentication, SDK generation, artifact scanning and —
 since the 2026-09-04 credential-adoption ruling (hasna/apps#1720) — the client
-credential resolver, pinned exactly to published @hasna/contracts 1.0.2. This
+credential resolver, pinned exactly to published @hasna/contracts 1.1.0. This
 storage kit itself remains application-owned source: it is not an unmodified
 generated registry kit, and no unpublished Contracts source is copied or consumed.
 

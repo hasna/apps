@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { Hono } from "hono";
+import type { ApiKeyPrincipal } from "@hasna/contracts/auth";
 import { cors } from "hono/cors";
 import { getPackageVersion } from "../lib/package-version.js";
 import { handleV1Request } from "./v1.js";
@@ -40,7 +41,7 @@ if (process.argv.includes("--version") || process.argv.includes("-V")) {
 if (process.argv.includes("--help") || process.argv.includes("-h")) {
   console.log(`Usage: instructions-serve [options]
 
-HTTP API server for @hasna/instructions (backend: sqlite or postgresql).
+HTTP API server for @hasna/instructions (PostgreSQL is required for /v1).
 
 Options:
   -V, --version  output the version number
@@ -51,7 +52,7 @@ Environment:
   PORT / INSTRUCTIONS_PORT        HTTP port (default: 3457)
   HOST / INSTRUCTIONS_HOST        bind host (default: localhost)
   HASNA_INSTRUCTIONS_DATABASE_URL / INSTRUCTIONS_DATABASE_URL / DATABASE_URL
-                                  postgresql backend URL (enables the cloud backend)`);
+                                  PostgreSQL backend URL (required for /v1)`);
   process.exit(0);
 }
 
@@ -59,12 +60,12 @@ const PORT = Number(
   process.env["PORT"] ?? process.env["INSTRUCTIONS_PORT"] ?? 3457,
 );
 
-const app = new Hono();
+export const app = new Hono<{ Variables: { apiKey: ApiKeyPrincipal } }>();
 app.use("*", cors());
 
 // ── Service surface probes (unauthenticated): /health /ready /version ─────────
-function serviceBackend(): "postgresql" | "sqlite" {
-  return isPostgresBackendEnabled() ? "postgresql" : "sqlite";
+export function serviceBackend(): "postgresql" | "unconfigured" {
+  return isPostgresBackendEnabled() ? "postgresql" : "unconfigured";
 }
 
 app.get("/health", (c) => c.json({ status: "ok", version: getPackageVersion(), backend: serviceBackend(), name: "instructions" }));
@@ -74,12 +75,14 @@ app.get("/version", (c) => c.json({ status: "ok", version: getPackageVersion(), 
 app.get("/ready", async (c) => {
   const version = getPackageVersion();
   const backend = serviceBackend();
-  if (backend === "postgresql") {
-    try {
-      await pingCloud();
-    } catch (e) {
-      return c.json({ status: "unavailable", version, backend, error: (e as Error).message }, 503);
-    }
+  if (backend !== "postgresql") {
+    return c.json({ status: "unavailable", version, backend, code: "SERVER_BACKEND_UNCONFIGURED" }, 503);
+  }
+  try {
+    await pingCloud();
+  } catch {
+    console.error("instructions ready: database unavailable");
+    return c.json({ status: "unavailable", version, backend, code: "DATABASE_UNAVAILABLE" }, 503);
   }
   return c.json({ status: "ready", version, backend });
 });
@@ -96,15 +99,18 @@ app.use("/v1/*", async (c, next) => {
   let mw;
   try {
     mw = getHonoAuthMiddleware([isWrite ? "instructions:write" : "instructions:read"]);
-  } catch (e) {
-    // Fail closed: /v1 is never an unauthenticated backdoor.
-    return c.json({ error: (e as Error).message }, 503);
+  } catch {
+    // Fail closed: /v1 is never an unauthenticated backdoor, and public
+    // responses never expose signing-secret or backend configuration details.
+    return c.json({ error: "Instructions API is unavailable", code: "API_AUTH_UNCONFIGURED" }, 503);
   }
   return mw(c, next);
 });
 
 app.all("/v1/*", async (c) => {
-  const res = await handleV1Request(c.req.raw, new URL(c.req.url));
+  const res = await handleV1Request(c.req.raw, new URL(c.req.url), {
+    principal: c.get("apiKey"),
+  });
   return res ?? c.json({ error: "Not found" }, 404);
 });
 
@@ -122,5 +128,13 @@ app.all("/v1/*", async (c) => {
 // the unauthenticated health/version probes above) are exposed by the server.
 
 const HOST = process.env["HOST"] ?? process.env["INSTRUCTIONS_HOST"] ?? "localhost";
-console.log(`instructions-serve listening on http://${HOST}:${PORT} (backend: ${serviceBackend()})`);
-export default { port: PORT, hostname: HOST, fetch: app.fetch };
+export const serverOptions = { port: PORT, hostname: HOST, fetch: app.fetch } as const;
+if (import.meta.main) {
+  console.log(`instructions-serve listening on http://${HOST}:${PORT} (backend: ${serviceBackend()})`);
+  // Start explicitly instead of relying on Bun's default-export server magic.
+  // Bun 1.4 stopped keeping this module alive when it also exported the Hono
+  // app for tests, so the binary printed "listening" and then exited 0 without
+  // a listener. Explicit ownership is stable across the supported Bun range.
+  Bun.serve(serverOptions);
+}
+export default app;

@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { homedir } from "node:os";
 import type { ApplyResult, Config, ConfigFormat, ConfigOutput } from "../types/index.js";
 import { ConfigApplyError } from "../types/index.js";
@@ -32,6 +32,22 @@ export function expandPath(p: string): string {
     return resolve(getConfigHome(), p.slice(2));
   }
   return resolve(p);
+}
+
+/**
+ * Compact a path to `~/...` only when tilde expansion uses the conventional
+ * HOME. A custom CONFIGS_HOME is an isolated target root, not permission to
+ * reinterpret arbitrary paths below the OS home. Segment-safe relative checks
+ * prevent `/home/user2` from being treated as a child of `/home/user`.
+ */
+export function compactPathForConfigHome(p: string): string {
+  const absolute = resolve(p);
+  const configHome = resolve(getConfigHome());
+  const conventionalHome = resolve(process.env["HOME"] || homedir());
+  if (configHome !== conventionalHome) return absolute;
+  const rel = relative(configHome, absolute);
+  if (!rel || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return absolute;
+  return `~/${rel}`;
 }
 
 export function normalizeTargetPath(p: string): string {

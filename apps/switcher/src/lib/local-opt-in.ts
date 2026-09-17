@@ -26,6 +26,7 @@ import {
   credentialPointerEnvKey,
   CREDENTIAL_PROFILE_ENV_KEY,
 } from "@hasna/contracts/client";
+import { Fault } from "../domain";
 
 /** The deliberate unhosted opt-in, canonical name first. */
 export const SWITCHER_LOCAL_OPT_IN_ENV_KEYS = ["HASNA_SWITCHER_LOCAL", "SWITCHER_LOCAL"] as const;
@@ -38,7 +39,16 @@ export type SwitcherLocalOptInEnv = Record<string, string | undefined>;
 
 /** True when the operator deliberately asked for the unhosted on-box run. */
 export function isSwitcherLocalOptIn(env: SwitcherLocalOptInEnv = process.env): boolean {
-  return SWITCHER_LOCAL_OPT_IN_ENV_KEYS.some((key) => (env[key] ?? "").trim() !== "");
+  let selected:boolean|undefined;
+  for(const key of SWITCHER_LOCAL_OPT_IN_ENV_KEYS){
+    if(env[key]===undefined)continue;
+    const value=env[key]!.trim().toLowerCase();
+    const decision=!value||["0","false","no","off"].includes(value)?false:["1","true","yes","on"].includes(value)?true:undefined;
+    if(decision===undefined)throw new Fault(400,"invalid_local_opt_in",`${key} must be one of 1, true, yes, on, 0, false, no, or off.`);
+    if(selected!==undefined&&selected!==decision)throw new Fault(400,"conflicting_local_opt_in","HASNA_SWITCHER_LOCAL and SWITCHER_LOCAL must not disagree.");
+    selected=decision;
+  }
+  return selected??false;
 }
 
 /** Every env name that can configure a Switcher authority or credential, resolver-derived. */

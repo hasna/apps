@@ -10,6 +10,7 @@
 import { verifyApiKey, honoApiKey, type ApiKeyVerifier, ApiKeyStore, type AuthQueryClient } from "@hasna/contracts/auth";
 import { createPgPool, createQueryClient, type PoolQueryClient } from "../generated/storage-kit/index.js";
 import { instructionsSchemaSql } from "../storage/schema.js";
+import { ensureIdempotencySchema } from "../storage/cloud-store.js";
 
 export const INSTRUCTIONS_APP_SLUG = "instructions";
 
@@ -126,6 +127,7 @@ export async function ensureCloudSchema(): Promise<void> {
     for (const sql of instructionsSchemaSql()) {
       await client.execute(sql);
     }
+    await ensureIdempotencySchema(client);
     await getApiKeyStore().ensureSchema();
   })().catch((e) => {
     // One transient Postgres failure must not poison every later /v1 request:

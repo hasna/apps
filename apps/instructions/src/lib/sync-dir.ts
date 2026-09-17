@@ -2,10 +2,9 @@
 // at a custom directory they own. Never called by default.
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
-import { homedir } from "node:os";
 import type { SyncResult } from "../types/index.js";
 import { resolveConfigStore, type ConfigStore } from "../data/config-store.js";
-import { applyConfigsWithReport, expandPath } from "./apply.js";
+import { applyConfigsWithReport, compactPathForConfigHome, expandPath } from "./apply.js";
 import { detectAgent, detectCategory, detectFormat } from "./sync.js";
 import { redactContent, redactFormatForTarget, type RedactFormat } from "./redact.js";
 
@@ -28,7 +27,6 @@ export async function syncFromDir(dir: string, opts: SyncFromDirOptions = {}): P
     : readdirSync(absDir).map((f) => join(absDir, f)).filter((f) => statSync(f).isFile());
 
   const result: SyncResult = { added: 0, updated: 0, unchanged: 0, skipped: [] };
-  const home = homedir();
   const allConfigs = await store.listConfigs();
 
   for (const file of files) {
@@ -36,7 +34,7 @@ export async function syncFromDir(dir: string, opts: SyncFromDirOptions = {}): P
     try {
       const content = readFileSync(file, "utf-8");
       if (content.length > 500_000) { result.skipped.push(file + " (too large)"); continue; }
-      const targetPath = file.replace(home, "~");
+      const targetPath = compactPathForConfigHome(file);
       // Always redact before storing (todos a3da5210). This legacy
       // explicit-directory ingest was the only path that persisted raw bytes;
       // the DIALECT comes from the path (redactFormatForTarget), because
@@ -58,9 +56,8 @@ export async function syncFromDir(dir: string, opts: SyncFromDirOptions = {}): P
 
 export async function syncToDir(dir: string, opts: { store?: ConfigStore; dryRun?: boolean } = {}): Promise<SyncResult> {
   const store = opts.store ?? resolveConfigStore();
-  const home = homedir();
   const absDir = expandPath(dir);
-  const normalized = dir.startsWith("~/") ? dir : absDir.replace(home, "~");
+  const normalized = dir.startsWith("~/") ? dir : compactPathForConfigHome(absDir);
   const configs = (await store.listConfigs()).filter((c) => c.target_path && (c.target_path.startsWith(normalized) || c.target_path.startsWith(absDir)));
   const result: SyncResult = { added: 0, updated: 0, unchanged: 0, skipped: [] };
   for (const config of configs) {

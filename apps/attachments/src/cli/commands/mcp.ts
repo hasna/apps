@@ -10,7 +10,7 @@ import { exitError } from "../utils";
 // ---------------------------------------------------------------------------
 
 function installClaude(): void {
-  execSync("claude mcp add --transport stdio --scope user attachments -- attachments-mcp", {
+  execSync("claude mcp add --transport stdio --scope user attachments -- attachments-mcp --stdio", {
     stdio: "inherit",
   });
   process.stdout.write("\u2713 Installed attachments MCP in Claude Code\n");
@@ -22,40 +22,14 @@ function uninstallClaude(): void {
 }
 
 function installCodex(): void {
-  const configPath = join(homedir(), ".codex", "config.toml");
-  const entry = '\n[mcp_servers.attachments]\ncommand = "attachments-mcp"\nargs = []\n';
-
-  let existing = "";
-  if (existsSync(configPath)) {
-    existing = readFileSync(configPath, "utf-8");
-  } else {
-    mkdirSync(join(homedir(), ".codex"), { recursive: true });
-  }
-
-  if (existing.includes("[mcp_servers.attachments]")) {
-    // Replace existing entry
-    const updated = existing.replace(
-      /\[mcp_servers\.attachments\][^\[]*/s,
-      '[mcp_servers.attachments]\ncommand = "attachments-mcp"\nargs = []\n'
-    );
-    writeFileSync(configPath, updated, "utf-8");
-  } else {
-    writeFileSync(configPath, existing + entry, "utf-8");
-  }
-
+  // Let Codex edit its own TOML. A regex table replacement stops at the
+  // opening bracket in args arrays and can corrupt the remaining document.
+  execSync("codex mcp add attachments -- attachments-mcp --stdio", { stdio: "inherit" });
   process.stdout.write("\u2713 Installed attachments MCP in Codex\n");
 }
 
 function uninstallCodex(): void {
-  const configPath = join(homedir(), ".codex", "config.toml");
-  if (!existsSync(configPath)) {
-    process.stdout.write("\u2713 Removed attachments MCP from Codex (not present)\n");
-    return;
-  }
-
-  const existing = readFileSync(configPath, "utf-8");
-  const updated = existing.replace(/\n?\[mcp_servers\.attachments\][^\[]*/s, "");
-  writeFileSync(configPath, updated, "utf-8");
+  execSync("codex mcp remove attachments", { stdio: "inherit" });
   process.stdout.write("\u2713 Removed attachments MCP from Codex\n");
 }
 
@@ -79,7 +53,7 @@ function installGemini(): void {
 
   (settings.mcpServers as Record<string, unknown>).attachments = {
     command: "attachments-mcp",
-    args: [],
+    args: ["--stdio"],
   };
 
   writeFileSync(configPath, JSON.stringify(settings, null, 2), "utf-8");

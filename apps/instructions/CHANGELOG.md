@@ -1,3 +1,47 @@
+## 0.7.0
+
+### Minor Changes
+
+- Add native S3 backup support as an adjunct, never a database authority. The
+  new `@hasna/instructions/storage` export and `instructions storage backup`
+  commands validate configuration, build traversal-safe immutable keys, upload
+  payload-plus-manifest objects with SHA-256/size integrity, perform network-free
+  dry-runs, verify downloads before owner-only local writes, and refuse a reused
+  backup ID whose bytes differ.
+- Add an explicit, transactional `instructions migrate-legacy` path from the
+  historical `~/.hasna/configs/configs.db` store. It plans by default, creates
+  an exclusive destination backup before apply, preserves compatible IDs and
+  metadata, creates missing current-version snapshots, refuses implicit merges,
+  and never overwrites destination rows.
+- Add the protected root `deploy-instructions` workflow. It binds deployment to
+  the exact successful CI commit on `main`, scans before OIDC, validates the
+  SSM target manifest, deploys an immutable digest after the one-shot migration,
+  retains a rollback anchor, and verifies version, readiness, anonymous denial,
+  and authenticated existing-data readback at
+  `https://api.hasna.com/instructions/v1`.
+- Keep local/hosted authority fail closed. A custom `CONFIGS_HOME` no longer
+  causes `instructions add` to abbreviate against one home and apply against
+  another. `instructions-serve` now reports `unconfigured` and returns 503 when
+  PostgreSQL is absent instead of claiming SQLite readiness, streams request
+  bodies through a 1 MiB limit, caps search strings, and returns stable redacted
+  backend errors.
+- Complete producer gates for compatibility bins, live PostgreSQL proof,
+  packed-artifact scanning, reproducible Bun 1.3.14 containers, and the managed
+  gateway serving contract.
+
+### Included unreleased work
+
+- Keep SQLite in a dynamically loaded client chunk, preserve hosted-by-default
+  credential resolution, and bound expensive hosted status fan-out.
+- Preserve the resolver-backed config/state homes and native profile rendering
+  changes accumulated since 0.6.1.
+
+## 0.6.1
+
+### Patch Changes
+
+- e9c04be: Render Grok and Devin global AGENTS.md in an explicit native instruction home while preserving existing project targets, ownership checks and rollback. Compile native profile bindings against their flattened loading contract so conditional rules are not silently promoted.
+
 ## 0.6.0
 
 ### Minor Changes

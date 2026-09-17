@@ -4,10 +4,36 @@ title: "Switcher changelog"
 type: "release-notes"
 owner: "codex-fixer"
 created_at: "2026-09-05T12:54:59Z"
-updated_at: "2026-09-09T14:35:00Z"
+updated_at: "2026-09-16T20:04:05Z"
 status: "active"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
+
+## 0.2.5
+
+### Patch Changes
+
+- Start the Docker server with an explicit all-interface bind so container networking and load balancer health checks can reach it. Remove the unused HOST environment setting while preserving the CLI loopback default and authentication requirements.
+
+## 0.2.4
+
+### Patch Changes
+
+- Scale inference request limits to the selected and explicitly allowed models, capped at 64 MiB, so large-context requests can exceed the former 4 MiB limit.
+- Stop gateway fallback replay after ambiguous provider connection failures and return a distinct, redacted network error. Native harness retry behavior remains controlled by that harness.
+
+## 0.2.3
+
+### Patch Changes
+
+- Separate provider credential onboarding from credential storage and delivery into a focused module while preserving explicit environment credentials, source/account pins, origin restrictions, metadata-only Secrets discovery, bounded provider authentication, noninteractive setup errors, dry-run behavior, and final-plan fingerprint checks.
+- Add first-class hosted API operation at `https://api.hasna.com/switcher`: local mode remains an owned authenticated loopback API backed by SQLite, while hosted mode requires PostgreSQL, Contracts-signed revocable API keys, an owner-only terminating migration, DML-only runtime schema validation, and fail-closed remote configuration. Hosted catalog refresh authenticates and discovers in the local launcher, then persists version/fingerprint-bound catalog metadata without sending provider credentials to the service; the hosted server refuses provider URL refreshes to close the SSRF boundary. Add a zero-desired-count bootstrap migration receipt, prebuilt immutable fleet-key minting, protected image retention, explicit local-flag parsing, public readiness/OpenAPI probes, deployment metadata, and regression coverage for CLI, MCP, SDK, local and hosted paths.
+
+## 0.2.2
+
+### Patch Changes
+
+- Preflight provider credentials before catalog refresh and interactive model selection for direct and saved-profile launches. Add first-run metadata-only Hasna Secrets discovery with exact selected-source pinning, explicit account/reference selection, immutable binding reuse, bounded declared non-inference authentication checks, actionable structured errors, credential-free dry-run planning from public or cached catalogs, and final-plan authority revalidation. OpenRouter authentication uses its protected key metadata endpoint rather than its public model catalog; catalog behavior is never inferred as credential proof, while older explicit bindings without a declared safe check retain their existing compatibility contract.
 
 ## 0.2.1
 

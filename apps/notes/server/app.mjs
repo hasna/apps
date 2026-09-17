@@ -10,6 +10,7 @@ import { readFileSync } from 'node:fs';
 import { ApiError, errorBody, mapError, bearer, parseLimit } from './http.mjs';
 import { getMeta, setMeta } from './sql.mjs';
 import { serverEnv } from './env.mjs';
+import { NOTE_WRITE_RATE_LIMIT_WINDOW_MS, resolveNoteWriteRateLimitMax } from './write-rate-config.mjs';
 import { parsePeerList, resolveClientIp, resolveTrustedProxyHops } from './client-ip.mjs';
 import {
   approveDeviceAuth, autoApproveDeviceAuth, exchangeDeviceAuth, getTenant, getUser,
@@ -58,6 +59,7 @@ export function resolveConfig(env = process.env, argv = []) {
     // (#1784; server/client-ip.mjs). Defaults trust no header: socket peer.
     trustedProxyHops: resolveTrustedProxyHops(serverEnv(env, 'TRUSTED_PROXY_HOPS')),
     trustedGatewayPeers: parsePeerList(serverEnv(env, 'TRUSTED_GATEWAY_PEERS')),
+    noteWriteRateLimitMax: resolveNoteWriteRateLimitMax(serverEnv(env, 'NOTE_WRITE_RATE_LIMIT_MAX')),
     jwtSecret: serverEnv(env, 'JWT_SECRET'), // default: generated + persisted in the DB meta table
     env,
     log: console.log,
@@ -96,6 +98,9 @@ export async function createApp({ db, config, testOnlySqlite = false }) {
     throw new Error('notes-server: PostgreSQL is required; SQLite is isolated test-only storage.');
   }
   const cfg = { ...config };
+  const noteWriteRateLimitMax = resolveNoteWriteRateLimitMax(
+    cfg.noteWriteRateLimitMax ?? serverEnv(cfg.env ?? process.env, 'NOTE_WRITE_RATE_LIMIT_MAX'),
+  );
   if (!cfg.jwtSecret) {
     // Zero-ops: persist a generated secret so sessions survive restarts.
     let secret = await getMeta(db, 'jwt_secret');
@@ -115,7 +120,6 @@ export async function createApp({ db, config, testOnlySqlite = false }) {
 
   const app = new Hono();
   const rateBuckets = new Map();
-
   app.onError((err, c) => {
     const m = mapError(err);
     if (m.code === 'internal_error') console.error(`[${SERVICE}] request failed`, err);
@@ -355,7 +359,7 @@ export async function createApp({ db, config, testOnlySqlite = false }) {
 
   app.post('/v1/notes', async (c) => {
     requireScope(c, 'notes_write');
-    rateLimit(c, 'note_write', 300);
+    rateLimit(c, 'note_write', noteWriteRateLimitMax, NOTE_WRITE_RATE_LIMIT_WINDOW_MS);
     return c.json(await createNote(db, c.get('tenantId'), await jsonBody(c), c.get('actor')), 201);
   });
 
@@ -366,7 +370,7 @@ export async function createApp({ db, config, testOnlySqlite = false }) {
 
   app.patch('/v1/notes/:id', async (c) => {
     requireScope(c, 'notes_write');
-    rateLimit(c, 'note_write', 300);
+    rateLimit(c, 'note_write', noteWriteRateLimitMax, NOTE_WRITE_RATE_LIMIT_WINDOW_MS);
     return c.json(await updateNote(db, c.get('tenantId'), c.req.param('id'), await jsonBody(c), c.get('actor')));
   });
 

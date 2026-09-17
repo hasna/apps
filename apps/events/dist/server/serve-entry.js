@@ -1226,7 +1226,7 @@ var package_default = {
   license: "Apache-2.0",
   dependencies: {
     commander: "^13.1.0",
-    "@hasna/contracts": "1.0.2",
+    "@hasna/contracts": "1.1.0",
     pg: "8.23.0",
     "@modelcontextprotocol/sdk": "1.27.1",
     zod: "3.25.76"

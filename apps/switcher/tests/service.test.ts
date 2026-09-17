@@ -8,6 +8,7 @@ import { createHandler } from "../src/service";
 import { SwitcherClient, clientFromEnv } from "../src/sdk";
 import { discover } from "../src/catalog";
 import { parse, providerInputSchema } from "../src/domain";
+import { ApiKeyStore, mintApiKey } from "@hasna/contracts/auth";
 const token = "switcher-test-token-never-valid-for-a-provider";
 for (const engine of ["sqlite","postgresql"] as const) {
   describe.skipIf(engine==="postgresql"&&!process.env.SWITCHER_TEST_DATABASE_URL)(engine,()=>{
@@ -96,6 +97,55 @@ for (const engine of ["sqlite","postgresql"] as const) {
       const input={id:"concurrent",name:"Concurrent",baseUrl:"https://example.com",protocol:"openai-chat" as const};
       const results=await Promise.all([client.createProvider(input,"concurrent-request"),client.createProvider(input,"concurrent-request")]);
       expect(results[0]).toEqual(results[1]);
+    });
+    test.skipIf(engine!=="postgresql")("PostgreSQL catalog commit serializes with provider updates and cannot restore stale metadata",async()=>{
+      const provider=await client.createProvider({id:"catalog-race",name:"Catalog race",baseUrl:"https://example.com/v1",protocol:"openai-chat"});
+      const suffix=crypto.randomUUID().replaceAll("-","");
+      const fn=`delay_catalog_${suffix}`,trigger=`delay_catalog_${suffix}`;
+      await store.sql.unsafe(`CREATE FUNCTION ${fn}() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_sleep(0.2); RETURN NEW; END $$`);
+      await store.sql.unsafe(`CREATE TRIGGER ${trigger} BEFORE INSERT ON switcher_catalogs FOR EACH ROW EXECUTE FUNCTION ${fn}()`);
+      try{
+        const catalog={models:[{id:"race-model",name:"Race model"}],refreshedAt:new Date().toISOString(),source:"remote" as const};
+        const saving=client.saveCatalog(provider.id,provider.version,catalog,"catalog-race-save");
+        await Bun.sleep(50);
+        const {version,updatedAt,...input}=provider;
+        const updating=client.updateProvider({...input,name:"Catalog race updated"},version,"catalog-race-update");
+        await Promise.all([saving,updating]);
+        await expect(client.listModels(provider.id)).rejects.toMatchObject({status:404});
+      }finally{
+        await store.sql.unsafe(`DROP TRIGGER IF EXISTS ${trigger} ON switcher_catalogs`);
+        await store.sql.unsafe(`DROP FUNCTION IF EXISTS ${fn}()`);
+      }
+    });
+    test.skipIf(engine!=="postgresql")("hosted runtime validates the migrated schema with a DML-only role and performs no DDL",async()=>{
+      const role=`switcher_runtime_${crypto.randomUUID().replaceAll("-","")}`;
+      await admin!.unsafe(`CREATE ROLE ${role} NOLOGIN`);
+      try{
+        await admin!.unsafe(`GRANT ${role} TO CURRENT_USER`);
+        await admin!.unsafe(`GRANT USAGE ON SCHEMA ${schema} TO ${role}`);
+        await admin!.unsafe(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA ${schema} TO ${role}`);
+        const url=new URL(process.env.SWITCHER_TEST_DATABASE_URL!);url.searchParams.set("options",`-c role=${role} -c search_path=${schema}`);
+        const runtime=await Store.open({databaseUrl:url.href,migrate:false});
+        try{
+          await runtime.ready();
+          expect((await runtime.sql.unsafe("SELECT current_user AS name"))[0].name).toBe(role);
+          expect((await admin!.unsafe("SELECT has_schema_privilege($1,$2,'CREATE') AS allowed",[role,schema]))[0].allowed).toBe(false);
+        }finally{await runtime.close();}
+      }finally{
+        await admin!.unsafe(`DROP OWNED BY ${role}`);
+        await admin!.unsafe(`REVOKE ${role} FROM CURRENT_USER`);
+        await admin!.unsafe(`DROP ROLE ${role}`);
+      }
+    });
+    test.skipIf(engine!=="postgresql")("PostgreSQL migration installs strict API-key lifecycle storage",async()=>{
+      const keyStore=new ApiKeyStore(store.authQueryClient());
+      const minted=mintApiKey({app:"switcher",scopes:["switcher:read","switcher:write"],signingSecret:"switcher-postgres-test-signing-secret-not-production"});
+      await keyStore.insertMinted(minted,"service-test");
+      expect(await keyStore.keyStatus(minted.kid)).toBe("active");
+      expect((await keyStore.findByKid(minted.kid))?.tokenHash).toBe(minted.tokenHash);
+      const ledger=await store.sql.unsafe("SELECT id,checksum FROM switcher_auth_migrations ORDER BY id");
+      expect(ledger.map((row:any)=>row.id)).toEqual(["hasna_auth_0001_api_keys","hasna_auth_0002_api_keys_indexes","hasna_auth_0003_api_keys_tenant"]);
+      expect(ledger.every((row:any)=>/^[a-f0-9]{64}$/.test(row.checksum))).toBe(true);
     });
     test("generation methods survive API storage and prevent unsupported launch plans",async()=>{
       const provider=await client.createProvider({id:"generation-methods",name:"Generation methods",baseUrl:"https://example.com/v1beta",protocol:"gemini-generate-content",authStyle:"x-api-key",manualModels:[
