@@ -1,72 +1,110 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
+import { copyFile, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { getPackageVersion } from "../lib/package-version.js";
 
-let child: ReturnType<typeof Bun.spawn> | undefined;
+const SERVER_ROOT = join(import.meta.dir, "../..");
 
-afterEach(async () => {
-  if (!child) return;
-  child.kill();
-  await child.exited;
-  child = undefined;
-});
+async function readStream(stream: ReadableStream<Uint8Array> | null): Promise<string> {
+  if (!stream) return "";
+  return new Response(stream).text();
+}
 
-async function reservePort(): Promise<number> {
-  const server = Bun.serve({
+function takeFreePort(): number {
+  const reservation = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
     fetch: () => new Response("reserved"),
   });
-  const port = server.port;
-  server.stop(true);
-  if (typeof port !== "number") throw new Error("Bun did not allocate a test port");
+  const port = reservation.port;
+  reservation.stop(true);
+  if (port === undefined) throw new Error("Bun did not allocate a test port");
   return port;
 }
 
 describe("instructions-serve owns exactly one listener", () => {
-  test("the executable stays alive and answers health without an auto-served default export", async () => {
-    const port = await reservePort();
-    const env = Object.fromEntries(
-      Object.entries(process.env).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
-    );
-    env.HOST = "127.0.0.1";
-    env.PORT = String(port);
-    delete env.HASNA_INSTRUCTIONS_DATABASE_URL;
-    delete env.INSTRUCTIONS_DATABASE_URL;
-    delete env.DATABASE_URL;
+  test("the built artifact stays alive and answers health when production PORT is set", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "instructions-server-entrypoint-"));
+    let server: Bun.Subprocess<"ignore", "pipe", "pipe"> | undefined;
 
-    child = Bun.spawn([process.execPath, "run", "src/server/index.ts"], {
-      cwd: import.meta.dir + "/../..",
-      env,
-      stdout: "pipe",
-      stderr: "pipe",
-    });
+    try {
+      const outputDirectory = join(workspace, "dist/server");
+      await copyFile(join(SERVER_ROOT, "package.json"), join(workspace, "package.json"));
+      const build = Bun.spawn([
+        process.execPath,
+        "build",
+        "src/server/index.ts",
+        "--outdir",
+        outputDirectory,
+        "--target",
+        "bun",
+        "--external",
+        "pg",
+      ], {
+        cwd: SERVER_ROOT,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const buildStdout = readStream(build.stdout);
+      const buildStderr = readStream(build.stderr);
+      const buildExitCode = await build.exited;
+      expect(
+        { exitCode: buildExitCode, stdout: await buildStdout, stderr: await buildStderr },
+      ).toMatchObject({ exitCode: 0 });
 
-    let response: Response | undefined;
-    for (let attempt = 0; attempt < 50; attempt += 1) {
-      if (await Promise.race([
-        child.exited.then(() => true),
-        Bun.sleep(50).then(() => false),
-      ])) break;
-      try {
-        response = await fetch(`http://127.0.0.1:${port}/health`);
-        if (response.ok) break;
-      } catch {
-        // The listener may still be starting.
+      const port = takeFreePort();
+      const env: Record<string, string | undefined> = {
+        ...process.env,
+        HOST: "127.0.0.1",
+        PORT: String(port),
+      };
+      delete env.HASNA_INSTRUCTIONS_DATABASE_URL;
+      delete env.INSTRUCTIONS_DATABASE_URL;
+      delete env.DATABASE_URL;
+      server = Bun.spawn([process.execPath, join(outputDirectory, "index.js")], {
+        cwd: SERVER_ROOT,
+        env,
+        stdin: "ignore",
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const stdout = readStream(server.stdout);
+      const stderr = readStream(server.stderr);
+
+      let health: Response | undefined;
+      const deadline = Date.now() + 5_000;
+      while (Date.now() < deadline && server.exitCode === null) {
+        try {
+          health = await fetch(`http://127.0.0.1:${port}/health`);
+          break;
+        } catch {
+          await Bun.sleep(25);
+        }
       }
-    }
 
-    const exit = await Promise.race([child.exited, Promise.resolve(null)]);
-    if (!response?.ok) {
-      const stdout = child.stdout instanceof ReadableStream ? await new Response(child.stdout).text() : "";
-      const stderr = child.stderr instanceof ReadableStream ? await new Response(child.stderr).text() : "";
-      throw new Error(`server did not become healthy (exit=${exit ?? "running"})\nstdout=${stdout}\nstderr=${stderr}`);
+      expect(health?.status).toBe(200);
+      expect(await health?.json()).toEqual({
+        status: "ok",
+        version: getPackageVersion(),
+        backend: "unconfigured",
+        name: "instructions",
+      });
+      expect(server.exitCode).toBeNull();
+
+      server.kill();
+      await server.exited;
+      const output = await stdout;
+      const errors = await stderr;
+      expect(output).toContain(`listening on http://127.0.0.1:${port}`);
+      expect(output.match(/instructions-serve listening on/g)).toHaveLength(1);
+      expect(errors).not.toContain("EADDRINUSE");
+    } finally {
+      if (server?.exitCode === null) {
+        server.kill();
+        await server.exited;
+      }
+      await rm(workspace, { recursive: true, force: true });
     }
-    expect(await response.json()).toEqual({
-      status: "ok",
-      version: getPackageVersion(),
-      backend: "unconfigured",
-      name: "instructions",
-    });
-    expect(exit).toBeNull();
-  });
+  }, 15_000);
 });
