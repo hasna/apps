@@ -21,6 +21,9 @@ describe("mementos-mcp entrypoint", () => {
     expect(stdout).toContain("Streamable HTTP transport by default");
     expect(stdout).toContain("--stdio");
     expect(stdout).toContain("default: 8867");
+    expect(stdout).toContain("--mcp-profile <list>");
+    expect(stdout).toContain("default: core");
+    expect(stdout).toContain("HASNA_MEMENTOS_MCP_PROFILE");
     expect(stderr).toBe("");
   });
 

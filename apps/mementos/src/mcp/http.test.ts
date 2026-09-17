@@ -85,9 +85,12 @@ describe("mcp buildServer stdio registration", () => {
       arguments: { tags: [tag], full: true, limit: 1 },
     });
     const fullText = full.content?.[0]?.type === "text" ? full.content[0].text : "";
-    const parsed = JSON.parse(fullText);
-    expect(Array.isArray(parsed)).toBe(true);
-    expect(parsed[0].value).toContain("MCP_UNTRUNCATED_SENTINEL");
+    const parsed = JSON.parse(fullText) as {
+      items: Array<{ value: string }>;
+      _meta: { count: number; has_more: boolean; next_offset: number | null };
+    };
+    expect(parsed.items[0]!.value).toContain("MCP_UNTRUNCATED_SENTINEL");
+    expect(parsed._meta).toMatchObject({ count: 1, has_more: true, next_offset: 1 });
 
     await client.close();
     await server.close();

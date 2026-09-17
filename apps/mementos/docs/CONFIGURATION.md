@@ -258,6 +258,8 @@ backend and are not the fleet cutover mechanism.
 | `MEMENTOS_API_KEY` | REST auth | Static-key fallback when signing is disabled |
 | `MCP_STDIO=1` | MCP server | Select stdio instead of default HTTP |
 | `MCP_HTTP_PORT` | MCP server | HTTP port; default 8867 |
+| `HASNA_MEMENTOS_MCP_PROFILE` | MCP server | Additive comma-separated tool profile list; default `core`; values: `core`, `search`, `graph`, `automation`, `admin`, `storage`, `hooks`, `full` |
+| `MEMENTOS_MCP_PROFILE` | MCP server | Compatibility alias for `HASNA_MEMENTOS_MCP_PROFILE` |
 | `MEMENTOS_URL` | hooks/connectors | REST base URL for the on-box hooks; default `http://localhost:19428` (the `./sdk` client does NOT read it) |
 | `MEMENTOS_AGENT` | hooks/connectors | Default agent identifier |
 | `MEMENTOS_AUTO_INJECT=true` | auto-inject | Enable automatic channel injection |

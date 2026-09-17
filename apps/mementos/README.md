@@ -95,11 +95,19 @@ mementos-mcp --stdio
 Cursor, Codex, Claude, and other command-based MCP host entries should use
 `command = "mementos-mcp"` with `args = ["--stdio"]`.
 
-The server exposes its live tools plus `mementos://memories`,
-`mementos://agents`, and `mementos://projects`. MCP `tools/list` is the complete
-schema source; the convenience `search_tools` and `describe_tools` calls cover
-the smaller registered utility discovery catalog. See the [MCP
-reference](docs/MCP.md) for installation examples and the full tool inventory.
+The default `core` MCP profile exposes a bounded 23-tool agent surface. Select
+additional comma-separated profiles with `--mcp-profile`,
+`HASNA_MEMENTOS_MCP_PROFILE`, or the compatibility alias
+`MEMENTOS_MCP_PROFILE`: `search`, `graph`, `automation`, `admin`, `storage`,
+`hooks`, and `full`. The explicit `full` profile preserves all 123 tools and the
+legacy unpaged `mementos://memories`, `mementos://agents`, and
+`mementos://projects` resources; reduced profiles omit those resources and use
+bounded list/get tools instead.
+
+MCP `tools/list` remains the authoritative schema source. `search_tools` returns
+a bounded names-only page for active-profile tools, and `describe_tools`
+requires one to ten explicit names. See the [MCP reference](docs/MCP.md) for
+profile membership and compatibility details.
 
 ## REST API
 

@@ -4,7 +4,7 @@ import {
   createMemory,
   getMemory,
   getMemoryByKey,
-  listMemories,
+  listMemoriesBounded,
   updateMemory,
   touchMemory,
   semanticSearch,
@@ -17,6 +17,7 @@ import { isApiMode } from "../../db/api-mode.js";
 import { getCurrentMachineId } from "../../db/machines.js";
 import { searchMemories } from "../../lib/search.js";
 import { parseDuration } from "../../lib/duration.js";
+import { redactMemoryForOutput } from "../../lib/redact.js";
 import {
   compactPageHint,
   ensureAutoProject,
@@ -27,6 +28,70 @@ import {
   resolveId,
 } from "./memory-utils.js";
 import type { MemoryFilter, CreateMemoryInput } from "../../types/index.js";
+
+
+const MCP_DEFAULT_FULL_LIST_MAX_BYTES = 64 * 1024;
+const MCP_MAX_FULL_LIST_MAX_BYTES = 1024 * 1024;
+
+function fullListMaxBytes(value: unknown): number {
+  const parsed = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(parsed) || parsed < 1024) return MCP_DEFAULT_FULL_LIST_MAX_BYTES;
+  return Math.min(Math.floor(parsed), MCP_MAX_FULL_LIST_MAX_BYTES);
+}
+
+function fullListEnvelope(args: {
+  items: Array<Record<string, unknown>>;
+  itemIds: string[];
+  pageHasMore: boolean;
+  pageNextOffset: number | null;
+  offset: number;
+  limit: number;
+  maxBytes: number;
+  fields: string[] | null;
+}): string {
+  const makeEnvelope = (
+    items: Array<Record<string, unknown>>,
+    byteTruncated: boolean,
+    blockedItemId: string | null,
+  ) => {
+    const hasMore = byteTruncated || args.pageHasMore;
+    const nextOffset = byteTruncated
+      ? (items.length > 0 ? args.offset + items.length : null)
+      : args.pageNextOffset;
+    return {
+      items,
+      _meta: {
+        count: items.length,
+        limit: args.limit,
+        offset: args.offset,
+        next_offset: nextOffset,
+        has_more: hasMore,
+        complete: !hasMore,
+        truncated: hasMore,
+        truncation_reason: byteTruncated ? "max_bytes" : (args.pageHasMore ? "limit" : null),
+        detail: "full",
+        fields: args.fields,
+        max_bytes: args.maxBytes,
+        blocked_item_id: blockedItemId,
+        detail_hint: blockedItemId ? `Use memory_get(id="${blockedItemId}") or request narrower fields.` : null,
+      },
+    };
+  };
+
+  const selected: Array<Record<string, unknown>> = [];
+  for (const item of args.items) {
+    // Size against the larger truncated metadata shape so the final response
+    // cannot cross the caller's byte budget when continuation fields are added.
+    const candidate = JSON.stringify(makeEnvelope([...selected, item], true, null));
+    if (Buffer.byteLength(candidate) > args.maxBytes) break;
+    selected.push(item);
+  }
+  const byteTruncated = selected.length < args.items.length;
+  const blockedItemId = byteTruncated && selected.length === 0
+    ? (args.itemIds[0] ?? "unknown")
+    : null;
+  return JSON.stringify(makeEnvelope(selected, byteTruncated, blockedItemId));
+}
 
 export function registerMemoryCrudTools(server: McpServer): void {
   server.tool(
@@ -341,7 +406,7 @@ export function registerMemoryCrudTools(server: McpServer): void {
 
   server.tool(
     "memory_list",
-    "List memories. Default: compact lines. full=true for complete JSON objects.",
+    "List memories. Default: compact lines. full=true returns a byte-bounded JSON page with truthful continuation metadata.",
     {
       scope: z.enum(["global", "shared", "private", "working"]).optional(),
       category: z.enum(["preference", "fact", "knowledge", "history", "procedural", "resource"]).optional(),
@@ -358,12 +423,14 @@ export function registerMemoryCrudTools(server: McpServer): void {
       full: z.boolean().optional(),
       verbose: z.boolean().optional(),
       fields: z.array(z.string()).optional(),
+      max_bytes: z.coerce.number().int().min(1024).max(MCP_MAX_FULL_LIST_MAX_BYTES).optional()
+        .describe("Maximum serialized bytes for full=true (default 65536, maximum 1048576)"),
     },
     async (args) => {
       try {
-        const { full, fields, verbose, ...filterArgs } = args;
+        const { full, fields, verbose, max_bytes, ...filterArgs } = args;
         const limit = positiveLimit(filterArgs.limit, 10);
-        const offset = filterArgs.offset ?? 0;
+        const offset = Math.max(Math.floor(filterArgs.offset ?? 0), 0);
         // Focus mode: if agent is focused and no explicit scope/project_id, auto-scope
         let resolvedFilter = { ...filterArgs };
         if (!resolvedFilter.scope && !resolvedFilter.project_id && resolvedFilter.agent_id) {
@@ -372,29 +439,41 @@ export function registerMemoryCrudTools(server: McpServer): void {
         }
         const filter: MemoryFilter = {
           ...resolvedFilter,
-          limit: full ? limit : limit + 1,
           offset,
         };
-        const memories = listMemories(filter);
-        if (memories.length === 0) {
+        const page = listMemoriesBounded(filter, limit);
+        const visible = page.rows.map(redactMemoryForOutput);
+        if (full) {
+          // Full mode is still bounded. It returns a page envelope so an agent
+          // can distinguish an exhaustive result from a truncated page and can
+          // continue without guessing an offset.
+          const items = visible.map((memory) => Object.fromEntries(
+            Object.entries(memory).filter(([key, value]) => {
+              if (value === null || value === undefined) return false;
+              if (fields && fields.length > 0) return fields.includes(key);
+              return true;
+            }),
+          ));
+          return {
+            content: [{
+              type: "text" as const,
+              text: fullListEnvelope({
+                items,
+                itemIds: visible.map((memory) => memory.id),
+                pageHasMore: page.has_more,
+                pageNextOffset: page.next_cursor,
+                offset,
+                limit,
+                maxBytes: fullListMaxBytes(max_bytes),
+                fields: fields && fields.length > 0 ? fields : null,
+              }),
+            }],
+          };
+        }
+        if (visible.length === 0) {
           return { content: [{ type: "text" as const, text: "No memories found." }] };
         }
-        if (full) {
-          // Full mode: complete JSON objects (strip nulls, optionally filter fields)
-          const compact = memories.map(m => {
-            const obj = Object.fromEntries(
-              Object.entries(m).filter(([k, v]) => {
-                if (v === null || v === undefined) return false;
-                if (fields && fields.length > 0) return fields.includes(k);
-                return true;
-              })
-            );
-            return obj;
-          });
-          return { content: [{ type: "text" as const, text: JSON.stringify(compact, null, 2) }] };
-        }
-        const hasMore = memories.length > limit;
-        const visible = hasMore ? memories.slice(0, limit) : memories;
+        const hasMore = page.has_more;
         // Compact mode (default): key+value+scope+importance+id only
         const lines = visible.map((m, i) => formatMemorySummary(m, i + 1, verbose ? 160 : 100));
         const hint = compactPageHint({

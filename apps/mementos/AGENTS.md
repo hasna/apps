@@ -71,56 +71,37 @@ The CLI and MCP tools are compact by default to keep agent context small.
 
 ## MCP Tool Profiles
 
-Use the MCP protocol's `tools/list` result for the complete live schemas. The
-convenience `search_tools("keyword")` and `describe_tools(["name"])` catalog
-currently covers the seven registered utility discovery schemas only.
+`mementos-mcp` defaults to the bounded `core` profile (23 tools). Configure an
+additive comma-separated profile list with `--mcp-profile`,
+`HASNA_MEMENTOS_MCP_PROFILE`, or the compatibility alias
+`MEMENTOS_MCP_PROFILE`:
 
-### Minimal (token-sensitive contexts)
-```
-memory_save      -- save/upsert
-memory_recall    -- get by key
-memory_inject    -- load context (format=compact)
-memory_forget    -- delete
-```
+- `core` — common save/recall/get/list/update, primary search and context,
+  lifecycle, agent/project identity, focus, and discovery tools;
+- `search` — advanced search, history, health, activity, report, and audit reads;
+- `graph` — entity, relation, traversal, dependency-graph, and tool-insight tools;
+- `automation` — synthesis, auto-memory, auto-inject, sessions, consolidation,
+  and reflection;
+- `admin` — fleet registries, bulk operations, locks, import/export, ACL, GDPR,
+  audit, and eviction;
+- `storage` — storage status, sync, and migration operations;
+- `hooks` — hooks, webhooks, subscriptions, tool events, and feedback;
+- `full` — compatibility profile exposing all 123 tools and the three legacy
+  unpaged resources.
 
-### Standard (most sessions)
-All minimal tools, plus:
-```
-memory_list      -- browse with filters
-memory_search    -- full-text + fuzzy search
-memory_update    -- update fields (version optional)
-memory_pin       -- pin without version
-memory_archive   -- archive without version
-memory_get       -- get by ID
-memory_stats     -- aggregate stats
-memory_activity  -- daily creation trend
-session_extract  -- auto-extract from session summary
-register_agent   -- register yourself
-register_project -- register project
-update_agent     -- bind to project (active_project_id)
-list_agents      -- who's registered
-list_projects    -- registered projects
+Every reduced profile includes `core`, and profiles compose:
+
+```bash
+mementos-mcp --stdio                         # core
+mementos-mcp --stdio --mcp-profile search,graph # core + search + graph
+HASNA_MEMENTOS_MCP_PROFILE=full mementos-mcp --stdio
 ```
 
-### Full (research, auditing, knowledge graph)
-All standard tools, plus:
-```
-memory_versions   -- version history for a memory
-memory_export     -- bulk export
-memory_import     -- bulk import
-bulk_forget       -- delete multiple
-bulk_update       -- update multiple
-memory_context    -- raw context list
-clean_expired     -- maintenance
-entity_create     -- knowledge graph entities
-entity_list       -- browse entities
-entity_get        -- get entity
-entity_link       -- link memory to entity
-relation_create   -- entity relationships
-graph_query       -- traverse knowledge graph
-list_agents_by_project  -- who's on a project
-get_project       -- project details
-```
+Unknown profile names safely fall back to `core`; they never widen access to
+`full`. Reduced profiles omit `mementos://memories`, `mementos://agents`, and
+`mementos://projects`; use bounded list/get tools instead. `search_tools`
+returns a bounded names-only page for the active profile, while
+`describe_tools` requires one to ten explicit tool names.
 
 ## Token Optimization
 
