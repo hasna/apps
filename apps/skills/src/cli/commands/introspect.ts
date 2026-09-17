@@ -12,6 +12,7 @@ import { loadRemoteRegistry, loadRemoteSkill } from "../../lib/remote-registry.j
 import { isSkillsFleetCredentialError } from "../../lib/fleet-credentials.js";
 import { requireSkillsReadAccess } from "../../lib/read-access.js";
 import { getSkillDocs, getSkillRequirements } from "../../lib/skillinfo.js";
+import { resolveSkillDocFile, selectSkillDoc, SkillDocFileError } from "../../lib/skill-doc-file.js";
 import { getInstallMeta, getInstalledSkills, getSkillPath } from "../../lib/installer.js";
 import { validateSkillDirectory } from "../../lib/skill-validation.js";
 import { findPortableSkill, normalizePortableSkillName, validatePortableSkillDirectory } from "../../lib/portable-skills.js";
@@ -97,7 +98,7 @@ function skillNotFound(name: string, similar: string[] = findSimilarSkills(name)
  * (handleBrowseError in list.ts). Anything else propagates as before.
  */
 function handleReadRefusal(error: unknown): void {
-  if (!isSkillsFleetCredentialError(error)) throw error;
+  if (!isSkillsFleetCredentialError(error) && !(error instanceof SkillDocFileError)) throw error;
   console.error(chalk.red(error.message));
   process.exitCode = 1;
 }
@@ -175,9 +176,9 @@ async function resolveRemoteNotFound(name: string, remote: boolean | undefined, 
 }
 
 async function handleDocs(name: string, options: { json: boolean; file: string; selectionProfile?: string }) {
+  const file = resolveSkillDocFile(options.file);
   const access = await requireSkillsReadAccess();
   if (access.mode === "hosted") {
-    const file = options.file === "readme" ? "README.md" : options.file === "claude" ? "CLAUDE.md" : options.file ? "SKILL.md" : undefined;
     const result = await loadSelectedSkill(name, selectedProfileId(options.selectionProfile), { projectDir: process.cwd(), file });
     console.log(options.json ? JSON.stringify({ skill: name, ...result }) : result.content);
     return;
@@ -188,25 +189,16 @@ async function handleDocs(name: string, options: { json: boolean; file: string; 
     else skillNotFound(name);
     process.exitCode = 1; return;
   }
+  const content = selectSkillDoc(docs, options.file);
   if (options.json) {
     console.log(JSON.stringify({
       skill: name, hasSkillMd: docs.skillMd !== null, hasReadme: docs.readme !== null, hasClaudeMd: docs.claudeMd !== null,
-      content: options.file ? docs[options.file === "skill" ? "skillMd" : options.file === "readme" ? "readme" : "claudeMd"] : docs.skillMd || docs.readme || docs.claudeMd,
+      content,
     }, null, 2));
     return;
   }
-  let content: string | null = null;
-  if (options.file === "skill") content = docs.skillMd;
-  else if (options.file === "readme") content = docs.readme;
-  else if (options.file === "claude") content = docs.claudeMd;
-  else content = docs.skillMd || docs.readme || docs.claudeMd;
-  if (!content) {
-    const available: string[] = [];
-    if (docs.skillMd) available.push("skill");
-    if (docs.readme) available.push("readme");
-    if (docs.claudeMd) available.push("claude");
-    if (!available.length) console.log(chalk.dim(`No documentation found for '${name}'`));
-    else console.log(chalk.dim(`File '${options.file}' not found. Available: ${available.join(", ")}`));
+  if (content === null) {
+    console.log(chalk.dim(`No documentation found for '${name}'`));
     return;
   }
   console.log(content);

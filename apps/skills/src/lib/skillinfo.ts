@@ -9,6 +9,7 @@ import { getInstalledSkills, getSkillPath } from "./installer.js";
 import { getSkill, loadRegistry, type SkillMeta } from "./registry.js";
 import { normalizeSkillName } from "./utils.js";
 import { parseSkillFrontmatter } from "./skill-validation.js";
+import { resolveSkillDocFile, selectSkillDoc } from "./skill-doc-file.js";
 
 /**
  * Detect whether a skill directory is an instruction (prose-only) skill.
@@ -71,12 +72,14 @@ export function getSkillDocs(name: string): SkillDocs | null {
 }
 
 /**
- * Get the best available documentation for a skill (SKILL.md > README.md > CLAUDE.md)
+ * Get preferred documentation, or an exact docs alias (skill, readme, claude).
+ * Unknown aliases and missing explicitly requested files refuse without fallback.
  */
-export function getSkillBestDoc(name: string): string | null {
+export function getSkillBestDoc(name: string, file?: string): string | null {
+  resolveSkillDocFile(file);
   const docs = getSkillDocs(name);
   if (!docs) return null;
-  return docs.skillMd || docs.readme || docs.claudeMd || null;
+  return selectSkillDoc(docs, file);
 }
 
 /**
