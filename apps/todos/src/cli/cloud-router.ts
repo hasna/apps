@@ -2774,6 +2774,23 @@ export async function cloudCountTasks(client: HasnaStorageClient, filter: TaskFi
  * transport throws — surfaced to the caller as a conflict error (parity with the
  * local conflict path) rather than a silent duplicate.
  */
+/**
+ * One agent from the shared roster (`GET /v1/agents/:id`, which resolves by id
+ * OR name). Returns null on 404 rather than throwing, matching the local
+ * `getAgent(...) || getAgentByName(...)` contract this replaces.
+ */
+export async function cloudGetAgent(client: HasnaStorageClient, idOrName: string): Promise<Agent | null> {
+  try {
+    const raw = await client.transport.get<unknown>(`/agents/${encodeURIComponent(idOrName)}`);
+    const envelope = (raw ?? {}) as { agent?: Agent };
+    const agent = envelope.agent ?? (raw as Agent | null);
+    return agent && typeof agent.id === "string" && agent.id ? agent : null;
+  } catch (error) {
+    if (error && typeof error === "object" && (error as { status?: unknown }).status === 404) return null;
+    throw error;
+  }
+}
+
 export async function cloudRegisterAgent(client: HasnaStorageClient, input: RegisterAgentInput): Promise<Agent> {
   const raw = await client.transport.post<unknown>("/agents", input as unknown as Record<string, unknown>);
   if (raw && typeof raw === "object" && "agent" in (raw as Record<string, unknown>)) {
@@ -2852,6 +2869,26 @@ export async function cloudLinkCommit(
 }
 
 /** Find the task that explains a commit SHA (`GET /v1/commits/:sha`); `null` if none. */
+/**
+ * Every commit linked to one task (`GET /v1/tasks/:id/commits`). The MCP
+ * `get_task_commits` tool read this machine's sqlite, which on a hosted station
+ * is empty even when the shared task has a full commit trail.
+ */
+export async function cloudListTaskCommits(client: HasnaStorageClient, taskId: string): Promise<CloudTaskCommit[]> {
+  const route = `/v1/tasks/${encodeURIComponent(taskId)}/commits`;
+  const raw = await requiredRemoteRoute(client, route, () =>
+    client.transport.get<unknown>(`/tasks/${encodeURIComponent(taskId)}/commits`));
+  const envelope = (raw ?? {}) as { commits?: unknown; count?: unknown };
+  if (!Array.isArray(envelope.commits)) {
+    if (Array.isArray(raw)) return raw as CloudTaskCommit[];
+    throw new Error(`REMOTE_API_INCOMPATIBLE: ${route} did not return a commits array; refusing an incomplete commit trail`);
+  }
+  if (typeof envelope.count === "number" && envelope.count !== envelope.commits.length) {
+    throw new Error(`REMOTE_API_INCOMPATIBLE: ${route} reported ${envelope.count} commits but returned ${envelope.commits.length}; refusing a partial commit trail`);
+  }
+  return envelope.commits as CloudTaskCommit[];
+}
+
 export async function cloudFindCommit(client: HasnaStorageClient, sha: string): Promise<CloudTaskCommit | null> {
   const raw = await client.transport.get<unknown>(`/commits/${encodeURIComponent(sha)}`);
   const env = (raw ?? {}) as { commit?: CloudTaskCommit | null };
