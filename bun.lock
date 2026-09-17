@@ -684,7 +684,7 @@
     },
     "apps/messages": {
       "name": "@hasna/messages",
-      "version": "0.3.0",
+      "version": "0.4.0",
       "bin": {
         "messages": "bin/index.js",
         "messages-mcp": "bin/mcp.js",

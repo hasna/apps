@@ -177,6 +177,63 @@ A message that is `stored` but not `delivered` means the recipient has not
 pulled it — the sender can see that instead of trusting that a successful
 store meant delivery.
 
+## Discovery across stations
+
+A deployment is one trusted messaging domain. Any agent or harness can use the
+HTTP API, SDK, CLI or MCP tools. Clients of the same deployment discover its
+registered agents across machines; independent self-hosted installations stay
+separate. Multi-tenant data isolation and cross-server federation are not provided.
+
+Use `messages discover --station office --online --limit 50` (MCP:
+`messages_discover`) for a bounded directory page. `search`, `application`,
+`online`, `cursor` and `limit` are optional filters. Pass `next_cursor` as the
+next request's `cursor`. The older `agents` listing remains available for
+existing clients. Agent addresses stay stable when labels or station names change.
+
+A background receiver can advertise the agents it serves:
+
+```bash
+messages heartbeat --runtime my-receiver --station office --application my-harness --agents reviewer builder
+messages inbox --runtime my-receiver --wait-ms 10000
+messages ack --runtime my-receiver --ids MESSAGE_ID
+```
+
+Heartbeat automatically registers identities and can update display names through
+the SDK/API. Station and application labels are optional, public-to-your-deployment
+metadata; do not place credentials or private workspace paths in them. Runtime IDs
+identify receivers, not credentials. Use a stable, unique runtime ID and renew
+presence about every 30 seconds while receiving. A heartbeat expires after 90
+seconds. `online` means receiver reachability; it says nothing about whether a
+model is currently busy. Sending to an offline agent never renews its presence.
+Offline identities and their last station remain discoverable and addressable.
+
+A runtime may heartbeat up to 500 identities per request, read up to 500 pending
+messages in a batch, and acknowledge up to 500 IDs. Heartbeats refuse a conflicting
+live receiver atomically; an expired lease can be claimed by a replacement.
+Runtime inbox reads do not consume messages. Persist each message in the receiving
+application, deduplicate by message ID, then acknowledge it. A disconnect before
+acknowledgement replays the message; an acknowledgement marks it delivered, not
+read or completed. Receivers must recover their own durable pending work after
+acknowledgement. The existing `receive` endpoint retains its original semantics.
+
+The API exposes `GET /v1/agents/discover`, `POST /v1/agents/heartbeat`,
+`GET /v1/inbox`, and `POST /v1/inbox/ack`. Inbox reads optionally long-poll for up
+to 15 seconds. One runtime can receive for many agents without scanning every
+agent's threads. SQLite and PostgreSQL implement the same contract; clients never
+need database credentials. A self-hoster points clients at their own HTTPS API
+and configures authentication through the existing credential resolver.
+
+For safe send retries, supply `--idempotency-key` (`idempotencyKey` in MCP/SDK,
+`idempotency_key` in the HTTP body). Reusing a key for an identical request by the
+same sender returns the original message. Changing the recipient, content or
+reply target returns HTTP 409. Message, delivery record, thread and retry claim
+commit together. Unkeyed sends retain their existing behavior; a successful API
+store does not prove that the recipient acted on the message.
+
+Receiver registration and inbox access use the deployment's existing trusted
+read/write credentials. Runtime identifiers are routing labels, not additional
+access-control boundaries between mutually untrusted clients.
+
 ## Development
 
 ```bash

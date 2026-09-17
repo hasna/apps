@@ -18,6 +18,10 @@
  */
 import type {
   Agent,
+  AgentDiscovery,
+  AgentHeartbeat,
+  AgentPage,
+  InboxItem,
   DeliveredMessage,
   Message,
   MessageDeliveryReport,
@@ -92,7 +96,10 @@ export const MESSAGES_API_VERSION_PREFIX = "/v1";
  * Hasna client uses. It preserves the path prefix, refuses userinfo, query
  * and fragment data, and restricts plain HTTP to exact loopback authorities.
  */
-export function resolveMessagesApiBase(rawBaseUrl: string): { baseUrl: string; apiUrl: string } {
+export function resolveMessagesApiBase(rawBaseUrl: string): {
+  baseUrl: string;
+  apiUrl: string;
+} {
   const apiUrl = toV1BaseUrl(rawBaseUrl);
   return { baseUrl: stripV1FromApiUrl(apiUrl), apiUrl };
 }
@@ -145,8 +152,14 @@ export class MessagesClient {
     return resolved.apiKey;
   }
 
-  private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
-    const headers: Record<string, string> = { "content-type": "application/json" };
+  private async request<T>(
+    method: string,
+    path: string,
+    body?: unknown,
+  ): Promise<T> {
+    const headers: Record<string, string> = {
+      "content-type": "application/json",
+    };
     const apiKey = this.currentApiKey();
     if (apiKey) headers["x-api-key"] = apiKey;
     const res = await this.fetchImpl(`${this.baseUrl}${path}`, {
@@ -163,58 +176,148 @@ export class MessagesClient {
 
   // --- identity ---
   registerAgent(name: string, displayName?: string): Promise<{ agent: Agent }> {
-    return this.request("POST", "/v1/auth/register", { name, display_name: displayName ?? null });
+    return this.request("POST", "/v1/auth/register", {
+      name,
+      display_name: displayName ?? null,
+    });
   }
 
   listAgents(): Promise<{ agents: Agent[] }> {
     return this.request("GET", "/v1/agents");
   }
 
+  discoverAgents(input: AgentDiscovery = {}): Promise<AgentPage> {
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries(input))
+      if (value !== undefined) query.set(key, String(value));
+    return this.request("GET", `/v1/agents/discover?${query}`);
+  }
+
+  heartbeat(
+    input: AgentHeartbeat,
+  ): Promise<{ expires_at: string; count: number }> {
+    return this.request("POST", "/v1/agents/heartbeat", input);
+  }
+
+  runtimeInbox(
+    runtimeId: string,
+    limit?: number,
+    waitMs = 0,
+  ): Promise<{ messages: InboxItem[] }> {
+    const query = new URLSearchParams({
+      runtime_id: runtimeId,
+      wait_ms: String(waitMs),
+    });
+    if (limit !== undefined) query.set("limit", String(limit));
+    return this.request("GET", `/v1/inbox?${query}`);
+  }
+
+  acknowledge(
+    runtimeId: string,
+    ids: string[],
+  ): Promise<{ acknowledged: number }> {
+    return this.request("POST", "/v1/inbox/ack", {
+      runtime_id: runtimeId,
+      message_ids: ids,
+    });
+  }
+
   // --- messaging ---
-  send(from: string, to: string, content: string, replyTo?: string): Promise<SendResult> {
+  send(
+    from: string,
+    to: string,
+    content: string,
+    replyTo?: string,
+    idempotencyKey?: string,
+  ): Promise<SendResult> {
     return this.request<SendResult>("POST", "/v1/messages", {
       from,
       to,
       content,
       reply_to: replyTo ?? null,
+      idempotency_key: idempotencyKey,
     });
   }
 
   /** Drain the agent's inbox: transitions stored -> delivered and returns them. */
   receive(agent: string): Promise<{ messages: DeliveredMessage[] }> {
-    return this.request("GET", `/v1/messages/receive?agent=${encodeURIComponent(agent)}`);
+    return this.request(
+      "GET",
+      `/v1/messages/receive?agent=${encodeURIComponent(agent)}`,
+    );
   }
 
   /** Per-message per-recipient delivery state for a thread. */
-  deliveryStatus(threadId: string): Promise<{ deliveries: MessageDeliveryReport[] }> {
-    return this.request("GET", `/v1/messages/delivery?thread=${encodeURIComponent(threadId)}`);
+  deliveryStatus(
+    threadId: string,
+  ): Promise<{ deliveries: MessageDeliveryReport[] }> {
+    return this.request(
+      "GET",
+      `/v1/messages/delivery?thread=${encodeURIComponent(threadId)}`,
+    );
   }
 
   // --- threads ---
-  threads(agent: string, openOnly = true): Promise<{ threads: ThreadSummary[] }> {
+  threads(
+    agent: string,
+    openOnly = true,
+  ): Promise<{ threads: ThreadSummary[] }> {
     const q = openOnly ? "" : "&open_only=0";
-    return this.request("GET", `/v1/threads?agent=${encodeURIComponent(agent)}${q}`);
+    return this.request(
+      "GET",
+      `/v1/threads?agent=${encodeURIComponent(agent)}${q}`,
+    );
   }
 
-  thread(threadId: string, agent: string): Promise<{ thread: Thread; messages: Array<{ message: Message; delivery: unknown }>; unread_count: number }> {
-    return this.request("GET", `/v1/threads/${encodeURIComponent(threadId)}?agent=${encodeURIComponent(agent)}`);
+  thread(
+    threadId: string,
+    agent: string,
+  ): Promise<{
+    thread: Thread;
+    messages: Array<{ message: Message; delivery: unknown }>;
+    unread_count: number;
+  }> {
+    return this.request(
+      "GET",
+      `/v1/threads/${encodeURIComponent(threadId)}?agent=${encodeURIComponent(agent)}`,
+    );
   }
 
-  threadMessages(threadId: string, limit?: number): Promise<{ messages: Message[] }> {
+  threadMessages(
+    threadId: string,
+    limit?: number,
+  ): Promise<{ messages: Message[] }> {
     const q = limit ? `?limit=${limit}` : "";
-    return this.request("GET", `/v1/threads/${encodeURIComponent(threadId)}/messages${q}`);
+    return this.request(
+      "GET",
+      `/v1/threads/${encodeURIComponent(threadId)}/messages${q}`,
+    );
   }
 
-  threadUnread(threadId: string, agent: string): Promise<{ unread_count: number }> {
-    return this.request("GET", `/v1/threads/${encodeURIComponent(threadId)}/unread?agent=${encodeURIComponent(agent)}`);
+  threadUnread(
+    threadId: string,
+    agent: string,
+  ): Promise<{ unread_count: number }> {
+    return this.request(
+      "GET",
+      `/v1/threads/${encodeURIComponent(threadId)}/unread?agent=${encodeURIComponent(agent)}`,
+    );
   }
 
   closeThread(threadId: string, agent: string): Promise<{ thread: Thread }> {
-    return this.request("POST", `/v1/threads/${encodeURIComponent(threadId)}/close`, { agent });
+    return this.request(
+      "POST",
+      `/v1/threads/${encodeURIComponent(threadId)}/close`,
+      { agent },
+    );
   }
 
   reopenThread(threadId: string, agent: string): Promise<{ thread: Thread }> {
-    return this.request("POST", `/v1/threads/${encodeURIComponent(threadId)}/reopen`, { agent });
+    return this.request(
+      "POST",
+      `/v1/threads/${encodeURIComponent(threadId)}/reopen`,
+      { agent },
+    );
   }
 
   unread(agent: string): Promise<{ threads: ThreadSummary[]; total: number }> {
@@ -222,11 +325,19 @@ export class MessagesClient {
   }
 
   markRead(threadId: string, agent: string): Promise<{ ok: true }> {
-    return this.request("POST", `/v1/threads/${encodeURIComponent(threadId)}/read`, { agent });
+    return this.request(
+      "POST",
+      `/v1/threads/${encodeURIComponent(threadId)}/read`,
+      { agent },
+    );
   }
 
   markMessageRead(messageId: string, agent: string): Promise<{ ok: true }> {
-    return this.request("POST", `/v1/messages/${encodeURIComponent(messageId)}/read`, { agent });
+    return this.request(
+      "POST",
+      `/v1/messages/${encodeURIComponent(messageId)}/read`,
+      { agent },
+    );
   }
 }
 
@@ -265,7 +376,9 @@ export function createMessagesClient(
   const resolveOptions: MessagesClientResolveOptions = {
     ...(overrides.baseUrl !== undefined ? { baseUrl: overrides.baseUrl } : {}),
     ...(overrides.apiKey !== undefined ? { apiKey: overrides.apiKey } : {}),
-    ...(overrides.keychain ? { credentials: { keychain: overrides.keychain } } : {}),
+    ...(overrides.keychain
+      ? { credentials: { keychain: overrides.keychain } }
+      : {}),
   };
   const report = resolveMessagesClientTransport(env, resolveOptions);
   if (report.transport === "local") return null;
@@ -273,7 +386,11 @@ export function createMessagesClient(
 
   // An explicit apiKey is a deliberate pin and is never re-resolved.
   if (overrides.apiKey !== undefined) {
-    return new MessagesClient({ baseUrl, apiKey: overrides.apiKey, fetch: overrides.fetch });
+    return new MessagesClient({
+      baseUrl,
+      apiKey: overrides.apiKey,
+      fetch: overrides.fetch,
+    });
   }
   // A pinned authority with no pinned key: NO ambient credential applies
   // (#1794). The chain is never consulted for the credential again.
@@ -295,7 +412,11 @@ export function createMessagesClient(
     }
     return fresh;
   };
-  return new MessagesClient({ baseUrl, apiKey: provider, fetch: overrides.fetch });
+  return new MessagesClient({
+    baseUrl,
+    apiKey: provider,
+    fetch: overrides.fetch,
+  });
 }
 
 /**
@@ -308,26 +429,37 @@ export function createMessagesClient(
 export function resolveMessagesClientStore(
   env: MessagesClientEnv = process.env,
   overrides: MessagesClientFromEnvOverrides = {},
-): { transport: "http"; client: MessagesClient } | { transport: "local"; service: MessagesService } {
+):
+  | { transport: "http"; client: MessagesClient }
+  | { transport: "local"; service: MessagesService } {
   const resolveOptions: MessagesClientResolveOptions = {
     ...(overrides.baseUrl !== undefined ? { baseUrl: overrides.baseUrl } : {}),
     ...(overrides.apiKey !== undefined ? { apiKey: overrides.apiKey } : {}),
-    ...(overrides.keychain ? { credentials: { keychain: overrides.keychain } } : {}),
+    ...(overrides.keychain
+      ? { credentials: { keychain: overrides.keychain } }
+      : {}),
   };
   const report = resolveMessagesClientTransport(env, resolveOptions);
   if (report.transport === "local") {
     const sqlitePath = env[MESSAGES_SQLITE_PATH_ENV];
-    return { transport: "local", service: new MessagesService(new SqliteMessagesStore(sqlitePath)) };
+    return {
+      transport: "local",
+      service: new MessagesService(new SqliteMessagesStore(sqlitePath)),
+    };
   }
   const client = createMessagesClient(env, overrides);
-  if (!client) throw new Error("HTTP transport resolved but no client could be created");
+  if (!client)
+    throw new Error("HTTP transport resolved but no client could be created");
   return { transport: "http", client };
 }
 
-export {
-  MessagesService,
-  threadKeyFor,
-  newThreadId,
-  SqliteMessagesStore,
-};
+export { MessagesService, threadKeyFor, newThreadId, SqliteMessagesStore };
 export type { MessagesStore } from "../service";
+export type {
+  AgentDiscovery,
+  AgentHeartbeat,
+  AgentPresence,
+  DiscoveredAgent,
+  AgentPage,
+  InboxItem,
+} from "../types";
