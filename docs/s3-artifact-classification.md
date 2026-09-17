@@ -40,7 +40,7 @@ Classes:
 | 6 | logs | A | raw JSONL segment files + manifests live only on-box; hosted `event_records` rows carry redacted metadata + content hash with `raw: null` by design (`src/store/index.ts`, `src/server/cloud/store.ts`) | `hasna-apps-logs-artifacts-…` · `artifacts/<run>/<sha>` | kit; bucket; task role grant | #1648 |
 | 7 | conversations | B | `message_attachments.content BYTEA` in the shared RDS (migration 6, `sr/lib/pg-migrations.ts`) — attachment bytes bloat the shared DB | `hasna-apps-conversations-attachments-…` · `attachments/<sha>` | bucket only (bytes, no versioning); migrate table → S3 with content-addressed keys; task role grant | #1646 |
 | 8 | telephony | B | call recordings/voicemail exist only at the provider (`media_url`/`recording_url` columns, `src/server/cloud-serve.ts`) — hosted rows keep the URL, bytes are not in our control | `hasna-apps-telephony-media-…` · `media/<id>/<sha>` | bucket only; copy-on-arrival worker; task role grant | #1649 |
-| 9 | attachments | B (live) | production S3 today; keys `attachments/<yyyy-MM-dd>/<id>/<filename>` (`src/api/routes/attachments.ts`), versioning off, no lifecycle, grandfathered bucket | keep bucket (grandfathered), align layout + versioning + lifecycle | bucket ops in infra-live #41; no kit needed (non-versioned bytes) | #1650 |
+| 9 | attachments | B (live) | source moved to `hasna-internal/internal-apps` on 2026-09-18; `hasna-oss-attachments-prod` has versioning enabled plus all-version inventory, retains the legacy dated keys, and the internal service writes content-addressed `attachments/global/<sha>[.<ext>]` objects with `attachments/global/manifests/<id>.json` manifests | keep the versioned bucket and all-version inventory; preserve every pre-cutover version/delete marker | link-services infra PRs #186–#189; live cutover receipt in `docs/shortlinks-attachments-internal-migration.md` | #1650 |
 | 10 | files | B (live) | production S3 with **two key layouts** and a second `EVIDENCE` bucket (`HASNA_FILES_S3_BUCKET` + `HASNA_FILES_EVIDENCE_BUCKET`, `src/lib/evidence.ts`, `src/server/pg-store.ts` object_key rows) | keep bucket, collapse to one layout + one bucket | bucket ops in infra-live #41 | #1650 |
 | 11 | emails | B (live) | inbound MIME in the mail-plane S3 (`EMAILS_INGEST_S3_BUCKET`/prefix, `hasna-emails-prod-inbound-<acct>`); attachments addressed by `object_key` columns into the MIME (`src/server/self-hosted/migrations.ts`, `ingest-worker.ts`); Postgres holds metadata rows | keep; retire copies in other accounts | bucket already exists; cleanup sequenced via infra-live #41 | #1589/#41 |
 | 12 | instructions | A | `configs` + snapshots/profiles remain rows in PostgreSQL; native immutable export-backup payload + SHA-256 manifest support lives in `src/storage/s3-{config,object-store,backup}.ts` and the `instructions storage backup` CLI | per-app private backup bucket · `instructions/backups/<backup-id>/` | native Bun S3 client; bucket and task-role grant; PostgreSQL/SQLite remain authoritative | — |
@@ -51,7 +51,7 @@ Classes:
 | 17 | calendar | C | rows only (migrations 0001–0002; attachment mention is a metadata comment) | — | — | — |
 | 18 | domains | C | rows only | — | — | — |
 | 19 | notes | C | rows only | — | — | — |
-| 20 | shortlinks | C | rows only | — | — | — |
+| 20 | shortlinks | C | source moved to `hasna-internal/internal-apps` on 2026-09-18; PostgreSQL rows only, with public resolution through the reviewed `hasna-link-router` | — | — | — |
 | 21 | economy | C | rows only (migrations 0001) | — | — | — |
 | 22 | secrets | C | values stored encrypted as TEXT in DB (`src/db.ts` value/value_blob, AES-GCM); no object store | — | — | — |
 | 23 | messages | C | rows only | — | — | — |
@@ -105,6 +105,6 @@ Kit consumers: skills (#1630), projects (#1593), knowledge (#1633), recordings (
 ## Verification notes
 
 - Read on origin/main: migrations/schema + storage code for all 25 hosted apps; S3 env-var/API usage across `apps/*`; deploy lanes `.github/workflows/deploy-{conversations,mementos,projects,skills,todos}.yml`.
-- identities and subscriptions sources live in hasna-internal/internal-apps (read-only via API); both classified C.
+- attachments, shortlinks, identities and subscriptions sources live in hasna-internal/internal-apps; their fleet classifications remain recorded here.
 - attachments/files/emails are the only hosted apps with production S3 today (all class B).
 - No hosted app ships versioned immutable artefacts to a durable remote today; skills is the only A-class app with the kit mechanics merged and unexercised in prod.

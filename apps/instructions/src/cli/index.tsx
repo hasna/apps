@@ -3540,7 +3540,6 @@ program
       { name: "@hasna/conversations", bin: "conversations", mcp: "conversations-mcp" },
       { name: "@hasna/skills", bin: "skills", mcp: "skills-mcp" },
       { name: "@hasna/economy", bin: "economy", mcp: "economy-mcp" },
-      { name: "@hasna/attachments", bin: "attachments", mcp: "attachments-mcp" },
       { name: "@hasna/emails", bin: "emails", mcp: "emails-mcp" },
       { name: "@hasna/recordings", bin: "recordings", mcp: "recordings-mcp" },
       { name: "@hasna/assistants", bin: "assistants", mcp: "assistants-mcp" },
