@@ -1,5 +1,4 @@
-import { Database } from "bun:sqlite";
-import { CURRENT_MIGRATION_LEVEL } from "../db/database.js";
+import { loadLocalSqliteStore } from "../local/load.js";
 import { existsSync } from "fs";
 import {
   getRecordingsTransportStatus,
@@ -111,20 +110,17 @@ export interface ActiveStoreDescription {
  * Count recordings in a SQLite file without opening it read-write.
  *
  * `getDatabase()` would run migrations, which is a write to a file we are only
- * inspecting — and on a legacy file that is a destructive surprise. Open
- * read-only and treat any failure as "unknown" rather than propagating.
+ * inspecting — and on a legacy file that is a destructive surprise. The
+ * read-only open lives in src/local/sqlite-store.ts and arrives through the
+ * single gated dynamic import, so the reporting path keeps `bun:sqlite` out of
+ * the CLI and MCP bundles; any failure — including a build with no local chunk
+ * at all — reads as "unknown" rather than propagating.
+ *
+ * Async for that reason alone; the answer is the same one it always gave.
  */
-function readLocalRecordingCount(dbPath: string): number | null {
+async function readLocalRecordingCount(dbPath: string): Promise<number | null> {
   try {
-    const db = new Database(dbPath, { readonly: true });
-    try {
-      const row = db.query("SELECT COUNT(*) AS count FROM recordings").get() as
-        | { count?: number }
-        | null;
-      return typeof row?.count === "number" ? row.count : null;
-    } finally {
-      db.close();
-    }
+    return (await loadLocalSqliteStore()).readLocalRecordingCount(dbPath);
   } catch {
     return null;
   }
@@ -135,21 +131,13 @@ function readLocalRecordingCount(dbPath: string): number | null {
  *
  * Read-only, because the only other way to find out is to open it read-write,
  * which applies the migrations — the exact side effect being checked for.
- * Returns null when the answer cannot be established.
+ * Returns null when the answer cannot be established, and never opens (or
+ * loads an engine for) a file that does not exist.
  */
-export function localStoreIsBehindSchema(dbPath: string): boolean | null {
+export async function localStoreIsBehindSchema(dbPath: string): Promise<boolean | null> {
   if (!existsSync(dbPath)) return null;
   try {
-    const db = new Database(dbPath, { readonly: true });
-    try {
-      const row = db.query("SELECT MAX(id) AS max_id FROM _migrations").get() as
-        | { max_id?: number | null }
-        | null;
-      const level = typeof row?.max_id === "number" ? row.max_id : -1;
-      return level < CURRENT_MIGRATION_LEVEL;
-    } finally {
-      db.close();
-    }
+    return (await loadLocalSqliteStore()).localStoreIsBehindSchema(dbPath);
   } catch {
     return null;
   }
@@ -159,11 +147,11 @@ export function localStoreIsBehindSchema(dbPath: string): boolean | null {
  * Report which store this process would read and write, and whether a second,
  * stale dataset is sitting next to it.
  */
-export function describeActiveStore(
+export async function describeActiveStore(
   config: RecordingsConfig,
   env: NodeJS.ProcessEnv | Record<string, string | undefined> = process.env,
   options: RecordsClientResolveOptions = {},
-): ActiveStoreDescription {
+): Promise<ActiveStoreDescription> {
   const localDbPath = config.db_path;
   const localDbPresent = existsSync(localDbPath);
 
@@ -198,13 +186,13 @@ export function describeActiveStore(
       base_url: null,
       local_db_path: localDbPath,
       local_db_present: localDbPresent,
-      local_db_recordings: localDbPresent ? readLocalRecordingCount(localDbPath) : null,
+      local_db_recordings: localDbPresent ? await readLocalRecordingCount(localDbPath) : null,
       divergent: false,
       warning: null,
     };
   }
 
-  const localDbRecordings = localDbPresent ? readLocalRecordingCount(localDbPath) : null;
+  const localDbRecordings = localDbPresent ? await readLocalRecordingCount(localDbPath) : null;
   const divergent = (localDbRecordings ?? 0) > 0;
 
   const warnings: string[] = [];

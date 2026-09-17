@@ -1315,9 +1315,9 @@ program
     // vars whose mere presence flips the transport, so `check` has to name it:
     // auditing the wrong store is what made two separate reviews conclude that
     // persistence had broken when it had only moved.
-    const activeStore = describeActiveStore(config);
+    const activeStore = await describeActiveStore(config);
     // Sampled here, before any probe runs, so it reflects the store as found.
-    const localStoreWasLegacy = localStoreIsBehindSchema(config.db_path);
+    const localStoreWasLegacy = await localStoreIsBehindSchema(config.db_path);
 
     let capture: CaptureProbeResult | null = null;
     let credential: CredentialProbeResult | null = null;
