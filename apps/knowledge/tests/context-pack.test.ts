@@ -39,6 +39,8 @@ describe('bounded knowledge agent context packs', () => {
     expect(pack.safety.raw_artifact_content_included).toBe(false);
     expect(pack.budgets.items_included).toBeLessThanOrEqual(1);
     expect(pack.budgets.estimated_tokens).toBeLessThanOrEqual(pack.budgets.max_tokens);
+    expect(pack.budgets.encoded_bytes).toBeLessThanOrEqual(pack.budgets.max_bytes);
+    expect(Buffer.byteLength(JSON.stringify(pack))).toBeLessThanOrEqual(pack.budgets.max_bytes);
     expect(pack.evidence[0].citation_ids.length).toBeGreaterThan(0);
     expect(JSON.stringify(pack)).not.toContain('sk-testsecretkeyvalue');
   });
@@ -238,6 +240,14 @@ describe('bounded knowledge agent context packs', () => {
       query: 'nothing',
       maxTokens: 160,
     })).rejects.toThrow('--max-tokens must be at least');
+
+    await expect(buildKnowledgeAgentContextPack({
+      dbPath,
+      safetyPolicy: safetyFor(dir),
+      source: 'search',
+      query: 'nothing',
+      maxBytes: 512,
+    })).rejects.toThrow('--max-bytes must be at least');
 
     await expect(buildKnowledgeAgentContextPack({
       dbPath,

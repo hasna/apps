@@ -370,12 +370,14 @@ describe('knowledge MCP', () => {
           scope: 'project',
           query: 'MCP resolver source text',
           max_tokens: 1200,
+          max_bytes: 4800,
           max_items: 1,
         },
       }));
       expect(contextPack.format).toBe('knowledge-agent-context-pack');
       expect(contextPack.source).toBe('search');
       expect(contextPack.evidence.length).toBeLessThanOrEqual(1);
+      expect(contextPack.budgets.encoded_bytes).toBeLessThanOrEqual(contextPack.budgets.max_bytes);
       expect(contextPack.safety.raw_artifact_content_included).toBe(false);
 
       const add = parseToolJson(await client.callTool({
@@ -753,14 +755,46 @@ describe('knowledge MCP', () => {
         arguments: { scope: 'project', query: 'resolver source text', semantic: true, fake: true, dimensions: 8 },
       }));
       expect(hybridSearch.results.some((entry: any) => entry.kind === 'source_chunk')).toBe(true);
+      expect(hybridSearch.results[0].text).toContain('MCP resolver source text');
       expect(hybridSearch.counts.semantic_results).toBeGreaterThan(0);
+
+      const compactHybridCall = await client.callTool({
+        name: 'ok_search',
+        arguments: { scope: 'project', query: 'resolver source text', semantic: true, fake: true, dimensions: 8, detail: 'compact' },
+      });
+      const compactHybridText = compactHybridCall.content?.[0]?.text as string;
+      const compactHybridSearch = JSON.parse(compactHybridText);
+      expect(compactHybridText).not.toContain('\n');
+      expect(compactHybridSearch.detail).toBe('compact');
+      expect(compactHybridSearch.results[0].text).toBeUndefined();
+      expect(compactHybridSearch.results[0].text_preview).toContain('MCP resolver source text');
+
+      const fullHybridSearch = parseToolJson(await client.callTool({
+        name: 'ok_search',
+        arguments: { scope: 'project', query: 'resolver source text', semantic: true, fake: true, dimensions: 8, detail: 'full' },
+      }));
+      expect(fullHybridSearch.detail).toBe('full');
+      expect(fullHybridSearch.results[0].text).toContain('MCP resolver source text');
 
       const contextSearch = parseToolJson(await client.callTool({
         name: 'knowledge_search',
         arguments: { scope: 'project', query: 'resolver source text', semantic: true, fake: true, dimensions: 8 },
       }));
       expect(contextSearch.excerpts.length).toBeGreaterThan(0);
+      expect(contextSearch.results[0].text).toContain('MCP resolver source text');
       expect(contextSearch.citations[0].source_uri).toBe('open-files://file/file_mcp');
+
+      const compactContextCall = await client.callTool({
+        name: 'knowledge_search',
+        arguments: { scope: 'project', query: 'resolver source text', semantic: true, fake: true, dimensions: 8, detail: 'compact' },
+      });
+      const compactContextText = compactContextCall.content?.[0]?.text as string;
+      const compactContextSearch = JSON.parse(compactContextText);
+      expect(compactContextText).not.toContain('\n');
+      expect(compactContextSearch.detail).toBe('compact');
+      expect(compactContextSearch.results[0].text).toBeUndefined();
+      expect(compactContextSearch.excerpts[0].text).toBeUndefined();
+      expect(compactContextSearch.excerpts[0].text_preview).toContain('MCP resolver source text');
 
       const answer = parseToolJson(await client.callTool({
         name: 'knowledge_ask',
