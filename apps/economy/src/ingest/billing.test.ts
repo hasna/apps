@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
 import { mkdirSync, writeFileSync, rmSync, existsSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
-import { openDatabase, queryBillingSummary } from '../db/database.js'
+import { openDatabase, queryBillingSummary } from '../db/sqlite-store.js'
 import { syncAnthropicBilling, syncGeminiBilling, syncOpenAIBilling } from './billing.js'
 import type { SqliteAdapter as Database } from '../db/sqlite-adapter.js'
 

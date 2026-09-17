@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'bun:test'
-import { openDatabase, upsertRequest, upsertSession } from '../db/database.js'
+import { openDatabase, upsertRequest, upsertSession } from '../db/sqlite-store.js'
 import { createHandler } from './serve.js'
 import type { SqliteAdapter as Database } from '../db/sqlite-adapter.js'
 

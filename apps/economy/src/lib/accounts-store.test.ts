@@ -25,6 +25,8 @@ const envKeys = [
   'HASNA_ACCOUNTS_MODE',
   'ACCOUNTS_MODE',
   'HASNA_PROFILE',
+  'HASNA_ECONOMY_LOCAL',
+  'ECONOMY_LOCAL',
   'HOME',
   'HASNA_HOME',
   'HASNA_CONFIG_HOME',
@@ -66,7 +68,11 @@ afterEach(() => {
 const noOptions: ResolveAccountsStoreOptions = { credentials: {} }
 
 describe('resolveStore fails closed on accounts API misconfiguration', () => {
-  test('nothing configured anywhere selects the local registry — and announces it once on stderr', () => {
+  // Fleet-alignment ruling d (2026-09-11): with no accounts credential and no
+  // economy local opt-in, the on-box JSON registry is NOT read. Attribution is
+  // absent (transport 'none') and the refusal is announced once on stderr —
+  // this was the last silent-local branch in the package.
+  test('nothing configured anywhere REFUSES the on-box registry — and says so once on stderr', () => {
     __resetAccountsLocalNotice()
     const lines: string[] = []
     const originalWrite = process.stderr.write.bind(process.stderr)
@@ -76,15 +82,44 @@ describe('resolveStore fails closed on accounts API misconfiguration', () => {
     }) as typeof process.stderr.write
     try {
       const store = withScrubbedEnv(() => resolveStore(process.env, noOptions))
+      expect(store.transport).toBe('none')
+    } finally {
+      process.stderr.write = originalWrite
+    }
+    expect(lines.join('')).toContain('is NOT read without HASNA_ECONOMY_LOCAL=1')
+    expect(lines.join('')).toContain('hasna.credentials.accounts.api-key')
+  })
+
+  test('the refusing store reads no on-box file: no profiles, only the built-in tools', async () => {
+    const store = withScrubbedEnv(() => resolveStore(process.env, noOptions))
+    expect(store.transport).toBe('none')
+    expect(await store.listProfiles()).toEqual([])
+    expect(await store.findProfile('anything')).toBeUndefined()
+    expect(await store.currentProfile('claude')).toBeUndefined()
+    expect((await store.listTools()).length).toBeGreaterThan(0)
+  })
+
+  test('the explicit economy local opt-in restores the on-box registry — and announces it once', () => {
+    __resetAccountsLocalNotice()
+    const lines: string[] = []
+    const originalWrite = process.stderr.write.bind(process.stderr)
+    process.stderr.write = ((chunk: string) => {
+      lines.push(String(chunk))
+      return true
+    }) as typeof process.stderr.write
+    try {
+      const store = withScrubbedEnv(() => {
+        process.env['HASNA_ECONOMY_LOCAL'] = '1'
+        return resolveStore(process.env, noOptions)
+      })
       expect(store.transport).toBe('local')
     } finally {
       process.stderr.write = originalWrite
     }
-    expect(lines.join('')).toContain('accounts: local mode')
-    expect(lines.join('')).toContain('hasna.credentials.accounts.api-key')
+    expect(lines.join('')).toContain('accounts: LOCAL mode')
   })
 
-  test('nothing configured anywhere is LOCAL only — no fetch is performed', async () => {
+  test('nothing configured anywhere performs no fetch', async () => {
     const seen: string[] = []
     const originalFetch = globalThis.fetch
     globalThis.fetch = (async (input: RequestInfo | URL) => {

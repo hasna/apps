@@ -39,8 +39,11 @@ export async function ingestHermes(db: Database, verbose = false): Promise<{ ses
     return { sessions: 0, requests: 0 }
   }
 
-  const { Database: Sqlite } = await import('bun:sqlite')
-  const hermes = new Sqlite(HERMES_DB, { readonly: true })
+  // Gated dynamic import (../db/third-party-sqlite.js): keeps `bun:sqlite` out
+  // of dist/cli and dist/mcp — an `await import('bun:sqlite')` here would still
+  // be inlined into the client bundle.
+  const { openThirdPartySqlite } = await import('../db/third-party-sqlite.js')
+  const hermes = openThirdPartySqlite(HERMES_DB, { readonly: true })
   const rows = hermes.prepare(`
     SELECT id, source, model, started_at, ended_at,
            input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,

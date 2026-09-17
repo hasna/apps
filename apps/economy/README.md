@@ -118,7 +118,7 @@ economy sync --hermes
 economy sync --loops
 ```
 
-`economy sync --loops` reads the OpenLoops store (`~/.hasna/loops/loops.db` by default, resolved by the in-package resolver to the XDG data home once the loops store has migrated there) in read-only mode and imports OpenLoops orchestration/judge `goal_runs.tokens_used` into `loop:*` cost centers. It intentionally does not ingest dispatched coding-agent work from loops; heavy agent spend remains captured by the existing per-agent ingesters and can be analyzed alongside loop cost centers through account/profile attribution.
+`economy sync --loops` reads the OpenLoops store (`~/.hasna/loops/loops.db` by default, resolved by the in-package resolver to the XDG data home once the loops store has migrated there) in read-only mode and imports OpenLoops orchestration/judge `goal_runs.tokens_used` into `loop:*` cost centers. **This cross-app on-box read runs only in the local lane.** A hosted client (a resolved economy credential) refuses it with one stderr line — another app's on-box SQLite is never fleet data — so hosted stations see `loops ingest skipped` until the read is served by the loops API. It intentionally does not ingest dispatched coding-agent work from loops; heavy agent spend remains captured by the existing per-agent ingesters and can be analyzed alongside loop cost centers through account/profile attribution.
 
 Useful repair options:
 
@@ -130,7 +130,7 @@ economy sync --backfill-machine
 
 Full sync also imports active project metadata from `@hasna/projects` when the registry is available. The Codex source reads both `~/.codex/state_5.sqlite` and the Codewith store at `~/.codewith/state_5.sqlite` by default; explicit `HASNA_ECONOMY_CODEX_DB_PATH` and `HASNA_ECONOMY_CODEWITH_DB_PATH` values override those locations.
 
-Account attribution is automatic when `@hasna/accounts` has a matching active, applied, or env-dir profile for the agent. Account identity is the email address plus coding agent, so `work@example.com` under Codex and Claude is reported as two accounts. You can also force attribution for a process with `ECONOMY_ACCOUNT=tool:name` or agent-specific overrides such as `ECONOMY_CODEX_ACCOUNT=codex:work`.
+Account attribution is automatic when the accounts API (`HASNA_ACCOUNTS_API_KEY`, the accounts credentials file, or the Keychain item `hasna.credentials.accounts.api-key`) resolves a matching active, applied, or env-dir profile for the agent. With **no** accounts credential the on-box registry `~/.hasna/accounts/accounts.json` is **not** read unless `HASNA_ECONOMY_LOCAL=1` is set: attribution is simply omitted, announced once on stderr, rather than filling hosted rows from an on-box file. Account identity is the email address plus coding agent, so `work@example.com` under Codex and Claude is reported as two accounts. You can also force attribution for a process with `ECONOMY_ACCOUNT=tool:name` or agent-specific overrides such as `ECONOMY_CODEX_ACCOUNT=codex:work`.
 
 Session drilldown can be scoped to an account key, account name, or email:
 

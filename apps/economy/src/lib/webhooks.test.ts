@@ -83,7 +83,7 @@ function resetConfig(): void {
 
 beforeAll(async () => {
   process.env['HOME'] = root
-  const database = await import('../db/database.js')
+  const database = await import('../db/sqlite-store.js')
   const config = await import('./config.js')
   const webhooks = await import('./webhooks.js')
   checkAndFireWebhooks = webhooks.checkAndFireWebhooks

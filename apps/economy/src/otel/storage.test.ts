@@ -163,7 +163,7 @@ describe('economy-otel storage lanes (hasna/apps#1720)', () => {
     proc.kill()
     await proc.exited
     const stderr = await stderrPromise
-    expect(stderr).not.toContain('local mode')
+    expect(stderr.toLowerCase()).not.toContain('local mode')
     // Hosted: no SQLite anywhere under the run's HOME — not the app home, not
     // the store path, not a scratch file.
     expect(sqliteFilesUnder(home)).toEqual([])
@@ -183,7 +183,7 @@ describe('economy-otel storage lanes (hasna/apps#1720)', () => {
     proc.kill()
     await proc.exited
     const stderr = await stderrPromise
-    expect(stderr).toContain('economy: local mode')
+    expect(stderr).toContain('economy: LOCAL mode')
     expect(existsSync(join(home, 'economy-home', 'economy.db'))).toBe(true)
   }, 20_000)
 })

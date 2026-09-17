@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'bun:test'
 import { normalizeModelName, getPricing, getPricingFromDb, computeCost, DEFAULT_PRICING, ensurePricingSeeded } from './pricing.js'
-import { openDatabase, upsertModelPricing, getModelPricing } from '../db/database.js'
+import { openDatabase, upsertModelPricing, getModelPricing } from '../db/sqlite-store.js'
 
 describe('normalizeModelName', () => {
   it('strips date suffixes, provider prefixes, and lowercases', () => {

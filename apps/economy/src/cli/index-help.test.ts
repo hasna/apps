@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { openDatabase, upsertCostCenter, upsertRequest, upsertSession } from '../db/database.js'
+import { openDatabase, upsertCostCenter, upsertRequest, upsertSession } from '../db/sqlite-store.js'
 
 const root = new URL('../../', import.meta.url).pathname.replace(/\/$/, '')
 const tempRoots: string[] = []
@@ -206,7 +206,7 @@ describe('economy CLI help', () => {
       expect(result.stdout).toContain('--json')
       // The explicit local opt-in announces itself on stderr (owner directive
       // 2026-09-04): an unhosted run is never mistaken for a hosted one.
-      expect(result.stderr).toContain('local mode')
+      expect(result.stderr).toContain('LOCAL mode')
     }
 
     const jsonResult = await runCli(['breakdown', '--by', 'model', '--json'], env)
@@ -215,7 +215,7 @@ describe('economy CLI help', () => {
     expect(payload.by).toBe('model')
     expect(payload.total).toBe(25)
     expect(payload.rows).toHaveLength(25)
-    expect(jsonResult.stderr).toContain('local mode')
+    expect(jsonResult.stderr).toContain('LOCAL mode')
   })
 
   test('documents Gemini as a billing sync provider', async () => {

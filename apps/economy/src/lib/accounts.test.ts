@@ -21,6 +21,8 @@ const envKeys = [
   'ACCOUNTS_MODE',
   'HOME',
   'HASNA_HOME',
+  'HASNA_ECONOMY_LOCAL',
+  'ECONOMY_LOCAL',
 ] as const
 const originalEnv = new Map<string, string | undefined>()
 const originalFetch = globalThis.fetch
@@ -42,6 +44,10 @@ beforeEach(() => {
   // empty temp dir so the resolver's disk tier performs no read.
   process.env['HOME'] = makeRoot()
   process.env['HASNA_HOME'] = makeRoot()
+  // The on-box JSON registry is served only under economy's explicit local
+  // opt-in (fleet-alignment ruling d, 2026-09-11) — these fixtures exercise
+  // exactly that lane. The refusal without it has its own test below.
+  process.env['HASNA_ECONOMY_LOCAL'] = '1'
 })
 
 afterEach(() => {
@@ -98,6 +104,29 @@ describe('resolveAccountForAgent', () => {
       account_email: 'client@example.com',
       account_source: 'env',
     })
+  })
+
+  test('without the local opt-in the on-box registry is NOT read — attribution is absent', async () => {
+    const root = makeRoot()
+    const profileDir = join(root, 'profiles', 'codex', 'client')
+    process.env['ACCOUNTS_STORE_PATH'] = join(root, 'accounts.json')
+    process.env['CODEX_HOME'] = profileDir
+    delete process.env['HASNA_ECONOMY_LOCAL']
+    writeFileSync(process.env['ACCOUNTS_STORE_PATH'], JSON.stringify({
+      version: 1,
+      current: { codex: 'client' },
+      applied: { codex: 'client' },
+      tools: [],
+      profiles: [{
+        name: 'client',
+        tool: 'codex',
+        email: 'client@example.com',
+        dir: profileDir,
+        createdAt: '2026-06-04T00:00:00.000Z',
+      }],
+    }))
+
+    expect(await resolveAccountForAgent('codex')).toBeNull()
   })
 
   test('matches hosted profiles through the async accounts store in strict root mode', async () => {
