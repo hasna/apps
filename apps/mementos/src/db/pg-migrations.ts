@@ -873,4 +873,82 @@ export const PG_MIGRATIONS: string[] = [
   ${postgresMementosMemoryProjectLinkSchemaSql()}
   INSERT INTO _migrations (id) VALUES (40) ON CONFLICT DO NOTHING;
   `,
+
+  // Machine registration identity invariant. Preflight first and refuse
+  // ambiguous legacy duplicates or invalid rows; no stable machine id is
+  // automatically merged or deleted. applyPgMigrations executes this body and
+  // its migration receipt in one advisory-locked transaction.
+  `
+  DROP TABLE IF EXISTS pg_temp.mementos_m41_machine_preflight;
+  CREATE TEMP TABLE mementos_m41_machine_preflight (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL CHECK(
+      length(name) BETWEEN 1 AND 128
+      AND name !~ '[[:cntrl:]]'
+    ),
+    hostname TEXT NOT NULL UNIQUE CHECK(
+      length(hostname) BETWEEN 1 AND 253
+      AND hostname = lower(regexp_replace(btrim(hostname), '\\.+$', ''))
+      AND hostname !~ '[[:space:]/\\\\]'
+    ),
+    platform TEXT NOT NULL CHECK(
+      length(platform) BETWEEN 1 AND 64
+      AND platform = lower(btrim(platform))
+      AND platform ~ '^[a-z0-9._-]+$'
+    ),
+    is_primary BOOLEAN NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL,
+    last_seen_at TIMESTAMPTZ NOT NULL CHECK(last_seen_at >= created_at)
+  ) ON COMMIT DROP;
+
+  INSERT INTO mementos_m41_machine_preflight
+    (id, name, hostname, platform, is_primary, created_at, last_seen_at)
+  SELECT
+    id,
+    name,
+    lower(regexp_replace(btrim(hostname), '\\.+$', '')),
+    platform,
+    is_primary,
+    created_at,
+    last_seen_at
+  FROM machines;
+
+  UPDATE machines machine
+  SET hostname = preflight.hostname
+  FROM mementos_m41_machine_preflight preflight
+  WHERE preflight.id = machine.id;
+
+  DROP TRIGGER IF EXISTS machines_single_primary_insert ON machines;
+  DROP TRIGGER IF EXISTS machines_single_primary_update ON machines;
+  DROP INDEX IF EXISTS idx_machines_hostname;
+  CREATE UNIQUE INDEX idx_machines_hostname ON machines(hostname);
+  DROP INDEX IF EXISTS idx_machines_single_primary;
+  CREATE UNIQUE INDEX idx_machines_single_primary
+    ON machines ((1)) WHERE is_primary = TRUE;
+
+  ALTER TABLE machines DROP CONSTRAINT IF EXISTS machines_hostname_canonical;
+  ALTER TABLE machines ADD CONSTRAINT machines_hostname_canonical CHECK(
+    length(hostname) BETWEEN 1 AND 253
+    AND hostname = lower(regexp_replace(btrim(hostname), '\\.+$', ''))
+    AND hostname !~ '[[:space:]/\\\\]'
+  );
+
+  ALTER TABLE machines DROP CONSTRAINT IF EXISTS machines_name_runtime;
+  ALTER TABLE machines ADD CONSTRAINT machines_name_runtime CHECK(
+    length(name) BETWEEN 1 AND 128
+    AND name !~ '[[:cntrl:]]'
+  );
+  ALTER TABLE machines DROP CONSTRAINT IF EXISTS machines_platform_runtime;
+  ALTER TABLE machines ADD CONSTRAINT machines_platform_runtime CHECK(
+    length(platform) BETWEEN 1 AND 64
+    AND platform = lower(btrim(platform))
+    AND platform ~ '^[a-z0-9._-]+$'
+  );
+  ALTER TABLE machines DROP CONSTRAINT IF EXISTS machines_liveness_runtime;
+  ALTER TABLE machines ADD CONSTRAINT machines_liveness_runtime CHECK(
+    last_seen_at >= created_at
+  );
+
+  INSERT INTO _migrations (id) VALUES (41) ON CONFLICT DO NOTHING;
+  `,
 ];

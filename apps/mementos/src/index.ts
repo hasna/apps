@@ -166,8 +166,13 @@ export {
   setPrimaryMachine,
   getFallbackSyncTargetMachine,
   getPrimaryMachineStartupWarning,
+  MACHINE_REGISTRATION_CONTRACT,
+  MACHINE_LIST_CONTRACT,
+  MACHINE_MUTATION_CONTRACT,
+  MACHINE_TOUCH_CONTRACT,
+  MachineRegistryError,
 } from "./db/machines.js";
-export type { Machine } from "./db/machines.js";
+export type { Machine, RegisterMachineInput, MachineRegistrationResult } from "./db/machines.js";
 
 // Search
 export { searchMemories } from "./lib/search.js";

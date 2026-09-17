@@ -1,5 +1,4 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { getStorageBackend } from "../../storage.js";
 import { z } from "zod";
 import {
   registerProject,
@@ -9,11 +8,9 @@ import {
 import {
   registerMachine,
   listMachines,
-  getMachine,
   renameMachine,
   setPrimaryMachine,
 } from "../../db/machines.js";
-import { pullStorageChanges, pushStorageChanges } from "../../lib/storage-sync.js";
 import { compactPageHint, compactText, positiveLimit } from "./memory-utils.js";
 
 function formatError(error: unknown): string {
@@ -32,25 +29,6 @@ function formatError(error: unknown): string {
     return msg;
   }
   return String(error);
-}
-
-function storageSyncEnabled(): boolean {
-  // The postgresql server backend (HASNA_MEMENTOS_DATABASE_URL present) is
-  // what makes the local<->postgres sync engine meaningful. Deployment modes
-  // no longer exist; the server backend is the only switch.
-  return getStorageBackend() === "postgresql";
-}
-
-function syncMachinesTable(direction: "push" | "pull", currentMachineId?: string): void {
-  if (!storageSyncEnabled()) return;
-
-  const result = direction === "push"
-    ? pushStorageChanges({ tables: ["machines"], current_machine_id: currentMachineId ?? null })
-    : pullStorageChanges({ tables: ["machines"], current_machine_id: currentMachineId ?? null });
-
-  if (result.errors.length > 0) {
-    throw new Error(`Storage ${direction} for machines failed: ${result.errors.join("; ")}`);
-  }
 }
 
 export function registerProjectTools(server: McpServer): void {
@@ -140,14 +118,12 @@ export function registerProjectTools(server: McpServer): void {
 
   server.tool(
     "register_machine",
-    "Register the current machine in the mementos machine registry. Auto-detects hostname. Idempotent by hostname.",
-    { name: z.string().optional().describe("Human-readable name (e.g. 'apple01'). Defaults to hostname.") },
+    "Register this machine in the shared registry. The normalized hostname is the account-local idempotency key; the returned machine ID is the stable identity used by mutations and memory attribution.",
+    { name: z.string().max(128).optional().describe("Human-readable display name. Defaults to the normalized hostname; repeat registration never renames an existing machine.") },
     async (args) => {
       try {
-        syncMachinesTable("pull");
         const machine = registerMachine(args.name);
-        syncMachinesTable("push", machine.id);
-        return { content: [{ type: "text" as const, text: `Machine: ${machine.name} | ${machine.id.slice(0, 8)} | hostname:${machine.hostname} | platform:${machine.platform}` }] };
+        return { content: [{ type: "text" as const, text: `Machine: ${machine.name} | ${machine.id} | hostname:${machine.hostname} | platform:${machine.platform}` }] };
       } catch (e) {
         return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
       }
@@ -156,29 +132,35 @@ export function registerProjectTools(server: McpServer): void {
 
   server.tool(
     "list_machines",
-    "List all registered machines with their hostname, platform, primary status, and last seen time.",
+    "List registered machines. Machine IDs are stable identities; hostnames are registration idempotency keys, not authorization boundaries.",
     {
-      limit: z.coerce.number().optional().describe("Max machines (default: 10)"),
-      offset: z.coerce.number().optional().describe("Cursor offset for the next page"),
-      full: z.boolean().optional().describe("Return complete machine JSON objects. Defaults to compact lines."),
+      limit: z.coerce.number().int().min(1).max(100).optional().describe("Max machines (default: 10, maximum: 100)"),
+      offset: z.coerce.number().int().min(0).optional().describe("Cursor offset for the next page"),
+      full: z.boolean().optional().describe("Return complete machine JSON objects for the bounded page. Defaults to compact lines."),
     },
     async (args) => {
       try {
-        syncMachinesTable("pull");
         const machines = listMachines();
-        if (args.full) {
-          return { content: [{ type: "text" as const, text: JSON.stringify(machines, null, 2) }] };
-        }
         const limit = positiveLimit(args.limit, 10);
         const offset = args.offset ?? 0;
         const page = machines.slice(offset, offset + limit + 1);
         const hasMore = page.length > limit;
         const visible = hasMore ? page.slice(0, limit) : page;
+        if (args.full) {
+          return { content: [{ type: "text" as const, text: JSON.stringify({
+            machines: visible,
+            count: visible.length,
+            offset,
+            limit,
+            has_more: hasMore,
+            next_offset: hasMore ? offset + visible.length : null,
+          }) }] };
+        }
         if (visible.length === 0) {
           return { content: [{ type: "text" as const, text: "No machines registered." }] };
         }
         const lines = visible.map((m) =>
-          `${m.id.slice(0, 8)} | ${m.name} | ${m.hostname} | ${m.platform}${m.is_primary ? " | primary" : ""} | last_seen=${m.last_seen_at ?? "-"}`
+          `${m.id} | ${m.name} | ${m.hostname} | ${m.platform}${m.is_primary ? " | primary" : ""} | last_seen=${m.last_seen_at}`
         );
         const hint = compactPageHint({
           shown: visible.length,
@@ -190,48 +172,19 @@ export function registerProjectTools(server: McpServer): void {
         });
         return { content: [{ type: "text" as const, text: `${visible.length}${hasMore ? "+" : ""} machine(s):\n${lines.join("\n")}${hint}` }] };
       } catch (e) {
-        // Fallback to local machines when remote storage sync is unavailable
-        try {
-          const machines = listMachines();
-          if (args.full) {
-            return { content: [{ type: "text" as const, text: `${JSON.stringify(machines, null, 2)}\n\n(Note: Storage pull failed, showing local data only)` }] };
-          }
-          const limit = positiveLimit(args.limit, 10);
-          const offset = args.offset ?? 0;
-          const page = machines.slice(offset, offset + limit + 1);
-          const hasMore = page.length > limit;
-          const visible = hasMore ? page.slice(0, limit) : page;
-          const lines = visible.map((m) =>
-            `${m.id.slice(0, 8)} | ${m.name} | ${m.hostname} | ${m.platform}${m.is_primary ? " | primary" : ""} | last_seen=${m.last_seen_at ?? "-"}`
-          );
-          const hint = compactPageHint({
-            shown: visible.length,
-            limit,
-            offset,
-            hasMore,
-            moreCall: "list_machines",
-            detailHint: "use full=true for complete machine objects",
-          });
-          return { content: [{ type: "text" as const, text: `${visible.length}${hasMore ? "+" : ""} machine(s):\n${lines.join("\n")}${hint}\n\n(Note: Storage pull failed, showing local data only)` }] };
-        } catch {
-          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
-        }
+        return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
       }
     }
   );
 
   server.tool(
     "rename_machine",
-    "Rename a machine by its ID or current name.",
-    { id: z.string().describe("Machine ID or name"), new_name: z.string() },
+    "Rename a machine by its exact stable machine ID.",
+    { id: z.string().min(1).describe("Exact stable machine ID returned by register_machine or list_machines"), new_name: z.string().min(1).max(128) },
     async (args) => {
       try {
-        syncMachinesTable("pull");
-        const machine = getMachine(args.id);
-        if (!machine) return { content: [{ type: "text" as const, text: `Machine not found: ${args.id}` }], isError: true };
-        const updated = renameMachine(machine.id, args.new_name);
-        syncMachinesTable("push", updated.id);
-        return { content: [{ type: "text" as const, text: `Renamed: ${machine.name} → ${updated.name}` }] };
+        const updated = renameMachine(args.id, args.new_name);
+        return { content: [{ type: "text" as const, text: `Renamed machine ${updated.id}: ${updated.name}` }] };
       } catch (e) {
         return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
       }
@@ -240,17 +193,15 @@ export function registerProjectTools(server: McpServer): void {
 
   server.tool(
     "set_primary_machine",
-    "Mark a machine as the primary machine. Only one primary machine is allowed at a time.",
-    { id: z.string().describe("Machine ID or name") },
+    "Mark the exact stable machine ID as primary. The database enforces at most one primary machine.",
+    { id: z.string().min(1).describe("Exact stable machine ID") },
     async (args) => {
       try {
-        syncMachinesTable("pull");
         const updated = setPrimaryMachine(args.id);
-        syncMachinesTable("push", updated.id);
         return {
           content: [{
             type: "text" as const,
-            text: `Primary machine: ${updated.name} | ${updated.id.slice(0, 8)} | hostname:${updated.hostname}`,
+            text: `Primary machine: ${updated.name} | ${updated.id} | hostname:${updated.hostname}`,
           }],
         };
       } catch (e) {

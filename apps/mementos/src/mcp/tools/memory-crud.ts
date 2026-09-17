@@ -141,8 +141,11 @@ export function registerMemoryCrudTools(server: McpServer): void {
         if (!input.machine_id) {
           try {
             input.machine_id = getCurrentMachineId();
-          } catch {
-            // Best-effort — machine not registered yet
+          } catch (error) {
+            // Hosted machine-local attribution must never widen to machine-null
+            // after an identity/authority/protocol failure. Explicit local mode
+            // keeps the historical best-effort behavior.
+            if (isApiMode()) throw error;
           }
         }
 

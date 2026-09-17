@@ -1092,4 +1092,224 @@ INSERT OR IGNORE INTO _migrations (id) VALUES (38);
 ${sqliteMementosMemoryProjectLinkSchemaSql()}
 INSERT OR IGNORE INTO _migrations (id) VALUES (40);
 `,
+
+  // Migration 41: machine hostname is the registration idempotency key.
+  // Preflight every legacy row into a constrained temporary table before any
+  // persistent mutation. Ambiguous duplicate identities or invalid rows abort
+  // the transaction for explicit operator reconciliation; stable ids and
+  // machine-local attribution are never silently merged or deleted.
+  `
+DROP TABLE IF EXISTS temp.mementos_m41_machine_preflight;
+CREATE TEMP TABLE mementos_m41_machine_preflight (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL CHECK(
+    length(name) BETWEEN 1 AND 128
+    AND instr(name, char(0)) = 0
+    AND instr(name, char(1)) = 0
+    AND instr(name, char(2)) = 0
+    AND instr(name, char(3)) = 0
+    AND instr(name, char(4)) = 0
+    AND instr(name, char(5)) = 0
+    AND instr(name, char(6)) = 0
+    AND instr(name, char(7)) = 0
+    AND instr(name, char(8)) = 0
+    AND instr(name, char(9)) = 0
+    AND instr(name, char(10)) = 0
+    AND instr(name, char(11)) = 0
+    AND instr(name, char(12)) = 0
+    AND instr(name, char(13)) = 0
+    AND instr(name, char(14)) = 0
+    AND instr(name, char(15)) = 0
+    AND instr(name, char(16)) = 0
+    AND instr(name, char(17)) = 0
+    AND instr(name, char(18)) = 0
+    AND instr(name, char(19)) = 0
+    AND instr(name, char(20)) = 0
+    AND instr(name, char(21)) = 0
+    AND instr(name, char(22)) = 0
+    AND instr(name, char(23)) = 0
+    AND instr(name, char(24)) = 0
+    AND instr(name, char(25)) = 0
+    AND instr(name, char(26)) = 0
+    AND instr(name, char(27)) = 0
+    AND instr(name, char(28)) = 0
+    AND instr(name, char(29)) = 0
+    AND instr(name, char(30)) = 0
+    AND instr(name, char(31)) = 0
+    AND instr(name, char(127)) = 0
+  ),
+  hostname TEXT NOT NULL UNIQUE CHECK(
+    length(hostname) BETWEEN 1 AND 253
+    AND hostname = lower(rtrim(trim(hostname), '.'))
+    AND instr(hostname, ' ') = 0
+    AND instr(hostname, char(9)) = 0
+    AND instr(hostname, char(10)) = 0
+    AND instr(hostname, char(13)) = 0
+    AND instr(hostname, '/') = 0
+    AND instr(hostname, char(92)) = 0
+  ),
+  platform TEXT NOT NULL CHECK(
+    length(platform) BETWEEN 1 AND 64
+    AND platform = lower(trim(platform))
+    AND platform NOT GLOB '*[^a-z0-9._-]*'
+  ),
+  is_primary INTEGER NOT NULL CHECK(is_primary IN (0, 1)),
+  created_at TEXT NOT NULL CHECK(julianday(created_at) IS NOT NULL),
+  last_seen_at TEXT NOT NULL CHECK(
+    julianday(last_seen_at) IS NOT NULL
+    AND julianday(last_seen_at) >= julianday(created_at)
+  )
+);
+INSERT INTO mementos_m41_machine_preflight
+  (id, name, hostname, platform, is_primary, created_at, last_seen_at)
+SELECT
+  id,
+  name,
+  lower(rtrim(trim(hostname), '.')),
+  platform,
+  is_primary,
+  created_at,
+  last_seen_at
+FROM machines;
+
+UPDATE machines
+SET hostname = (
+  SELECT preflight.hostname
+  FROM mementos_m41_machine_preflight preflight
+  WHERE preflight.id = machines.id
+);
+
+DROP TABLE mementos_m41_machine_preflight;
+DROP TRIGGER IF EXISTS machines_single_primary_insert;
+DROP TRIGGER IF EXISTS machines_single_primary_update;
+DROP INDEX IF EXISTS idx_machines_hostname;
+CREATE UNIQUE INDEX idx_machines_hostname ON machines(hostname);
+DROP INDEX IF EXISTS idx_machines_single_primary;
+CREATE UNIQUE INDEX idx_machines_single_primary
+  ON machines(is_primary) WHERE is_primary = 1;
+
+CREATE TRIGGER IF NOT EXISTS machines_hostname_canonical_insert
+BEFORE INSERT ON machines
+WHEN NEW.hostname != lower(rtrim(trim(NEW.hostname), '.'))
+  OR length(NEW.hostname) NOT BETWEEN 1 AND 253
+  OR instr(NEW.hostname, ' ') > 0
+  OR instr(NEW.hostname, char(9)) > 0
+  OR instr(NEW.hostname, char(10)) > 0
+  OR instr(NEW.hostname, char(13)) > 0
+  OR instr(NEW.hostname, '/') > 0
+  OR instr(NEW.hostname, char(92)) > 0
+BEGIN
+  SELECT RAISE(ABORT, 'machines.hostname must be canonical');
+END;
+
+CREATE TRIGGER IF NOT EXISTS machines_hostname_canonical_update
+BEFORE UPDATE OF hostname ON machines
+WHEN NEW.hostname != lower(rtrim(trim(NEW.hostname), '.'))
+  OR length(NEW.hostname) NOT BETWEEN 1 AND 253
+  OR instr(NEW.hostname, ' ') > 0
+  OR instr(NEW.hostname, char(9)) > 0
+  OR instr(NEW.hostname, char(10)) > 0
+  OR instr(NEW.hostname, char(13)) > 0
+  OR instr(NEW.hostname, '/') > 0
+  OR instr(NEW.hostname, char(92)) > 0
+BEGIN
+  SELECT RAISE(ABORT, 'machines.hostname must be canonical');
+END;
+
+CREATE TRIGGER IF NOT EXISTS machines_runtime_contract_insert
+BEFORE INSERT ON machines
+WHEN length(NEW.name) NOT BETWEEN 1 AND 128
+  OR instr(NEW.name, char(0)) > 0
+  OR instr(NEW.name, char(1)) > 0
+  OR instr(NEW.name, char(2)) > 0
+  OR instr(NEW.name, char(3)) > 0
+  OR instr(NEW.name, char(4)) > 0
+  OR instr(NEW.name, char(5)) > 0
+  OR instr(NEW.name, char(6)) > 0
+  OR instr(NEW.name, char(7)) > 0
+  OR instr(NEW.name, char(8)) > 0
+  OR instr(NEW.name, char(9)) > 0
+  OR instr(NEW.name, char(10)) > 0
+  OR instr(NEW.name, char(11)) > 0
+  OR instr(NEW.name, char(12)) > 0
+  OR instr(NEW.name, char(13)) > 0
+  OR instr(NEW.name, char(14)) > 0
+  OR instr(NEW.name, char(15)) > 0
+  OR instr(NEW.name, char(16)) > 0
+  OR instr(NEW.name, char(17)) > 0
+  OR instr(NEW.name, char(18)) > 0
+  OR instr(NEW.name, char(19)) > 0
+  OR instr(NEW.name, char(20)) > 0
+  OR instr(NEW.name, char(21)) > 0
+  OR instr(NEW.name, char(22)) > 0
+  OR instr(NEW.name, char(23)) > 0
+  OR instr(NEW.name, char(24)) > 0
+  OR instr(NEW.name, char(25)) > 0
+  OR instr(NEW.name, char(26)) > 0
+  OR instr(NEW.name, char(27)) > 0
+  OR instr(NEW.name, char(28)) > 0
+  OR instr(NEW.name, char(29)) > 0
+  OR instr(NEW.name, char(30)) > 0
+  OR instr(NEW.name, char(31)) > 0
+  OR instr(NEW.name, char(127)) > 0
+  OR length(NEW.platform) NOT BETWEEN 1 AND 64
+  OR NEW.platform != lower(trim(NEW.platform))
+  OR NEW.platform GLOB '*[^a-z0-9._-]*'
+  OR NEW.is_primary NOT IN (0, 1)
+  OR julianday(NEW.created_at) IS NULL
+  OR julianday(NEW.last_seen_at) IS NULL
+  OR julianday(NEW.last_seen_at) < julianday(NEW.created_at)
+BEGIN
+  SELECT RAISE(ABORT, 'machines row violates the persisted runtime contract');
+END;
+
+CREATE TRIGGER IF NOT EXISTS machines_runtime_contract_update
+BEFORE UPDATE OF name, platform, is_primary, created_at, last_seen_at ON machines
+WHEN length(NEW.name) NOT BETWEEN 1 AND 128
+  OR instr(NEW.name, char(0)) > 0
+  OR instr(NEW.name, char(1)) > 0
+  OR instr(NEW.name, char(2)) > 0
+  OR instr(NEW.name, char(3)) > 0
+  OR instr(NEW.name, char(4)) > 0
+  OR instr(NEW.name, char(5)) > 0
+  OR instr(NEW.name, char(6)) > 0
+  OR instr(NEW.name, char(7)) > 0
+  OR instr(NEW.name, char(8)) > 0
+  OR instr(NEW.name, char(9)) > 0
+  OR instr(NEW.name, char(10)) > 0
+  OR instr(NEW.name, char(11)) > 0
+  OR instr(NEW.name, char(12)) > 0
+  OR instr(NEW.name, char(13)) > 0
+  OR instr(NEW.name, char(14)) > 0
+  OR instr(NEW.name, char(15)) > 0
+  OR instr(NEW.name, char(16)) > 0
+  OR instr(NEW.name, char(17)) > 0
+  OR instr(NEW.name, char(18)) > 0
+  OR instr(NEW.name, char(19)) > 0
+  OR instr(NEW.name, char(20)) > 0
+  OR instr(NEW.name, char(21)) > 0
+  OR instr(NEW.name, char(22)) > 0
+  OR instr(NEW.name, char(23)) > 0
+  OR instr(NEW.name, char(24)) > 0
+  OR instr(NEW.name, char(25)) > 0
+  OR instr(NEW.name, char(26)) > 0
+  OR instr(NEW.name, char(27)) > 0
+  OR instr(NEW.name, char(28)) > 0
+  OR instr(NEW.name, char(29)) > 0
+  OR instr(NEW.name, char(30)) > 0
+  OR instr(NEW.name, char(31)) > 0
+  OR instr(NEW.name, char(127)) > 0
+  OR length(NEW.platform) NOT BETWEEN 1 AND 64
+  OR NEW.platform != lower(trim(NEW.platform))
+  OR NEW.platform GLOB '*[^a-z0-9._-]*'
+  OR NEW.is_primary NOT IN (0, 1)
+  OR julianday(NEW.created_at) IS NULL
+  OR julianday(NEW.last_seen_at) IS NULL
+  OR julianday(NEW.last_seen_at) < julianday(NEW.created_at)
+BEGIN
+  SELECT RAISE(ABORT, 'machines row violates the persisted runtime contract');
+END;
+
+INSERT OR IGNORE INTO _migrations (id) VALUES (41);
+`,
 ];
