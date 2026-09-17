@@ -394,6 +394,18 @@ skills grants set default --file ./reviewed-policy.json --if-match <policy-revis
 skills grants show default --revision <prior-policy-revision> --json
 ```
 
+For executable arguments, use `--` after the skill and Skills options:
+
+```bash
+skills run --target local --selection-profile default --json \
+  your-skill@1.0.0 -- prepare --input child-input.json --json
+```
+
+Everything after that separator belongs to the executable, including flags such
+as `--input`, `--json` and any further `--`. Cloud execution accepts structured
+Skills `--input` only and rejects executable arguments. Existing calls without a
+separator retain their option parsing behavior.
+
 Updating a policy appends a revision and atomically changes its current pointer.
 An empty `grants` array revokes shared execution access. Historical policies remain
 readable and can be submitted as a new reviewed revision for rollback; they cannot
