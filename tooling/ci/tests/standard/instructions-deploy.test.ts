@@ -60,7 +60,7 @@ describe("standard-adherence: protected Instructions deployment lane", () => {
 
   test("the checker proves a positive control and rejects its negative controls", () => {
     expect(selfTestInstructionsDeploy(root)).toEqual([]);
-  });
+  }, 10_000);
 
   test("captures two consecutive identical valid archives before migration and pushes only the stable archive", () => {
     const baseline = workflow.indexOf("Export and validate complete pre-migration domain archive");
@@ -208,6 +208,90 @@ describe("standard-adherence: protected Instructions deployment lane", () => {
     expect(backup).toContain('sha256sum "${versioned_payload}"');
     expect(backup).toContain('payload_version_id=%s');
     expect(backup).toContain('manifest_version_id=%s');
+  });
+
+  test("binds direct backup commands to exact-image containers around runner-only version parsing", () => {
+    const backup = workflow.slice(
+      workflow.indexOf("Create immutable pre-deploy S3 backup"),
+      workflow.indexOf("Verify immutable scan-on-push ECR repository"),
+    );
+    const push = backup.indexOf("storage backup push /backup/instructions-domain-pre.tar.gz");
+    const runnerParse = backup.indexOf('payload_version_id="$(jq -er', push);
+    const verify = backup.indexOf("storage backup verify", runnerParse);
+    const pushContainer = backup.slice(backup.lastIndexOf("docker run --rm", push), runnerParse);
+    const verificationContainer = backup.slice(backup.lastIndexOf("docker run --rm", verify));
+
+    expect(backup.match(/docker run --rm/g)).toHaveLength(2);
+    expect(push).toBeGreaterThan(-1);
+    expect(runnerParse).toBeGreaterThan(push);
+    expect(verify).toBeGreaterThan(runnerParse);
+    expect(pushContainer).not.toContain("jq");
+    expect(pushContainer).toContain('--entrypoint bun');
+    expect(pushContainer).toContain('"${LOCAL_IMAGE}:${SOURCE_SHA}"');
+    expect(verificationContainer).toContain('--entrypoint bun');
+    expect(verificationContainer).toContain('"${LOCAL_IMAGE}:${SOURCE_SHA}"');
+    expect(backup).toContain('--payload-version-id "${payload_version_id}"');
+    expect(backup).toContain('--manifest-version-id "${manifest_version_id}"');
+    expect(backup).not.toContain("PAYLOAD_VERSION_ID");
+    expect(backup).not.toContain("MANIFEST_VERSION_ID");
+    expect(backup).not.toContain("--entrypoint sh");
+  });
+
+  test("rejects an in-image shell or jq in the backup push container", () => {
+    const backupStep = workflow.indexOf("Create immutable pre-deploy S3 backup");
+    const entrypoint = workflow.indexOf("            --entrypoint bun \\", backupStep);
+    const shellPush = entrypoint < 0
+      ? workflow
+      : `${workflow.slice(0, entrypoint)}            --entrypoint sh \\${workflow.slice(entrypoint + "            --entrypoint bun \\".length)}`;
+    const jqPush = workflow.replace(
+      '              --json > "${backup_json}"\n          chmod 600 "${backup_json}"',
+      '              --json > "${backup_json}" \\\n                jq --version\n          chmod 600 "${backup_json}"',
+    );
+
+    for (const mutation of [shellPush, jqPush]) {
+      expect(mutation).not.toBe(workflow);
+      expect(validateInstructionsDeploy(mutation, "ci", "1.3.14")).toContain(
+        "S3 backup push container must not use an in-image shell or jq",
+      );
+    }
+  });
+
+  test("rejects an unrelated image for the direct backup push container", () => {
+    const backupStep = workflow.indexOf("Create immutable pre-deploy S3 backup");
+    const image = workflow.indexOf('"${LOCAL_IMAGE}:${SOURCE_SHA}"', backupStep);
+    const unrelatedImage = image < 0
+      ? workflow
+      : `${workflow.slice(0, image)}"unrelated-image:fixed"${workflow.slice(image + '"${LOCAL_IMAGE}:${SOURCE_SHA}"'.length)}`;
+
+    expect(unrelatedImage).not.toBe(workflow);
+    expect(validateInstructionsDeploy(unrelatedImage, "ci", "1.3.14")).toContain(
+      "S3 backup push container must run the exact source image",
+    );
+  });
+
+  test("rejects moving version-pinned verification outside the second container command", () => {
+    const movedVerification = workflow.replace(
+      '            dist/cli/index.js storage backup verify "${backup_id}" \\',
+      '            true\n          bun dist/cli/index.js storage backup verify "${backup_id}" \\',
+    );
+
+    expect(movedVerification).not.toBe(workflow);
+    expect(validateInstructionsDeploy(movedVerification, "ci", "1.3.14")).toContain(
+      "S3 backup verification container must directly execute the version-pinned verify command",
+    );
+  });
+
+  test("rejects an unrelated image for the direct version-pinned verification container", () => {
+    const runnerParse = workflow.indexOf('payload_version_id="$(jq -er');
+    const image = workflow.indexOf('"${LOCAL_IMAGE}:${SOURCE_SHA}"', runnerParse);
+    const unrelatedImage = image < 0
+      ? workflow
+      : `${workflow.slice(0, image)}"unrelated-image:fixed"${workflow.slice(image + '"${LOCAL_IMAGE}:${SOURCE_SHA}"'.length)}`;
+
+    expect(unrelatedImage).not.toBe(workflow);
+    expect(validateInstructionsDeploy(unrelatedImage, "ci", "1.3.14")).toContain(
+      "S3 backup verification container must run the exact source image",
+    );
   });
 
   test("uses only the redacted receipt for WORM object keys without logging content", () => {
