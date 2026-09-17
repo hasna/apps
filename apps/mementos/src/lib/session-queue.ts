@@ -7,6 +7,9 @@
 import { getDatabase } from "../db/database.js";
 import { getNextPendingJob, recoverStaleProcessingJobs } from "../db/session-jobs.js";
 import { processSessionJob } from "./session-processor.js";
+import { isApiMode, apiJson } from "../db/api-mode.js";
+import { expectNonNegativeInteger, expectObject } from "../db/api-response-contract.js";
+import { isServerContext } from "../storage.js";
 
 // ============================================================================
 // Types
@@ -37,6 +40,11 @@ let _workerStarted = false;
  * The background worker will pick it up within the next polling interval.
  */
 export function enqueueSessionJob(jobId: string): void {
+  // Hosted transport: the queue lives on the server. POST /v1/sessions/ingest
+  // already enqueued this job there, and a client has no store to poll — the
+  // in-process worker below would only try to open local SQLite. Do nothing
+  // rather than start a doomed local drain.
+  if (!isServerContext() && isApiMode()) return;
   _pendingQueue.add(jobId);
   // If worker is not running, kick off immediate processing
   if (!_isProcessing) {
@@ -50,6 +58,17 @@ export function enqueueSessionJob(jobId: string): void {
  * this returns a lightweight in-memory snapshot.
  */
 export function getSessionQueueStats(): SessionQueueStats {
+  if (!isServerContext() && isApiMode()) {
+    const operation = "GET /sessions/queue/stats";
+    const { data } = apiJson<unknown>("GET", "/sessions/queue/stats");
+    const response = expectObject(data, operation);
+    return {
+      pending: expectNonNegativeInteger(response, "pending", operation),
+      processing: expectNonNegativeInteger(response, "processing", operation),
+      completed: expectNonNegativeInteger(response, "completed", operation),
+      failed: expectNonNegativeInteger(response, "failed", operation),
+    };
+  }
   try {
     const db = getDatabase();
     const rows = db
@@ -70,7 +89,11 @@ export function getSessionQueueStats(): SessionQueueStats {
       else if (row.status === "failed") stats.failed = row.count;
     }
     return stats;
-  } catch {
+  } catch (error) {
+    // A server response is authoritative. If its database query fails, surface
+    // the failure instead of returning an in-memory zero-shaped answer that a
+    // hosted client would mistake for complete queue statistics.
+    if (isServerContext()) throw error;
     return {
       pending: _pendingQueue.size,
       processing: _isProcessing ? 1 : 0,
@@ -86,6 +109,10 @@ export function getSessionQueueStats(): SessionQueueStats {
  */
 export function startSessionQueueWorker(): void {
   if (_workerStarted) return;
+  // The worker drains jobs straight out of the store; only the server process
+  // holds one. A client under a hosted credential must never start it (the
+  // poll would hit the fail-closed getDatabase() guard every 5 seconds).
+  if (!isServerContext() && isApiMode()) return;
   _workerStarted = true;
 
   // Poll for pending jobs every 5 seconds

@@ -1,6 +1,14 @@
 import { SqliteAdapter as Database } from "../storage.js";
 import { getDatabase, now, shortUuid } from "./database.js";
 import { isApiMode, apiJson, toQuery, ApiRequestError } from "./api-mode.js";
+import {
+  MementosApiProtocolError,
+  expectArray,
+  expectBoolean,
+  expectNonNegativeInteger,
+  expectObject,
+  expectString,
+} from "./api-response-contract.js";
 
 export type ResourceType = "project" | "memory" | "entity" | "agent" | "connector" | "file";
 export type LockType = "advisory" | "exclusive";
@@ -15,16 +23,34 @@ export interface ResourceLock {
   expires_at: string;
 }
 
-function parseLockRow(row: Record<string, unknown>): ResourceLock {
+const RESOURCE_TYPES = new Set<ResourceType>(["project", "memory", "entity", "agent", "connector", "file"]);
+const LOCK_TYPES = new Set<LockType>(["advisory", "exclusive"]);
+
+function parseLockRow(row: unknown, operation = "lock response"): ResourceLock {
+  const object = expectObject(row, operation);
+  const resourceType = expectString(object, "resource_type", operation);
+  const lockType = expectString(object, "lock_type", operation);
+  if (!RESOURCE_TYPES.has(resourceType as ResourceType)) {
+    throw new MementosApiProtocolError(operation, "unsupported 'resource_type'");
+  }
+  if (!LOCK_TYPES.has(lockType as LockType)) {
+    throw new MementosApiProtocolError(operation, "unsupported 'lock_type'");
+  }
   return {
-    id: row["id"] as string,
-    resource_type: row["resource_type"] as ResourceType,
-    resource_id: row["resource_id"] as string,
-    agent_id: row["agent_id"] as string,
-    lock_type: row["lock_type"] as LockType,
-    locked_at: row["locked_at"] as string,
-    expires_at: row["expires_at"] as string,
+    id: expectString(object, "id", operation),
+    resource_type: resourceType as ResourceType,
+    resource_id: expectString(object, "resource_id", operation),
+    agent_id: expectString(object, "agent_id", operation),
+    lock_type: lockType as LockType,
+    locked_at: expectString(object, "locked_at", operation),
+    expires_at: expectString(object, "expires_at", operation),
   };
+}
+
+function parseLockList(value: unknown, operation: string): ResourceLock[] {
+  return expectArray(value, operation).map((row, index) =>
+    parseLockRow(row, `${operation} item ${index}`),
+  );
 }
 
 /**
@@ -45,14 +71,14 @@ export function acquireLock(
 ): ResourceLock | null {
   if (!db && isApiMode()) {
     try {
-      const { data } = apiJson<ResourceLock>("POST", "/locks", {
+      const { data } = apiJson<unknown>("POST", "/locks", {
         agent_id: agentId,
         resource_type: resourceType,
         resource_id: resourceId,
         lock_type: lockType,
         ttl_seconds: ttlSeconds,
       });
-      return data;
+      return parseLockRow(data, "POST /locks");
     } catch (e) {
       // 409 = lock held by another agent → mirror the local `null` contract.
       if (e instanceof ApiRequestError && e.status === 409) return null;
@@ -121,13 +147,15 @@ export function acquireLock(
  */
 export function releaseLock(lockId: string, agentId: string, db?: Database): boolean {
   if (!db && isApiMode()) {
-    const { status } = apiJson<{ released: boolean }>(
+    const operation = `DELETE /locks/${encodeURIComponent(lockId)}`;
+    const { status, data } = apiJson<unknown>(
       "DELETE",
       `/locks/${encodeURIComponent(lockId)}`,
       { agent_id: agentId },
       { allow404: true },
     );
-    return status !== 404;
+    if (status === 404) return false;
+    return expectBoolean(expectObject(data, operation), "released", operation);
   }
   const d = db || getDatabase();
   const result = d.run(
@@ -159,11 +187,9 @@ export function releaseResourceLocks(
  */
 export function releaseAllAgentLocks(agentId: string, db?: Database): number {
   if (!db && isApiMode()) {
-    const { data } = apiJson<{ released: number }>(
-      "DELETE",
-      `/agents/${encodeURIComponent(agentId)}/locks`,
-    );
-    return data?.released ?? 0;
+    const operation = `DELETE /agents/${encodeURIComponent(agentId)}/locks`;
+    const { data } = apiJson<unknown>("DELETE", `/agents/${encodeURIComponent(agentId)}/locks`);
+    return expectNonNegativeInteger(expectObject(data, operation), "released", operation);
   }
   const d = db || getDatabase();
   const result = d.run("DELETE FROM resource_locks WHERE agent_id = ?", [agentId]);
@@ -182,8 +208,8 @@ export function checkLock(
 ): ResourceLock[] {
   if (!db && isApiMode()) {
     const q = toQuery({ resource_type: resourceType, resource_id: resourceId, lock_type: lockType });
-    const { data } = apiJson<ResourceLock[]>("GET", `/locks${q}`);
-    return data ?? [];
+    const { data } = apiJson<unknown>("GET", `/locks${q}`);
+    return parseLockList(data, "GET /locks");
   }
   const d = db || getDatabase();
 
@@ -199,7 +225,7 @@ export function checkLock(
       : d.query(query).all(resourceType, resourceId)
   ) as Record<string, unknown>[];
 
-  return rows.map(parseLockRow);
+  return rows.map((row) => parseLockRow(row));
 }
 
 /**
@@ -212,6 +238,14 @@ export function agentHoldsLock(
   lockType?: LockType,
   db?: Database
 ): ResourceLock | null {
+  if (!db && isApiMode()) {
+    // GET /v1/locks returns every ACTIVE lock on the resource (the server
+    // applies the same expiry predicate as the SQL below), so selecting this
+    // agent's row from that list is exactly the local answer — no extra route
+    // and no invented data.
+    const locks = checkLock(resourceType, resourceId, lockType, db);
+    return locks.find((l) => l.agent_id === agentId) ?? null;
+  }
   const d = db || getDatabase();
 
   const query = lockType
@@ -232,8 +266,9 @@ export function agentHoldsLock(
  */
 export function listAgentLocks(agentId: string, db?: Database): ResourceLock[] {
   if (!db && isApiMode()) {
-    const { data } = apiJson<ResourceLock[]>("GET", `/agents/${encodeURIComponent(agentId)}/locks`);
-    return data ?? [];
+    const operation = `GET /agents/${encodeURIComponent(agentId)}/locks`;
+    const { data } = apiJson<unknown>("GET", `/agents/${encodeURIComponent(agentId)}/locks`);
+    return parseLockList(data, operation);
   }
   const d = db || getDatabase();
   cleanExpiredLocks(d);
@@ -242,7 +277,7 @@ export function listAgentLocks(agentId: string, db?: Database): ResourceLock[] {
       "SELECT * FROM resource_locks WHERE agent_id = ? AND expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now') ORDER BY locked_at DESC"
     )
     .all(agentId) as Record<string, unknown>[];
-  return rows.map(parseLockRow);
+  return rows.map((row) => parseLockRow(row));
 }
 
 /**
@@ -272,8 +307,9 @@ export function cleanExpiredLocksWithInfo(db?: Database): ExpiredLockInfo[] {
 
 export function cleanExpiredLocks(db?: Database): number {
   if (!db && isApiMode()) {
-    const { data } = apiJson<{ cleaned: number }>("POST", "/locks/clean");
-    return data?.cleaned ?? 0;
+    const operation = "POST /locks/clean";
+    const { data } = apiJson<unknown>("POST", "/locks/clean");
+    return expectNonNegativeInteger(expectObject(data, operation), "cleaned", operation);
   }
   const d = db || getDatabase();
   const result = d.run("DELETE FROM resource_locks WHERE expires_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now')");

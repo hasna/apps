@@ -161,6 +161,24 @@ hookRegistry.register({
   },
 });
 
+hookRegistry.register({
+  type: "PostMemoryUpdate",
+  blocking: false,
+  builtin: true,
+  priority: 65,
+  description: "Mark synthesized profile as stale when a preference or fact memory is updated",
+  handler: async (ctx) => {
+    const category = ctx.memory?.category;
+    if (category !== "preference" && category !== "fact") return;
+    try {
+      const { markProfileStale } = await import("./profile-synthesizer.js");
+      markProfileStale(ctx.projectId, ctx.agentId);
+    } catch {
+      // Non-critical — profile staleness is best-effort
+    }
+  },
+});
+
 // ============================================================================
 // Built-in: PostMemorySave → auto-decay contradicted memories
 // ============================================================================

@@ -1,8 +1,30 @@
-import { createSessionJob, getSessionJob, listSessionJobs } from "../../db/session-jobs.js";
+import {
+  SESSION_INGEST_CONTRACT,
+  SESSION_JOBS_PAGE_CONTRACT,
+  createSessionJob,
+  getSessionJob,
+  listSessionJobs,
+} from "../../db/session-jobs.js";
 import { enqueueSessionJob, getSessionQueueStats } from "../../lib/session-queue.js";
 import { autoResolveAgentProject } from "../../lib/session-auto-resolve.js";
 import { addRoute } from "../router.js";
 import { json, errorResponse, readJson } from "../helpers.js";
+
+function boundedIntegerQuery(
+  url: URL,
+  name: string,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+): number {
+  const raw = url.searchParams.get(name);
+  if (raw === null) return fallback;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < minimum || value > maximum) {
+    throw new Error(`${name} must be an integer between ${minimum} and ${maximum}`);
+  }
+  return value;
+}
 
 export function registerSystemSessionRoutes(): void {
   addRoute("POST", "/api/sessions/ingest", async (req) => {
@@ -28,16 +50,52 @@ export function registerSystemSessionRoutes(): void {
       metadata: (metadata as Record<string, unknown>) ?? {},
     });
     enqueueSessionJob(job.id);
-    return json({ job_id: job.id, status: "queued", message: "Session queued for memory extraction" }, 202);
+    const { transcript: _transcript, ...jobReceipt } = job;
+    return json({
+      contract: SESSION_INGEST_CONTRACT,
+      job_id: job.id,
+      status: "queued",
+      message: "Session queued for memory extraction",
+      job: jobReceipt,
+    }, 202);
   });
 
   addRoute("GET", "/api/sessions/jobs", (_req, url) => {
     const agentId = url.searchParams.get("agent_id") ?? undefined;
     const projectId = url.searchParams.get("project_id") ?? undefined;
-    const status = url.searchParams.get("status") ?? undefined;
-    const limit = url.searchParams.get("limit") ? parseInt(url.searchParams.get("limit")!) : 20;
-    const jobs = listSessionJobs({ agent_id: agentId, project_id: projectId, status: status as "pending" | "processing" | "completed" | "failed" | undefined, limit });
-    return json({ jobs, count: jobs.length });
+    const sessionId = url.searchParams.get("session_id") ?? undefined;
+    const rawStatus = url.searchParams.get("status");
+    const status = rawStatus ?? undefined;
+    if (rawStatus !== null && !["pending", "processing", "completed", "failed"].includes(rawStatus)) {
+      return errorResponse("status must be one of: pending, processing, completed, failed", 400);
+    }
+    let limit: number;
+    let offset: number;
+    try {
+      limit = boundedIntegerQuery(url, "limit", 20, 1, 1000);
+      offset = boundedIntegerQuery(url, "offset", 0, 0, Number.MAX_SAFE_INTEGER - 1001);
+    } catch (error) {
+      return errorResponse(error instanceof Error ? error.message : String(error), 400);
+    }
+    const page = listSessionJobs({
+      agent_id: agentId,
+      project_id: projectId,
+      session_id: sessionId,
+      status: status as "pending" | "processing" | "completed" | "failed" | undefined,
+      limit: limit + 1,
+      offset,
+    });
+    const hasMore = page.length > limit;
+    const jobs = hasMore ? page.slice(0, limit) : page;
+    return json({
+      contract: SESSION_JOBS_PAGE_CONTRACT,
+      jobs,
+      count: jobs.length,
+      limit,
+      offset,
+      has_more: hasMore,
+      next_offset: hasMore ? offset + jobs.length : null,
+    });
   });
 
   addRoute("GET", "/api/sessions/jobs/:id", (_req, _url, params) => {

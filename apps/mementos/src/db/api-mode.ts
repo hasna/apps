@@ -638,7 +638,12 @@ function apiRequestRaw(method: string, path: string, body?: unknown): RawRespons
   let bodyFile: string | undefined;
   if (hasBody) {
     bodyFile = join(tmpdir(), `mem-req-${process.pid}-${randomUUID()}.json`);
-    writeFileSync(bodyFile, JSON.stringify(body), { mode: 0o600 });
+    try {
+      writeFileSync(bodyFile, JSON.stringify(body), { mode: 0o600 });
+    } catch (error) {
+      try { unlinkSync(bodyFile); } catch { /* no partial file remained */ }
+      throw error;
+    }
     args.push("--data-binary", `@${bodyFile}`);
   }
   args.push(url);
@@ -731,7 +736,7 @@ export function apiJson<T = unknown>(
         throw new ApiRequestError(
           `mementos cloud ${method} ${path} returned status ${raw.status} with a body that is not valid JSON (${e instanceof Error ? e.message : String(e)}) — the response is truncated or the server is unhealthy`,
           raw.status,
-          raw.body.slice(0, 500),
+          "",
         );
       }
     } else {

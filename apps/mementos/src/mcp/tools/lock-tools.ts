@@ -5,7 +5,15 @@ import {
   releaseMemoryWriteLock,
   checkMemoryWriteLock,
 } from "../../lib/memory-lock.js";
-import { acquireLock, releaseLock, checkLock, listAgentLocks, cleanExpiredLocksWithInfo } from "../../db/locks.js";
+import {
+  acquireLock,
+  releaseLock,
+  checkLock,
+  listAgentLocks,
+  cleanExpiredLocks,
+  cleanExpiredLocksWithInfo,
+} from "../../db/locks.js";
+import { isApiMode } from "../../db/api-mode.js";
 import { compactPageHint, compactText, positiveLimit } from "./memory-utils.js";
 
 function formatLockLine(lock: {
@@ -206,6 +214,17 @@ export function registerLockTools(server: McpServer): void {
     "Delete all expired resource locks. Notifies holding agents via conversations DM.",
     {},
     async () => {
+      // The hosted API owns lock expiry and returns an authoritative count.
+      // It cannot safely return another service's notification credentials or
+      // ask a station to contact localhost, so notifications remain a local
+      // convenience only.
+      if (isApiMode()) {
+        const count = cleanExpiredLocks();
+        return {
+          content: [{ type: "text" as const, text: `Cleaned ${count} expired lock(s) on the hosted store.` }],
+        };
+      }
+
       const expired = cleanExpiredLocksWithInfo();
       const count = expired.length;
 

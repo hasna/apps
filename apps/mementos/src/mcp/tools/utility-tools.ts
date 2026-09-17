@@ -334,7 +334,7 @@ export function registerUtilityTools(server: McpServer, registry: ToolRegistry):
     {
       project_id: z.string().optional(),
       agent_id: z.string().optional(),
-      scope: z.enum(["agent", "project", "global"]).optional().default("project"),
+      scope: z.enum(["agent", "project", "global"]).optional().describe("Defaults from project_id, then agent_id, then global"),
       force_refresh: z.boolean().optional().default(false).describe("Force re-synthesis even if cached profile exists"),
     },
     async (args) => {
