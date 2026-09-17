@@ -248,6 +248,18 @@ describe("registry: the written inventory of hosted apps", () => {
     expect(messages!.keySecretId).toBe("hasna/oss/messages/api-key");
   });
 
+  test("Print uses the canonical API route with bearer authentication", () => {
+    const print = registry.find((a) => a.app === "print");
+    expect(print).toBeDefined();
+    expect(print!.source).toBe("external");
+    expect(print!.baseUrl).toBe("https://api.hasna.com/print");
+    expect(print!.targetClientBase).toBe("https://api.hasna.com/print");
+    expect(print!.probeAuth).toBe("bearer");
+    expect(print!.probePath).toBe("/v1/printers");
+    expect(print!.keySecretId).toBe("hasna/oss/print/api-key");
+    expect(print!.notes).toContain("hasna-internal/internal-apps");
+  });
+
   test("messages carries the note that this repo cannot finish its rollout", () => {
     // messages has NO deploy lane here, so nothing in this repository can
     // provision its key: the gate reaches production through an out-of-repo
