@@ -159,7 +159,7 @@ export function registerAgentIntegration(parent: Command): void {
 
   const migrate = parent.command("migrate").description("Preserve and retire native agent skill copies");
   migrate.command("native")
-    .option("--project <directory>", "Also inventory native skills in a project directory")
+    .option("--project <directory>", "Also inventory a project and its ancestors (the current directory and its ancestors are always included)")
     .option("--include-unmanaged", "Archive user-authored skills as well as Skills-managed copies", false)
     .option("--include-vendor", "Retire vendor SKILL.md discovery files while preserving plugin scripts and assets", false)
     .option("--discovery-inputs <file>", "Advanced reviewed active plugin roots and source hashes")
@@ -170,7 +170,7 @@ export function registerAgentIntegration(parent: Command): void {
     .action(async (options) => {
       try {
         const discoveryInputs: ReviewedDiscoveryInputs | undefined = options.discoveryInputs ? JSON.parse(readFileSync(options.discoveryInputs, "utf8")) : undefined;
-        const inventory = inventoryNativeSkills(undefined, { projectDir: options.project, includeVendor: options.includeVendor, configured: options.includeVendor, discoveryInputs, allowRootAliases: options.allowRootAliases });
+        const inventory = inventoryNativeSkills(undefined, { projectDirs: [process.cwd(), ...(options.project ? [options.project] : [])], includeVendor: options.includeVendor, configured: options.includeVendor, discoveryInputs, allowRootAliases: options.allowRootAliases });
         const result = options.apply ? archiveNativeSkills(inventory, { includeUnmanaged: options.includeUnmanaged, includeVendor: options.includeVendor, allowRootAliases: options.allowRootAliases }) : { entries: [] };
         if (options.json) await writeCliOutput(JSON.stringify({ applied: options.apply, inventory, ...result }));
         else await writeCliOutput(`${inventory.length} native skill(s) found; ${result.entries.length} archived with recovery receipts.${options.apply ? "" : " Use --apply to archive managed copies."}`);

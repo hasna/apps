@@ -73,6 +73,31 @@ async function fixture(documentSuffix = "") {
   return { root, store, principal, versions, requests, a: station("station-a"), b: station("station-b"), close: async () => { server.stop(true); await handler?.close(); await governanceStore.close(); await store.close(); } };
 }
 
+for (const explicitProject of [false, true]) test(`native migration retires the same ancestor copies as the hook (${explicitProject ? "explicit project" : "current directory"})`, async () => {
+  const f = await fixture();
+  try {
+    await f.a.install();
+    await f.a.ok(["profiles", "set", "engineering", "--file", f.versions[0]!.file, "--json"]);
+    const nested = join(f.a.project, "src", "nested"), ancestor = join(f.a.project, ".claude", "skills", "ancestor-copy");
+    mkdirSync(nested, { recursive: true });
+    put(join(ancestor, "SKILL.md"), "Synthetic ancestor migration instructions\n");
+    const hook = () => f.a.ok(["hook", "user-prompt", "--agent", "claude"], { cwd: nested, stdin: { cwd: nested, hook_event_name: "UserPromptSubmit", session_id: "ancestor-migration", prompt: "$review-code" } });
+    expect((await hook()).decision).toBe("block");
+    const args = ["migrate", "native", "--include-unmanaged", "--include-vendor", "--json", ...(explicitProject ? ["--project", nested] : [])];
+    const options = { cwd: explicitProject ? f.a.home : nested };
+    const plan = await f.a.ok(args, options);
+    expect(plan.applied).toBe(false);
+    expect(plan.inventory.filter((entry: any) => entry.path === ancestor)).toHaveLength(1);
+    expect(existsSync(join(ancestor, "SKILL.md"))).toBe(true);
+    const applied = await f.a.ok([...args, "--apply"], options);
+    expect(applied.entries).toHaveLength(1);
+    expect(applied.entries[0].source).toBe(ancestor);
+    expect(readFileSync(join(applied.entries[0].archive, "SKILL.md"), "utf8")).toBe("Synthetic ancestor migration instructions\n");
+    expect((await hook()).hookSpecificOutput.additionalContext).toContain("Published 1.0.0");
+    expect((await f.a.ok(args, options)).inventory.every((entry: any) => entry.bridge)).toBe(true);
+  } finally { await f.close(); }
+});
+
 test("built CLI flushes a complete large skill document through a pipe", async () => {
   const f = await fixture("Unicode instructions: căutare 🧭\n".repeat(4000));
   try {
@@ -348,6 +373,16 @@ test("managed prompt hook refuses new native copies and missing or modified brid
     await f.a.install();
     await f.a.ok(["profiles", "set", "engineering", "--file", f.versions[0]!.file, "--json"]);
     await f.a.ok(["sync", "--json"]);
+    const settings = join(f.a.home, ".claude", "settings.json"), config = json(settings);
+    expect(config.syncClaudeAiSkills).toBe(false);
+    put(settings, JSON.stringify({ ...config, syncClaudeAiSkills: true }));
+    const requestsBefore = f.requests.length;
+    const syncRefused = await f.a.hook("claude", "UserPromptSubmit", { prompt: "review this patch" });
+    expect(syncRefused.decision).toBe("block");
+    expect(syncRefused.reason).toContain("syncClaudeAiSkills");
+    expect(f.requests).toHaveLength(requestsBefore);
+    expect(JSON.stringify(syncRefused)).not.toContain("Published 1.0.0");
+    put(settings, JSON.stringify(config));
     const bridge = join(f.a.home, ".claude", "skills", "skills-cli", "SKILL.md"), original = readFileSync(bridge, "utf8");
     const unexpected = join(f.a.home, ".claude", "skills", "unexpected", "SKILL.md");
     put(unexpected, "Unexpected native instructions must not be accepted.\n");
