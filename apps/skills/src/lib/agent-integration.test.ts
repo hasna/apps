@@ -15,6 +15,42 @@ function fixture() {
 }
 function put(path: string, body: string) { mkdirSync(join(path, ".."), { recursive: true }); writeFileSync(path, body); }
 
+test("native migration covers project ancestors without duplicate archive entries", () => {
+  const f = fixture(), parent = join(f.home, "workspace"), project = join(parent, "repo", "src");
+  const native = join(parent, ".claude", "skills", "ancestor-copy");
+  mkdirSync(project, { recursive: true }); put(join(native, "SKILL.md"), "Synthetic ancestor instructions\n");
+  const inventory = inventoryNativeSkills(f.home, { projectDir: project, projectDirs: [parent, project] });
+  expect(inventory.map(entry => entry.path)).toEqual([native]);
+  expect(inventoryNativeSkills(f.home, { projectDir: project }).map(entry => entry.path)).toEqual([native]);
+  const archived = archiveNativeSkills(inventory, { dataDir: f.dataDir, includeUnmanaged: true });
+  expect(archived.entries).toHaveLength(1);
+  expect(readFileSync(join(archived.entries[0]!.archive, "SKILL.md"), "utf8")).toBe("Synthetic ancestor instructions\n");
+});
+
+test("native drift identifies bounded escaped paths without exposing document contents", () => {
+  const f = fixture(); applyAgentIntegration(planAgentIntegration({ ...f, agents: ["claude"] }));
+  const projectDir = join(f.home, ...Array.from({ length: 5 }, () => "long-parent".repeat(18)));
+  for (let index = 0; index < 12; index++) {
+    put(join(projectDir, ".claude", "skills", `copy-${String(index).padStart(2, "0")}\ncontrol\u0085\u2028\u2029\u202e`, "SKILL.md"), "PRIVATE_DOCUMENT_MUST_NOT_APPEAR");
+  }
+  let reason = "";
+  try { assertManagedAgentBridge("claude", { ...f, projectDir }); } catch (error) { reason = (error as Error).message; }
+  expect(reason).toContain("NATIVE_SKILL_DRIFT");
+  expect(reason).toContain("12 unexpected native skill copies");
+  expect(reason).toContain("copy-00\\ncontrol");
+  expect(reason).not.toContain("\n");
+  for (const character of ["\u0085", "\u2028", "\u2029", "\u202e"]) {
+    expect(reason).not.toContain(character);
+    expect(reason).toContain(`\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`);
+  }
+  expect(reason).not.toContain("PRIVATE_DOCUMENT_MUST_NOT_APPEAR");
+  expect(reason).not.toContain("copy-11");
+  expect(reason).toContain("...");
+  expect(reason.length).toBeLessThanOrEqual(4096);
+  expect(reason).toContain("--project");
+  expect(reason).toContain("--json");
+});
+
 test("native invocation profile must match the adapter binding, including retained adapter profiles", () => {
   const f = fixture();
   applyAgentIntegration(planAgentIntegration({ ...f, agents: ["claude"], profileId: "engineering", command: "/opt/bin/skills" }));

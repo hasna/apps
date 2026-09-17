@@ -128,6 +128,44 @@ test("Codex restored built-ins are allowed only at their bound digest and disabl
   expect(() => assertManagedAgentBridge("codex", { ...f, projectDir: f.home })).toThrow("NATIVE_SKILL_DRIFT");
 });
 
+test("account-synced plugin skills are refused and archived without removing plugin assets", () => {
+  const f = options(); applyAgentIntegration(planAgentIntegration(f));
+  const plugin = join(f.home, ".claude", "plugins", "synced", "fixture-plugin");
+  const skill = join(plugin, "skills", "fixture-skill");
+  mkdirSync(skill, { recursive: true });
+  writeFileSync(join(skill, "SKILL.md"), "Synthetic synced plugin instructions\n");
+  writeFileSync(join(plugin, "helper.js"), "export const fixture = true;\n");
+  writeFileSync(join(plugin, ".mcp.json"), '{"mcpServers":{}}');
+  expect(() => assertManagedAgentBridge("claude", { ...f, projectDir: f.home })).toThrow("NATIVE_SKILL_DRIFT");
+  const inventory = inventoryNativeSkills(f.home, { includeVendor: true });
+  expect(inventory.find(entry => entry.path === skill)).toMatchObject({ agent: "claude", vendor: true, managed: false });
+  expect(archiveNativeSkills(inventory, { dataDir: f.dataDir, includeUnmanaged: true }).entries).toEqual([]);
+  const receipt = archiveNativeSkills(inventory, { dataDir: f.dataDir, includeVendor: true });
+  expect(receipt.entries).toHaveLength(1);
+  expect(readFileSync(receipt.entries[0]!.archive, "utf8")).toBe("Synthetic synced plugin instructions\n");
+  expect(readFileSync(join(plugin, "helper.js"), "utf8")).toBe("export const fixture = true;\n");
+  expect(readFileSync(join(plugin, ".mcp.json"), "utf8")).toBe('{"mcpServers":{}}');
+  expect(existsSync(join(skill, "SKILL.md"))).toBe(false);
+  expect(() => assertManagedAgentBridge("claude", { ...f, projectDir: f.home })).not.toThrow();
+});
+
+test("Claude bridge disables account skill reseeding and verifies the user setting", () => {
+  const f = options(), path = join(f.home, ".claude", "settings.json");
+  mkdirSync(join(f.home, ".claude"), { recursive: true });
+  writeFileSync(path, JSON.stringify({ syncClaudeAiSkills: true, syncClaudeAiPlugins: true, unrelated: { preserve: true } }));
+  applyAgentIntegration(planAgentIntegration(f));
+  const config = JSON.parse(readFileSync(path, "utf8"));
+  expect(config.syncClaudeAiSkills).toBe(false);
+  expect(config.syncClaudeAiPlugins).toBe(true);
+  expect(config.unrelated).toEqual({ preserve: true });
+  expect(planAgentIntegration(f).changes).toEqual([]);
+  expect(() => assertManagedAgentBridge("claude", { ...f, projectDir: f.home })).not.toThrow();
+  for (const value of [true, undefined, "false"]) {
+    writeFileSync(path, JSON.stringify({ ...config, syncClaudeAiSkills: value }));
+    expect(() => assertManagedAgentBridge("claude", { ...f, projectDir: f.home })).toThrow("syncClaudeAiSkills");
+  }
+});
+
 test("native protection config drift refuses prompts without freezing unrelated configuration", () => {
   const f = options(); applyAgentIntegration(planAgentIntegration(f));
   const path = join(f.home, ".claude", "settings.json"), config = JSON.parse(readFileSync(path, "utf8"));
