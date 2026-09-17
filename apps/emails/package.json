@@ -1,6 +1,6 @@
 {
   "name": "@hasna/emails",
-  "version": "1.6.3",
+  "version": "2.0.0",
   "description": "Email management through a shared API: CLI, terminal UI, MCP server, and library",
   "keywords": [
     "email",

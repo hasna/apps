@@ -360,7 +360,7 @@
     },
     "apps/emails": {
       "name": "@hasna/emails",
-      "version": "1.6.3",
+      "version": "2.0.0",
       "bin": {
         "emails": "dist/cli/index.js",
         "emails-mcp": "dist/mcp/index.js",
