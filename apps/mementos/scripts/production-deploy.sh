@@ -21,7 +21,29 @@ if [[ -n "${AWS_PROFILE:-}" ]]; then
 fi
 
 TMP_DIR="$(mktemp -d)"
-trap 'rm -rf -- "$TMP_DIR"' EXIT
+ROLLBACK_ARMED=false
+ROLLBACK_COMPLETED=false
+DEPLOYMENT_PROVEN=false
+
+cleanup_and_guard_rollback() {
+  local rc=$?
+  trap - EXIT
+  if [[ "$ROLLBACK_ARMED" == "true" && "$ROLLBACK_COMPLETED" != "true" && "$DEPLOYMENT_PROVEN" != "true" ]]; then
+    printf 'unexpected failure after candidate update; finalizer is restoring %s before exit
+'       "${PREVIOUS_TASK_DEFINITION:-unknown}" >&2
+    if rollback_service; then
+      printf 'finalizer rollback restored one stable PRIMARY on %s
+'         "${PREVIOUS_TASK_DEFINITION}" >&2
+    else
+      printf 'finalizer rollback could not be proven; manual recovery required
+' >&2
+    fi
+    rc=1
+  fi
+  rm -rf -- "$TMP_DIR"
+  exit "$rc"
+}
+trap cleanup_and_guard_rollback EXIT
 
 try_aws() {
   local stdout_file="$1"
@@ -66,8 +88,10 @@ settle_deployment_readback() {
   local desired running pending
 
   for ((attempt = 1; attempt <= max_attempts; attempt++)); do
-    run_aws "$service_json" "$service_err" ecs describe-services \
-      --cluster "$CLUSTER" --services "$SERVICE"
+    if ! try_aws "$service_json" "$service_err" ecs describe-services \
+      --cluster "$CLUSTER" --services "$SERVICE"; then
+      return 1
+    fi
 
     failures="$(jq -r '.failures | length' "$service_json")"
     services="$(jq -r '.services | length' "$service_json")"
@@ -186,6 +210,79 @@ resolve_candidate() {
   CANDIDATE_IMAGE="${ECR_URL}@${CANDIDATE_DIGEST}"
 }
 
+run_migration_task() {
+  local task_definition="$1"
+  local service_json="$TMP_DIR/service-preflight.json"
+  local network_json="$TMP_DIR/migration-network.json"
+  local capacity_json="$TMP_DIR/migration-capacity.json"
+  local overrides_json="$TMP_DIR/migration-overrides.json"
+  local run_json="$TMP_DIR/migration-run.json"
+  local stopped_json="$TMP_DIR/migration-stopped.json"
+
+  [[ -s "$service_json" ]] || fail "migration refused: stable service preflight evidence is missing"
+  jq -e '
+    .services[0].networkConfiguration
+    | select(.awsvpcConfiguration.subnets | type == "array" and length > 0)
+    | select(.awsvpcConfiguration.securityGroups | type == "array" and length > 0)
+    | select(.awsvpcConfiguration.assignPublicIp == "ENABLED" or .awsvpcConfiguration.assignPublicIp == "DISABLED")
+  ' "$service_json" > "$network_json" || fail "migration refused: service network configuration is incomplete"
+  jq -e '.services[0].capacityProviderStrategy | select(type == "array" and length > 0)' \
+    "$service_json" > "$capacity_json" || fail "migration refused: service has no capacity-provider strategy"
+  jq -n --arg container "$WEB_CONTAINER" '{
+    containerOverrides: [{
+      name: $container,
+      command: ["mementos", "storage", "migrate"]
+    }]
+  }' > "$overrides_json"
+
+  run_aws "$run_json" "$TMP_DIR/migration-run.err" ecs run-task \
+    --cluster "$CLUSTER" \
+    --task-definition "$task_definition" \
+    --capacity-provider-strategy "file://${capacity_json}" \
+    --network-configuration "file://${network_json}" \
+    --overrides "file://${overrides_json}" \
+    --count 1
+
+  local failures task_count migration_task
+  failures="$(jq -r '.failures | length' "$run_json")"
+  task_count="$(jq -r '.tasks | length' "$run_json")"
+  migration_task="$(jq -r '.tasks[0].taskArn // ""' "$run_json")"
+  if [[ "$failures" != "0" || "$task_count" != "1" || -z "$migration_task" ]]; then
+    fail "migration task launch did not return exactly one task"
+  fi
+
+  run_aws "$TMP_DIR/migration-wait.out" "$TMP_DIR/migration-wait.err" ecs wait tasks-stopped \
+    --cluster "$CLUSTER" --tasks "$migration_task"
+  run_aws "$stopped_json" "$TMP_DIR/migration-stopped.err" ecs describe-tasks \
+    --cluster "$CLUSTER" --tasks "$migration_task"
+
+  local stopped_failures stopped_count observed_td container_count exit_code image_digest
+  local stop_code stopped_reason container_reason
+  stopped_failures="$(jq -r '.failures | length' "$stopped_json")"
+  stopped_count="$(jq -r '.tasks | length' "$stopped_json")"
+  observed_td="$(jq -r '.tasks[0].taskDefinitionArn // ""' "$stopped_json")"
+  container_count="$(jq -r --arg container "$WEB_CONTAINER" '[.tasks[0].containers[]? | select(.name == $container)] | length' "$stopped_json")"
+  exit_code="$(jq -r --arg container "$WEB_CONTAINER" '[.tasks[0].containers[]? | select(.name == $container) | .exitCode][0] // -1' "$stopped_json")"
+  image_digest="$(jq -r --arg container "$WEB_CONTAINER" '[.tasks[0].containers[]? | select(.name == $container) | .imageDigest][0] // ""' "$stopped_json")"
+  stop_code="$(jq -r '.tasks[0].stopCode // ""' "$stopped_json")"
+  stopped_reason="$(jq -r '.tasks[0].stoppedReason // ""' "$stopped_json")"
+  container_reason="$(jq -r --arg container "$WEB_CONTAINER" '[.tasks[0].containers[]? | select(.name == $container) | (.reason // "")][0] // ""' "$stopped_json")"
+
+  printf 'migration task=%s task_definition=%s exit_code=%s stop_code=%s image_digest=%s\n' \
+    "$migration_task" "$observed_td" "$exit_code" "${stop_code:-none}" "$image_digest"
+  if [[ "$stopped_failures" != "0" || "$stopped_count" != "1" \
+    || "$observed_td" != "$task_definition" || "$container_count" != "1" \
+    || "$exit_code" != "0" || "$image_digest" != "$CANDIDATE_DIGEST" ]]; then
+    printf 'migration failed: stopped_reason=%s container_reason=%s\n' \
+      "${stopped_reason:-none}" "${container_reason:-none}" >&2
+    fail "migration task did not prove an exact-image transactional migration with exit code 0"
+  fi
+
+  emit_output "migration_task_definition=${task_definition}"
+  emit_output "migration_task=${migration_task}"
+  emit_output "migration_exit_code=0"
+}
+
 deploy_service() {
   # Close the build-time/pre-mutation gap: the workflow calls preflight before
   # building, and deploy repeats it immediately before any ECS mutation.
@@ -243,53 +340,97 @@ deploy_service() {
     fail "registered task definition does not preserve the digest-pinned migration-gated candidate"
   fi
 
-  run_aws "$TMP_DIR/update.json" "$TMP_DIR/update.err" ecs update-service \
+  # The runtime never applies PostgreSQL DDL. Run the exact candidate image as
+  # a one-shot migration task first; applyPgMigrations serializes migration 41
+  # with a transaction-level advisory lock and records its receipt in the same
+  # transaction. A refusal (including unsafe legacy machine rows) exits nonzero
+  # and stops before the service task definition is updated.
+  run_migration_task "$new_td"
+
+  # From the first update-service attempt onward, every failure is an
+  # uncertain production mutation. Keep the rollback anchor in this same shell
+  # step and restore it before returning failure; the later verify step may be
+  # skipped by Actions when this step fails, so it cannot own this recovery.
+  export PREVIOUS_TASK_DEFINITION="$LIVE_TASK_DEFINITION"
+  export DEPLOYED_TASK_DEFINITION="$new_td"
+  local deployment_failure=""
+  ROLLBACK_ARMED=true
+
+  if ! try_aws "$TMP_DIR/update.json" "$TMP_DIR/update.err" ecs update-service \
     --cluster "$CLUSTER" --service "$SERVICE" \
-    --task-definition "$new_td" --force-new-deployment
-  run_aws "$TMP_DIR/wait.out" "$TMP_DIR/wait.err" ecs wait services-stable \
-    --cluster "$CLUSTER" --services "$SERVICE"
-  settle_deployment_readback "$new_td" || exit $?
-
-  run_aws "$TMP_DIR/task-list.json" "$TMP_DIR/task-list.err" ecs list-tasks \
-    --cluster "$CLUSTER" --service-name "$SERVICE" --desired-status RUNNING
-  local task_count
-  task_count="$(jq -r '.taskArns | length' "$TMP_DIR/task-list.json")"
-  (( task_count > 0 )) || fail "deployment readback returned no running service tasks"
-  task_arns=()
-  while IFS= read -r task_arn; do
-    [[ -n "$task_arn" ]] && task_arns+=("$task_arn")
-  done < <(jq -r '.taskArns[]' "$TMP_DIR/task-list.json")
-  run_aws "$TMP_DIR/task-readback.json" "$TMP_DIR/task-readback.err" ecs describe-tasks \
-    --cluster "$CLUSTER" --tasks "${task_arns[@]}"
-
-  local task_failures readback_task_count bad_tasks
-  task_failures="$(jq -r '.failures | length' "$TMP_DIR/task-readback.json")"
-  readback_task_count="$(jq -r '.tasks | length' "$TMP_DIR/task-readback.json")"
-  if [[ "$task_failures" != "0" || "$readback_task_count" != "$task_count" ]]; then
-    fail "running task readback is incomplete"
+    --task-definition "$new_td" --force-new-deployment; then
+    deployment_failure="ECS update-service did not return success"
+  elif ! try_aws "$TMP_DIR/wait.out" "$TMP_DIR/wait.err" ecs wait services-stable \
+    --cluster "$CLUSTER" --services "$SERVICE"; then
+    deployment_failure="ECS services-stable waiter failed after candidate activation"
+  elif ! settle_deployment_readback "$new_td"; then
+    deployment_failure="strict service readback failed after candidate activation"
+  elif ! try_aws "$TMP_DIR/task-list.json" "$TMP_DIR/task-list.err" ecs list-tasks \
+    --cluster "$CLUSTER" --service-name "$SERVICE" --desired-status RUNNING; then
+    deployment_failure="running task list failed after candidate activation"
+  else
+    local task_count
+    task_count="$(jq -r '.taskArns | length' "$TMP_DIR/task-list.json")"
+    if (( task_count == 0 )); then
+      deployment_failure="deployment readback returned no running service tasks"
+    else
+      task_arns=()
+      while IFS= read -r task_arn; do
+        [[ -n "$task_arn" ]] && task_arns+=("$task_arn")
+      done < <(jq -r '.taskArns[]' "$TMP_DIR/task-list.json")
+      if ! try_aws "$TMP_DIR/task-readback.json" "$TMP_DIR/task-readback.err" ecs describe-tasks \
+        --cluster "$CLUSTER" --tasks "${task_arns[@]}"; then
+        deployment_failure="running task detail readback failed after candidate activation"
+      else
+        local task_failures readback_task_count bad_tasks
+        task_failures="$(jq -r '.failures | length' "$TMP_DIR/task-readback.json")"
+        readback_task_count="$(jq -r '.tasks | length' "$TMP_DIR/task-readback.json")"
+        if [[ "$task_failures" != "0" || "$readback_task_count" != "$task_count" ]]; then
+          deployment_failure="running task readback is incomplete"
+        else
+          bad_tasks="$(jq -r \
+            --arg taskdef "$new_td" \
+            --arg container "$WEB_CONTAINER" \
+            --arg digest "$CANDIDATE_DIGEST" '
+              [
+                .tasks[]?
+                | select(
+                    .taskDefinitionArn != $taskdef
+                    or ([.containers[]? | select(
+                      .name == $container
+                      and .lastStatus == "RUNNING"
+                      and .imageDigest == $digest
+                    )] | length) != 1
+                  )
+              ] | length
+            ' "$TMP_DIR/task-readback.json")"
+          if [[ "$bad_tasks" != "0" ]]; then
+            deployment_failure="running task digest readback does not match ${CANDIDATE_DIGEST}"
+          fi
+        fi
+      fi
+    fi
   fi
-  bad_tasks="$(jq -r \
-    --arg taskdef "$new_td" \
-    --arg container "$WEB_CONTAINER" \
-    --arg digest "$CANDIDATE_DIGEST" '
-      [
-        .tasks[]?
-        | select(
-            .taskDefinitionArn != $taskdef
-            or ([.containers[]? | select(
-              .name == $container
-              and .lastStatus == "RUNNING"
-              and .imageDigest == $digest
-            )] | length) != 1
-          )
-      ] | length
-    ' "$TMP_DIR/task-readback.json")"
-  [[ "$bad_tasks" == "0" ]] || fail "running task digest readback does not match ${CANDIDATE_DIGEST}"
+
+  if [[ -n "$deployment_failure" ]]; then
+    printf 'candidate deployment proof failed: %s; restoring %s in the same guarded step\n' \
+      "$deployment_failure" "$PREVIOUS_TASK_DEFINITION" >&2
+    if rollback_service; then
+      ROLLBACK_COMPLETED=true
+      ROLLBACK_ARMED=false
+      fail "candidate deployment rejected: ${deployment_failure}; rollback restored one stable PRIMARY on ${PREVIOUS_TASK_DEFINITION}"
+    fi
+    ROLLBACK_COMPLETED=true
+    ROLLBACK_ARMED=false
+    fail "candidate deployment failed and rollback could not be proven: ${deployment_failure}; manual recovery required"
+  fi
 
   emit_output "previous_task_definition=${LIVE_TASK_DEFINITION}"
   emit_output "deployed_task_definition=${new_td}"
   emit_output "candidate_image=${CANDIDATE_IMAGE}"
   emit_output "candidate_digest=${CANDIDATE_DIGEST}"
+  DEPLOYMENT_PROVEN=true
+  ROLLBACK_ARMED=false
 }
 
 rollback_service() {
