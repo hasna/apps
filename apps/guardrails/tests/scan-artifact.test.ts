@@ -63,6 +63,12 @@ function rootCiViolations(workflow: RootCi): string[] {
   }
   equal(shard?.env?.AFFECTED_SHARD, "${{ matrix.shard }}", "each runner must execute its selected shard");
   equal(aggregate?.env?.AFFECTED_MATRIX_RESULT, "${{ needs.affected-shard.result }}", "aggregate must receive the actual shard result");
+  equal(
+    aggregate?.env?.LOOPS_LIVE_POSTGRES_RESULT,
+    "${{ needs.loops-live-postgres.result }}",
+    "aggregate must receive the live PostgreSQL import result",
+  );
+  stepIndex("build-test", 'test "$LOOPS_LIVE_POSTGRES_RESULT" = "success"', always);
   stepIndex("gates", "bun tooling/ci/check-manifests.ts --self-test");
   stepIndex("gates", "bun tooling/ci/check-manifests.ts");
   stepIndex("publish-guard", "bun tooling/ci/check-publish-guard.ts --self-test");
