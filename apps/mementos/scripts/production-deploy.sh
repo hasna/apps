@@ -11,7 +11,7 @@ require_env() {
   fi
 }
 
-for name in AWS_REGION CLUSTER SERVICE WEB_FAMILY WEB_CONTAINER; do
+for name in AWS_REGION CLUSTER SERVICE WEB_FAMILY WEB_CONTAINER MIGRATION_FAMILY MIGRATION_CONTAINER; do
   require_env "$name"
 done
 
@@ -124,6 +124,7 @@ settle_deployment_readback() {
 
 LIVE_TASK_DEFINITION=""
 LIVE_TASK_DEFINITION_JSON=""
+MIGRATION_TASK_DEFINITION_JSON=""
 
 preflight_service() {
   local service_json="$TMP_DIR/service-preflight.json"
@@ -182,6 +183,25 @@ preflight_service() {
   fi
 }
 
+preflight_migration_template() {
+  MIGRATION_TASK_DEFINITION_JSON="$TMP_DIR/live-migration-task-definition.json"
+  run_aws "$MIGRATION_TASK_DEFINITION_JSON" "$TMP_DIR/live-migration-task-definition.err" \
+    ecs describe-task-definition --task-definition "$MIGRATION_FAMILY"
+
+  local family container_count command_json
+  family="$(jq -r '.taskDefinition.family // ""' "$MIGRATION_TASK_DEFINITION_JSON")"
+  container_count="$(jq -r --arg container "$MIGRATION_CONTAINER" \
+    '[.taskDefinition.containerDefinitions[]? | select(.name == $container)] | length' \
+    "$MIGRATION_TASK_DEFINITION_JSON")"
+  command_json="$(jq -c --arg container "$MIGRATION_CONTAINER" \
+    '[.taskDefinition.containerDefinitions[]? | select(.name == $container) | (.command // [])][0] // []' \
+    "$MIGRATION_TASK_DEFINITION_JSON")"
+  if [[ "$family" != "$MIGRATION_FAMILY" || "$container_count" != "1" \
+    || "$command_json" != '["mementos","storage","migrate"]' ]]; then
+    fail "migration prerequisite unmet: ${MIGRATION_FAMILY} must contain exactly one ${MIGRATION_CONTAINER} container running mementos storage migrate"
+  fi
+}
+
 CANDIDATE_DIGEST=""
 CANDIDATE_IMAGE=""
 
@@ -228,7 +248,7 @@ run_migration_task() {
   ' "$service_json" > "$network_json" || fail "migration refused: service network configuration is incomplete"
   jq -e '.services[0].capacityProviderStrategy | select(type == "array" and length > 0)' \
     "$service_json" > "$capacity_json" || fail "migration refused: service has no capacity-provider strategy"
-  jq -n --arg container "$WEB_CONTAINER" '{
+  jq -n --arg container "$MIGRATION_CONTAINER" '{
     containerOverrides: [{
       name: $container,
       command: ["mementos", "storage", "migrate"]
@@ -261,12 +281,12 @@ run_migration_task() {
   stopped_failures="$(jq -r '.failures | length' "$stopped_json")"
   stopped_count="$(jq -r '.tasks | length' "$stopped_json")"
   observed_td="$(jq -r '.tasks[0].taskDefinitionArn // ""' "$stopped_json")"
-  container_count="$(jq -r --arg container "$WEB_CONTAINER" '[.tasks[0].containers[]? | select(.name == $container)] | length' "$stopped_json")"
-  exit_code="$(jq -r --arg container "$WEB_CONTAINER" '[.tasks[0].containers[]? | select(.name == $container) | .exitCode][0] // -1' "$stopped_json")"
-  image_digest="$(jq -r --arg container "$WEB_CONTAINER" '[.tasks[0].containers[]? | select(.name == $container) | .imageDigest][0] // ""' "$stopped_json")"
+  container_count="$(jq -r --arg container "$MIGRATION_CONTAINER" '[.tasks[0].containers[]? | select(.name == $container)] | length' "$stopped_json")"
+  exit_code="$(jq -r --arg container "$MIGRATION_CONTAINER" '[.tasks[0].containers[]? | select(.name == $container) | .exitCode][0] // -1' "$stopped_json")"
+  image_digest="$(jq -r --arg container "$MIGRATION_CONTAINER" '[.tasks[0].containers[]? | select(.name == $container) | .imageDigest][0] // ""' "$stopped_json")"
   stop_code="$(jq -r '.tasks[0].stopCode // ""' "$stopped_json")"
   stopped_reason="$(jq -r '.tasks[0].stoppedReason // ""' "$stopped_json")"
-  container_reason="$(jq -r --arg container "$WEB_CONTAINER" '[.tasks[0].containers[]? | select(.name == $container) | (.reason // "")][0] // ""' "$stopped_json")"
+  container_reason="$(jq -r --arg container "$MIGRATION_CONTAINER" '[.tasks[0].containers[]? | select(.name == $container) | (.reason // "")][0] // ""' "$stopped_json")"
 
   printf 'migration task=%s task_definition=%s exit_code=%s stop_code=%s image_digest=%s\n' \
     "$migration_task" "$observed_td" "$exit_code" "${stop_code:-none}" "$image_digest"
@@ -287,6 +307,7 @@ deploy_service() {
   # Close the build-time/pre-mutation gap: the workflow calls preflight before
   # building, and deploy repeats it immediately before any ECS mutation.
   preflight_service
+  preflight_migration_template
   resolve_candidate
 
   # The production host/Origin allowlist for state-changing requests is
@@ -295,6 +316,43 @@ deploy_service() {
   # Fail the deploy loudly rather than silently shipping a write-refusing
   # service.
   require_env MEMENTOS_CORS_ORIGIN
+
+  local migration_taskdef_json="$TMP_DIR/new-migration-task-definition.json"
+  jq --arg image "$CANDIDATE_IMAGE" \
+    --arg container "$MIGRATION_CONTAINER" \
+    --arg family "$MIGRATION_FAMILY" '
+      .taskDefinition
+      | .family=$family
+      | .containerDefinitions |= map(
+          if .name==$container
+          then (.image=$image
+               | .command=["mementos","storage","migrate"])
+          else .
+          end
+        )
+      | del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,
+            .registeredAt,.registeredBy,.deregisteredAt)
+    ' "$MIGRATION_TASK_DEFINITION_JSON" > "$migration_taskdef_json"
+
+  local migration_register_json="$TMP_DIR/register-migration.json"
+  run_aws "$migration_register_json" "$TMP_DIR/register-migration.err" ecs register-task-definition \
+    --cli-input-json "file://${migration_taskdef_json}"
+  local migration_td migration_registered_count migration_registered_image migration_registered_command
+  migration_td="$(jq -r '.taskDefinition.taskDefinitionArn // ""' "$migration_register_json")"
+  migration_registered_count="$(jq -r --arg container "$MIGRATION_CONTAINER" \
+    '[.taskDefinition.containerDefinitions[]? | select(.name == $container)] | length' \
+    "$migration_register_json")"
+  migration_registered_image="$(jq -r --arg container "$MIGRATION_CONTAINER" \
+    '.taskDefinition.containerDefinitions[]? | select(.name == $container) | .image // ""' \
+    "$migration_register_json")"
+  migration_registered_command="$(jq -c --arg container "$MIGRATION_CONTAINER" \
+    '[.taskDefinition.containerDefinitions[]? | select(.name == $container) | (.command // [])][0] // []' \
+    "$migration_register_json")"
+  if [[ -z "$migration_td" || "$migration_registered_count" != "1" \
+    || "$migration_registered_image" != "$CANDIDATE_IMAGE" \
+    || "$migration_registered_command" != '["mementos","storage","migrate"]' ]]; then
+    fail "registered migration task definition does not preserve the digest-pinned candidate and migration command"
+  fi
 
   local taskdef_json="$TMP_DIR/new-task-definition.json"
   jq --arg image "$CANDIDATE_IMAGE" \
@@ -340,12 +398,13 @@ deploy_service() {
     fail "registered task definition does not preserve the digest-pinned migration-gated candidate"
   fi
 
-  # The runtime never applies PostgreSQL DDL. Run the exact candidate image as
-  # a one-shot migration task first; applyPgMigrations serializes migration 41
+  # The runtime never applies PostgreSQL DDL. Run the exact candidate image in
+  # the IAM-sanctioned migration family (which preserves the owner DSN) first;
+  # applyPgMigrations serializes migration 41
   # with a transaction-level advisory lock and records its receipt in the same
   # transaction. A refusal (including unsafe legacy machine rows) exits nonzero
   # and stops before the service task definition is updated.
-  run_migration_task "$new_td"
+  run_migration_task "$migration_td"
 
   # From the first update-service attempt onward, every failure is an
   # uncertain production mutation. Keep the rollback anchor in this same shell
