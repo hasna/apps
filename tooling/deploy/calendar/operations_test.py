@@ -64,8 +64,11 @@ class Operations(unittest.TestCase):
                     op.promote(candidate['source_commit'], path, sha, Path(temp) / 'out')
                 aws.assert_not_called()
 
-    def promotion(self, fail_update=False, drift=False):
+    def promotion(self, fail_update=False, drift=False, omitted=False, invalid_eligibility=False):
         cfg, candidate, service, task = fixture(); raw, sha = self.candidate(cfg, candidate)
+        if omitted:
+            del task['requiresCompatibilities']
+            task['compatibilities'] = ['EC2', 'FARGATE', 'MANAGED_INSTANCES']
         desired = op.c.task_payload(task); desired['containerDefinitions'][0]['image'] = cfg['ecr_repository_url'] + '@' + candidate['image_digest']
         arn = service['taskDefinition'].rsplit(':', 1)[0] + ':43'
         live = copy.deepcopy(service); live['taskDefinition'] = arn; live['deployments'][0]['taskDefinition'] = arn
@@ -85,24 +88,81 @@ class Operations(unittest.TestCase):
         admits = [(cfg, service, task), ValueError('ACTIVATION_LIVE_DRIFT') if drift else (cfg, service, task)]
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / 'candidate.json'; path.write_bytes(raw); out = Path(temp) / 'out'
-            with patch.object(op, 'fresh_admission', side_effect=admits) as fresh, patch.object(op, 'aws', aws), patch.object(op, 'read_task', return_value=desired), patch.object(op, 'read_service', return_value=live), patch.object(op, 'read_manifest', return_value=cfg), patch.object(op, 'running', return_value=['8' * 64]):
-                if drift or fail_update:
+            with patch.object(op, 'fresh_admission', side_effect=admits) as fresh, patch.object(op, 'aws', aws), patch.object(op, 'read_task', return_value={**desired, 'compatibilities': ['EC2'] if invalid_eligibility else ['EC2', 'FARGATE', 'MANAGED_INSTANCES']}), patch.object(op, 'read_service', return_value=live), patch.object(op, 'read_manifest', return_value=cfg), patch.object(op, 'running', return_value=['8' * 64]):
+                if drift or fail_update or invalid_eligibility:
                     with self.assertRaises(ValueError): op.promote(candidate['source_commit'], path, sha, out)
                 else:
                     op.promote(candidate['source_commit'], path, sha, out)
                     receipt = json.loads((out / 'deployed.json').read_bytes())
                     self.assertIs(receipt['automatic_rollback'], False)
                     self.assertIs(receipt['migration_performed'], False)
-                self.assertEqual(fresh.call_count, 2)
+                self.assertEqual(fresh.call_count, 1 if invalid_eligibility else 2)
+                if invalid_eligibility:
+                    refusal = json.loads((out / 'reconciliation-required.json').read_bytes())
+                    self.assertEqual(refusal['phase'], 'registration')
                 if fail_update:
                     refusal = json.loads((out / 'reconciliation-required.json').read_bytes())
                     self.assertIs(refusal['automatic_retry'], False)
             self.assertEqual(sum(args[:2] == ('ecs', 'register-task-definition') for args, _ in calls), 1)
-            self.assertEqual(sum(args[:2] == ('ecs', 'update-service') for args, _ in calls), 0 if drift else 1)
+            self.assertEqual(sum(args[:2] == ('ecs', 'update-service') for args, _ in calls), 0 if drift or invalid_eligibility else 1)
 
     def test_success_changes_only_image_after_two_fresh_admissions(self): self.promotion()
+    def test_promotion_preserves_omitted_compatibility_declaration(self): self.promotion(omitted=True)
+    def test_registered_omitted_declaration_requires_fresh_computed_eligibility(self): self.promotion(omitted=True, invalid_eligibility=True)
     def test_preupdate_drift_prevents_service_mutation(self): self.promotion(drift=True)
     def test_uncertain_update_records_refusal_without_retry_or_rollback(self): self.promotion(fail_update=True)
+
+    def test_actual_aws_shape_requires_fargate_service_and_running_evidence(self):
+        cfg, _, service, task = fixture()
+        service.update(desiredCount=1, runningCount=1)
+        del task['requiresCompatibilities']
+        task['compatibilities'] = ['EC2', 'FARGATE', 'MANAGED_INSTANCES']
+        live = {'taskArn': 'synthetic-task', 'clusterArn': service['clusterArn'],
+            'taskDefinitionArn': service['taskDefinition'], 'lastStatus': 'RUNNING',
+            'healthStatus': 'HEALTHY', 'launchType': 'FARGATE', 'capacityProviderName': 'FARGATE_SPOT', 'containers': [{'name': 'calendar',
+            'lastStatus': 'RUNNING', 'imageDigest': 'sha256:' + 'a' * 64}]}
+        for launch in ['FARGATE', 'EC2', None, 'UNKNOWN']:
+            with self.subTest(launch=launch), patch.object(op, 'read_service', return_value=service), patch.object(op, 'read_task', return_value=task), patch.object(op, 'aws', side_effect=[{'taskArns': ['synthetic-task']}, {'tasks': [{**live, 'launchType': launch}]}]):
+                if launch == 'FARGATE':
+                    _, returned, baseline, observed = op.state(cfg)
+                    self.assertNotIn('requiresCompatibilities', returned)
+                    self.assertEqual(baseline['task_payload_sha256'], op.c.digest(op.c.task_payload(task)))
+                    self.assertEqual(len(observed), 1)
+                else:
+                    with self.assertRaisesRegex(ValueError, 'RUNNING_TASK_FARGATE'): op.state(cfg)
+        for provider in ['EC2', None, 'UNKNOWN']:
+            with self.subTest(provider=provider), patch.object(op, 'read_service', return_value=service), patch.object(op, 'read_task', return_value=task), patch.object(op, 'aws', side_effect=[{'taskArns': ['synthetic-task']}, {'tasks': [{**live, 'capacityProviderName': provider}]}]):
+                with self.assertRaisesRegex(ValueError, 'RUNNING_TASK_CAPACITY_PROVIDER'): op.state(cfg)
+        for launch in ['EC2', None, 'UNKNOWN']:
+            with self.subTest(service_launch=launch), patch.object(op, 'read_service', return_value={**service, 'launchType': launch}), patch.object(op, 'read_task') as read:
+                with self.assertRaisesRegex(ValueError, 'SERVICE_FARGATE'): op.state(cfg)
+                read.assert_not_called()
+
+    def test_omitted_declaration_still_allows_verified_quiescence(self):
+        cfg, _, service, task = fixture()
+        del task['requiresCompatibilities']
+        task['compatibilities'] = ['EC2', 'FARGATE', 'MANAGED_INSTANCES']
+        with patch.object(op, 'read_service', return_value=service), patch.object(op, 'read_task', return_value=task), patch.object(op, 'aws', side_effect=[{'taskArns': []}, {'taskArns': []}]):
+            _, _, baseline, observed = op.state(cfg, activate=True)
+            self.assertEqual(baseline['desired_count'], 0)
+            self.assertEqual(observed, [])
+
+    def test_prepare_eligibility_refusal_precedes_registry_or_docker_write(self):
+        cfg, candidate, service, task = fixture()
+        del task['requiresCompatibilities']
+        task['compatibilities'] = ['EC2']
+        source = candidate['source_commit']; image = 'calendar-candidate:' + source
+        proof = {'schema': 'hasna.calendar-container-smoke.v1', 'image_id': 'synthetic-image',
+            'platform': 'linux/arm64', 'version': json.loads((op.c.ROOT / 'apps/calendar/package.json').read_bytes())['version'],
+            'cpus': '0.25', 'memory_mib': 512, 'port': 8080, 'migration_runs': 2,
+            'tls_verify_full': True, 'owned_record_read': 200, 'cross_tenant_read': 404,
+            'authentication_controls_passed': True, 'offline_version_passed': True}
+        with tempfile.TemporaryDirectory() as temp:
+            smoke = Path(temp) / 'smoke.json'; smoke.write_bytes(op.c.encode(proof)); out = Path(temp) / 'out'
+            with patch.object(op.g, 'current_main'), patch.object(op, 'scan_report', return_value='1' * 64), patch.object(op, 'local_image', return_value=('synthetic-image', candidate['image_config_digest'])), patch.object(op, 'read_manifest', return_value=cfg), patch.object(op, 'read_service', return_value=service), patch.object(op, 'read_task', return_value=task), patch.object(op, 'aws') as aws, patch.object(op.g, 'command') as execute:
+                with self.assertRaisesRegex(ValueError, 'TASK_FARGATE_ELIGIBILITY'):
+                    op.prepare(source, image, Path(temp) / 'scan.json', smoke, out)
+                aws.assert_not_called(); execute.assert_not_called(); self.assertFalse(out.exists())
 
     def test_scanner_requires_real_complete_image_report(self):
         image = 'calendar-candidate:' + 'a' * 40
