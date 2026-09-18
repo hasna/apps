@@ -84,6 +84,14 @@ export function registerRuntime(parent: Command) {
     });
 
   const executions = parent.command("executions").description("Inspect isolated cloud executions");
+  executions.command("eligibility").argument("<skill>").requiredOption("--skill-version <version>", "Exact published version")
+    .option("--bundle-digest <digest>", "Expected published bundle SHA256").option("--json", "Output as JSON", false)
+    .description("Inspect reviewed cloud eligibility without executing a skill")
+    .action(async (slug: string, options: { skillVersion: string; bundleDigest?: string }) => {
+      try { const client = await CloudExecutionClient.configured();
+        await writeCliOutput(JSON.stringify(await client.eligibility(slug, options.skillVersion, options.bundleDigest), null, 2));
+      } catch (error) { console.error(JSON.stringify({ error: (error as Error).message })); process.exitCode = 1; }
+    });
   for (const operation of ["show", "logs", "artifacts", "cancel"] as const) {
     executions.command(operation).argument("<execution-id>").option("--json", "Output as JSON", false)
       .action(async (id: string) => {
