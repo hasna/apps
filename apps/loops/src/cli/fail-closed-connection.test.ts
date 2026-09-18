@@ -142,8 +142,9 @@ describe("loops CLI fail-closed connection (owner rulings 2026-09-04 / 2026-09-0
 
       const hosted = runCli(["import", join(dataDir, "missing.json")], { LOOPS_DATA_DIR: dataDir, ...HOSTED_ENV });
       expect(hosted.status).not.toBe(0);
-      expect(output(hosted)).toContain("REMOTE_COMMAND_UNSUPPORTED");
+      expect(output(hosted)).not.toContain("failed to read JSON file");
       expect(output(hosted)).not.toContain("ENOENT");
+      expect(output(hosted)).not.toContain("REMOTE_COMMAND_UNSUPPORTED");
       expect(readdirSync(dataDir)).toEqual([]);
     });
   });

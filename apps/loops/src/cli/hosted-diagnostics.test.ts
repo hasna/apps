@@ -102,10 +102,16 @@ function serveHosted(loops: Loop[], runsByLoop: Record<string, LoopRun[]>) {
       if (request.method !== "GET") {
         return Response.json({ ok: false, error: "method_not_allowed" }, { status: 405 });
       }
+      if (url.pathname === "/v1/loops/count") {
+        const status = url.searchParams.get("status");
+        return Response.json({ ok: true, count: loops.filter((loop) => (status ? loop.status === status : true)).length });
+      }
       if (url.pathname === "/v1/loops") {
+        const status = url.searchParams.get("status");
         const offset = Number(url.searchParams.get("offset") ?? "0");
         const limit = Number(url.searchParams.get("limit") ?? "200");
-        return Response.json({ ok: true, loops: loops.slice(offset, offset + limit) });
+        const filtered = loops.filter((loop) => (status ? loop.status === status : true));
+        return Response.json({ ok: true, loops: filtered.slice(offset, offset + limit) });
       }
       if (url.pathname === "/v1/runs") {
         const loopId = url.searchParams.get("loopId") ?? "";
@@ -553,11 +559,10 @@ describe("hosted-mode diagnostics (e3b6f1d4)", () => {
       expect(report.backend?.transport).toBe("api");
       const checks = report.report?.checks ?? [];
       expect(checks.length).toBeGreaterThan(0);
-      // Every check states whether it looked at this machine or at the hosted
-      // control plane; a scope-less check is how "clean report about the wrong
-      // runtime" happens.
-      expect(checks.every((check) => check.scope === "machine" || check.scope === "control-plane")).toBe(true);
-      expect(checks.some((check) => check.scope === "machine")).toBe(true);
+      // Hosted doctor is deliberately control-plane-only. Machine checks are
+      // named as unchecked instead of spawning local tools with hosted secrets.
+      expect(checks.every((check) => check.scope === "control-plane")).toBe(true);
+      expect((report.unchecked ?? []).map((entry) => entry.id)).toContain("machine-runtime");
       expect(checks.some((check) => check.scope === "control-plane")).toBe(true);
       expect((report.unchecked ?? []).length).toBeGreaterThan(0);
       expect(result.stdout).not.toContain("test-hosted-key");

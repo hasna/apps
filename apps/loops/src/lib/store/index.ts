@@ -58,6 +58,7 @@ import { publicWorkflowEvents } from "../workflow-events.js";
 import { runLoopNow } from "../scheduler.js";
 import { resolveCloudStorage, type LoopsStorageClient } from "../cloud/resolve.js";
 import { HasnaHttpError } from "@hasna/contracts/client";
+import { importOperationId, validateImportReceipt, type ImportContractInput, type ImportReceiptV2 } from "../import-contract.js";
 // Mirrors the seam's own Env definition; not re-exported from the client
 // subpath in the installed kit (0.10.x).
 type Env = Record<string, string | undefined>;
@@ -496,19 +497,19 @@ function clean(query: Query): Record<string, string | number | boolean> {
   return out;
 }
 
-export class HostedResponseShapeError extends Error {
-  constructor(key: string) {
-    super(`hosted Loops API response is malformed: expected '${key}' to be an array`);
-    this.name = "HostedResponseShapeError";
-  }
-}
+export { HostedResponseShapeError } from "../hosted-errors.js";
+import { HostedResponseShapeError } from "../hosted-errors.js";
 
 /** Pull `key` out of an `{ ok, <key>: [...] }` list envelope, failing closed when malformed. */
 function pickArray<T>(raw: unknown, key: string): T[] {
-  if (raw && typeof raw === "object" && Array.isArray((raw as Record<string, unknown>)[key])) {
-    return (raw as Record<string, T[]>)[key]!;
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    const envelope = raw as Record<string, unknown>;
+    if (envelope.ok !== true) {
+      throw new HostedResponseShapeError("a successful list envelope to carry ok:true");
+    }
+    if (Array.isArray(envelope[key])) return envelope[key] as T[];
   }
-  throw new HostedResponseShapeError(key);
+  throw new HostedResponseShapeError(key, true);
 }
 
 /** Pull `key` out of an `{ ok, <key>: {...} }` object envelope, else the raw value. */
@@ -518,6 +519,28 @@ function pickObject<T>(raw: unknown, key: string): T | undefined {
     return value == null ? undefined : (value as T);
   }
   return raw == null ? undefined : (raw as T);
+}
+
+function assertSuccessfulObjectEnvelope(raw: unknown, key: string): void {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new HostedResponseShapeError(`a successful '${key}' response envelope`);
+  }
+  const envelope = raw as Record<string, unknown>;
+  if (envelope.ok !== true) {
+    throw new HostedResponseShapeError(`a successful '${key}' response envelope to carry ok:true`);
+  }
+}
+
+function nonNegativeSafeInteger(raw: unknown, key: string): number {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new HostedResponseShapeError(`'${key}' to be a non-negative safe integer`);
+  }
+  const envelope = raw as Record<string, unknown>;
+  const value = envelope[key];
+  if (envelope.ok !== true || !Number.isSafeInteger(value) || Number(value) < 0) {
+    throw new HostedResponseShapeError(`'${key}' to be a non-negative safe integer`);
+  }
+  return Number(value);
 }
 
 /**
@@ -547,9 +570,14 @@ export class ApiStore implements LoopStore {
   }
   async getLoop(id: string): Promise<Loop | undefined> {
     try {
-      return pickObject<Loop>(await this.t.get(`/loops/${encodeURIComponent(id)}`), "loop");
-    } catch {
-      return undefined;
+      const raw = await this.t.get(`/loops/${encodeURIComponent(id)}`);
+      assertSuccessfulObjectEnvelope(raw, "loop");
+      const loop = pickObject<Loop>(raw, "loop");
+      if (loop === undefined) throw new HostedResponseShapeError("'loop' to be present in a successful get response");
+      return loop;
+    } catch (error) {
+      if (error instanceof HasnaHttpError && error.status === 404) return undefined;
+      throw error;
     }
   }
   async findLoopByName(name: string): Promise<Loop | undefined> {
@@ -588,7 +616,41 @@ export class ApiStore implements LoopStore {
   }
   async countLoops(status?: LoopStatus, opts: { archived?: boolean; includeArchived?: boolean } = {}): Promise<number> {
     const raw = await this.t.get("/loops/count", { query: clean({ status, ...opts }) });
-    return Number(pickObject<number>(raw, "count") ?? 0);
+    return nonNegativeSafeInteger(raw, "count");
+  }
+
+  /**
+   * Bulk id-preserving import through `POST /v1/import`.
+   *
+   * Not part of {@link LoopStore}: it is a transport-level bulk write with no
+   * local-store counterpart (the local side applies a plan row by row), so it
+   * lives on the API transport only and callers reach it behind an
+   * `instanceof ApiStore` check rather than through the shared interface.
+   */
+  async requireImportV2(): Promise<void> {
+    const raw = await this.t.get("/version");
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      throw new HostedResponseShapeError("/v1/version to return an object envelope");
+    }
+    const envelope = raw as Record<string, unknown>;
+    if (!Array.isArray(envelope.capabilities) || !envelope.capabilities.includes("loops.import.v2")) {
+      throw new HostedResponseShapeError(
+        "/v1/version capabilities to include loops.import.v2 before any hosted import file is read or mutation is dispatched",
+      );
+    }
+  }
+
+  async importMigration(
+    body: Omit<ImportContractInput, "operationId">,
+  ): Promise<{
+    imported: { workflows: number; loops: number; runs: number };
+    skippedRunning: number;
+    receipt: ImportReceiptV2;
+  }> {
+    const request: ImportContractInput & { operationId: string } = { ...body, operationId: importOperationId() };
+    const raw = await this.t.post("/import", request);
+    const result = validateImportReceipt(raw, request);
+    return { imported: result.imported, skippedRunning: result.skippedRunning, receipt: result.receipt };
   }
   async updateLoop(
     id: string,
@@ -719,9 +781,14 @@ export class ApiStore implements LoopStore {
   }
   async getWorkflow(id: string): Promise<WorkflowSpec | undefined> {
     try {
-      return pickObject<WorkflowSpec>(await this.t.get(`/workflows/${encodeURIComponent(id)}`), "workflow");
-    } catch {
-      return undefined;
+      const raw = await this.t.get(`/workflows/${encodeURIComponent(id)}`);
+      assertSuccessfulObjectEnvelope(raw, "workflow");
+      const workflow = pickObject<WorkflowSpec>(raw, "workflow");
+      if (workflow === undefined) throw new HostedResponseShapeError("'workflow' to be present in a successful get response");
+      return workflow;
+    } catch (error) {
+      if (error instanceof HasnaHttpError && error.status === 404) return undefined;
+      throw error;
     }
   }
   async findWorkflowByName(name: string): Promise<WorkflowSpec | undefined> {
@@ -741,7 +808,7 @@ export class ApiStore implements LoopStore {
   }
   async countWorkflows(opts: { status?: WorkflowSpec["status"] } = {}): Promise<number> {
     const raw = await this.t.get("/workflows/count", { query: clean({ ...opts }) });
-    return Number(pickObject<number>(raw, "count") ?? 0);
+    return nonNegativeSafeInteger(raw, "count");
   }
   async archiveWorkflow(idOrName: string): Promise<WorkflowSpec> {
     const wf = await this.requireWorkflow(idOrName);
@@ -859,13 +926,18 @@ export class ApiStore implements LoopStore {
   async countRuns(opts: Parameters<LoopStore["countRuns"]>[0] = {}): Promise<number> {
     const { labels, ...rest } = opts;
     const raw = await this.t.get("/runs/count", { query: clean({ ...rest, labels: labels?.join(",") }) });
-    return Number(pickObject<number>(raw, "count") ?? 0);
+    return nonNegativeSafeInteger(raw, "count");
   }
   async getRun(id: string): Promise<LoopRun | undefined> {
     try {
-      return pickObject<LoopRun>(await this.t.get(`/runs/${encodeURIComponent(id)}`, { query: { showOutput: true } }), "run");
-    } catch {
-      return undefined;
+      const raw = await this.t.get(`/runs/${encodeURIComponent(id)}`, { query: { showOutput: true } });
+      assertSuccessfulObjectEnvelope(raw, "run");
+      const run = pickObject<LoopRun>(raw, "run");
+      if (run === undefined) throw new HostedResponseShapeError("'run' to be present in a successful get response");
+      return run;
+    } catch (error) {
+      if (error instanceof HasnaHttpError && error.status === 404) return undefined;
+      throw error;
     }
   }
   async writeRunReceipt(input: WriteRunReceiptInput): Promise<RunReceipt> {

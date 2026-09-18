@@ -1330,6 +1330,11 @@ loops daemon stop
 loops doctor
 ```
 
+With a hosted authority, `loops doctor` performs bounded control-plane reads
+only and reports machine runtime checks as unchecked. It never spawns local
+provider/account tooling with hosted credentials. Use explicit local mode on the
+executing machine for daemon, binary, and local-store checks.
+
 Run in the foreground for supervised environments:
 
 ```bash

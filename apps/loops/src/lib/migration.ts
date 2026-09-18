@@ -8,6 +8,12 @@ import { loopControlPlaneConfig } from "./runtime-config.js";
 import { scrubSecretsDeep } from "./redact.js";
 import type { Store, StoreMigrationChecks } from "./store.js";
 import { packageVersion } from "./version.js";
+import {
+  importOperationId,
+  validateImportReceipt,
+  ImportOperationReconciliationRequiredError,
+  type ImportContractInput,
+} from "./import-contract.js";
 
 export const LOOPS_MIGRATION_SCHEMA = "open-loops.migration/v1";
 // Stable wire/archive identity: the historical name is preserved byte-identical
@@ -311,7 +317,7 @@ function compareResource(
 function remoteRepresentationRow(
   current: unknown | undefined,
   incoming: unknown,
-  opts: { resource: LoopsMigrationResource; id: string; name?: string },
+  opts: { resource: LoopsMigrationResource; id: string; name?: string; replace?: boolean },
 ): LoopsMigrationPlanRow {
   const incomingHash = migrationHash(incoming);
   if (!current) return { resource: opts.resource, id: opts.id, name: opts.name, action: "insert", incomingHash };
@@ -319,15 +325,41 @@ function remoteRepresentationRow(
     resource: opts.resource,
     id: opts.id,
     name: opts.name,
-    action: "skip",
-    reason: "remote id is represented; control-plane list payload is public/redacted, so exact byte comparison is reserved for import apply",
+    action: opts.replace ? "update" : "skip",
+    reason: opts.replace
+      ? "remote id is represented by a public/redacted row; --replace explicitly requests an authoritative update"
+      : "remote id is represented by a public/redacted row; exact byte equality is unavailable, so the safe default is skip unless --replace is explicit",
     incomingHash,
     currentHash: migrationHash(current),
   };
 }
 
+/**
+ * The destination reads an import plan needs, named as a contract instead of a
+ * concrete sqlite {@link Store}.
+ *
+ * The local {@link Store} satisfies it structurally, so every existing caller is
+ * unchanged; a hosted destination (see `hosted-migration.ts`) implements it over
+ * prefetched `/v1` reads. `exportMigrationRows` is OPTIONAL because the
+ * destination integrity sweep it performs is a sqlite table census: a hosted
+ * destination must say it did not run that sweep rather than return an empty
+ * check set that reads as "destination is clean".
+ */
+export interface MigrationDestination {
+  /** Hosted list/get responses are public/redacted and cannot support exact byte comparison. */
+  comparison?: "exact" | "representation";
+  /** Hosted import archives incoming workflows unless activation preservation is explicit. */
+  normalizesWorkflowActivation?: boolean;
+  exportMigrationRows?(opts: { includeRuns?: boolean }): { checks: StoreMigrationChecks };
+  listWorkflows(opts: { status?: WorkflowSpec["status"] }): WorkflowSpec[];
+  getWorkflow(id: string): WorkflowSpec | undefined;
+  getLoop(id: string): Loop | undefined;
+  getRun(id: string): LoopRun | undefined;
+  getRunBySlot(loopId: string, scheduledFor: string): LoopRun | undefined;
+}
+
 export function buildImportMigrationPlan(
-  store: Store,
+  store: MigrationDestination,
   bundle: LoopsMigrationBundle,
   opts: ImportLoopsMigrationOptions = {},
 ): LoopsMigrationPlan {
@@ -337,7 +369,9 @@ export function buildImportMigrationPlan(
   const replace = opts.replace ?? false;
   const rows: LoopsMigrationPlanRow[] = [];
   const warnings = [...(bundle.warnings ?? [])];
-  rows.push(...checksToBlockers(store.exportMigrationRows({ includeRuns: false }).checks, "destination", warnings));
+  if (store.exportMigrationRows) {
+    rows.push(...checksToBlockers(store.exportMigrationRows({ includeRuns: false }).checks, "destination", warnings));
+  }
   if (!bundle.importable || bundle.blockers.length > 0) {
     rows.push(...bundle.blockers.map((row) => ({ ...row, action: "blocked" as const })));
   }
@@ -359,7 +393,7 @@ export function buildImportMigrationPlan(
       continue;
     }
     const activeNameCollision = store.listWorkflows({ status: "active" }).find((current) => current.name === workflow.name && current.id !== workflow.id);
-    if (workflow.status === "active" && activeNameCollision) {
+    if (workflow.status === "active" && !store.normalizesWorkflowActivation && activeNameCollision) {
       rows.push({
         resource: "workflow",
         id: workflow.id,
@@ -371,7 +405,11 @@ export function buildImportMigrationPlan(
       });
       continue;
     }
-    rows.push(compareResource(store.getWorkflow(workflow.id), workflow, { replace, resource: "workflow", id: workflow.id, name: workflow.name }));
+    rows.push(
+      store.comparison === "representation"
+        ? remoteRepresentationRow(store.getWorkflow(workflow.id), workflow, { replace, resource: "workflow", id: workflow.id, name: workflow.name })
+        : compareResource(store.getWorkflow(workflow.id), workflow, { replace, resource: "workflow", id: workflow.id, name: workflow.name }),
+    );
   }
 
   for (const loop of bundle.data.loops) {
@@ -390,6 +428,24 @@ export function buildImportMigrationPlan(
       });
       continue;
     }
+    if (
+      store.comparison === "representation"
+      && !replace
+      && loop.target.type === "workflow"
+      && workflowIds.has(loop.target.workflowId)
+      && store.getWorkflow(loop.target.workflowId)
+    ) {
+      rows.push({
+        resource: "loop",
+        id: loop.id,
+        name: loop.name,
+        action: "blocked",
+        reason:
+          `workflow ${loop.target.workflowId} is only a public hosted representation; use --replace to bind this dependent loop to the imported definition`,
+        incomingHash: migrationHash(loop),
+      });
+      continue;
+    }
     if (loop.target.type === "workflow" && !workflowIds.has(loop.target.workflowId) && !store.getWorkflow(loop.target.workflowId)) {
       rows.push({
         resource: "loop",
@@ -401,7 +457,11 @@ export function buildImportMigrationPlan(
       });
       continue;
     }
-    rows.push(compareResource(store.getLoop(loop.id), loop, { replace, resource: "loop", id: loop.id, name: loop.name }));
+    rows.push(
+      store.comparison === "representation"
+        ? remoteRepresentationRow(store.getLoop(loop.id), loop, { replace, resource: "loop", id: loop.id, name: loop.name })
+        : compareResource(store.getLoop(loop.id), loop, { replace, resource: "loop", id: loop.id, name: loop.name }),
+    );
   }
 
   if (includeRuns) {
@@ -413,6 +473,23 @@ export function buildImportMigrationPlan(
           name: run.loopName,
           action: "blocked",
           reason: "running rows carry volatile lease/process ownership and must finish before import",
+          incomingHash: migrationHash(run),
+        });
+        continue;
+      }
+      if (
+        store.comparison === "representation"
+        && !replace
+        && loopIds.has(run.loopId)
+        && store.getLoop(run.loopId)
+      ) {
+        rows.push({
+          resource: "run",
+          id: run.id,
+          name: run.loopName,
+          action: "blocked",
+          reason:
+            `loop ${run.loopId} is only a public hosted representation; use --replace before attaching imported run history`,
           incomingHash: migrationHash(run),
         });
         continue;
@@ -441,7 +518,11 @@ export function buildImportMigrationPlan(
         });
         continue;
       }
-      rows.push(compareResource(store.getRun(run.id), run, { replace, resource: "run", id: run.id, name: run.loopName }));
+      rows.push(
+        store.comparison === "representation"
+          ? remoteRepresentationRow(store.getRun(run.id), run, { replace, resource: "run", id: run.id, name: run.loopName })
+          : compareResource(store.getRun(run.id), run, { replace, resource: "run", id: run.id, name: run.loopName }),
+      );
     }
   } else if (bundle.data.runs.length > 0) {
     warnings.push("run history is present in the bundle but --no-runs was requested");
@@ -456,7 +537,10 @@ export function buildImportMigrationPlan(
     rows,
     warnings,
   });
-  return { ...plan, importable: plan.summary.blocked === 0 && plan.summary.conflict === 0 };
+  return {
+    ...plan,
+    importable: bundle.importable && plan.summary.blocked === 0 && plan.summary.conflict === 0,
+  };
 }
 
 export function applyImportMigrationBundle(
@@ -996,17 +1080,39 @@ interface ImportCounts {
   runs: number;
 }
 
+async function requireImportV2Capability(
+  fetchImpl: typeof fetch,
+  config: { apiUrl: string; token?: string; timeoutMs?: number },
+): Promise<void> {
+  const body = await requestJson(fetchImpl, config, "/v1/version");
+  if (!Array.isArray(body.capabilities) || !body.capabilities.includes("loops.import.v2")) {
+    throw new ValidationError(
+      "control-plane /v1/version must advertise loops.import.v2 before any import mutation is dispatched",
+    );
+  }
+}
+
 async function postImportBatch(
   fetchImpl: typeof fetch,
   config: { apiUrl: string; token?: string; timeoutMs?: number },
-  payload: { workflows?: unknown[]; loops?: unknown[]; runs?: unknown[]; replace?: boolean; preserveWorkflowActivation?: boolean; preserveLoopScheduling?: boolean },
+  payload: Omit<ImportContractInput, "operationId">,
 ): Promise<{ imported: ImportCounts; skippedRunning: number }> {
-  const body = await requestJson(fetchImpl, config, "/v1/import", { method: "POST", body: JSON.stringify(payload) });
-  const imported = (body.imported ?? {}) as Partial<ImportCounts>;
-  return {
-    imported: { workflows: imported.workflows ?? 0, loops: imported.loops ?? 0, runs: imported.runs ?? 0 },
-    skippedRunning: typeof body.skippedRunning === "number" ? body.skippedRunning : 0,
-  };
+  const request: ImportContractInput & { operationId: string } = { ...payload, operationId: importOperationId() };
+  let body: Record<string, unknown>;
+  try {
+    body = await requestJson(fetchImpl, config, "/v1/import", { method: "POST", body: JSON.stringify(request) });
+  } catch (error) {
+    const status = error && typeof error === "object" && typeof (error as { status?: unknown }).status === "number"
+      ? `HTTP ${(error as { status: number }).status}`
+      : error instanceof Error
+        ? error.name
+        : "unknown transport failure";
+    throw new ImportOperationReconciliationRequiredError(
+      `POST /v1/import ended with ${status} after dispatch, so partial or committed state is possible`,
+    );
+  }
+  const result = validateImportReceipt(body, request, { allowSkippedExisting: true });
+  return { imported: result.imported, skippedRunning: result.skippedRunning };
 }
 
 /**
@@ -1031,6 +1137,7 @@ export async function applyControlPlanePush(store: Store, opts: ControlPlanePush
   if (plan.summary.blocked > 0 || plan.summary.conflict > 0 || !plan.importable) {
     throw new ValidationError(`control-plane push is not safe to apply: blocked=${plan.summary.blocked} conflict=${plan.summary.conflict}`);
   }
+  await requireImportV2Capability(fetchImpl, config);
   const batchRows = Math.max(1, opts.batchRows ?? 200);
   const runBatchBytes = Math.max(64 * 1024, opts.runBatchBytes ?? 4 * 1024 * 1024);
 

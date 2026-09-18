@@ -550,6 +550,7 @@ describe("ApiStore end-to-end against the real /v1 server", () => {
   test("fails closed when a remote workflow event has malformed base fields", async () => {
     const transport = {
       get: async () => ({
+        ok: true,
         events: [{
           id: 42,
           workflowRunId: null,

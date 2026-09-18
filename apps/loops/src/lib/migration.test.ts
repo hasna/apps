@@ -3,10 +3,12 @@ import type { AgentTarget } from "../types.js";
 import { ValidationError } from "./errors.js";
 import {
   buildControlPlaneMigrationPlan,
+  applyImportMigrationBundle,
   buildImportMigrationPlan,
   exportLoopsMigrationBundle,
   migrationHash,
   validateLoopsMigrationBundle,
+  type MigrationDestination,
 } from "./migration.js";
 import { Store } from "./store.js";
 
@@ -34,6 +36,111 @@ describe("migration agent target validation", () => {
       }
     } finally {
       store.close();
+    }
+  });
+
+  test("keeps an explicitly non-importable bundle non-importable after planning", () => {
+    const source = new Store(":memory:");
+    const destination = new Store(":memory:");
+    try {
+      source.createLoop({
+        name: "non-importable",
+        schedule: { type: "once", at: "2026-01-01T00:00:00.000Z" },
+        target: { type: "command", command: "true" },
+      });
+      const bundle = exportLoopsMigrationBundle(source, { includeRuns: false });
+      bundle.importable = false;
+      const { hash: _hash, ...body } = bundle;
+      bundle.hash = migrationHash(body);
+      const plan = buildImportMigrationPlan(destination, bundle);
+      expect(plan.summary.blocked).toBe(0);
+      expect(plan.summary.conflict).toBe(0);
+      expect(plan.importable).toBe(false);
+    } finally {
+      source.close();
+      destination.close();
+    }
+  });
+
+  test("blocks dependent rows when a hosted workflow is only an opaque representation", () => {
+    const source = new Store(":memory:");
+    try {
+      const workflow = source.createWorkflow({
+        name: "opaque-workflow",
+        steps: [{ id: "one", target: { type: "command", command: "true" } }],
+      });
+      source.createLoop({
+        name: "dependent-loop",
+        schedule: { type: "once", at: "2026-01-01T00:00:00.000Z" },
+        target: { type: "workflow", workflowId: workflow.id },
+      });
+      const bundle = exportLoopsMigrationBundle(source, { includeRuns: false });
+      const represented = { ...workflow, description: "opaque public projection" };
+      const destination: MigrationDestination = {
+        comparison: "representation",
+        normalizesWorkflowActivation: true,
+        listWorkflows: () => [],
+        getWorkflow: (id) => id === workflow.id ? represented : undefined,
+        getLoop: () => undefined,
+        getRun: () => undefined,
+        getRunBySlot: () => undefined,
+      };
+      const plan = buildImportMigrationPlan(destination, bundle);
+      expect(plan.rows.find((row) => row.resource === "workflow")?.action).toBe("skip");
+      expect(plan.rows.find((row) => row.resource === "loop")?.action).toBe("blocked");
+      expect(plan.importable).toBe(false);
+
+      const replace = buildImportMigrationPlan(destination, bundle, { replace: true });
+      expect(replace.rows.find((row) => row.resource === "workflow")?.action).toBe("update");
+      expect(replace.rows.find((row) => row.resource === "loop")?.action).toBe("insert");
+      expect(replace.importable).toBe(true);
+    } finally {
+      source.close();
+    }
+  });
+
+});
+
+describe("full migration bundle roundtrip", () => {
+  test("export -> SQLite import -> export preserves every accepted workflow, loop, and run field", () => {
+    const source = new Store(":memory:");
+    const destination = new Store(":memory:");
+    try {
+      const workflow = source.createWorkflow({
+        name: "roundtrip-workflow",
+        steps: [{ id: "step", target: { type: "command", command: "true" } }],
+      });
+      const created = source.createLoop({
+        name: "roundtrip-loop",
+        schedule: { type: "interval", everyMs: 60_000, anchor: "fixed_rate" },
+        target: { type: "workflow", workflowId: workflow.id },
+      });
+      source.upsertMigrationLoop({
+        ...created,
+        bundleName: "roundtrip-bundle",
+        bundlePinnedVersion: 7,
+      }, { replace: true });
+      source.createSkippedRun(
+        source.requireLoop(created.id),
+        "2026-09-18T12:00:00.000Z",
+        "roundtrip terminal run",
+        { now: new Date("2026-09-18T12:00:01.000Z") },
+      );
+
+      const first = exportLoopsMigrationBundle(source);
+      expect(first.importable).toBe(true);
+      expect(first.data.loops[0]).toMatchObject({
+        bundleName: "roundtrip-bundle",
+        bundlePinnedVersion: 7,
+      });
+
+      const result = applyImportMigrationBundle(destination, first, { includeRuns: true });
+      expect(result.applied).toEqual({ workflows: 1, loops: 1, runs: 1 });
+      const second = exportLoopsMigrationBundle(destination);
+      expect(second.data).toEqual(first.data);
+    } finally {
+      source.close();
+      destination.close();
     }
   });
 });

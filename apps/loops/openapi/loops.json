@@ -904,7 +904,7 @@
       "post": {
         "operationId": "importRows",
         "summary": "Bulk id-preserving import (control-plane backfill)",
-        "description": "Upsert full workflow/loop/run rows by id (idempotent; ON CONFLICT(id) DO UPDATE). Preserves ids, definitions, and timestamps while applying safe defaults: imported workflows are archived, imported loops are paused, and nextRunAt/retryScheduledFor are cleared by default so backfills never schedule immediately. Set preserveWorkflowActivation=true or preserveLoopScheduling=true only for intentional activation. Applied FK-safe: workflows, then loops, then runs. Volatile running runs are skipped and reported.",
+        "description": "Atomically import bounded, fully validated workflow/loop/run rows by id with a v2 receipt bound to an operation id, request digest, and exact row ids. Imported workflows are archived and imported loops are paused with scheduling pointers cleared unless explicit preservation is requested. Existing same-id rows are skipped unless replace=true; valid volatile running runs are skipped and reported. Malformed rows and missing workflow/loop references return a stable 400 before any write. Callers must treat transport or server failure after dispatch as reconciliation-required rather than retrying blindly.",
         "requestBody": {
           "required": true,
           "content": {
@@ -926,15 +926,21 @@
               }
             }
           },
-          "422": {
-            "description": "Validation failed. Invalid imported agent extraArgs include bounded public details; other validation failures omit details.",
+          "400": {
+            "description": "The import body, a domain row, or a workflow/loop reference is invalid; no rows were written.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ValidationFailureResponse"
+                  "$ref": "#/components/schemas/ImportValidationResponse"
                 }
               }
             }
+          },
+          "409": {
+            "description": "The authoritative destination conflicts with a submitted identity or run slot; reconcile before retrying."
+          },
+          "413": {
+            "description": "The import body or bounded row count exceeds the server limit."
           }
         },
         "x-authorization-operation": "tenant.import",
@@ -4302,6 +4308,24 @@
           "error"
         ]
       },
+      "ImportValidationResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": false
+          },
+          "error": {
+            "type": "string",
+            "const": "invalid_import"
+          }
+        },
+        "required": [
+          "ok",
+          "error"
+        ]
+      },
       "InvalidLoopStatusResponse": {
         "type": "object",
         "additionalProperties": false,
@@ -4630,6 +4654,13 @@
           },
           "detail": {
             "type": "string"
+          },
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Server capabilities that clients must verify before using side-effecting versioned contracts."
           }
         },
         "required": [
@@ -5847,30 +5878,1138 @@
           "workItems"
         ]
       },
+      "ImportAccountRef": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "type": "string",
+            "minLength": 1
+          },
+          "tool": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "profile"
+        ]
+      },
+      "ImportRuntimePreflightPolicy": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "beforeRun": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ImportGoalSpec": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "objective": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          },
+          "tokenBudget": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "maxTurns": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "maxTokens": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "model": {
+            "type": "string",
+            "minLength": 1
+          },
+          "autoExecute": {
+            "type": "string",
+            "enum": [
+              "off",
+              "readyOnly",
+              "aiDirected"
+            ]
+          }
+        },
+        "required": [
+          "objective"
+        ]
+      },
+      "ImportAgentAllowlist": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "tools": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "commands": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "enforcement": {
+            "type": "string",
+            "enum": [
+              "metadata_only"
+            ]
+          },
+          "safetyReason": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "ImportAgentWorktree": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "required",
+              "off",
+              "main"
+            ]
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "originalCwd": {
+            "type": "string",
+            "minLength": 1
+          },
+          "cwd": {
+            "type": "string",
+            "minLength": 1
+          },
+          "repoRoot": {
+            "type": "string",
+            "minLength": 1
+          },
+          "root": {
+            "type": "string",
+            "minLength": 1
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "branch": {
+            "type": "string",
+            "minLength": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "mode",
+          "enabled",
+          "originalCwd",
+          "cwd"
+        ]
+      },
+      "ImportAgentRouting": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "projectPath": {
+            "type": "string",
+            "minLength": 1
+          },
+          "projectGroup": {
+            "type": "string",
+            "minLength": 1
+          },
+          "taskId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "eventId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "eventType": {
+            "type": "string",
+            "minLength": 1
+          },
+          "eventSource": {
+            "type": "string",
+            "minLength": 1
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "triage",
+              "planner",
+              "worker",
+              "verifier"
+            ]
+          }
+        }
+      },
+      "ImportAgentPromptSource": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "file"
+            ]
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "type",
+          "path"
+        ]
+      },
+      "ImportCommandTarget": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "command"
+            ]
+          },
+          "command": {
+            "type": "string",
+            "minLength": 1
+          },
+          "args": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "cwd": {
+            "type": "string",
+            "minLength": 1
+          },
+          "shell": {
+            "type": "boolean"
+          },
+          "env": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "timeoutMs": {
+            "oneOf": [
+              {
+                "type": "integer",
+                "minimum": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "idleTimeoutMs": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "account": {
+            "$ref": "#/components/schemas/ImportAccountRef"
+          },
+          "preflight": {
+            "$ref": "#/components/schemas/ImportRuntimePreflightPolicy"
+          }
+        },
+        "required": [
+          "type",
+          "command"
+        ]
+      },
+      "ImportAgentTarget": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "agent"
+            ]
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "claude",
+              "cursor",
+              "codewith",
+              "aicopilot",
+              "opencode",
+              "codex"
+            ]
+          },
+          "prompt": {
+            "type": "string",
+            "minLength": 1
+          },
+          "promptSource": {
+            "$ref": "#/components/schemas/ImportAgentPromptSource"
+          },
+          "cwd": {
+            "type": "string",
+            "minLength": 1
+          },
+          "model": {
+            "type": "string",
+            "minLength": 1
+          },
+          "variant": {
+            "type": "string",
+            "minLength": 1
+          },
+          "agent": {
+            "type": "string",
+            "minLength": 1
+          },
+          "authProfile": {
+            "type": "string",
+            "minLength": 1
+          },
+          "env": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "extraArgs": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "maxItems": 0,
+            "enum": [
+              []
+            ]
+          },
+          "addDirs": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "timeoutMs": {
+            "oneOf": [
+              {
+                "type": "integer",
+                "minimum": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "idleTimeoutMs": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "configIsolation": {
+            "type": "string",
+            "enum": [
+              "safe",
+              "none"
+            ]
+          },
+          "permissionMode": {
+            "type": "string",
+            "enum": [
+              "default",
+              "plan",
+              "auto",
+              "bypass"
+            ]
+          },
+          "sandbox": {
+            "type": "string",
+            "enum": [
+              "read-only",
+              "workspace-write",
+              "danger-full-access",
+              "enabled",
+              "disabled"
+            ]
+          },
+          "manualBreakGlass": {
+            "type": "boolean"
+          },
+          "automated": {
+            "type": "boolean"
+          },
+          "allowlist": {
+            "$ref": "#/components/schemas/ImportAgentAllowlist"
+          },
+          "worktree": {
+            "$ref": "#/components/schemas/ImportAgentWorktree"
+          },
+          "routing": {
+            "$ref": "#/components/schemas/ImportAgentRouting"
+          },
+          "account": {
+            "$ref": "#/components/schemas/ImportAccountRef"
+          },
+          "preflight": {
+            "$ref": "#/components/schemas/ImportRuntimePreflightPolicy"
+          }
+        },
+        "required": [
+          "type",
+          "provider",
+          "prompt"
+        ]
+      },
+      "ImportExecutableTarget": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/ImportCommandTarget"
+          },
+          {
+            "$ref": "#/components/schemas/ImportAgentTarget"
+          }
+        ]
+      },
+      "ImportWorkflowTarget": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "workflow"
+            ]
+          },
+          "workflowId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "input": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "timeoutMs": {
+            "oneOf": [
+              {
+                "type": "integer",
+                "minimum": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "preflight": {
+            "$ref": "#/components/schemas/ImportRuntimePreflightPolicy"
+          }
+        },
+        "required": [
+          "type",
+          "workflowId"
+        ]
+      },
+      "ImportLoopTarget": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/ImportCommandTarget"
+          },
+          {
+            "$ref": "#/components/schemas/ImportAgentTarget"
+          },
+          {
+            "$ref": "#/components/schemas/ImportWorkflowTarget"
+          }
+        ]
+      },
+      "ImportOnceSchedule": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "once"
+            ]
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "type",
+          "at"
+        ]
+      },
+      "ImportIntervalSchedule": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "interval"
+            ]
+          },
+          "everyMs": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "anchor": {
+            "type": "string",
+            "enum": [
+              "fixed_rate",
+              "fixed_delay"
+            ]
+          }
+        },
+        "required": [
+          "type",
+          "everyMs"
+        ]
+      },
+      "ImportCronSchedule": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "cron"
+            ]
+          },
+          "expression": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "type",
+          "expression"
+        ]
+      },
+      "ImportDynamicSchedule": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "dynamic"
+            ]
+          },
+          "minIntervalMs": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "ImportSchedule": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/ImportOnceSchedule"
+          },
+          {
+            "$ref": "#/components/schemas/ImportIntervalSchedule"
+          },
+          {
+            "$ref": "#/components/schemas/ImportCronSchedule"
+          },
+          {
+            "$ref": "#/components/schemas/ImportDynamicSchedule"
+          }
+        ]
+      },
+      "ImportWorkflowStep": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": {
+            "type": "string"
+          },
+          "target": {
+            "$ref": "#/components/schemas/ImportExecutableTarget"
+          },
+          "goal": {
+            "$ref": "#/components/schemas/ImportGoalSpec"
+          },
+          "dependsOn": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "continueOnFailure": {
+            "type": "boolean"
+          },
+          "timeoutMs": {
+            "oneOf": [
+              {
+                "type": "integer",
+                "minimum": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "account": {
+            "$ref": "#/components/schemas/ImportAccountRef"
+          }
+        },
+        "required": [
+          "id",
+          "target"
+        ]
+      },
+      "ImportWorkflow": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "archived"
+            ]
+          },
+          "goal": {
+            "$ref": "#/components/schemas/ImportGoalSpec"
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ImportWorkflowStep"
+            },
+            "minItems": 1
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "minLength": 1
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "version",
+          "status",
+          "steps",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
+      "ImportLoopMachineRef": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "requestedId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "route": {
+            "type": "string",
+            "enum": [
+              "local",
+              "lan",
+              "tailscale",
+              "ssh",
+              "unknown"
+            ]
+          },
+          "local": {
+            "type": "boolean"
+          },
+          "confidence": {
+            "type": "string",
+            "enum": [
+              "exact",
+              "high",
+              "medium",
+              "low",
+              "none"
+            ]
+          },
+          "workspacePath": {
+            "type": "string",
+            "minLength": 1
+          },
+          "resolvedAt": {
+            "type": "string",
+            "format": "date-time",
+            "minLength": 1
+          },
+          "packageVersion": {
+            "type": "string",
+            "minLength": 1
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "ImportLoop": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": {
+            "type": "string"
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "paused",
+              "stopped",
+              "expired"
+            ]
+          },
+          "archivedAt": {
+            "type": "string",
+            "format": "date-time",
+            "minLength": 1
+          },
+          "archivedFromStatus": {
+            "type": "string",
+            "enum": [
+              "active",
+              "paused",
+              "stopped",
+              "expired"
+            ]
+          },
+          "schedule": {
+            "$ref": "#/components/schemas/ImportSchedule"
+          },
+          "target": {
+            "$ref": "#/components/schemas/ImportLoopTarget"
+          },
+          "goal": {
+            "$ref": "#/components/schemas/ImportGoalSpec"
+          },
+          "machine": {
+            "$ref": "#/components/schemas/ImportLoopMachineRef"
+          },
+          "nextRunAt": {
+            "type": "string",
+            "format": "date-time",
+            "minLength": 1
+          },
+          "retryScheduledFor": {
+            "type": "string",
+            "format": "date-time",
+            "minLength": 1
+          },
+          "catchUp": {
+            "type": "string",
+            "enum": [
+              "none",
+              "latest",
+              "all"
+            ]
+          },
+          "catchUpLimit": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "overlap": {
+            "type": "string",
+            "enum": [
+              "skip",
+              "allow"
+            ]
+          },
+          "maxAttempts": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "retryDelayMs": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "leaseMs": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time",
+            "minLength": 1
+          },
+          "expiresAfterRuns": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "bundleName": {
+            "type": "string",
+            "minLength": 1
+          },
+          "bundlePinnedVersion": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "minLength": 1
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "status",
+          "schedule",
+          "target",
+          "catchUp",
+          "catchUpLimit",
+          "overlap",
+          "maxAttempts",
+          "retryDelayMs",
+          "leaseMs",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
+      "ImportRunningRun": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "loopId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "loopName": {
+            "type": "string",
+            "minLength": 1
+          },
+          "scheduledFor": {
+            "type": "string",
+            "format": "date-time",
+            "minLength": 1
+          },
+          "attempt": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "startedAt": {
+            "type": "string",
+            "format": "date-time",
+            "minLength": 1
+          },
+          "claimedBy": {
+            "type": "string",
+            "minLength": 1
+          },
+          "leaseExpiresAt": {
+            "type": "string",
+            "format": "date-time",
+            "minLength": 1
+          },
+          "pid": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "pgid": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "processStartedAt": {
+            "type": "string",
+            "format": "date-time",
+            "minLength": 1
+          },
+          "exitCode": {
+            "type": "integer"
+          },
+          "durationMs": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "stdout": {
+            "type": "string"
+          },
+          "stderr": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "goalRunId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "minLength": 1
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "minLength": 1
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "running"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "loopId",
+          "loopName",
+          "scheduledFor",
+          "attempt",
+          "status",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
+      "ImportTerminalRun": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "loopId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "loopName": {
+            "type": "string",
+            "minLength": 1
+          },
+          "scheduledFor": {
+            "type": "string",
+            "format": "date-time",
+            "minLength": 1
+          },
+          "attempt": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "startedAt": {
+            "type": "string",
+            "format": "date-time",
+            "minLength": 1
+          },
+          "claimedBy": {
+            "type": "string",
+            "minLength": 1
+          },
+          "leaseExpiresAt": {
+            "type": "string",
+            "format": "date-time",
+            "minLength": 1
+          },
+          "pid": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "pgid": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "processStartedAt": {
+            "type": "string",
+            "format": "date-time",
+            "minLength": 1
+          },
+          "exitCode": {
+            "type": "integer"
+          },
+          "durationMs": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "stdout": {
+            "type": "string"
+          },
+          "stderr": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "goalRunId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "minLength": 1
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "minLength": 1
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "succeeded",
+              "failed",
+              "timed_out",
+              "abandoned",
+              "skipped"
+            ]
+          },
+          "finishedAt": {
+            "type": "string",
+            "format": "date-time",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "id",
+          "loopId",
+          "loopName",
+          "scheduledFor",
+          "attempt",
+          "status",
+          "finishedAt",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
+      "ImportRun": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/ImportRunningRun"
+          },
+          {
+            "$ref": "#/components/schemas/ImportTerminalRun"
+          }
+        ]
+      },
       "ImportInput": {
         "type": "object",
-        "description": "Batches of full rows to upsert by id. Any array may be omitted.",
+        "additionalProperties": false,
         "properties": {
+          "operationId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Caller-generated operation id echoed in the v2 receipt. Optional for legacy clients; new clients must send and verify it."
+          },
           "workflows": {
             "type": "array",
             "items": {
-              "type": "object",
-              "additionalProperties": true
-            }
+              "$ref": "#/components/schemas/ImportWorkflow"
+            },
+            "maxItems": 2000
           },
           "loops": {
             "type": "array",
             "items": {
-              "type": "object",
-              "additionalProperties": true
-            }
+              "$ref": "#/components/schemas/ImportLoop"
+            },
+            "maxItems": 2000
           },
           "runs": {
             "type": "array",
             "items": {
-              "type": "object",
-              "additionalProperties": true
-            }
+              "$ref": "#/components/schemas/ImportRun"
+            },
+            "maxItems": 2000
           },
           "replace": {
             "type": "boolean",
@@ -5884,7 +7023,8 @@
             "type": "boolean",
             "description": "Default false. When false, imported workflows are written archived, including same-id active rows, so backfills cannot activate workflow execution unless explicitly requested."
           }
-        }
+        },
+        "description": "Batches of strict full-fidelity rows to upsert by id. Any array may be omitted; incomplete public projection rows are invalid."
       },
       "ImportResponse": {
         "type": "object",
@@ -5894,15 +7034,19 @@
           },
           "imported": {
             "type": "object",
+            "additionalProperties": false,
             "properties": {
               "workflows": {
-                "type": "integer"
+                "type": "integer",
+                "minimum": 0
               },
               "loops": {
-                "type": "integer"
+                "type": "integer",
+                "minimum": 0
               },
               "runs": {
-                "type": "integer"
+                "type": "integer",
+                "minimum": 0
               }
             },
             "required": [
@@ -5912,14 +7056,44 @@
             ]
           },
           "skippedRunning": {
-            "type": "integer"
+            "type": "integer",
+            "minimum": 0
+          },
+          "skippedExisting": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "workflows": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "loops": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "runs": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "workflows",
+              "loops",
+              "runs"
+            ]
+          },
+          "receipt": {
+            "$ref": "#/components/schemas/ImportReceiptV2"
           }
         },
         "required": [
           "ok",
           "imported",
-          "skippedRunning"
-        ]
+          "skippedRunning",
+          "skippedExisting",
+          "receipt"
+        ],
+        "additionalProperties": false
       },
       "AgentSessionContract": {
         "type": "object",
@@ -6725,6 +7899,75 @@
             "type": "integer"
           }
         }
+      },
+      "ImportIdGroups": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "workflows": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "loops": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "runs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "workflows",
+          "loops",
+          "runs"
+        ]
+      },
+      "ImportReceiptV2": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "contract": {
+            "type": "string",
+            "enum": [
+              "loops.import.v2"
+            ]
+          },
+          "operationId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "requestDigest": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "importedIds": {
+            "$ref": "#/components/schemas/ImportIdGroups"
+          },
+          "skippedRunningIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "skippedExistingIds": {
+            "$ref": "#/components/schemas/ImportIdGroups"
+          }
+        },
+        "required": [
+          "contract",
+          "operationId",
+          "requestDigest",
+          "importedIds",
+          "skippedRunningIds",
+          "skippedExistingIds"
+        ]
       }
     },
     "securitySchemes": {

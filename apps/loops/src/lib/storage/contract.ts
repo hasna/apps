@@ -29,6 +29,7 @@ export type LoopStorageMethodName =
   | "findLoopRevisionByDigest"
   | "listLoopRevisions"
   | "listLoopBundles"
+  | "importMigrationRows"
   | "upsertMigrationLoop"
   | "upsertMigrationRun"
   | "upsertMigrationWorkflow"
@@ -132,6 +133,7 @@ export interface LoopStorageContract extends Record<LoopStorageMethodName, (...a
   findLoopRevisionByDigest: AsyncStoreMethod<"findLoopRevisionByDigest">;
   listLoopRevisions: AsyncStoreMethod<"listLoopRevisions">;
   listLoopBundles: AsyncStoreMethod<"listLoopBundles">;
+  importMigrationRows: AsyncStoreMethod<"importMigrationRows">;
   upsertMigrationLoop: AsyncStoreMethod<"upsertMigrationLoop">;
   upsertMigrationRun: AsyncStoreMethod<"upsertMigrationRun">;
   upsertMigrationWorkflow: AsyncStoreMethod<"upsertMigrationWorkflow">;
