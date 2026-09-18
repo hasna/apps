@@ -63,11 +63,15 @@ async function run() {
   if (input.action === "rls") {
     const role = await db.one("SELECT rolsuper,rolbypassrls FROM pg_roles WHERE rolname=current_user");
     check(!role.rolsuper && !role.rolbypassrls, "RLS_ROLE_BYPASS");
-    const tables = await db.many("SELECT relname,relrowsecurity,relforcerowsecurity FROM pg_class WHERE relname IN ('messages','domains','addresses')");
+    const tables = await db.many("SELECT relname,relrowsecurity,relforcerowsecurity FROM pg_class WHERE relnamespace='public'::regnamespace AND relkind='r' AND relname IN ('messages','domains','addresses')");
     check(tables.length === 3 && tables.every((r: any) => r.relrowsecurity && r.relforcerowsecurity), "RLS_TABLE_FENCE");
     check((await db.many("SELECT id FROM domains")).length === 0, "RLS_UNSCOPED_READ");
-    // A single SQL statement pins tenant context and read to the same connection.
-    const rows = await db.many("WITH scope AS MATERIALIZED (SELECT set_config('app.current_tenant',$1,true)) SELECT d.domain FROM scope CROSS JOIN domains d", [input.tenant_id]);
+    // Match the application integration fixture: set context before the read,
+    // on one transaction/connection, independently of planner join ordering.
+    const rows = await db.transaction(async (tx: any) => {
+      await tx.execute("SELECT set_config('app.current_tenant',$1,true)", [input.tenant_id]);
+      return tx.many("SELECT domain FROM public.domains");
+    });
     check(rows.length === 1 && rows[0].domain === "a.example.test", "RLS_CROSS_TENANT_READ");
     return { role_subject_to_rls: true, forced_tables: tables.map((r: any) => r.relname).sort(), scoped_rows: rows.length };
   }
