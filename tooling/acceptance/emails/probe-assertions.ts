@@ -1,3 +1,9 @@
+export function assertApiReady(response: { status: number; body: any }, version: string) {
+  if (!(response.status === 200 && response.body?.status === "ready" && response.body.version === version
+    && response.body.db?.ok === true && Array.isArray(response.body.pendingMigrations) && response.body.pendingMigrations.length === 0
+    && Array.isArray(response.body.migrationIssues) && response.body.migrationIssues.length === 0)) throw new Error("API_READY_VERSION");
+}
+
 /** Provider attempts include rejected/uncertain calls as well as accepted sends. */
 export function assertNoProviderReplay(before: { sends: unknown[]; events: { operation: string }[] }, after: typeof before) {
   const attempts = (value: typeof before) => value.events.filter(event => event.operation.endsWith(".send")).length;

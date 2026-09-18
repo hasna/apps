@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { createRequire } from "node:module";
 import { FixtureTransports } from "./transports.ts";
-import { assertNoProviderReplay, assertProviderAttempt, assertProviderRequest } from "./probe-assertions.ts";
+import { assertApiReady, assertNoProviderReplay, assertProviderAttempt, assertProviderRequest } from "./probe-assertions.ts";
 import { loadImageAuth } from "./image-imports.ts";
 
 const require = createRequire(new URL("../../../apps/emails/package.json", import.meta.url));
@@ -182,4 +182,18 @@ test("image bootstrap loads published auth through its import-only export condit
   const auth = await loadImageAuth(new URL("../../../apps/emails", import.meta.url).pathname);
   expect(typeof auth.ApiKeyStore).toBe("function");
   expect(typeof auth.mintApiKey).toBe("function");
+});
+
+
+test("readiness requires the actual API contract and an empty migration discrepancy inventory", () => {
+  const body = { status: "ready", version: "1.2.3", db: { ok: true }, pendingMigrations: [], migrationIssues: [] };
+  const ready = { status: 200, body };
+  expect(() => assertApiReady(ready, "1.2.3")).not.toThrow();
+  for (const delta of [
+    { status: "not_ready" }, { version: "1.2.4" }, { db: { ok: false } }, { db: undefined },
+    { pendingMigrations: ["pending"] }, { migrationIssues: ["checksum"] },
+    { pendingMigrations: undefined }, { migrationIssues: undefined },
+  ]) expect(() => assertApiReady({ status: 200, body: { ...body, ...delta } }, "1.2.3")).toThrow("API_READY_VERSION");
+  expect(() => assertApiReady({ ...ready, status: 503 }, "1.2.3")).toThrow("API_READY_VERSION");
+  expect(() => assertApiReady({ status: 200, body: { ok: true, version: "1.2.3" } }, "1.2.3")).toThrow("API_READY_VERSION");
 });

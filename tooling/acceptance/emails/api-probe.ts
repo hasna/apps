@@ -1,5 +1,5 @@
 /** Black-box requests to the actual API process and inspection of captured provider wire data. */
-import { assertNoProviderReplay, assertProviderAttempt, assertProviderRequest } from "./probe-assertions.ts";
+import { assertApiReady, assertNoProviderReplay, assertProviderAttempt, assertProviderRequest } from "./probe-assertions.ts";
 const input = await Bun.stdin.json();
 const check = (ok: unknown, code: string) => { if (!ok) throw new Error(code); };
 async function request(path: string, token = input.tenants[0].token, body?: unknown) {
@@ -15,7 +15,7 @@ async function control(path: string, body?: unknown) {
   check(response.ok, "FIXTURE_CONTROL"); return await response.json() as any;
 }
 async function run() {
-  const ready = await request("/ready"); check(ready.status === 200 && ready.body.ok === true && ready.body.version === input.version, "API_READY_VERSION");
+  assertApiReady(await request("/ready"), input.version);
   const a = await request("/v1/domains"); const b = await request("/v1/domains", input.tenants[1].token);
   check(a.status === 200 && b.status === 200 && a.body.domains.length === 1 && b.body.domains.length === 1
     && a.body.domains[0].domain === "a.example.test" && b.body.domains[0].domain === "b.example.test", "API_TENANT_LIST");
