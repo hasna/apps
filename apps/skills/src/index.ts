@@ -203,6 +203,7 @@ export {
   type RemoteSkillSummary,
   type UpdatedSincePage,
 } from "./lib/remote-client.js";
+export { RemoteSkillsPermissionError, type RemoteSkillsAccess, type RemoteSkillsPermissions } from "./lib/remote-permissions.js";
 
 export {
   REMOTE_SKILL_RUN_CONTRACT_VERSION,
