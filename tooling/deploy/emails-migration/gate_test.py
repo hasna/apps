@@ -16,12 +16,15 @@ SOURCE = "a" * 40
 
 
 class GateTest(unittest.TestCase):
-    def test_execute_phase_is_disabled_before_artifact_or_aws_authority(self):
+    def test_mutating_phases_are_disabled_before_artifact_or_aws_authority(self):
         self.assertEqual(g.require_phase("reconcile"), None)
-        self.assertEqual(g.require_phase("prepare"), None)
+        with self.assertRaisesRegex(ValueError, "MIGRATION_PREPARE_DISABLED"):
+            g.require_phase("prepare")
         with self.assertRaisesRegex(ValueError, "MIGRATION_EXECUTION_DISABLED"):
             g.require_phase("execute")
         with patch.object(g, "gh", side_effect=AssertionError("GitHub read must not occur")):
+            with self.assertRaisesRegex(ValueError, "MIGRATION_PREPARE_DISABLED"):
+                g.validate(SimpleNamespace(phase="prepare"), Path("unused"))
             with self.assertRaisesRegex(ValueError, "MIGRATION_EXECUTION_DISABLED"):
                 g.validate(SimpleNamespace(phase="execute"), Path("unused"))
 

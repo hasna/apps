@@ -27,7 +27,8 @@ def require(ok, code):
 
 def require_phase(phase):
     require(phase != "execute", "MIGRATION_EXECUTION_DISABLED")
-    require(phase in {"reconcile", "prepare"}, "PHASE")
+    require(phase != "prepare", "MIGRATION_PREPARE_DISABLED")
+    require(phase == "reconcile", "PHASE")
 
 
 def gh(path):
