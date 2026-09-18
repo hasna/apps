@@ -3,6 +3,7 @@ import type { Command } from "commander";
 import { closeSync, constants, fstatSync, openSync, readSync, writeFileSync } from "node:fs";
 import { readSkillProfile, saveSkillProfile, readStationSkillState } from "../../lib/profile-admin.js";
 import { MAX_PROFILE_DOCUMENT_BYTES } from "../../lib/profile-limits.js";
+import { RemoteSkillsPermissionError } from "../../lib/remote-permissions.js";
 
 function readProfileInput(path: string): string {
   // Open without waiting for a FIFO writer so fstat can reject nonregular input.
@@ -43,7 +44,12 @@ export function registerProfiles(parent: Command): void {
         const input = JSON.parse(text);
         const profile = await saveSkillProfile(id, input.selections, options.ifMatch);
         await writeCliOutput(options.json ? JSON.stringify(profile) : `Saved ${profile.id} at ${profile.revision}`);
-      } catch (error) { console.error((error as Error).message); process.exitCode = 1; }
+      } catch (error) {
+        if (options.json && error instanceof RemoteSkillsPermissionError)
+          await writeCliOutput(JSON.stringify({ error: error.message, code: error.code, status: error.status, permission: error.permission }));
+        else console.error((error as Error).message);
+        process.exitCode = 1;
+      }
     });
   parent.command("station-state <id>").description("Read this actor's last applied skill selection on a station")
     .option("--json", "Output the station receipt as JSON", false)

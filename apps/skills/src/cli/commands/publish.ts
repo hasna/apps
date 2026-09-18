@@ -22,6 +22,7 @@ import {
   validatePortableSkillDirectory,
 } from "../../lib/portable-skills.js";
 import { RemoteSkillsClient, createRemoteSkillsClient } from "../../lib/remote-client.js";
+import { RemoteSkillsPermissionError } from "../../lib/remote-permissions.js";
 import pkg from "../../../package.json" with { type: "json" };
 import { collectSkillBundleEntries, packSkillBundle, sha256Hex, type PackedSkillBundle, unpackSkillBundle } from "../../lib/skill-bundle.js";
 import { verifyContentHashFromEntries } from "../../lib/skill-hash.js";
@@ -108,6 +109,7 @@ export function registerPublish(parent: Command) {
         if (options.json) {
           console.log(JSON.stringify({
             error: (error as Error).message,
+            ...(error instanceof RemoteSkillsPermissionError ? { code: error.code, status: error.status, permission: error.permission } : {}),
             ...(error instanceof PushSkillError && error.detail ? { detail: error.detail } : {}),
           }, null, 2));
         } else {

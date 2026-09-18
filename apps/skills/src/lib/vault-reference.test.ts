@@ -26,7 +26,7 @@ test("the unmocked built CLI loads the installed ESM SDK and refuses missing dep
   const isolated = join(home, "isolated/skills.js");
   mkdirSync(join(home, "isolated"), { mode: 0o700 });
   copyFileSync(cli, isolated);
-  let mode = "ok", vaultRequests = 0, skillsRequests = 0, registryRequests = 0, correctCredential = true;
+  let mode = "ok", vaultRequests = 0, skillsRequests = 0, capabilityRequests = 0, registryRequests = 0, correctCredential = true;
   const key = () => mode === "rotate" ? "dummy-vault-key-rotated" : "dummy-vault-key";
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(req) {
     const path = new URL(req.url).pathname;
@@ -42,12 +42,18 @@ test("the unmocked built CLI loads the installed ESM SDK and refuses missing dep
       correctCredential &&= req.headers.get("authorization") === `Bearer ${key()}`;
       return Response.json({ user: { id: "fixture-user", email: "fixture@example.com", role: "owner" }, organization: { id: "fixture-org", slug: "fixture" } });
     }
+    if (path === "/api/v1/capabilities" && req.method === "GET") {
+      capabilityRequests++;
+      correctCredential &&= req.headers.get("authorization") === `Bearer ${key()}`;
+      return Response.json({ contractVersion: 1, apiVersion: 1, capabilities: ["skills.registry"],
+        scopes: ["skills:read"], permissions: { publish: false, profilesWrite: false } });
+    }
     registryRequests++;
     return new Response(null, { status: 404 });
   } });
   try {
     for (const current of ["ok", "rotate", "missing", "drift", "absent-sdk", "bootstrap-reference", "bootstrap-mixed"]) {
-      mode = current; vaultRequests = 0; skillsRequests = 0; correctCredential = true;
+      mode = current; vaultRequests = 0; skillsRequests = 0; capabilityRequests = 0; correctCredential = true;
       writeFileSync(file, `HASNA_SKILLS_API_KEY_REF=fixture/skills/live/api_key\nHASNA_SKILLS_API_URL=${server.url.origin}\nHASNA_SKILLS_BOUND_API_URL=${server.url.origin}\n`, { mode: 0o600 });
       writeFileSync(join(home, ".hasna/secrets/config/credentials"), `HASNA_SECRETS_API_KEY=dummy-bootstrap-key\nHASNA_SECRETS_API_URL=${server.url.origin}\n`, { mode: 0o600 });
       if (current.startsWith("bootstrap-")) {
@@ -68,9 +74,11 @@ test("the unmocked built CLI loads the installed ESM SDK and refuses missing dep
       const result = JSON.parse(stdout);
       if (current === "ok" || current === "rotate") {
         expect(code, current).toBe(0); expect(result.status).toBe("authenticated"); expect(result.userId).toBe("fixture-user");
-        expect(vaultRequests).toBe(1); expect(skillsRequests).toBe(1);
+        expect(vaultRequests).toBe(1); expect(skillsRequests).toBe(1); expect(capabilityRequests).toBe(1);
+        expect(result.permissions).toEqual({ publish: false, profilesWrite: false });
+        expect(result.scopes).toEqual(["skills:read"]);
       } else {
-        expect(code, current).not.toBe(0); expect(vaultRequests).toBe(current === "absent-sdk" || current.startsWith("bootstrap-") ? 0 : 1); expect(skillsRequests).toBe(0);
+        expect(code, current).not.toBe(0); expect(vaultRequests).toBe(current === "absent-sdk" || current.startsWith("bootstrap-") ? 0 : 1); expect(skillsRequests).toBe(0); expect(capabilityRequests).toBe(0);
       }
       expect(registryRequests, current).toBe(0);
       expect(existsSync(join(home, ".bun/install/cache")), current).toBe(false);

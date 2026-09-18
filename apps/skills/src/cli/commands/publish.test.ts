@@ -108,6 +108,28 @@ function catalogueCorpus(slug: string, flavor: string): string {
 }
 
 describe("skills push", () => {
+  test("effective API permissions stop a read-only owner and allow a scoped member", async () => {
+    const root = makeCorpus({ "release-notes": VALID_SKILL });
+    try {
+      await withServer(async ({ baseUrl, store, requests }) => {
+        await store.ensureBootstrapApiKey("test-denied-owner-token", { ...PRINCIPAL, apiKeyId: "key_denied", role: "owner", scopes: ["skills:read"] });
+        const denied = new RemoteSkillsClient("test-denied-owner-token", baseUrl);
+        expect(await denied.getCapabilities()).toMatchObject({ scopes: ["skills:read"], permissions: { publish: false, profilesWrite: false } });
+        const start = requests.length;
+        await expect(pushSkill("release-notes", { rootDir: root, client: denied })).rejects.toMatchObject({ code: "SKILLS_PERMISSION_DENIED", permission: "publish" });
+        expect(requests.slice(start)).toEqual([
+          { method: "GET", path: "/api/v1/skills/release-notes", ifMatch: null, status: 404 },
+          { method: "GET", path: "/api/v1/capabilities", ifMatch: null, status: 200 },
+        ]);
+        await store.ensureBootstrapApiKey("test-scoped-member-token", { ...PRINCIPAL, apiKeyId: "key_writer", role: "member", scopes: ["skills:read", "skills:publish"] });
+        const writer = new RemoteSkillsClient("test-scoped-member-token", baseUrl);
+        expect(await writer.getCapabilities()).toMatchObject({ permissions: { publish: true, profilesWrite: true } });
+        expect(await pushSkill("release-notes", { rootDir: root, client: writer })).toMatchObject({ published: true });
+        expect(requests.filter(request => request.method === "POST")).toHaveLength(1);
+      });
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
   test("edited drafts require explicit preparation and round-trip exact versions, kinds and bytes through the API", async () => {
     const root = mkdtempSync(join(tmpdir(), "skills-author-roundtrip-"));
     const pulled = mkdtempSync(join(tmpdir(), "skills-author-receiver-"));
@@ -182,6 +204,7 @@ describe("skills push", () => {
         const start = requests.length, result = await pushSkill(slug, { rootDir: root, client });
         expect(result.published).toBe(true);
         expect(requests.slice(start)).toEqual([{ method: "GET", path: `/api/v1/skills/${slug}`, ifMatch: null, status: 404 },
+          { method: "GET", path: "/api/v1/capabilities", ifMatch: null, status: 200 },
           { method: "POST", path: "/api/v1/skills", ifMatch: null, status: 201 }]);
         const published = await client.getSkillStatus(slug);
         expect(published.body).toMatchObject({ slug, bundleSha256: result.sha256 });
@@ -223,7 +246,9 @@ describe("skills push", () => {
         expect(intercepted).toBe(1);
         expect(requests.slice(start)).toEqual([{ method: "GET", path: `/api/v1/skills/${slug}`, ifMatch: null, status: 404 },
           { method: "GET", path: `/api/v1/skills/${slug}`, ifMatch: null, status: 404 },
+          { method: "GET", path: "/api/v1/capabilities", ifMatch: null, status: 200 },
           { method: "POST", path: "/api/v1/skills", ifMatch: null, status: 201 },
+          { method: "GET", path: "/api/v1/capabilities", ifMatch: null, status: 200 },
           { method: "POST", path: "/api/v1/skills", ifMatch: null, status: 409 }]);
         expect(winner!).not.toBeNull(); expect(winner!.skillMd).toContain("Owned winning edit");
         expect(await store.getSkill(principal!, slug)).toEqual(winner!);
@@ -513,6 +538,7 @@ describe("skills push", () => {
         expect(pushed).toMatchObject({ published: true, version: "2.2.0", contentHash: packed.sha256 });
         expect(requests.slice(start)).toEqual([
           { method: "GET", path: "/api/v1/skills/release-notes", ifMatch: null, status: 404 },
+          { method: "GET", path: "/api/v1/capabilities", ifMatch: null, status: 200 },
           { method: "POST", path: "/api/v1/skills", ifMatch: null, status: 201 },
         ]);
       });
@@ -531,6 +557,7 @@ describe("skills push", () => {
         expect(pushed.paths).toEqual(["SKILL.md"]);
         expect(requests.map(({ method, path }) => ({ method, path }))).toEqual([
           { method: "GET", path: "/api/v1/skills/legacy-instruction" },
+          { method: "GET", path: "/api/v1/capabilities" },
           { method: "POST", path: "/api/v1/skills" },
         ]);
       });

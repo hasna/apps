@@ -381,6 +381,24 @@ user and stable station ID, so rotating a key does not create a new station.
 Consumers need `skills:read` and `stations:write`; profile publishers need
 `skills:write`. Key scopes apply even to workspace owners.
 
+`skills auth whoami --json` reports the current credential's effective
+`permissions.publish` and `permissions.profilesWrite`, alongside its account
+role and advertised scopes. Human output labels each permission `allowed`,
+`denied`, or `unknown`; JSON uses `null` for unknown access. An owner role alone
+does not grant either permission. `skills capabilities --json` and the SDK's
+`getCapabilities()` also retain the server's typed permission and scope fields.
+
+Before sending a bundle, `push` and `RemoteSkillsClient.publishSkill()` read
+fresh capabilities and stop on an explicit publication denial. `profiles set`
+similarly stops before a profile write. The refusal reports
+`SKILLS_PERMISSION_DENIED` with the affected permission and guidance to obtain
+an authorized credential; it never changes credentials or their scopes.
+Servers that omit permissions (or predate the capabilities route) retain their
+existing server-authorized write behavior, with access displayed as unknown.
+Authentication failures and malformed permission responses do not bypass the
+preflight. `push --dry-run` remains a local packing check and does not check
+hosted publication access.
+
 `--selection-profile` chooses the shared skill selection. The top-level
 `--profile` option chooses an isolated credential file; these are separate
 settings. `HASNA_SKILLS_SELECTION_PROFILE` overrides the installed selection
