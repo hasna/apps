@@ -43,7 +43,11 @@ export interface KnowledgeManifestRoot { "open_files_root": string; "source_id":
 
 export interface KnowledgeManifestStorage { "provider": "local" | "s3" | "unknown"; "source_id": string }
 
-export interface KnowledgeManifestExtraction { "text_available": boolean; "status": "available" | "unavailable" | "partial" | "unsupported" | "error" | "stale"; "extracted_text_ref"?: string; "status_reason"?: string }
+export interface KnowledgeManifestReadableExtraction { "text_available": true; "status": "available" | "partial"; "extracted_text_ref": string }
+
+export interface KnowledgeManifestUnavailableExtraction { "text_available": false; "status": "unavailable" | "unsupported" | "error" | "stale"; "status_reason": string }
+
+export type KnowledgeManifestExtraction = KnowledgeManifestReadableExtraction | KnowledgeManifestUnavailableExtraction;
 
 export interface KnowledgeManifestFile { "kind": "file"; "source_ref": string; "revision_ref"?: string; "revision_id"?: string; "change_cursor": string; "source_revision_hash": string; "file_id": string; "source_id": string; "source_type": "local" | "s3" | "google_drive"; "name": string; "mime": string; "size": number; "hash"?: string; "status": "active" | "deleted" | "moved"; "updated_at": string; "deleted": boolean; "tombstone"?: boolean; "tags": Array<string>; "open_files_root": KnowledgeManifestRoot; "storage": KnowledgeManifestStorage; "extraction": KnowledgeManifestExtraction; "permissions": { "mode": "read_only"; "allowed_purposes": Array<string> }; "permission_labels": Array<string> }
 

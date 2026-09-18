@@ -165,16 +165,28 @@ export const openApiDocument = {
         },
         required: ["provider", "source_id"],
       },
-      KnowledgeManifestExtraction: {
+      KnowledgeManifestReadableExtraction: {
         type: "object",
         additionalProperties: false,
         properties: {
-          text_available: { type: "boolean" },
-          status: { type: "string", enum: ["available", "unavailable", "partial", "unsupported", "error", "stale"] },
-          extracted_text_ref: { type: "string" },
-          status_reason: { type: "string" },
+          text_available: { type: "boolean", enum: [true] },
+          status: { type: "string", enum: ["available", "partial"] },
+          extracted_text_ref: { type: "string", minLength: 1 },
         },
-        required: ["text_available", "status"],
+        required: ["text_available", "status", "extracted_text_ref"],
+      },
+      KnowledgeManifestUnavailableExtraction: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          text_available: { type: "boolean", enum: [false] },
+          status: { type: "string", enum: ["unavailable", "unsupported", "error", "stale"] },
+          status_reason: { type: "string", minLength: 1 },
+        },
+        required: ["text_available", "status", "status_reason"],
+      },
+      KnowledgeManifestExtraction: {
+        oneOf: [ref("KnowledgeManifestReadableExtraction"), ref("KnowledgeManifestUnavailableExtraction")],
       },
       KnowledgeManifestFile: {
         type: "object",

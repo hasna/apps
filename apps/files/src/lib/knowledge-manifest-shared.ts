@@ -594,6 +594,13 @@ export function validateHostedKnowledgeManifest(value: unknown): KnowledgeSource
       || !item.storage || typeof item.storage !== "object" || Array.isArray(item.storage)
       || !item.extraction || typeof item.extraction !== "object" || Array.isArray(item.extraction)
     ) throw new Error("Hosted knowledge manifest response is incompatible.");
+    const allowedItemKeys = new Set([
+      "kind", "source_ref", "revision_ref", "revision_id", "change_cursor", "source_revision_hash",
+      "file_id", "source_id", "source_type", "name", "mime", "size", "hash", "status",
+      "updated_at", "deleted", "tombstone", "tags", "open_files_root", "storage", "extraction",
+      "permissions", "permission_labels",
+    ]);
+    if (Object.keys(item).some((key) => !allowedItemKeys.has(key))) throw new Error("Hosted knowledge manifest response is incompatible.");
     previousCursor = BigInt(item.change_cursor as string);
     if (fileIds.has(item.file_id as string)) throw new Error("Hosted knowledge manifest response is incompatible.");
     fileIds.add(item.file_id as string);
@@ -622,17 +629,45 @@ export function validateHostedKnowledgeManifest(value: unknown): KnowledgeSource
       throw new Error("Hosted knowledge manifest response is incompatible.");
     }
     const extraction = item.extraction as Record<string, unknown>;
+    const extractionKeys = new Set(["text_available", "status", "extracted_text_ref", "status_reason"]);
     if (
-      typeof extraction.text_available !== "boolean"
+      Object.keys(extraction).some((key) => !extractionKeys.has(key))
+      || typeof extraction.text_available !== "boolean"
       || typeof extraction.status !== "string"
       || !["available", "partial", "unavailable", "unsupported", "error", "stale"].includes(extraction.status)
+      || (extraction.status_reason !== undefined && (typeof extraction.status_reason !== "string" || extraction.status_reason.length === 0))
     ) {
       throw new Error("Hosted knowledge manifest response is incompatible.");
     }
     const available = extraction.text_available === true;
     const availableStatus = extraction.status === "available" || extraction.status === "partial";
-    if (available !== availableStatus || available !== (typeof extraction.extracted_text_ref === "string")) {
+    const expectedExtractionRef = `${item.source_ref as string}/text`;
+    const hasExactExtractionRef = extraction.extracted_text_ref === expectedExtractionRef;
+    if (available !== availableStatus || available !== hasExactExtractionRef) {
       throw new Error("Hosted knowledge manifest response is incompatible.");
+    }
+    if (
+      (!available && Object.prototype.hasOwnProperty.call(extraction, "extracted_text_ref"))
+      || (available && Object.prototype.hasOwnProperty.call(extraction, "status_reason"))
+      || (!available && (typeof extraction.status_reason !== "string" || extraction.status_reason.length === 0))
+    ) {
+      throw new Error("Hosted knowledge manifest response is incompatible.");
+    }
+    const permissions = item.permissions as Record<string, unknown>;
+    if (
+      !permissions || typeof permissions !== "object" || Array.isArray(permissions)
+      || !exactObjectKeys(permissions, ["allowed_purposes", "mode"])
+      || permissions.mode !== "read_only"
+      || !Array.isArray(permissions.allowed_purposes)
+      || permissions.allowed_purposes.some((purpose) => typeof purpose !== "string")
+      || !Array.isArray(item.permission_labels)
+      || item.permission_labels.some((label) => typeof label !== "string")
+    ) throw new Error("Hosted knowledge manifest response is incompatible.");
+    if (item.revision_id !== undefined || item.revision_ref !== undefined) {
+      if (
+        typeof item.revision_id !== "string" || !item.revision_id
+        || item.revision_ref !== `open-files://file/${encodeURIComponent(item.file_id as string)}/revision/${encodeURIComponent(item.revision_id)}`
+      ) throw new Error("Hosted knowledge manifest response is incompatible.");
     }
   }
   if (tombstones !== manifest.tombstone_count) throw new Error("Hosted knowledge manifest response is incompatible.");

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mintApiKey, verifyApiKey } from "@hasna/contracts/auth";
 import type { TypedQueryClient } from "../generated/storage-kit/query.js";
 import type { KnowledgeSourceManifest, KnowledgeSourceManifestFileItem } from "../types/index.js";
+import { validateHostedKnowledgeManifest } from "../lib/knowledge-manifest-shared.js";
 import { createV1Handler } from "./v1.js";
 
 const SIGNING_SECRET = "test-only-knowledge-manifest-signing-secret-32b";
@@ -176,6 +177,33 @@ describe("GET /v1/knowledge/manifest", () => {
       const staleItem = (await (await get(staleRevision.h)).json() as KnowledgeSourceManifest).items[0] as KnowledgeSourceManifestFileItem;
       expect(staleItem.extraction).toMatchObject({ text_available: false, status: "unavailable" });
       expect(staleItem.extraction.extracted_text_ref).toBeUndefined();
+    }
+  });
+
+  test("client validation requires the exact readable partial contract and rejects extra response fields", async () => {
+    const currentPartial = handler({ rows: [change(9, "f_1", { extraction: { status: "partial", revision_id: "rev_1" } })] });
+    const manifest = await (await get(currentPartial.h)).json() as KnowledgeSourceManifest;
+    expect(validateHostedKnowledgeManifest(manifest).items[0]!.extraction.status).toBe("partial");
+
+    const invalid: KnowledgeSourceManifest[] = [];
+    const missingRef = structuredClone(manifest);
+    delete missingRef.items[0]!.extraction.extracted_text_ref;
+    invalid.push(missingRef);
+    const emptyRef = structuredClone(manifest);
+    emptyRef.items[0]!.extraction.extracted_text_ref = "";
+    invalid.push(emptyRef);
+    const wrongRef = structuredClone(manifest);
+    wrongRef.items[0]!.extraction.extracted_text_ref = "open-files://file/f_other/text";
+    invalid.push(wrongRef);
+    const itemExtra = structuredClone(manifest) as KnowledgeSourceManifest & { items: Array<Record<string, unknown>> };
+    itemExtra.items[0]!.private_path = "/private/path";
+    invalid.push(itemExtra as KnowledgeSourceManifest);
+    const extractionExtra = structuredClone(manifest) as KnowledgeSourceManifest & { items: Array<{ extraction: Record<string, unknown> }> };
+    extractionExtra.items[0]!.extraction.bucket = "private-bucket";
+    invalid.push(extractionExtra as KnowledgeSourceManifest);
+
+    for (const candidate of invalid) {
+      expect(() => validateHostedKnowledgeManifest(candidate)).toThrow("Hosted knowledge manifest response is incompatible");
     }
   });
 
