@@ -48,6 +48,7 @@ export class SqliteLoopStorage implements LoopStorageContract {
   findLoopRevisionByDigest(...args: StoreMethod<"findLoopRevisionByDigest">["args"]) { return this.call("findLoopRevisionByDigest", ...args); }
   listLoopRevisions(...args: StoreMethod<"listLoopRevisions">["args"]) { return this.call("listLoopRevisions", ...args); }
   listLoopBundles(...args: StoreMethod<"listLoopBundles">["args"]) { return this.call("listLoopBundles", ...args); }
+  importMigrationRows(...args: StoreMethod<"importMigrationRows">["args"]) { return this.call("importMigrationRows", ...args); }
   upsertMigrationLoop(...args: StoreMethod<"upsertMigrationLoop">["args"]) { return this.call("upsertMigrationLoop", ...args); }
   upsertMigrationRun(...args: StoreMethod<"upsertMigrationRun">["args"]) { return this.call("upsertMigrationRun", ...args); }
   upsertMigrationWorkflow(...args: StoreMethod<"upsertMigrationWorkflow">["args"]) { return this.call("upsertMigrationWorkflow", ...args); }

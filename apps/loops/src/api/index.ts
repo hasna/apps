@@ -27,6 +27,8 @@ import {
   LegacyWorkflowRunProvenanceError,
   LoopAdvancementConflictError,
   LoopArchivedError,
+  MigrationImportConflictError,
+  MigrationImportInvalidError,
   LoopMutationConflictError,
   LoopNotFoundError,
   RunFinalizationConflictError,
@@ -77,13 +79,12 @@ import type { BundleArtifactStorage } from "../lib/bundle/artifact-storage.js";
 import { routePolicy, type RoutePolicy } from "../lib/auth/route-policy.js";
 import type { TenantAuthContext, TenantAuthDecision } from "../lib/auth/tenant-auth.js";
 import { packageVersion } from "../lib/version.js";
-import { hostedLoop, hostedRun, hostedWorkflow } from "../lib/hosted-records.js";
 import {
   importRequestDigest,
   LOOPS_IMPORT_RECEIPT_CONTRACT,
-  validImportOperationId,
   type ImportContractInput,
 } from "../lib/import-contract.js";
+import { validateImportRequest } from "../lib/import-validation.js";
 import {
   DEFAULT_OPERATION_LOOKUP_CAPS,
   isPrivateOperationEventType,
@@ -627,26 +628,6 @@ function parseExpiredRunLeaseCandidate(value: unknown): PublicStuckRunCandidate 
   return { runId, loopId, snapshotId };
 }
 
-interface ImportRequestBody extends ImportContractInput {}
-
-function importRows<T>(body: ImportRequestBody, key: "workflows" | "loops" | "runs"): T[] {
-  if (!Object.hasOwn(body, key)) return [];
-  const value = body[key];
-  if (!Array.isArray(value)) throw apiError(`invalid_import_${key}`, 422);
-  return value as T[];
-}
-
-function assertUniqueImportIds(rows: Array<{ id?: unknown }>, label: string): void {
-  const seen = new Set<string>();
-  for (const row of rows) {
-    if (!row || typeof row !== "object" || typeof row.id !== "string" || row.id.trim().length === 0) {
-      throw apiError(`invalid_import_${label}_id`, 422);
-    }
-    if (seen.has(row.id)) throw apiError(`duplicate_import_${label}_id`, 422);
-    seen.add(row.id);
-  }
-}
-
 function safeImportedWorkflow(workflow: WorkflowSpec, opts: { preserveWorkflowActivation: boolean }): WorkflowSpec {
   if (opts.preserveWorkflowActivation) return workflow;
   return { ...workflow, status: "archived" };
@@ -660,19 +641,6 @@ function safeImportedLoop(loop: Loop, opts: { preserveLoopScheduling: boolean })
     nextRunAt: undefined,
     retryScheduledFor: undefined,
   };
-}
-
-function validateImportedAgentTargets(workflows: WorkflowSpec[], loops: Loop[]): void {
-  for (const [workflowIndex, workflow] of workflows.entries()) {
-    for (const [stepIndex, step] of workflow.steps.entries()) {
-      if (step.target.type === "agent") {
-        validateAgentTarget(step.target, `workflows[${workflowIndex}].steps[${stepIndex}].target`);
-      }
-    }
-  }
-  for (const [loopIndex, loop] of loops.entries()) {
-    if (loop.target.type === "agent") validateAgentTarget(loop.target, `loops[${loopIndex}].target`);
-  }
 }
 
 /**
@@ -691,47 +659,19 @@ function validateImportedAgentTargets(workflows: WorkflowSpec[], loops: Loop[]):
 async function handleImportRequest(ctx: V1RequestContext, segments: string[]): Promise<Response> {
   if (segments.length !== 0 || ctx.request.method !== "POST") return fail("not_found", 404);
   const storage = requireStorage(ctx.storage);
-  const body = await readJsonBody<ImportRequestBody>(ctx.request, ctx.importLimitBytes);
-  const allowedFields = new Set([
-    "operationId",
-    "workflows",
-    "loops",
-    "runs",
-    "replace",
-    "preserveLoopScheduling",
-    "preserveWorkflowActivation",
-  ]);
-  if (Object.keys(body).some((key) => !allowedFields.has(key))) throw apiError("unknown_import_field", 422);
-  for (const key of ["replace", "preserveLoopScheduling", "preserveWorkflowActivation"] as const) {
-    if (Object.hasOwn(body, key) && typeof body[key] !== "boolean") throw apiError(`invalid_import_${key}`, 422);
+  const rawBody = await readJsonBody<unknown>(ctx.request, ctx.importLimitBytes);
+  if (rawBody && typeof rawBody === "object" && !Array.isArray(rawBody)) {
+    const candidate = rawBody as Record<string, unknown>;
+    const rowCount = [candidate.workflows, candidate.loops, candidate.runs]
+      .reduce<number>((total, rows) => total + (Array.isArray(rows) ? rows.length : 0), 0);
+    if (rowCount > DEFAULT_IMPORT_MAX_ROWS) throw apiError("import_row_limit_exceeded", 413);
   }
-  if (body.operationId !== undefined && !validImportOperationId(body.operationId)) {
-    throw apiError("invalid_import_operation_id", 422);
-  }
+  const body = validateImportRequest(rawBody);
   const operationId = body.operationId ?? randomUUID();
   const replace = body.replace === true;
-  const workflows = importRows<WorkflowSpec>(body, "workflows");
-  const loops = importRows<Loop>(body, "loops");
-  const runs = importRows<LoopRun>(body, "runs");
-  const rowCount = workflows.length + loops.length + runs.length;
-  if (rowCount > DEFAULT_IMPORT_MAX_ROWS) throw apiError("import_row_limit_exceeded", 413);
-  assertUniqueImportIds(workflows, "workflow");
-  assertUniqueImportIds(loops, "loop");
-  assertUniqueImportIds(runs, "run");
-  try {
-    workflows.forEach((workflow) => hostedWorkflow(workflow, workflow.id));
-    loops.forEach((loop) => hostedLoop(loop, loop.id));
-    runs.forEach((run) => hostedRun(run, { id: run.id, loopId: run.loopId }));
-  } catch {
-    throw apiError("invalid_import_row", 422);
-  }
-  const slots = new Set<string>();
-  for (const run of runs) {
-    const slot = `${run.loopId}\u0000${run.scheduledFor}`;
-    if (slots.has(slot)) throw apiError("duplicate_import_run_slot", 422);
-    slots.add(slot);
-  }
-  validateImportedAgentTargets(workflows, loops);
+  const workflows = body.workflows;
+  const loops = body.loops;
+  const runs = body.runs;
   const preserveWorkflowActivation = body.preserveWorkflowActivation === true;
   const preserveLoopScheduling = body.preserveLoopScheduling === true;
   const request: ImportContractInput & { operationId: string } = {
@@ -743,59 +683,13 @@ async function handleImportRequest(ctx: V1RequestContext, segments: string[]): P
     preserveWorkflowActivation,
     preserveLoopScheduling,
   };
-  const importedIds = { workflows: [] as string[], loops: [] as string[], runs: [] as string[] };
-  const skippedExistingIds = { workflows: [] as string[], loops: [] as string[], runs: [] as string[] };
-  const skippedRunningIds: string[] = [];
-
-  // Preflight same-id and run-slot conflicts before the first write. This does
-  // not pretend the route is transactional, but it removes known deterministic
-  // partial-write cases and leaves transport/server uncertainty explicit in the
-  // v2 receipt contract.
-  for (const workflow of workflows) {
-    if (!replace && await storage.getWorkflow(workflow.id)) skippedExistingIds.workflows.push(workflow.id);
-  }
-  for (const loop of loops) {
-    if (!replace && await storage.getLoop(loop.id)) skippedExistingIds.loops.push(loop.id);
-  }
-  for (const run of runs) {
-    if (run.status === "running") {
-      skippedRunningIds.push(run.id);
-      continue;
-    }
-    const existing = await storage.getRun(run.id);
-    if (existing?.status === "running") throw apiError("import_running_destination_run", 409);
-    if (!replace && existing) {
-      skippedExistingIds.runs.push(run.id);
-      continue;
-    }
-    const occupant = await storage.getRunBySlot(run.loopId, run.scheduledFor);
-    if (occupant && occupant.id !== run.id) throw apiError("import_run_slot_conflict", 409);
-  }
-
-  for (const workflow of workflows) {
-    if (skippedExistingIds.workflows.includes(workflow.id)) continue;
-    const stored = await storage.upsertMigrationWorkflow(
-      safeImportedWorkflow(workflow, { preserveWorkflowActivation }),
-      { replace },
-    );
-    if (stored.id !== workflow.id) throw apiError("import_workflow_identity_mismatch", 409);
-    importedIds.workflows.push(stored.id);
-  }
-  for (const loop of loops) {
-    if (skippedExistingIds.loops.includes(loop.id)) continue;
-    const stored = await storage.upsertMigrationLoop(
-      safeImportedLoop(loop, { preserveLoopScheduling }),
-      { replace },
-    );
-    if (stored.id !== loop.id) throw apiError("import_loop_identity_mismatch", 409);
-    importedIds.loops.push(stored.id);
-  }
-  for (const run of runs) {
-    if (skippedRunningIds.includes(run.id) || skippedExistingIds.runs.includes(run.id)) continue;
-    const stored = await storage.upsertMigrationRun(run, { replace });
-    if (stored.id !== run.id) throw apiError("import_run_identity_mismatch", 409);
-    importedIds.runs.push(stored.id);
-  }
+  const result = await storage.importMigrationRows({
+    workflows: workflows.map((workflow) => safeImportedWorkflow(workflow, { preserveWorkflowActivation })),
+    loops: loops.map((loop) => safeImportedLoop(loop, { preserveLoopScheduling })),
+    runs,
+    replace,
+  });
+  const { importedIds, skippedExistingIds, skippedRunningIds } = result;
   const receipt = {
     contract: LOOPS_IMPORT_RECEIPT_CONTRACT,
     operationId,
@@ -2587,6 +2481,10 @@ function codedErrorFailure(error: unknown): Response | undefined {
       const details = validationErrorPublicDetails(error as ValidationError);
       return fail("validation_failed", 422, details ? { details } : undefined);
     }
+    case "MIGRATION_IMPORT_INVALID":
+      return fail("invalid_import", 400);
+    case "MIGRATION_IMPORT_CONFLICT":
+      return fail("import_conflict", 409);
     case "WORKFLOW_RUN_PROVENANCE_MISSING":
       return fail("workflow_run_provenance_missing", 409);
     case "WORKFLOW_RUN_DEFINITION_CONFLICT":
@@ -2609,6 +2507,8 @@ function errorResponse(error: unknown): Response {
   if (error instanceof LoopMutationConflictError) return fail(error.reason, 409);
   if (error instanceof AmbiguousNameError) return fail("ambiguous_name", 409);
   if (error instanceof RunFinalizationConflictError) return fail(error.reason, 409);
+  if (error instanceof MigrationImportInvalidError) return fail("invalid_import", 400);
+  if (error instanceof MigrationImportConflictError) return fail("import_conflict", 409);
   if (error instanceof ValidationError) {
     const details = validationErrorPublicDetails(error);
     return fail("validation_failed", 422, details ? { details } : undefined);

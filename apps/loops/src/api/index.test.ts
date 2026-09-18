@@ -216,10 +216,10 @@ describe("loops-api foundation", () => {
       }>;
       components: { schemas: Record<string, unknown> };
     };
-    for (const path of ["/v1/loops", "/v1/import"]) {
-      expect(document.paths[path]?.post?.responses?.["422"]?.content?.["application/json"]?.schema?.$ref)
-        .toBe("#/components/schemas/ValidationFailureResponse");
-    }
+    expect(document.paths["/v1/loops"]?.post?.responses?.["422"]?.content?.["application/json"]?.schema?.$ref)
+      .toBe("#/components/schemas/ValidationFailureResponse");
+    expect(document.paths["/v1/import"]?.post?.responses?.["400"]?.content?.["application/json"]?.schema?.$ref)
+      .toBe("#/components/schemas/ImportValidationResponse");
     expect(document.components.schemas.ValidationFailureResponse).toMatchObject({
       type: "object",
       required: ["ok", "error"],
@@ -1373,18 +1373,8 @@ describe("loops-api foundation", () => {
         headers: jsonHeaders,
         body: JSON.stringify({ loops: [legacyLoop] }),
       });
-      expect(response.status).toBe(422);
-      expect(await response.json()).toEqual({
-        ok: false,
-        error: "validation_failed",
-        details: {
-          code: "agent_extra_args_invalid",
-          reason: "option_not_allowed",
-          path: "loops[0].target.extraArgs[0]",
-          index: 0,
-          option: "--durable",
-        },
-      });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ ok: false, error: "invalid_import" });
       expect(await storage.getLoop(legacyLoop.id)).toBeUndefined();
     } finally {
       server.stop(true);
@@ -1435,8 +1425,8 @@ describe("loops-api foundation", () => {
             loops: [{ ...importedLoop, target: { ...importedLoop.target, addDirs } }],
           }),
         });
-        expect(response.status).toBe(422);
-        expect(await response.json()).toEqual({ ok: false, error: "validation_failed" });
+        expect(response.status).toBe(400);
+        expect(await response.json()).toEqual({ ok: false, error: "invalid_import" });
         expect(await storage.getLoop(importedLoop.id)).toBeUndefined();
       }
 
@@ -1469,7 +1459,7 @@ describe("loops-api foundation", () => {
       status: "stopped",
       archivedAt: "2026-01-02T00:00:00.000Z",
       archivedFromStatus: "paused",
-      schedule: { type: "interval", every: "1h" },
+      schedule: { type: "interval", everyMs: 3_600_000 },
       target: { type: "command", command: "true" },
       catchUp: "latest",
       catchUpLimit: 50,
@@ -1491,7 +1481,7 @@ describe("loops-api foundation", () => {
       createdAt: "2026-01-01T00:00:00.000Z",
       updatedAt: "2026-01-01T00:00:05.000Z",
     };
-    const runningRun = { ...terminalRun, id: "run-import-running", scheduledFor: "2026-01-01T01:00:00.000Z", status: "running" };
+    const runningRun = { ...terminalRun, id: "run-import-running", scheduledFor: "2026-01-01T01:00:00.000Z", status: "running", finishedAt: undefined };
 
     try {
       const operationId = "11111111-1111-4111-8111-111111111111";
@@ -1702,6 +1692,113 @@ describe("loops-api foundation", () => {
     }
   });
 
+  test("POST /v1/import rejects malformed bodies, domain rows, and orphan run refs with stable 400 before writes", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage });
+    const baseLoop = {
+      id: "validated-loop",
+      name: "validated-loop",
+      labels: [],
+      status: "paused",
+      schedule: { type: "interval", everyMs: 60_000 },
+      target: { type: "command", command: "true" },
+      catchUp: "none",
+      catchUpLimit: 1,
+      overlap: "skip",
+      maxAttempts: 1,
+      retryDelayMs: 0,
+      leaseMs: 60_000,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+    const orphanRun = {
+      id: "orphan-run",
+      loopId: "missing-loop",
+      loopName: "missing-loop",
+      scheduledFor: "2026-01-01T00:00:00.000Z",
+      attempt: 1,
+      status: "succeeded",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+
+    try {
+      const bodies = [
+        "1",
+        "true",
+        JSON.stringify("scalar"),
+        "null",
+        "[]",
+        JSON.stringify({ workflows: [null] }),
+        JSON.stringify({ workflows: [1] }),
+        JSON.stringify({ workflows: [{ id: "bad-workflow", name: "bad-workflow", version: 1, status: "active", steps: {} }] }),
+        JSON.stringify({ loops: [null] }),
+        JSON.stringify({ runs: [null] }),
+        JSON.stringify({ loops: [{ ...baseLoop, schedule: {} }] }),
+        JSON.stringify({ loops: [{ ...baseLoop, target: { type: "bogus" } }] }),
+        JSON.stringify({ loops: [{ ...baseLoop, target: { type: "workflow", workflowId: "missing-workflow" } }] }),
+        JSON.stringify({ runs: [{ ...orphanRun, status: "queued" }] }),
+        JSON.stringify({ runs: [{ ...orphanRun, loopId: baseLoop.id, status: "running", finishedAt: orphanRun.updatedAt }] }),
+        JSON.stringify({ runs: [orphanRun] }),
+      ];
+      for (const body of bodies) {
+        const response = await fetch(apiUrl(server, "/v1/import"), {
+          method: "POST",
+          headers: jsonHeaders,
+          body,
+        });
+        expect(response.status).toBe(400);
+        expect(await response.json()).toEqual({ ok: false, error: "invalid_import" });
+        expect(await storage.countWorkflows()).toBe(0);
+        expect(await storage.countLoops(undefined, { includeArchived: true })).toBe(0);
+        expect(await storage.countRuns()).toBe(0);
+      }
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
+  test("POST /v1/import rolls back every local write when a later row conflicts", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage });
+    const workflow = (id: string, name: string): WorkflowSpec => ({
+      id,
+      name,
+      version: 1,
+      status: "active",
+      steps: [{ id: "step", target: { type: "command", command: "true" } }],
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+    const existing = workflow("existing-workflow", "occupied-active-name");
+    await storage.upsertMigrationWorkflow(existing, { replace: true });
+
+    try {
+      const first = workflow("must-roll-back", "first-write");
+      const conflicting = workflow("conflicting-workflow", existing.name);
+      const response = await fetch(apiUrl(server, "/v1/import"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({
+          workflows: [first, conflicting],
+          replace: true,
+          preserveWorkflowActivation: true,
+        }),
+      });
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({ ok: false, error: "import_conflict" });
+      expect(await storage.getWorkflow(first.id)).toBeUndefined();
+      expect(await storage.getWorkflow(existing.id)).toEqual(existing);
+      expect(await storage.getWorkflow(conflicting.id)).toBeUndefined();
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
   test("POST /v1/import validates the bounded v2 request before any write", async () => {
     const mod = await import("./index.js");
     const storage = createSqliteLoopStorage(":memory:");
@@ -1729,6 +1826,7 @@ describe("loops-api foundation", () => {
       scheduledFor: "2026-01-02T00:00:00.000Z",
       attempt: 1,
       status: "succeeded",
+      finishedAt: "2026-01-02T00:00:01.000Z",
       createdAt: "2026-01-02T00:00:00.000Z",
       updatedAt: "2026-01-02T00:00:00.000Z",
     } as LoopRun;
@@ -1746,7 +1844,8 @@ describe("loops-api foundation", () => {
           headers: jsonHeaders,
           body: JSON.stringify(body),
         });
-        expect(response.status).toBe(422);
+        expect(response.status).toBe(400);
+        expect(await response.json()).toEqual({ ok: false, error: "invalid_import" });
       }
 
       const oversized = await fetch(apiUrl(server, "/v1/import"), {
@@ -1759,6 +1858,7 @@ describe("loops-api foundation", () => {
       const workflow = {
         id: "must-not-partially-write",
         name: "must-not-partially-write",
+        version: 1,
         status: "active",
         steps: [{ id: "step", target: { type: "command", command: "true" } }],
         createdAt: "2026-01-01T00:00:00.000Z",

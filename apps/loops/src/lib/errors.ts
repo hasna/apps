@@ -170,6 +170,20 @@ export class ValidationError extends CodedError {
   }
 }
 
+/** Stable public refusal for a malformed migration-import body, row, or reference. */
+export class MigrationImportInvalidError extends CodedError {
+  constructor() {
+    super("MIGRATION_IMPORT_INVALID", "migration import request is invalid");
+  }
+}
+
+/** Stable conflict for a migration batch that cannot be represented exactly. */
+export class MigrationImportConflictError extends CodedError {
+  constructor() {
+    super("MIGRATION_IMPORT_CONFLICT", "migration import conflicts with existing destination state");
+  }
+}
+
 /** Safely capture and re-project even forged/subclass validation errors. */
 export function validationErrorPublicDetails(error: ValidationError): Readonly<PublicValidationDetails> | undefined {
   try {

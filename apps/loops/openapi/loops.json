@@ -904,7 +904,7 @@
       "post": {
         "operationId": "importRows",
         "summary": "Bulk id-preserving import (control-plane backfill)",
-        "description": "Upsert bounded workflow/loop/run rows by id with a v2 receipt bound to an operation id, request digest, and exact row ids. Imported workflows are archived and imported loops are paused with scheduling pointers cleared unless explicit preservation is requested. Existing same-id rows are skipped unless replace=true; volatile running runs are skipped and reported. The route preflights known id/slot conflicts, but callers must treat transport or server failure after dispatch as reconciliation-required rather than retrying blindly.",
+        "description": "Atomically import bounded, fully validated workflow/loop/run rows by id with a v2 receipt bound to an operation id, request digest, and exact row ids. Imported workflows are archived and imported loops are paused with scheduling pointers cleared unless explicit preservation is requested. Existing same-id rows are skipped unless replace=true; valid volatile running runs are skipped and reported. Malformed rows and missing workflow/loop references return a stable 400 before any write. Callers must treat transport or server failure after dispatch as reconciliation-required rather than retrying blindly.",
         "requestBody": {
           "required": true,
           "content": {
@@ -926,12 +926,12 @@
               }
             }
           },
-          "422": {
-            "description": "Validation failed. Invalid imported agent extraArgs include bounded public details; other validation failures omit details.",
+          "400": {
+            "description": "The import body, a domain row, or a workflow/loop reference is invalid; no rows were written.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ValidationFailureResponse"
+                  "$ref": "#/components/schemas/ImportValidationResponse"
                 }
               }
             }
@@ -4308,6 +4308,24 @@
           "error"
         ]
       },
+      "ImportValidationResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": false
+          },
+          "error": {
+            "type": "string",
+            "const": "invalid_import"
+          }
+        },
+        "required": [
+          "ok",
+          "error"
+        ]
+      },
       "InvalidLoopStatusResponse": {
         "type": "object",
         "additionalProperties": false,
@@ -5872,24 +5890,21 @@
           "workflows": {
             "type": "array",
             "items": {
-              "type": "object",
-              "additionalProperties": true
+              "$ref": "#/components/schemas/Workflow"
             },
             "maxItems": 2000
           },
           "loops": {
             "type": "array",
             "items": {
-              "type": "object",
-              "additionalProperties": true
+              "$ref": "#/components/schemas/Loop"
             },
             "maxItems": 2000
           },
           "runs": {
             "type": "array",
             "items": {
-              "type": "object",
-              "additionalProperties": true
+              "$ref": "#/components/schemas/Run"
             },
             "maxItems": 2000
           },

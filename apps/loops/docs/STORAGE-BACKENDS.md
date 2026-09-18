@@ -185,12 +185,16 @@ reading the bundle, then plans from bounded `/v1` reads. Hosted rows are public
 projections, so an existing id is skipped by default and is updated only with an
 explicit `--replace`; the client never claims byte equality it cannot observe.
 `--apply` sends only rows marked `insert` or `update` in one `POST /v1/import`.
-The hosted file is capped at 32 MiB. The planner accepts at most 2,000
+The hosted file is capped at 32 MiB. The planner accepts at most 500
 selected rows, fully pages at most 10,000 active workflow definitions, and
 checks at most 500 historical slots per referenced loop. Apply refuses when a safety-critical slot window is incomplete.
-Malformed counts, list rows, row identities, and import receipts fail closed; an
-uncertain mutation receipt is reported as reconciliation-required rather than
-retried automatically.
+The server requires a plain-object request, fully validates workflow, loop,
+schedule, target, and run state, verifies every workflow/loop reference, and
+applies the accepted batch in one storage transaction. Malformed input returns
+the stable HTTP 400 `invalid_import` response before any write. A later storage
+conflict rolls the entire batch back. Malformed counts, list rows, row
+identities, and import receipts also fail closed; an uncertain mutation receipt
+is reported as reconciliation-required rather than retried automatically.
 
 There is no local backup to take. The route's backfill safety applies: imported
 workflow definitions land archived and imported loops land paused with

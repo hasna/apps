@@ -1,8 +1,92 @@
 import { describe, expect, test } from "bun:test";
 import { AmbiguousNameError, RunFinalizationConflictError } from "../errors.js";
+import type { LoopRun, WorkflowSpec } from "../../types.js";
 import { SqliteLoopStorage, createSqliteLoopStorage } from "./sqlite.js";
 
 describe("SqliteLoopStorage", () => {
+  const workflow = (id: string, name: string): WorkflowSpec => ({
+    id,
+    name,
+    version: 1,
+    status: "active",
+    steps: [{ id: "step", target: { type: "command", command: "true" } }],
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  });
+
+  test("migration import rejects orphan run references before any local write", async () => {
+    const storage = createSqliteLoopStorage(":memory:");
+    try {
+      const first = workflow("local-before-orphan", "local-before-orphan");
+      const orphan: LoopRun = {
+        id: "local-orphan-run",
+        loopId: "missing-local-loop",
+        loopName: "missing-local-loop",
+        scheduledFor: "2026-01-01T00:00:00.000Z",
+        attempt: 1,
+        status: "succeeded",
+        finishedAt: "2026-01-01T00:00:01.000Z",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:01.000Z",
+      };
+      await expect(storage.importMigrationRows({ workflows: [first], loops: [], runs: [orphan] }))
+        .rejects.toMatchObject({ code: "MIGRATION_IMPORT_INVALID" });
+      expect(await storage.getWorkflow(first.id)).toBeUndefined();
+      expect(await storage.countRuns()).toBe(0);
+    } finally {
+      await storage.close();
+    }
+  });
+
+  test("migration import rejects a local active-name conflict without partial rows", async () => {
+    const storage = createSqliteLoopStorage(":memory:");
+    try {
+      const existing = workflow("local-existing", "local-occupied-name");
+      await storage.upsertMigrationWorkflow(existing, { replace: true });
+      const first = workflow("local-must-roll-back", "local-first-write");
+      const conflicting = workflow("local-conflicting", existing.name);
+      await expect(storage.importMigrationRows({
+        workflows: [first, conflicting],
+        loops: [],
+        runs: [],
+        replace: true,
+      })).rejects.toMatchObject({ code: "MIGRATION_IMPORT_CONFLICT" });
+      expect(await storage.getWorkflow(first.id)).toBeUndefined();
+      expect(await storage.getWorkflow(existing.id)).toEqual(existing);
+      expect(await storage.getWorkflow(conflicting.id)).toBeUndefined();
+    } finally {
+      await storage.close();
+    }
+  });
+
+  test("migration import rolls back earlier local rows when a later storage write fails", async () => {
+    const storage = createSqliteLoopStorage(":memory:");
+    const first = workflow("local-rollback-first", "local-rollback-first");
+    const failing = workflow("local-rollback-failing", "local-rollback-failing");
+    const raw = storage.store as any;
+    const original = raw.upsertMigrationWorkflow.bind(raw);
+    let writes = 0;
+    raw.upsertMigrationWorkflow = (...args: unknown[]) => {
+      writes += 1;
+      if (writes === 2) throw new Error("forced local migration rollback");
+      return original(...args);
+    };
+    try {
+      await expect(storage.importMigrationRows({
+        workflows: [first, failing],
+        loops: [],
+        runs: [],
+        replace: true,
+      })).rejects.toThrow("forced local migration rollback");
+      expect(writes).toBe(2);
+      expect(await storage.getWorkflow(first.id)).toBeUndefined();
+      expect(await storage.getWorkflow(failing.id)).toBeUndefined();
+    } finally {
+      raw.upsertMigrationWorkflow = original;
+      await storage.close();
+    }
+  });
+
   test("wraps the existing Store with the async storage contract", async () => {
     const storage = createSqliteLoopStorage(":memory:");
     try {

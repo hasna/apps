@@ -7,6 +7,8 @@ export interface PublicValidationDetails { "code": string; "reason": "not_array"
 
 export interface ValidationFailureResponse { "ok": boolean; "error": string; "details"?: PublicValidationDetails }
 
+export interface ImportValidationResponse { "ok": boolean; "error": string }
+
 export interface InvalidLoopStatusResponse { "ok": boolean; "error": string }
 
 export interface AmbiguousNameResponse { "ok": boolean; "error": string }
@@ -101,7 +103,7 @@ export interface WorkflowWorkItemResponse { "ok": boolean; "workItem": WorkflowW
 
 export interface WorkflowWorkItemListResponse { "ok": boolean; "workItems": Array<WorkflowWorkItem> }
 
-export interface ImportInput { "operationId"?: string; "workflows"?: Array<Record<string, unknown>>; "loops"?: Array<Record<string, unknown>>; "runs"?: Array<Record<string, unknown>>; "replace"?: boolean; "preserveLoopScheduling"?: boolean; "preserveWorkflowActivation"?: boolean }
+export interface ImportInput { "operationId"?: string; "workflows"?: Array<Workflow>; "loops"?: Array<Loop>; "runs"?: Array<Run>; "replace"?: boolean; "preserveLoopScheduling"?: boolean; "preserveWorkflowActivation"?: boolean }
 
 export interface ImportResponse { "ok": boolean; "imported": { "workflows": number; "loops": number; "runs": number }; "skippedRunning": number; "skippedExisting": { "workflows": number; "loops": number; "runs": number }; "receipt": ImportReceiptV2 }
 

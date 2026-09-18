@@ -8,6 +8,8 @@ The existing MCP diagnostics (`loops_doctor`, `loops_health`, `loops_health_scan
 
 `loops import <file>` now resolves the authoritative transport before reading the bundle. Hosted previews use bounded `/v1` reads and safe representation-aware comparisons; hosted applies submit only explicit insert/update rows through `POST /v1/import`. The client rejects oversized row sets, incomplete collision windows, malformed count/list responses, mismatched row identities, and untrustworthy mutation receipts. Receipt uncertainty is reported as reconciliation-required rather than inviting a blind retry.
 
+The import route rejects non-object bodies and malformed workflow, loop, schedule, target, and run rows with a stable HTTP 400 before any write. Workflow and run references are verified inside the same SQLite/PostgreSQL transaction that applies the batch, so a later conflict rolls every earlier row back.
+
 The configured app authority remains `https://api.hasna.com/loops`, clients append `/v1` exactly once, and local SQLite remains available only through the explicit `HASNA_LOOPS_LOCAL=1` opt-in.
 
 The hosted import apply now requires the server's `loops.import.v2` receipt, bound to a caller operation id, an exact request digest, and imported/skipped row ids. Deploy the merged server before publishing a client release that enables hosted import.

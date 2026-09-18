@@ -82,11 +82,14 @@ On a hosted connection the command resolves authority before reading the file,
 uses bounded `/v1` reads for its preview, and sends only explicit insert/update
 rows through `POST /v1/import`. Existing public-projection rows are skipped
 unless `--replace` is explicit. Oversized imports, incomplete collision windows,
-malformed responses, and identity mismatches refuse. There is no local backup;
-imported workflows land archived and imported loops land paused with scheduling
-cleared. Hosted apply requires the server's `loops.import.v2` identity-bound
-receipt, so deploy the corresponding server before releasing this client. See
-`docs/STORAGE-BACKENDS.md` for the exact bounds.
+malformed responses, invalid domain rows, missing workflow/loop references, and
+identity mismatches refuse. The server returns stable HTTP 400
+`invalid_import` before writing malformed input and applies accepted rows in one
+transaction, rolling the full batch back on a later conflict. There is no local
+backup; imported workflows land archived and imported loops land paused with
+scheduling cleared. Hosted apply requires the server's `loops.import.v2`
+identity-bound receipt, so deploy the corresponding server before releasing
+this client. See `docs/STORAGE-BACKENDS.md` for the exact 500-row client bound.
 
 No-loss export/import currently preserves workflow specs, loop definitions, and
 terminal loop run history. It intentionally blocks when unsupported durable
