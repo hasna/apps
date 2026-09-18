@@ -3274,6 +3274,36 @@ const INBOUND_MESSAGE_IDENTITY_COLUMN = defineMigration(
   `,
 );
 
+/**
+ * 0027's provenance UPDATE ran after 0013 FORCEd RLS on messages and events.
+ * With no tenant GUC, the serving owner sees zero rows, so the published 0027
+ * remains checksum-identical and this follow-up repeats only its safe backfill
+ * once per authoritative tenant. Unknown or conflicting evidence stays NULL.
+ */
+const MESSAGE_PROVIDER_PROVENANCE_TENANT_BACKFILL = defineMigration(
+  "0044_message_provider_provenance_tenant_backfill",
+  `DO $$
+   DECLARE
+     prior_tenant text := current_setting('app.current_tenant', true);
+     target_tenant uuid;
+   BEGIN
+     FOR target_tenant IN SELECT id FROM tenants ORDER BY id LOOP
+       PERFORM set_config('app.current_tenant', target_tenant::text, true);
+       UPDATE messages m SET provider_id = evidence.provider_id
+       FROM (
+         SELECT tenant_id, email_id, min(provider_id) AS provider_id
+         FROM events
+         WHERE tenant_id = target_tenant AND provider_id IS NOT NULL
+           AND provider_id <> '' AND email_id IS NOT NULL
+         GROUP BY tenant_id, email_id HAVING count(DISTINCT provider_id) = 1
+       ) evidence
+       WHERE m.tenant_id = target_tenant AND m.tenant_id = evidence.tenant_id
+         AND m.id = evidence.email_id AND m.provider_id IS NULL;
+     END LOOP;
+     PERFORM set_config('app.current_tenant', COALESCE(prior_tenant, ''), true);
+   END $$;`,
+);
+
 /** All migrations, in order: api-keys table (auth), the core schema, inbound. */
 export function emailsSelfHostedMigrations(): Migration[] {
   const authMigrations = apiKeyMigrations().map((m) => defineMigration(m.id, m.sql));
@@ -3325,5 +3355,6 @@ export function emailsSelfHostedMigrations(): Migration[] {
     MAILBOX_FILTER_ACTIONS,
     INBOUND_MESSAGE_IDENTITY_INDEX,
     INBOUND_MESSAGE_IDENTITY_COLUMN,
+    MESSAGE_PROVIDER_PROVENANCE_TENANT_BACKFILL,
   ];
 }
