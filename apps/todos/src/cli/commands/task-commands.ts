@@ -2049,14 +2049,28 @@ export function registerTaskCommands(program: Command) {
 
       if (fmt === "json") {
         // Keep the long-standing global --json bare-array contract. Explicit
-        // --format json is the additive authority-envelope surface.
+        // --format json is the additive authority-envelope surface. Both
+        // spellings now share the same byte-fitting path; only the outer shape
+        // differs for compatibility.
         if (opts.format !== "json") {
-          const text = `${JSON.stringify(outputTasks, null, 2)}\n`;
+          const renderLegacyJson = (
+            _pageValue: AuthorityTaskPage,
+            taskValue: Task[],
+            _limited: boolean,
+          ): string => `${JSON.stringify(taskValue, null, 2)}\n`;
+          let text = renderLegacyJson(page, outputTasks, byteLimited);
           if (exhaustAll && Buffer.byteLength(text) > MAX_LIST_ALL_BYTES) {
             handleError(new Error(
               `Refusing --all: pretty JSON response exceeds the ${MAX_LIST_ALL_BYTES}-byte hard ceiling; ` +
               "use paginated output with --limit/--offset or narrow the query.",
             ));
+          }
+          while (!exhaustAll && Buffer.byteLength(text) > MAX_LIST_PAGE_BYTES && outputTasks.length > 0) {
+            await applyByteLimitedPrefix(largestFittingPrefix(renderLegacyJson));
+            text = renderLegacyJson(page, outputTasks, byteLimited);
+          }
+          if (Buffer.byteLength(text) > maxBytes) {
+            handleError(new Error(`Task list output exceeds the ${maxBytes}-byte output ceiling`));
           }
           process.stdout.write(text);
           return;

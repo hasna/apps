@@ -730,7 +730,10 @@ describe("CLI integration", () => {
     const globalJson = await runCli(["list", "--json"], dbPath);
     expect(globalJson.exitCode).toBe(0);
     expectLocalModeStderr(globalJson);
-    expect(JSON.parse(globalJson.stdout)).toHaveLength(50);
+    expect(Buffer.byteLength(globalJson.stdout)).toBeLessThanOrEqual(64 * 1024);
+    const globalRows = JSON.parse(globalJson.stdout);
+    expect(globalRows.length).toBeGreaterThan(0);
+    expect(globalRows.length).toBeLessThan(50);
 
     const formatJson = await runCli(["list", "--format", "json"], dbPath);
     expect(formatJson.exitCode).toBe(0);
@@ -751,7 +754,10 @@ describe("CLI integration", () => {
     const completedJson = await runCli(["list", "--status", "completed", "--json"], dbPath);
     expect(completedJson.exitCode).toBe(0);
     expectLocalModeStderr(completedJson);
-    expect(JSON.parse(completedJson.stdout)).toHaveLength(50);
+    expect(Buffer.byteLength(completedJson.stdout)).toBeLessThanOrEqual(64 * 1024);
+    const completedRows = JSON.parse(completedJson.stdout);
+    expect(completedRows.length).toBeGreaterThan(0);
+    expect(completedRows.length).toBeLessThan(50);
 
     const exhaustive = await runCli(["list", "--all", "--format", "json"], dbPath);
     expect(exhaustive.exitCode).toBe(0);

@@ -128,6 +128,27 @@ describe("todos list token-efficient pagination", () => {
     }
   });
 
+  test("legacy global --json keeps its bare array but obeys the 64 KiB page ceiling", async () => {
+    const rows = Array.from({ length: 75 }, (_, index) => task(index, 5_000));
+    const { server, requests } = pagedServer(rows);
+    try {
+      const result = await runCli(["--json", "list", "--status", "pending"], `http://127.0.0.1:${server.port}/todos`);
+      expect(result.exitCode).toBe(0);
+      expect(Buffer.byteLength(result.stdout)).toBeLessThanOrEqual(65_536);
+      const page = JSON.parse(result.stdout) as Array<{ id: string }>;
+      expect(Array.isArray(page)).toBe(true);
+      expect(page.length).toBeGreaterThan(0);
+      expect(page.length).toBeLessThan(50);
+      expect(result.stderr).toContain("bounded or snapshot-unknown page");
+      expect(result.stderr).toMatch(/--(?:cursor|offset) /);
+      expect(requests.length).toBe(2);
+      expect(Number(requests[1]!.searchParams.get("limit"))).toBe(page.length);
+      expect(requests.every((url) => url.pathname === "/todos/v1/tasks")).toBe(true);
+    } finally {
+      server.stop(true);
+    }
+  });
+
   test("compact output carries truthful total/has_more/next_offset metadata", async () => {
     const rows = Array.from({ length: 75 }, (_, index) => task(index));
     const { server } = pagedServer(rows);
