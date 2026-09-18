@@ -19,6 +19,16 @@ import { withHostedTools } from "./hosted-tool-harness.js";
 
 const iso = (offsetMs: number) => new Date(Date.now() + offsetMs).toISOString();
 
+const agentPage = (agents: Array<Record<string, unknown>>, req: { query: URLSearchParams }) => ({
+  agents,
+  count: agents.length,
+  total: agents.length,
+  limit: Number(req.query.get("limit")),
+  offset: Number(req.query.get("offset")),
+  has_more: false,
+  next_offset: null,
+});
+
 const dependencyPage = (dependencies: Array<{ task_id: string; depends_on: string }>) => ({
   dependencies,
   count: dependencies.length,
@@ -70,7 +80,7 @@ test("task-adv: standup, claim_task, release_task, extend_task, get_comments and
     registerTaskAdvTools as never,
     {
       "GET /v1/tasks": () => ({ tasks: [{ ...mine, status: "in_progress" }, other, blocker], total: 3 }),
-      "GET /v1/agents": () => ({ agents: [{ id: "ada", name: "ada", last_seen_at: iso(0) }], count: 1 }),
+      "GET /v1/agents": (req) => agentPage([{ id: "ada", name: "ada", last_seen_at: iso(0) }], req),
       "GET /v1/dependencies": () => dependencyPage([{ task_id: mine.id, depends_on: blocker.id }]),
       "GET /v1/tasks/:id": (req) => ({ task: req.path.includes(blocker.id) ? blocker : mine }),
       "POST /v1/tasks/:id/start": () => ({ task: { ...mine, status: "in_progress", assigned_to: "ada" } }),

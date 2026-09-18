@@ -44,6 +44,11 @@ import { changedSinceStampNewer } from "../lib/instant-compare.js";
 import type {
   ActiveWorkItem,
   TodosActiveWorkFilter,
+  TodosBulkCreateReceipt,
+  TodosBulkCreateTaskInput,
+  TodosBulkDeleteReceipt,
+  TodosAgentPage,
+  TodosAgentPageOptions,
   TodosAgentUpdateInput,
   CreateTodosVerificationInput,
   CreateTodosCommitInput,
@@ -67,6 +72,8 @@ import type {
   TodosTaskDependencies,
   TodosTaskFailureOptions,
   TodosTaskFailureResult,
+  TodosTaskHistoryPage,
+  TodosTaskHistoryPageOptions,
   TodosTaskVerification,
   UpdateTemplateInput,
 } from "./interfaces.js";
@@ -168,6 +175,8 @@ export function createPostgresTodosStorageAdapter(
       count: (filter = {}) => store.countTasks(filter),
       update: (id, input, context) => updateTask(id, input, store, context),
       delete: (id, context) => store.deleteTaskHierarchy(id, context),
+      bulkCreateAtomic: (inputs, context) => bulkCreateTasksAtomic(inputs, store, context),
+      bulkDeleteAtomic: (ids, force, context) => bulkDeleteTasksAtomic(ids, force, store, context),
       start: (id, agentId) => startTask(id, agentId, store),
       complete: (id, agentId, options) => completeTask(id, agentId, options, store),
       fail: (id, agentId, reason, options) => failTask(id, agentId, reason, options, store),
@@ -257,6 +266,7 @@ export function createPostgresTodosStorageAdapter(
       list: async (options) => (await store.list<Agent>("agents"))
         .filter((agent) => options?.include_archived || agent.status !== "archived")
         .sort((a, b) => a.name.localeCompare(b.name)),
+      listPage: (options) => store.listAgentPage(options),
       update: (id, input) => updateAgent(id, input, store),
       heartbeat: (idOrName, context) => heartbeatAgent(idOrName, store, context),
       release: (idOrName, sessionId, context) => releaseAgent(idOrName, sessionId, store, context),
@@ -319,10 +329,9 @@ export function createPostgresTodosStorageAdapter(
       },
       getTaskHistory: async (taskId) => (await store.list<TaskHistory>("audit_history"))
         .filter((entry) => entry.task_id === taskId)
-        .sort((a, b) => a.created_at.localeCompare(b.created_at)),
-      getRecentActivity: async (limit = 20) => (await store.list<TaskHistory>("audit_history"))
-        .sort((a, b) => b.created_at.localeCompare(a.created_at))
-        .slice(0, limit),
+        .sort((a, b) => b.created_at.localeCompare(a.created_at) || b.id.localeCompare(a.id)),
+      getTaskHistoryPage: (taskId, options) => store.listTaskHistoryPage(taskId, options),
+      getRecentActivity: (limit = 20) => store.listRecentActivity(limit),
     },
     machines: createPostgresMachineRegistry(options.client, options.service ?? "todos", options.tableName ?? DEFAULT_TODOS_POSTGRES_SYNC_TABLE, () => store.ensureSchema()),
     atomicProjectMigration: createAtomicProjectMigration({ client: options.client, table: options.tableName ?? DEFAULT_TODOS_POSTGRES_SYNC_TABLE, service: options.service ?? "todos", ensureSchema: () => store.ensureSchema() }),
@@ -361,6 +370,7 @@ class PostgresJsonRecordStore {
   /** Serialize graph validation and writes with task deletion on one connection. */
   async withDependencyGraphTransaction<T>(fn: (store: PostgresJsonRecordStore) => Promise<T>): Promise<T> {
     await this.ensureSchema();
+    if (this.projectIntegrityLocked) return fn(this);
     return this.withTaskParentIntegrityTransaction(async client => {
       const scoped = new PostgresJsonRecordStore({ ...this.options, client });
       // Schema was ensured before BEGIN; do not run DDL inside this transaction.
@@ -548,6 +558,98 @@ class PostgresJsonRecordStore {
 
   async list<T>(type: RemoteObjectType): Promise<T[]> {
     return (await this.listRecords<T>(type)).map((record) => record.payload);
+  }
+
+  async listAgentPage(options: TodosAgentPageOptions): Promise<TodosAgentPage> {
+    const { limit, offset } = options;
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) {
+      throw new Error("Postgres agent page limit must be an integer from 1 to 500");
+    }
+    if (!Number.isSafeInteger(offset) || offset < 0) {
+      throw new Error("Postgres agent page offset must be a non-negative integer");
+    }
+    await this.ensureSchema();
+    const result = await this.options.client.query<{ total: unknown; agents: unknown }>(
+      `/* todos:list-agent-page */ WITH filtered AS (
+         SELECT object_id, payload
+         FROM ${this.tableName}
+         WHERE service = $1 AND object_type = 'agents' AND deleted_at IS NULL
+           AND ($2::boolean OR COALESCE(payload->>'status', 'active') <> 'archived')
+       ), page AS (
+         SELECT object_id, payload FROM filtered
+         ORDER BY LOWER(payload->>'name'), object_id
+         LIMIT $3 OFFSET $4
+       )
+       SELECT (SELECT count(*) FROM filtered) AS total,
+              COALESCE((SELECT jsonb_agg(payload ORDER BY LOWER(payload->>'name'), object_id) FROM page), '[]'::jsonb) AS agents`,
+      [this.service, options.include_archived === true, limit, offset],
+    );
+    const row = result.rows[0];
+    const total = Number(row?.total);
+    if (!Number.isSafeInteger(total) || total < 0 || !Array.isArray(row?.agents)) {
+      throw new Error("Postgres agent page returned invalid count or agents");
+    }
+    if (row.agents.length > limit || (row.agents.length > 0 && offset + row.agents.length > total)) {
+      throw new Error("Postgres agent page exceeded its requested bounds");
+    }
+    return { agents: row.agents.map((value) => payloadRecord<Agent>(value)), total };
+  }
+
+  async listRecentActivity(limit: number): Promise<TaskHistory[]> {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 10_000) {
+      throw new Error("Postgres recent activity limit must be an integer from 1 to 10000");
+    }
+    await this.ensureSchema();
+    const result = await this.options.client.query<{ payload: unknown }>(
+      `/* todos:list-recent-activity */ SELECT payload
+       FROM ${this.tableName}
+       WHERE service = $1 AND object_type = 'audit_history' AND deleted_at IS NULL
+       ORDER BY payload->>'created_at' DESC, object_id DESC
+       LIMIT $2`,
+      [this.service, limit],
+    );
+    return result.rows.map((row) => payloadRecord<TaskHistory>(row.payload));
+  }
+
+  async listTaskHistoryPage(
+    taskId: string,
+    options: TodosTaskHistoryPageOptions,
+  ): Promise<TodosTaskHistoryPage> {
+    const { limit, offset } = options;
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) {
+      throw new Error("Postgres task history limit must be an integer from 1 to 500");
+    }
+    if (!Number.isSafeInteger(offset) || offset < 0) {
+      throw new Error("Postgres task history offset must be a non-negative integer");
+    }
+    await this.ensureSchema();
+    const direction = options.order === "asc" ? "ASC" : "DESC";
+    const result = await this.options.client.query<{ total: unknown; history: unknown }>(
+      `/* todos:list-task-history-page */ WITH filtered AS (
+         SELECT object_id, payload, payload->>'created_at' AS created_at
+         FROM ${this.tableName}
+         WHERE service = $1 AND object_type = 'audit_history' AND deleted_at IS NULL
+           AND payload->>'task_id' = $2
+           AND ($3::text IS NULL OR payload->>'created_at' >= $3)
+           AND ($4::text IS NULL OR payload->>'created_at' <= $4)
+       ), page AS (
+         SELECT object_id, payload, created_at FROM filtered
+         ORDER BY created_at ${direction}, object_id ${direction}
+         LIMIT $5 OFFSET $6
+       )
+       SELECT (SELECT count(*) FROM filtered) AS total,
+              COALESCE((SELECT jsonb_agg(payload ORDER BY created_at ${direction}, object_id ${direction}) FROM page), '[]'::jsonb) AS history`,
+      [this.service, taskId, options.since ?? null, options.until ?? null, limit, offset],
+    );
+    const row = result.rows[0];
+    const total = Number(row?.total);
+    if (!Number.isSafeInteger(total) || total < 0 || !Array.isArray(row?.history)) {
+      throw new Error("Postgres task history page returned invalid count or history");
+    }
+    if (row.history.length > limit || (row.history.length > 0 && offset + row.history.length > total)) {
+      throw new Error("Postgres task history page exceeded its requested bounds");
+    }
+    return { history: row.history.map((value) => payloadRecord<TaskHistory>(value)), total };
   }
 
   async listDependencyPage(options: { limit: number; offset: number }): Promise<{ dependencies: TaskDependency[]; total: number }> {
@@ -743,8 +845,11 @@ class PostgresJsonRecordStore {
       if (values.length === 0) return "1=0";
       return `${column} IN (${values.map((v) => p(v)).join(", ")})`;
     };
-    // Explicit archive selection is shared by list/count. Omitted requests retain predecessor behavior.
-    if (filter.include_archived === false) conds.push(`(payload->>'archived_at' IS NULL)`);
+    // Explicit archive selection is shared by list/count and applied before
+    // LIMIT/OFFSET. archived_only prevents a small archive page from scanning
+    // or materializing the fleet's complete live task corpus.
+    if (filter.archived_only === true) conds.push(`(payload->>'archived_at' IS NOT NULL)`);
+    else if (filter.include_archived === false) conds.push(`(payload->>'archived_at' IS NULL)`);
     if (filter.ids) conds.push(inClause("payload->>'id'", filter.ids));
     if (filter.project_id !== undefined) conds.push(`payload->>'project_id' = ${p(filter.project_id)}`);
     if (filter.parent_id !== undefined) conds.push(`payload->>'parent_id' IS NOT DISTINCT FROM ${p(filter.parent_id)}`);
@@ -824,9 +929,11 @@ class PostgresJsonRecordStore {
     // With a search query, rank by full-text relevance first (parity with the
     // SQLite bm25() ordering), then fall back to the standard priority/recency
     // tiebreak. Trigram-only fuzzy hits rank 0 and sort after exact matches.
-    const orderBy = queryRef
-      ? `ORDER BY ts_rank_cd(task_search_tsv, websearch_to_tsquery('simple', todos_immutable_unaccent(${queryRef}))) DESC, ${TASK_ORDER_TIEBREAK}`
-      : TASK_ORDER_BY;
+    const orderBy = filter.archived_only
+      ? `ORDER BY payload->>'archived_at' DESC, object_id DESC`
+      : queryRef
+        ? `ORDER BY ts_rank_cd(task_search_tsv, websearch_to_tsquery('simple', todos_immutable_unaccent(${queryRef}))) DESC, ${TASK_ORDER_TIEBREAK}`
+        : TASK_ORDER_BY;
     let sql = `/* todos:list-tasks */ SELECT payload FROM ${this.tableName} WHERE ${where} ${orderBy}`;
     if (filter.limit !== undefined) {
       params.push(filter.limit);
@@ -1196,6 +1303,12 @@ class PostgresJsonRecordStore {
     const planIds = [...new Set(guardedPlanIds.filter(Boolean))].sort();
     if (planIds.length === 0 && !parentGuard) return this.upsert("tasks", value, context);
     await this.ensureSchema();
+    // A dependency-graph transaction already holds the task-parent advisory
+    // lock and supplies a transaction-scoped client. Re-entering
+    // transaction(callback) from that scoped client is both unnecessary and
+    // unsupported by Bun.SQL. Reuse the held client so parent/plan guards and
+    // the task insert remain in the one outer bulk transaction.
+    if (!queryClient && this.projectIntegrityLocked) queryClient = this.options.client;
     if (!queryClient) {
       return this.withTaskParentIntegrityTransaction((client) =>
         this.upsertTaskWithPlanMembershipGuard(
@@ -1843,9 +1956,11 @@ class PostgresJsonRecordStore {
     context: TodosStorageContext = {},
   ): Promise<boolean> {
     await this.ensureSchema();
-    return this.withTaskParentIntegrityTransaction(async (client) => {
-      const timestamp = new Date().toISOString();
-      const result = await client.query<{
+    if (!this.projectIntegrityLocked) {
+      return this.withDependencyGraphTransaction((scoped) => scoped.deleteTaskHierarchy(id, context));
+    }
+    const timestamp = new Date().toISOString();
+    const result = await this.options.client.query<{
         found: boolean;
         deleted_count: number | string;
         related_deleted_count: number | string;
@@ -1918,9 +2033,8 @@ class PostgresJsonRecordStore {
           timestamp,
           context.requestId ?? this.sourceMachineId ?? null,
         ],
-      );
-      return Boolean(result.rows[0]?.found);
-    });
+    );
+    return Boolean(result.rows[0]?.found);
   }
 
   async getPlanProjectLinkReceipt(receiptId: string): Promise<PlanProjectLinkReceipt | null> {
@@ -2484,6 +2598,112 @@ class PostgresJsonRecordStore {
       [this.service, name, value],
     );
   }
+}
+
+async function bulkCreateTasksAtomic(
+  inputs: TodosBulkCreateTaskInput[],
+  store: PostgresJsonRecordStore,
+  context?: TodosStorageContext,
+): Promise<TodosBulkCreateReceipt> {
+  return store.withDependencyGraphTransaction(async (scoped) => {
+    const tempIds = new Map<string, string>();
+    const created: TodosBulkCreateReceipt["created"] = [];
+    const dependencies: TaskDependency[] = [];
+
+    for (const input of inputs) {
+      const { temp_id, depends_on: _dependsOn, ...taskInput } = input;
+      const task = await createTask(taskInput, scoped, context);
+      if (temp_id) tempIds.set(temp_id, task.id);
+      created.push({ temp_id: temp_id ?? null, id: task.id, short_id: task.short_id, title: task.title });
+    }
+
+    for (let index = 0; index < inputs.length; index++) {
+      const input = inputs[index]!;
+      const taskId = created[index]!.id;
+      const seenDependencies = new Set<string>();
+      for (const reference of input.depends_on ?? []) {
+        const exact = tempIds.get(reference) ?? (await scoped.get<Task>("tasks", reference))?.id;
+        const dependencyId = exact ?? (await scoped.resolveTaskRef(reference))?.id;
+        if (!dependencyId) throw new TaskNotFoundError(reference);
+        if (seenDependencies.has(dependencyId)) {
+          throw new ResourceConflictError("BULK_CREATE_DUPLICATE_DEPENDENCY", `Multiple references resolve to dependency ${dependencyId}`);
+        }
+        seenDependencies.add(dependencyId);
+        dependencies.push(await addDependency(taskId, dependencyId, scoped, context));
+      }
+    }
+
+    return { schema_version: 1, atomic: true, created, dependencies };
+  });
+}
+
+async function bulkDeleteTasksAtomic(
+  ids: string[],
+  force: boolean,
+  store: PostgresJsonRecordStore,
+  context?: TodosStorageContext,
+): Promise<TodosBulkDeleteReceipt> {
+  return store.withDependencyGraphTransaction(async (scoped) => {
+    const resolved: Array<{ reference: string; task: Task | null }> = [];
+    for (const reference of ids) {
+      resolved.push({
+        reference,
+        task: (await scoped.get<Task>("tasks", reference)) ?? await scoped.resolveTaskRef(reference),
+      });
+    }
+    const seen = new Set<string>();
+    for (const item of resolved) {
+      if (!item.task) continue;
+      if (seen.has(item.task.id)) {
+        throw new ResourceConflictError("BULK_DELETE_DUPLICATE_TASK", `Multiple references resolve to task ${item.task.id}`);
+      }
+      seen.add(item.task.id);
+    }
+
+    const childState = new Map<string, boolean>();
+    for (const item of resolved) {
+      if (!item.task) continue;
+      const children = await scoped.listTasks({ parent_id: item.task.id, include_subtasks: true, limit: 1 });
+      childState.set(item.task.id, children.length > 0);
+    }
+    const planned = resolved.filter((item) => item.task && (force || !childState.get(item.task.id))) as Array<{ reference: string; task: Task }>;
+    const plannedIds = new Set(planned.map((item) => item.task.id));
+    const roots: Array<{ reference: string; task: Task }> = [];
+    for (const item of planned) {
+      if (!force) {
+        roots.push(item);
+        continue;
+      }
+      let parentId = item.task.parent_id;
+      let covered = false;
+      while (parentId) {
+        if (plannedIds.has(parentId)) {
+          covered = true;
+          break;
+        }
+        parentId = (await scoped.get<Task>("tasks", parentId))?.parent_id ?? null;
+      }
+      if (!covered) roots.push(item);
+    }
+    for (const item of roots) {
+      if (!(await scoped.deleteTaskHierarchy(item.task.id, context))) {
+        throw new Error(`Atomic bulk delete lost task ${item.task.id}`);
+      }
+    }
+
+    return {
+      schema_version: 1,
+      atomic: true,
+      force,
+      results: resolved.map((item) => {
+        if (!item.task) return { requested_id: item.reference, task_id: null, outcome: "missing" as const, reason: "not_found" as const };
+        if (!force && childState.get(item.task.id)) {
+          return { requested_id: item.reference, task_id: item.task.id, outcome: "skipped" as const, reason: "has_children" as const };
+        }
+        return { requested_id: item.reference, task_id: item.task.id, outcome: "deleted" as const, reason: null };
+      }),
+    };
+  });
 }
 
 async function createTask(input: CreateTaskInput, store: PostgresJsonRecordStore, context?: TodosStorageContext): Promise<Task> {

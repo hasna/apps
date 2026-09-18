@@ -15,7 +15,7 @@ const PAGE: DependencyPage = {
 test("OpenAPI documents the storage-bounded /v1/dependencies page contract", () => {
   const operation = buildV1OpenApiDocument().paths["/v1/dependencies"].get;
   expect(operation.operationId).toBe("listDependencies");
-  expect(operation.description).toContain("LIMIT/OFFSET before materializing rows");
+  expect(operation.description).toContain("LIMIT/OFFSET before materializing edges");
   expect(operation.parameters).toEqual([
     expect.objectContaining({
       name: "limit",

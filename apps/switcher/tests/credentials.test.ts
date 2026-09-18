@@ -137,12 +137,13 @@ test("actual CLI resolves its vault binding, launches directly, preserves exit c
     const executable = join(dir,"claude-fixture");
     await writeFile(executable,`#!${process.execPath}
 if(process.argv.includes('--version')) console.log('2.1.263 (Claude Code)');
-else { console.log(JSON.stringify({auth:!!process.env.ANTHROPIC_AUTH_TOKEN&&process.env.ANTHROPIC_AUTH_TOKEN!=='fixture-provider-key',model:process.env.ANTHROPIC_DEFAULT_MODEL,subagent:process.env.CLAUDE_CODE_SUBAGENT_MODEL,leaked:Object.keys(process.env).filter(n=>/^(HASNA_|SWITCHER_CREDENTIAL_)/.test(n))})); process.exit(7); }
+else { console.log(JSON.stringify({auth:!!process.env.ANTHROPIC_AUTH_TOKEN&&process.env.ANTHROPIC_AUTH_TOKEN!=='fixture-provider-key',model:process.env.ANTHROPIC_DEFAULT_MODEL,subagent:process.env.CLAUDE_CODE_SUBAGENT_MODEL,stateHome:process.env.HASNA_CLAUDE_STATE_HOME,leaked:Object.keys(process.env).filter(n=>/^(HASNA_|SWITCHER_CREDENTIAL_)/.test(n)&&n!=='HASNA_CLAUDE_STATE_HOME')})); process.exit(7); }
 `,{mode:0o700});
     const args = ["launch","claude","--provider","generic-anthropic-messages","--url",upstream.url.origin,"--credential-env","SWITCHER_PROVIDER_FIXTURE","--model","fixture-pro","--executable",executable];
     const poisoned = {HASNA_SECRETS_API_KEY:"fixture-operator",HASNA_SECRETS_API_KEY_OVERRIDE:"fixture-wrong",HASNA_SECRETS_API_KEY_REF:"fixture/wrong",SECRETS_API_URL:"https://wrong.example",SECRETS_API_KEY:"fixture-wrong",UNRELATED_API_KEY:"fixture-unrelated"};
     const result = await command(dir,args,poisoned);
     expect(result.code,result.stderr).toBe(7);
+    // Shared-state consent markers are Switcher input and never enter provider children.
     expect(JSON.parse(result.stdout)).toEqual({auth:true,model:"fixture-pro",subagent:"fixture-pro",leaked:[]});
     expect(requests).toBe(1);
     const invocation = await Bun.file(join(dir,"vault-invoked.json")).json();

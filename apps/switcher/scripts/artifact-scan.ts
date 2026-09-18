@@ -10,7 +10,8 @@ try {
   const pack = Bun.spawn(["npm","pack","--ignore-scripts","--dry-run=false","--json","--pack-destination",directory],{stdout:"pipe",stderr:"inherit"});
   const output = await new Response(pack.stdout).text();
   if(await pack.exited) throw new Error("npm pack failed");
-  const file = JSON.parse(output)[0].filename;
-  const scan = Bun.spawn([process.execPath,"./node_modules/@hasna/contracts/dist/cli/contracts-cli.js","artifact-scan",join(directory,file)],{stdout:"inherit",stderr:"inherit"});
+  const receipt = JSON.parse(output)[0] as {filename:string;files?:Array<{path?:string}>};
+  if (!receipt.files?.some(entry => entry.path === "dist/codex-state-bridge.js")) throw new Error("Packed Switcher artifact is missing the native Codex state bridge.");
+  const scan = Bun.spawn([process.execPath,"./node_modules/@hasna/contracts/dist/cli/contracts-cli.js","artifact-scan",join(directory,receipt.filename)],{stdout:"inherit",stderr:"inherit"});
   if(await scan.exited) process.exitCode=1;
 } finally {await rm(directory,{recursive:true,force:true});}

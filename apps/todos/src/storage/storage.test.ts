@@ -115,6 +115,8 @@ describe("storage adapter contracts", () => {
       "count",
       "update",
       "delete",
+      "bulkCreateAtomic",
+      "bulkDeleteAtomic",
       "start",
       "complete",
       "fail",
@@ -129,7 +131,7 @@ describe("storage adapter contracts", () => {
     expectStore(adapter, "agents", ["register", "get", "getByName", "list", "update"]);
     expectStore(adapter, "taskLists", ["create", "get", "getBySlug", "list", "update", "delete"]);
     expectStore(adapter, "templates", ["create", "get", "list", "update", "delete", "getWithTasks"]);
-    expectStore(adapter, "audit", ["logTaskChange", "addComment", "getTaskHistory", "getRecentActivity"]);
+    expectStore(adapter, "audit", ["logTaskChange", "addComment", "getTaskHistory", "getTaskHistoryPage", "getRecentActivity"]);
     expectStore(adapter, "sync", ["getTasksChangedSince", "exportSnapshot", "importSnapshot"]);
     expectStore(adapter, "integrity", ["report"]);
   });
@@ -3645,6 +3647,19 @@ function createMemoryPostgresClient(options: { rejectWritesForObjectType?: strin
         return { rows: [{ payload }] as T[] };
       }
 
+      if (sql.includes("todos:list-recent-activity")) {
+        const [service, rawLimit] = values;
+        const selected = [...rows.values()]
+          .filter((row) => row.service === service && row.objectType === "audit_history" && !row.deletedAt)
+          .sort((left, right) => {
+            const leftCreatedAt = String((left.payload as Record<string, unknown>)["created_at"]);
+            const rightCreatedAt = String((right.payload as Record<string, unknown>)["created_at"]);
+            return rightCreatedAt.localeCompare(leftCreatedAt) || right.objectId.localeCompare(left.objectId);
+          })
+          .slice(0, Number(rawLimit));
+        return { rows: selected.map((row) => ({ payload: row.payload })) as T[] };
+      }
+
       // SQL-side task list/count (buildTaskFilterSql). Resolve each predicate's
       // bound value(s) by the explicit `$N` placeholder index found in the SQL,
       // then filter/sort/paginate the in-memory rows. KEEP IN SYNC with
@@ -3667,6 +3682,11 @@ function createMemoryPostgresClient(options: { rejectWritesForObjectType?: strin
           return [...group.matchAll(/\$(\d+)/g)].map((m) => values[Number(m[1]) - 1]);
         };
         const preds: Array<(t: Record<string, unknown>) => boolean> = [];
+        if (sql.includes("payload->>'archived_at' IS NOT NULL")) {
+          preds.push((t) => t["archived_at"] != null);
+        } else if (sql.includes("payload->>'archived_at' IS NULL")) {
+          preds.push((t) => t["archived_at"] == null);
+        }
         if (sql.includes("payload->>'id' IN (")) {
           const ids = grabIn("payload->>'id' IN (")!;
           preds.push((t) => ids.includes(t["id"]));
@@ -3733,9 +3753,11 @@ function createMemoryPostgresClient(options: { rejectWritesForObjectType?: strin
           return { rows: [{ count: selected.length }] as T[] };
         }
         const rank = (p: unknown) => ({ critical: 0, high: 1, medium: 2, low: 3 } as Record<string, number>)[String(p)] ?? 4;
-        selected = selected.sort((a, b) =>
-          rank(a["priority"]) - rank(b["priority"]) ||
-          String(a["created_at"]).localeCompare(String(b["created_at"])));
+        selected = sql.includes("payload->>'archived_at' DESC")
+          ? selected.sort((a, b) => String(b["archived_at"]).localeCompare(String(a["archived_at"])) || String(b["id"]).localeCompare(String(a["id"])))
+          : selected.sort((a, b) =>
+              rank(a["priority"]) - rank(b["priority"]) ||
+              String(a["created_at"]).localeCompare(String(b["created_at"])));
         const limit = sql.includes("LIMIT $") ? Number(grabScalar("LIMIT ")) : undefined;
         const offset = sql.includes("OFFSET $") ? Number(grabScalar("OFFSET ")) : 0;
         const page = selected.slice(offset, limit === undefined ? undefined : offset + limit);

@@ -1399,7 +1399,8 @@ describe("/v1 dependency analytics pagination", () => {
       has_more: false,
       next_offset: null,
     });
-    expect(listAllCalls).toBe(1);
+    expect(pageCalls).toEqual([{ limit: 1, offset: 0 }, { limit: 1, offset: 1 }, { limit: 500, offset: 0 }]);
+    expect(listAllCalls).toBe(0);
 
     expect((await request("/v1/dependencies?limit=501"))?.status).toBe(400);
     expect((await request("/v1/dependencies?offset=-1"))?.status).toBe(400);
@@ -1441,7 +1442,9 @@ describe("/v1 dependency analytics pagination", () => {
     };
     expect(body.dependencies).toHaveLength(500);
     expect(body).toMatchObject({ count: 500, total: 25_000, next_offset: 10_500 });
-    expect(pageCalls).toEqual([{ limit: 500, offset: 10_000 }]);
+    const legacy = await request("/v1/dependencies");
+    expect(legacy?.status).toBe(426);
+    expect(pageCalls).toEqual([{ limit: 500, offset: 10_000 }, { limit: 500, offset: 0 }]);
     expect(listAllCalls).toBe(0);
   });
 });
