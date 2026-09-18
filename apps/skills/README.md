@@ -592,13 +592,20 @@ before submitting again. The selected profile must include this exact version,
 and the consumer needs `runs:write` as well as `skills:read`.
 
 Cloud execution is enabled only when the deployment configures a reviewed image
-and exact bundle allowlist. The first supported lane is `pdf-generate`; arbitrary
-uploaded code is not admitted. Runs capture version, bundle digest, input digest,
+and exact bundle allowlist; arbitrary
+uploaded code is not admitted. The PDF lane accepts reviewed `pdf-generate` versions.
+The optional `regex-test.v1` pure contract accepts only a tenant-specific, reviewed
+self-contained Bun bundle, with no secrets, dependencies or network. Uploading or
+selecting a bundle never admits it to cloud execution. Check an exact version with
+`skills executions eligibility <skill> --skill-version <version> --json`; this
+reads metadata without creating a run. Runs capture version, bundle digest, input digest,
 runtime image digest, limits and policy. The cloud worker runs in a separate
 Fargate task; the skill process has no API/provider credentials, no network, a
 read-only root and bounded temporary storage, execution time and output.
 `GET /skills/v1/capabilities` reports whether this deployment has cloud execution
-configured. Authorization and runtime availability are checked separately.
+configured and lists supported `cloudExecutionContracts`. Each exact bundle needs
+its own review and admission; the flag does not promise arbitrary executable
+support. Authorization and runtime availability are checked separately.
 
 On a managed station, local execution also resolves the selected immutable
 bundle. Self-contained local executables run with explicit environment references
@@ -1433,7 +1440,7 @@ src/
 |---|---|---|
 | Catalog skills | 0 | `SKILLS.length` (`src/lib/registry-data/`) |
 | Categories | 17 | `CATEGORIES` (`src/lib/registry-types.ts`) |
-| MCP tools | 81 | `tools/list` against a live `buildServer()` |
+| MCP tools | 82 | `tools/list` against a live `buildServer()` |
 
 Every number in this table is re-derived from the source tree on each test run by
 `src/lib/readme-derived-counts.test.ts`, so a drifted figure fails a test rather

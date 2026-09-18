@@ -39,7 +39,7 @@ export interface RuntimeJob {
   attempts: AttemptRecord[];
   receipts: AttemptReceipt[];
   transitions: RunTransitionRecord[];
-  input?: { content: string; title?: string };
+  input?: { content: string; title?: string } | { pattern: string; text: string; flags: string };
   bundleBase64?: string;
   result?: RuntimeResult;
 }
