@@ -238,6 +238,32 @@ export interface TodosVerificationStore {
   list(taskId: string, context?: TodosStorageContext): MaybePromise<TodosTaskVerification[]>;
 }
 
+export interface TodosBulkCreateTaskInput extends CreateTaskInput {
+  /** Caller-local handle used only to reference siblings within this atomic batch. */
+  temp_id?: string;
+  /** Existing task ids/refs or temp_id values from the same request. */
+  depends_on?: string[];
+}
+
+export interface TodosBulkCreateReceipt {
+  schema_version: 1;
+  atomic: true;
+  created: Array<{ temp_id: string | null; id: string; short_id: string | null; title: string }>;
+  dependencies: TaskDependency[];
+}
+
+export interface TodosBulkDeleteReceipt {
+  schema_version: 1;
+  atomic: true;
+  force: boolean;
+  results: Array<{
+    requested_id: string;
+    task_id: string | null;
+    outcome: "deleted" | "skipped" | "missing";
+    reason: "has_children" | "not_found" | null;
+  }>;
+}
+
 export interface TodosTaskStore {
   create(input: CreateTaskInput, context?: TodosStorageContext): MaybePromise<Task>;
   get(id: string, context?: TodosStorageContext): MaybePromise<Task | null>;
@@ -256,6 +282,17 @@ export interface TodosTaskStore {
   count(filter?: Omit<TaskFilter, "limit" | "offset">, context?: TodosStorageContext): MaybePromise<number>;
   update(id: string, input: UpdateTaskInput, context?: TodosStorageContext): MaybePromise<Task>;
   delete(id: string, context?: TodosStorageContext): MaybePromise<boolean>;
+  /** Atomically create every task and dependency edge, or commit nothing. */
+  bulkCreateAtomic?(
+    inputs: TodosBulkCreateTaskInput[],
+    context?: TodosStorageContext,
+  ): MaybePromise<TodosBulkCreateReceipt>;
+  /** Atomically evaluate and delete a bounded set, returning every skip/miss. */
+  bulkDeleteAtomic?(
+    ids: string[],
+    force: boolean,
+    context?: TodosStorageContext,
+  ): MaybePromise<TodosBulkDeleteReceipt>;
   start(id: string, agentId: string, context?: TodosStorageContext): MaybePromise<Task>;
   complete(id: string, agentId?: string, options?: TodosTaskCompletionOptions, context?: TodosStorageContext): MaybePromise<Task>;
   fail(
@@ -391,11 +428,24 @@ export interface TodosAgentReleaseResult {
   released: boolean;
 }
 
+export interface TodosAgentPageOptions {
+  include_archived?: boolean;
+  limit: number;
+  offset: number;
+}
+
+export interface TodosAgentPage {
+  agents: Agent[];
+  total: number;
+}
+
 export interface TodosAgentStore {
   register(input: RegisterAgentInput, context?: TodosStorageContext): MaybePromise<Agent | { conflict: true; message: string }>;
   get(id: string, context?: TodosStorageContext): MaybePromise<Agent | null>;
   getByName(name: string, context?: TodosStorageContext): MaybePromise<Agent | null>;
   list(options?: { include_archived?: boolean }, context?: TodosStorageContext): MaybePromise<Agent[]>;
+  /** Storage-bounded deterministic page for hosted roster reads. */
+  listPage?(options: TodosAgentPageOptions, context?: TodosStorageContext): MaybePromise<TodosAgentPage>;
   update(id: string, input: TodosAgentUpdateInput, context?: TodosStorageContext): MaybePromise<Agent | null>;
   /**
    * Refresh an agent's `last_seen_at` (heartbeat), resolving by id OR name.
@@ -516,7 +566,26 @@ export interface TodosAuditStore {
     context?: TodosStorageContext,
   ): MaybePromise<TaskComment[]>;
   getTaskHistory(taskId: string, context?: TodosStorageContext): MaybePromise<TaskHistory[]>;
+  /** Storage-bounded deterministic page for hosted task-history reads. */
+  getTaskHistoryPage?(
+    taskId: string,
+    options: TodosTaskHistoryPageOptions,
+    context?: TodosStorageContext,
+  ): MaybePromise<TodosTaskHistoryPage>;
   getRecentActivity(limit?: number, context?: TodosStorageContext): MaybePromise<TaskHistory[]>;
+}
+
+export interface TodosTaskHistoryPageOptions {
+  limit: number;
+  offset: number;
+  order: "asc" | "desc";
+  since?: string;
+  until?: string;
+}
+
+export interface TodosTaskHistoryPage {
+  history: TaskHistory[];
+  total: number;
 }
 
 export interface TodosCommentListOptions {

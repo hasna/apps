@@ -1358,7 +1358,11 @@ describe("remote CLI entrypoint authority boundary", () => {
           updated_at: "2026-07-18T00:00:00.000Z",
         };
         if (url.pathname === "/v1/agents" && request.method === "POST") return Response.json({ agent }, { status: 201 });
-        if (url.pathname === "/v1/agents" && request.method === "GET") return Response.json({ agents: [agent], count: 1 });
+        if (url.pathname === "/v1/agents" && request.method === "GET") {
+          const limit = Number(url.searchParams.get("limit"));
+          const offset = Number(url.searchParams.get("offset"));
+          return Response.json({ agents: [agent], count: 1, total: 1, limit, offset, has_more: false, next_offset: null });
+        }
         if (url.pathname === "/v1/agents/fixture-agent/heartbeat") return Response.json({ agent });
         if (url.pathname === "/v1/agents/fixture-agent/release") return Response.json({ agent, released: true });
         if (url.pathname === `/v1/tasks/${TASK_ID}/lock`) return Response.json({ result: { success: true, locked_by: "fixture-agent", locked_at: new Date().toISOString(), expires_at: new Date(Date.now() + 60000).toISOString() } });
@@ -1384,7 +1388,7 @@ describe("remote CLI entrypoint authority boundary", () => {
         if (url.pathname === "/v1/tasks" && url.searchParams.get("status") === "in_progress") {
           return Response.json({ tasks: [task], count: 1, total: 1 });
         }
-        if (url.pathname === "/v1/activity") return Response.json({ activity: [], count: 0 });
+        if (url.pathname === "/v1/activity") return Response.json({ activity: [], count: 0, limit: Number(url.searchParams.get("limit")) });
         return Response.json({ error: `fixture route missing: ${request.method} ${url.pathname}` }, { status: 404 });
       },
     });
@@ -1436,9 +1440,9 @@ describe("remote CLI entrypoint authority boundary", () => {
         name: "fixture-agent",
       });
       expect(requests.map((request) => `${request.method} ${request.path}`)).toEqual([
-        "GET /v1/agents",
+        "GET /v1/agents?limit=500&offset=0&include_archived=false",
         "POST /v1/agents",
-        "GET /v1/agents",
+        "GET /v1/agents?limit=500&offset=0&include_archived=false",
         "POST /v1/agents/fixture-agent/heartbeat",
         "POST /v1/agents/fixture-agent/release",
         `POST /v1/tasks/${TASK_ID}/lock`,

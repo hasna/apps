@@ -41,6 +41,7 @@ import {
   cloudTaskStats,
   cloudCountTasks,
   cloudRecentActivity,
+  cloudListAgents,
   cloudListProjects,
   cloudListTaskLists,
   cloudNextTask,
@@ -274,6 +275,14 @@ afterEach(() => {
   }
   resetTodosCloudClient();
 });
+
+function agentPage(call: Call, agents: Array<Record<string, unknown>>, total = agents.length): Record<string, unknown> {
+  const url = new URL(call.url);
+  const limit = Number(url.searchParams.get("limit"));
+  const offset = Number(url.searchParams.get("offset"));
+  const hasMore = offset + agents.length < total;
+  return { agents, count: agents.length, total, limit, offset, has_more: hasMore, next_offset: hasMore ? offset + agents.length : null };
+}
 
 describe("todos client transport resolver (API pair, no storage modes)", () => {
   test("no env FAILS CLOSED; the local opt-in alone gives null client and isCloudRouting false", () => {
@@ -1891,8 +1900,25 @@ describe("cloud read/analytics routing reads the shared cloud dataset", () => {
     expect(stats.completion_rate).toBe(67);
   });
 
+  test("agent roster follows bounded pages and rejects oversized totals", async () => {
+    const calls = installFetch((call) => {
+      const offset = Number(new URL(call.url).searchParams.get("offset"));
+      const agents = offset === 0
+        ? [{ id: "a1", name: "ada" }]
+        : [{ id: "a2", name: "grace" }];
+      return { body: agentPage(call, agents, 2) };
+    });
+    const client = getTodosCloudClient(CLOUD_ENV)!;
+    expect((await cloudListAgents(client, { max_agents: 2 })).map((agent) => agent.id)).toEqual(["a1", "a2"]);
+    expect(calls.map((call) => new URL(call.url).searchParams.get("offset"))).toEqual(["0", "1"]);
+
+    installFetch((call) => ({ body: agentPage(call, [], 10_001) }));
+    const oversized = getTodosCloudClient({ ...CLOUD_ENV, HASNA_TODOS_API_URL: "https://oversized-agents.example.com" })!;
+    await expect(cloudListAgents(oversized)).rejects.toThrow("REMOTE_RESULT_TOO_LARGE");
+  });
+
   test("recent activity -> GET /v1/activity?limit, unwraps { activity }", async () => {
-    const calls = installFetch(() => ({ body: { activity: [{ id: "h1", task_id: "t1", action: "create", created_at: iso(0) }], count: 1 } }));
+    const calls = installFetch(() => ({ body: { activity: [{ id: "h1", task_id: "t1", action: "create", created_at: iso(0) }], count: 1, limit: 30 } }));
     const client = getTodosCloudClient(CLOUD_ENV)!;
     const entries = await cloudRecentActivity(client, 30);
     expect(entries).toHaveLength(1);
@@ -1991,8 +2017,8 @@ describe("cloud read/analytics routing reads the shared cloud dataset", () => {
 
   test("recap -> completed/created/in_progress/stale/blocked/agents from cloud", async () => {
     installFetch((c) => {
-      if (c.url.endsWith("/agents")) {
-        return { body: { agents: [{ id: "ag1", name: "julius", last_seen_at: iso(60 * 1000) }] } };
+      if (new URL(c.url).pathname.endsWith("/agents")) {
+        return { body: agentPage(c, [{ id: "ag1", name: "julius", last_seen_at: iso(60 * 1000) }]) };
       }
       if (new URL(c.url).pathname.endsWith("/dependencies")) return { body: dependencyPage([]) };
       // /v1/tasks (list, no status filter)
@@ -2023,6 +2049,8 @@ describe("cloud read/analytics routing reads the shared cloud dataset", () => {
           { id: "h1", task_id: "t1", action: "create", agent_id: "julius", created_at: iso(60 * 60 * 1000), field: null },
           { id: "h2", task_id: "t2", action: "complete", agent_id: null, created_at: iso(1000), field: "status", old_value: "pending", new_value: "completed" },
         ],
+        count: 2,
+        limit: 5000,
       },
     }));
     const client = getTodosCloudClient(CLOUD_ENV)!;
@@ -2034,7 +2062,7 @@ describe("cloud read/analytics routing reads the shared cloud dataset", () => {
   });
 
   test("timeline -> non-task entity filter yields no rows (cloud degradation)", async () => {
-    installFetch(() => ({ body: { activity: [{ id: "h1", task_id: "t1", action: "create", created_at: iso(0) }] } }));
+    installFetch(() => ({ body: { activity: [{ id: "h1", task_id: "t1", action: "create", created_at: iso(0) }], count: 1, limit: 5000 } }));
     const client = getTodosCloudClient(CLOUD_ENV)!;
     const page = await cloudTimeline(client, { entity_type: "project", entity_id: "p1" });
     expect(page.total).toBe(0);

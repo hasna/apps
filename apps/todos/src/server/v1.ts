@@ -13,7 +13,13 @@ import { MachineRegistryError, validateMachines } from "../storage/machine-regis
 import { LockError, PlanNotFoundError, PlanRevisionConflictError, ProjectNotFoundError, ResourceConflictError, StaleLockHandoffError, TaskNotFoundError, TaskListNotFoundError, TaskNotStartableError, TaskReferenceAmbiguousError, VersionConflictError, TASK_PRIORITIES, TASK_STATUSES } from "../types/index.js";
 import { collapseEnumValues, resolveEnumVocabulary } from "../lib/enum-vocabulary.js";
 import type { CreatePlanInput, CreateProjectInput, CreateTaskInput, CreateTaskListInput, CreateTemplateInput, PlanComment, RenameProjectInput, TaskComment, TemplateTaskInput, UpdateTaskInput, UpdateTaskListInput } from "../types/index.js";
-import type { TodosStorageContext, TodosStorageSnapshot, TodosTaskCompletionOptions, UpdateTemplateInput } from "../storage/interfaces.js";
+import type {
+  TodosBulkCreateTaskInput,
+  TodosStorageContext,
+  TodosStorageSnapshot,
+  TodosTaskCompletionOptions,
+  UpdateTemplateInput,
+} from "../storage/interfaces.js";
 import {
   ensureCloudSchema,
   getCloudPrGroupLedger,
@@ -66,6 +72,9 @@ const JSON_HEADERS = { "Content-Type": "application/json" } as const;
 const DEFAULT_COMMENT_PAGE_SIZE = 100;
 const MAX_COMMENT_PAGE_SIZE = 500;
 const LEGACY_COMMENT_RESPONSE_LIMIT = 500;
+const MAX_BULK_CREATE_TASKS = 50;
+const MAX_BULK_DELETE_TASKS = 100;
+const MAX_BULK_DEPENDENCIES = 100;
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: JSON_HEADERS });
@@ -264,6 +273,10 @@ function validateTaskPatchVocabulary(value: unknown):
     if (typeof raw !== "string") return { ok: false, message: `${name} must be a string. Allowed values: ${vocabulary.join(", ")}.` };
     const parsed = resolveEnumVocabulary(raw, { name, vocabulary, allowList: false });
     if (!parsed.ok) return { ok: false, message: parsed.message };
+  }
+  if (body.archived_at !== undefined && body.archived_at !== null &&
+      (typeof body.archived_at !== "string" || !body.archived_at.trim())) {
+    return { ok: false, message: "archived_at must be a non-empty timestamp string or null" };
   }
   if (
     body.parent_id !== undefined
@@ -487,6 +500,150 @@ function validateTemplatePatch(value: unknown):
     ...(body.project_id === null ? { project_id: null } : {}),
     ...(body.plan_id === null ? { plan_id: null } : {}),
   } };
+}
+
+function validateBulkCreateRequest(value: unknown):
+  | { ok: true; tasks: TodosBulkCreateTaskInput[] }
+  | { ok: false; message: string } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { ok: false, message: "bulk create body must be an object" };
+  }
+  const body = value as Record<string, unknown>;
+  const allowedTop = new Set(["schema_version", "tasks"]);
+  const unknownTop = Object.keys(body).find((key) => !allowedTop.has(key));
+  if (unknownTop) return { ok: false, message: `unknown bulk create field: ${unknownTop}` };
+  if (body.schema_version !== 1) return { ok: false, message: "schema_version must be 1" };
+  if (!Array.isArray(body.tasks) || body.tasks.length < 1 || body.tasks.length > MAX_BULK_CREATE_TASKS) {
+    return { ok: false, message: `tasks must contain between 1 and ${MAX_BULK_CREATE_TASKS} items` };
+  }
+  const allowedTask = new Set([
+    "temp_id", "depends_on", "title", "description", "status", "priority",
+    "project_id", "parent_id", "plan_id", "task_list_id", "agent_id", "created_by",
+    "assigned_to", "tags", "estimated_minutes",
+  ]);
+  const tempIds = new Set<string>();
+  const tasks: TodosBulkCreateTaskInput[] = [];
+  let dependencyCount = 0;
+  for (let index = 0; index < body.tasks.length; index++) {
+    const raw = body.tasks[index];
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      return { ok: false, message: `tasks[${index}] must be an object` };
+    }
+    const task = raw as Record<string, unknown>;
+    const unknown = Object.keys(task).find((key) => !allowedTask.has(key));
+    if (unknown) return { ok: false, message: `unknown tasks[${index}] field: ${unknown}` };
+    if (typeof task.title !== "string" || !task.title.trim() || task.title.length > 20_000) {
+      return { ok: false, message: `tasks[${index}].title must be a non-empty string of at most 20000 characters` };
+    }
+    if (task.description !== undefined && task.description !== null &&
+        (typeof task.description !== "string" || task.description.length > 100_000)) {
+      return { ok: false, message: `tasks[${index}].description must be a string or null of at most 100000 characters` };
+    }
+    if (task.status !== undefined && (typeof task.status !== "string" || !TASK_STATUSES.includes(task.status as never))) {
+      return { ok: false, message: `tasks[${index}].status is invalid` };
+    }
+    if (task.priority !== undefined && (typeof task.priority !== "string" || !TASK_PRIORITIES.includes(task.priority as never))) {
+      return { ok: false, message: `tasks[${index}].priority is invalid` };
+    }
+    for (const field of ["project_id", "parent_id", "plan_id", "task_list_id", "agent_id", "created_by", "assigned_to"] as const) {
+      const candidate = task[field];
+      if (candidate !== undefined && (typeof candidate !== "string" || !candidate.trim() || candidate.length > 200)) {
+        return { ok: false, message: `tasks[${index}].${field} must be a non-empty string of at most 200 characters` };
+      }
+    }
+    if (task.tags !== undefined && (
+      !Array.isArray(task.tags)
+      || task.tags.length > 100
+      || task.tags.some((tag) => typeof tag !== "string" || !tag.trim() || tag.length > 100)
+    )) {
+      return { ok: false, message: `tasks[${index}].tags must be an array of at most 100 non-empty strings` };
+    }
+    if (task.estimated_minutes !== undefined && (
+      typeof task.estimated_minutes !== "number"
+      || !Number.isFinite(task.estimated_minutes)
+      || task.estimated_minutes < 0
+    )) {
+      return { ok: false, message: `tasks[${index}].estimated_minutes must be a finite non-negative number` };
+    }
+    if (task.temp_id !== undefined) {
+      if (typeof task.temp_id !== "string" || !task.temp_id.trim() || task.temp_id.length > 100) {
+        return { ok: false, message: `tasks[${index}].temp_id must be a non-empty string of at most 100 characters` };
+      }
+      if (tempIds.has(task.temp_id)) return { ok: false, message: `duplicate temp_id: ${task.temp_id}` };
+      tempIds.add(task.temp_id);
+    }
+    if (task.depends_on !== undefined && (
+      !Array.isArray(task.depends_on)
+      || task.depends_on.length > MAX_BULK_DEPENDENCIES
+      || task.depends_on.some((ref) => typeof ref !== "string" || !ref.trim() || ref.length > 200)
+    )) {
+      return { ok: false, message: `tasks[${index}].depends_on must be an array of at most ${MAX_BULK_DEPENDENCIES} non-empty task references` };
+    }
+    if (Array.isArray(task.depends_on) && new Set(task.depends_on).size !== task.depends_on.length) {
+      return { ok: false, message: `tasks[${index}].depends_on must not contain duplicates` };
+    }
+    dependencyCount += Array.isArray(task.depends_on) ? task.depends_on.length : 0;
+    if (dependencyCount > MAX_BULK_DEPENDENCIES) {
+      return { ok: false, message: `bulk create supports at most ${MAX_BULK_DEPENDENCIES} dependency edges` };
+    }
+    tasks.push(task as unknown as TodosBulkCreateTaskInput);
+  }
+  return { ok: true, tasks };
+}
+
+function validateBulkDeleteRequest(value: unknown):
+  | { ok: true; taskIds: string[]; force: boolean }
+  | { ok: false; message: string } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { ok: false, message: "bulk delete body must be an object" };
+  }
+  const body = value as Record<string, unknown>;
+  const allowed = new Set(["schema_version", "task_ids", "force"]);
+  const unknown = Object.keys(body).find((key) => !allowed.has(key));
+  if (unknown) return { ok: false, message: `unknown bulk delete field: ${unknown}` };
+  if (body.schema_version !== 1) return { ok: false, message: "schema_version must be 1" };
+  if (!Array.isArray(body.task_ids) || body.task_ids.length < 1 || body.task_ids.length > MAX_BULK_DELETE_TASKS) {
+    return { ok: false, message: `task_ids must contain between 1 and ${MAX_BULK_DELETE_TASKS} items` };
+  }
+  if (body.task_ids.some((id) => typeof id !== "string" || !id.trim() || id.length > 200)) {
+    return { ok: false, message: "task_ids must contain non-empty task references of at most 200 characters" };
+  }
+  if (new Set(body.task_ids).size !== body.task_ids.length) {
+    return { ok: false, message: "task_ids must not contain duplicates" };
+  }
+  if (body.force !== undefined && typeof body.force !== "boolean") {
+    return { ok: false, message: "force must be a boolean" };
+  }
+  return { ok: true, taskIds: body.task_ids as string[], force: body.force === true };
+}
+
+async function readBoundedJson(
+  req: Request,
+  maxBytes: number,
+): Promise<{ ok: true; value: unknown } | { ok: false; status: 400 | 413; message: string }> {
+  const reader = req.body?.getReader();
+  if (!reader) return { ok: false, status: 400, message: "missing JSON body" };
+  let size = 0;
+  const chunks: Uint8Array[] = [];
+  try {
+    while (true) {
+      const part = await reader.read();
+      if (part.done) break;
+      size += part.value.byteLength;
+      if (size > maxBytes) {
+        await reader.cancel();
+        return { ok: false, status: 413, message: `request exceeds the ${maxBytes}-byte limit` };
+      }
+      chunks.push(part.value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  try {
+    return { ok: true, value: JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown };
+  } catch {
+    return { ok: false, status: 400, message: "invalid JSON body" };
+  }
 }
 
 async function readJson<T>(req: Request): Promise<T | null> {
@@ -775,6 +932,52 @@ export async function handleV1Request(
     }
     // ── /v1/tasks ──
     if (resource === "tasks") {
+      // ── POST /v1/tasks/bulk-create — all tasks and edges commit together ──
+      if (id === "bulk-create" && !action) {
+        if (method !== "POST") return error(405, "bulk task creation requires POST");
+        if (typeof store.tasks.bulkCreateAtomic !== "function") {
+          return error(501, "Upgrade the Todos backend: atomic bulk task creation is unavailable");
+        }
+        const body = await readBoundedJson(req, 2 * 1024 * 1024);
+        if (!body.ok) return error(body.status, body.message);
+        const parsed = validateBulkCreateRequest(body.value);
+        if (!parsed.ok) return error(400, parsed.message);
+        const normalizedTasks: TodosBulkCreateTaskInput[] = [];
+        for (const task of parsed.tasks) {
+          if (!task.assigned_to) {
+            normalizedTasks.push(task);
+            continue;
+          }
+          const assigned = await store.agents.get(task.assigned_to) ?? await store.agents.getByName(task.assigned_to);
+          if (!assigned) return error(404, `assigned agent not found: ${task.assigned_to}`);
+          normalizedTasks.push({ ...task, assigned_to: assigned.id });
+        }
+        const receipt = await store.tasks.bulkCreateAtomic(
+          normalizedTasks,
+          contextFromPrincipal(principal),
+        );
+        return json({ receipt }, 201);
+      }
+      // ── POST /v1/tasks/bulk-delete — authoritative child checks and force ──
+      if (id === "bulk-delete" && !action) {
+        if (method !== "POST") return error(405, "bulk task deletion requires POST");
+        if (typeof store.tasks.bulkDeleteAtomic !== "function") {
+          return error(501, "Upgrade the Todos backend: atomic bulk task deletion is unavailable");
+        }
+        const body = await readBoundedJson(req, 64 * 1024);
+        if (!body.ok) return error(body.status, body.message);
+        const parsed = validateBulkDeleteRequest(body.value);
+        if (!parsed.ok) return error(400, parsed.message);
+        if (parsed.force && !principal.scopes.includes("todos:*")) {
+          return error(403, "force bulk deletion requires todos:* scope");
+        }
+        const receipt = await store.tasks.bulkDeleteAtomic(
+          parsed.taskIds,
+          parsed.force,
+          contextFromPrincipal(principal),
+        );
+        return json({ receipt });
+      }
       // ── POST /v1/tasks/exists — bulk existence check for parity verification ──
       // Body: { ids: string[] }. Returns which task ids are present (live, NOT
       // tombstoned) in cloud vs missing, in a SINGLE SQL `payload->>'id' IN (...)`
@@ -863,6 +1066,13 @@ export async function handleV1Request(
           if (includeArchived !== null && includeArchived !== "true" && includeArchived !== "false") {
             return error(400, "include_archived must be true or false");
           }
+          const archivedOnly = url.searchParams.get("archived_only");
+          if (archivedOnly !== null && archivedOnly !== "true" && archivedOnly !== "false") {
+            return error(400, "archived_only must be true or false");
+          }
+          if (archivedOnly === "true" && includeArchived === "false") {
+            return error(400, "archived_only=true is incompatible with include_archived=false");
+          }
           const planRead = url.searchParams.get("plan_read_contract");
           if (planRead !== null) {
             const keys = [...url.searchParams.keys()];
@@ -905,6 +1115,7 @@ export async function handleV1Request(
           if (!offsetParam.ok) return offsetParam.response;
           const filter = {
             ...(includeArchived !== null ? { include_archived: includeArchived === "true" } : {}),
+            ...(archivedOnly === "true" ? { archived_only: true, include_archived: true } : {}),
             ...(updatedAfter !== null && updatedAfter.ok ? { updated_after: updatedAfter.value } : {}),
             ...(url.searchParams.get("q") ? { query: url.searchParams.get("q")! } : {}),
             ...(statusParam.value !== undefined ? { status: statusParam.value } : {}),
@@ -1133,8 +1344,50 @@ export async function handleV1Request(
         if (action === "history") {
           if (method !== "GET") return error(405, `method ${method} not allowed on /v1/tasks/:id/history`);
           if (!(await store.tasks.get(id))) return error(404, "task not found");
-          const history = await store.audit.getTaskHistory(id);
-          return json({ history, count: history.length });
+          if (typeof store.audit.getTaskHistoryPage !== "function") {
+            return error(501, "bounded task history is not supported by this storage backend");
+          }
+          const rawLimit = url.searchParams.get("limit");
+          const rawOffset = url.searchParams.get("offset");
+          const requestedPage = rawLimit !== null || rawOffset !== null || url.searchParams.has("order") ||
+            url.searchParams.has("since") || url.searchParams.has("until");
+          const limitParam = paginationQueryParam(url, "limit");
+          if (!limitParam.ok) return limitParam.response;
+          const offsetParam = paginationQueryParam(url, "offset");
+          if (!offsetParam.ok) return offsetParam.response;
+          const limit = limitParam.value ?? 500;
+          const offset = offsetParam.value ?? 0;
+          if (limit > 500) return error(400, "history limit must be at most 500");
+          const order = url.searchParams.get("order") ?? "desc";
+          if (order !== "asc" && order !== "desc") return error(400, "history order must be asc or desc");
+          const since = url.searchParams.get("since") ?? undefined;
+          const until = url.searchParams.get("until") ?? undefined;
+          const result = await store.audit.getTaskHistoryPage(
+            id,
+            { limit, offset, order, ...(since ? { since } : {}), ...(until ? { until } : {}) },
+            contextFromPrincipal(principal),
+          );
+          if (!result || !Array.isArray(result.history) || !Number.isSafeInteger(result.total) || result.total < 0 ||
+              result.history.length > limit || (result.history.length > 0 && offset + result.history.length > result.total)) {
+            return error(500, "TASK_HISTORY_PAGE_INVALID: storage returned contradictory pagination");
+          }
+          const hasMore = offset + result.history.length < result.total;
+          if (!requestedPage && hasMore) {
+            return error(426, "task history exceeds the bounded legacy window; send limit, offset, and order with an upgraded client");
+          }
+          if (hasMore && result.history.length === 0) {
+            return error(500, "TASK_HISTORY_PAGE_STALLED: storage returned no progress before total");
+          }
+          return json({
+            history: result.history,
+            count: result.history.length,
+            total: result.total,
+            limit,
+            offset,
+            order,
+            has_more: hasMore,
+            next_offset: hasMore ? offset + result.history.length : null,
+          });
         }
         // ── /v1/tasks/:id/lock and /unlock — exclusive task locking ──
         // Locking is a task-field (`locked_by`/`locked_at`) operation resolved on
@@ -1855,8 +2108,49 @@ export async function handleV1Request(
     // ── /v1/agents ──
     if (resource === "agents") {
       if (!id && method === "GET") {
-        const agents = await store.agents.list();
-        return json({ agents, count: agents.length });
+        if (typeof store.agents.listPage !== "function") {
+          return error(501, "bounded agent pagination is not supported by this storage backend");
+        }
+        const rawLimit = url.searchParams.get("limit");
+        const rawOffset = url.searchParams.get("offset");
+        const requestedPage = rawLimit !== null || rawOffset !== null || url.searchParams.has("include_archived");
+        const limit = rawLimit === null ? 500 : Number(rawLimit);
+        const offset = rawOffset === null ? 0 : Number(rawOffset);
+        if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) {
+          return error(400, "agent limit must be an integer from 1 to 500");
+        }
+        if (!Number.isSafeInteger(offset) || offset < 0) {
+          return error(400, "agent offset must be a non-negative integer");
+        }
+        const includeArchivedParam = url.searchParams.get("include_archived");
+        if (includeArchivedParam !== null && includeArchivedParam !== "true" && includeArchivedParam !== "false") {
+          return error(400, "include_archived must be true or false");
+        }
+        const page = await store.agents.listPage({
+          limit,
+          offset,
+          include_archived: includeArchivedParam === "true",
+        }, contextFromPrincipal(principal));
+        if (!page || !Array.isArray(page.agents) || !Number.isSafeInteger(page.total) || page.total < 0 ||
+            page.agents.length > limit || (page.agents.length > 0 && offset + page.agents.length > page.total)) {
+          return error(500, "agent storage returned an invalid bounded page");
+        }
+        const hasMore = offset + page.agents.length < page.total;
+        if (!requestedPage && hasMore) {
+          return error(426, "agent roster exceeds the bounded legacy window; send limit and offset with an upgraded client");
+        }
+        if (hasMore && page.agents.length === 0) {
+          return error(500, "agent storage returned a stalled bounded page");
+        }
+        return json({
+          agents: page.agents,
+          count: page.agents.length,
+          total: page.total,
+          limit,
+          offset,
+          has_more: hasMore,
+          next_offset: hasMore ? offset + page.agents.length : null,
+        });
       }
       if (!id && method === "POST") {
         const body = await readJson<{ name?: string }>(req);
@@ -1909,9 +2203,15 @@ export async function handleV1Request(
     if (resource === "activity" && !id) {
       if (method !== "GET") return error(405, `method ${method} not allowed on /v1/activity`);
       const limitParam = url.searchParams.get("limit");
-      const limit = limitParam ? Math.max(1, Math.min(10000, Number(limitParam) || 50)) : 50;
-      const activity = await store.audit.getRecentActivity(limit);
-      return json({ activity, count: activity.length });
+      const limit = limitParam === null ? 50 : Number(limitParam);
+      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 10_000) {
+        return error(400, "activity limit must be an integer from 1 to 10000");
+      }
+      const activity = await store.audit.getRecentActivity(limit, contextFromPrincipal(principal));
+      if (!Array.isArray(activity) || activity.length > limit) {
+        return error(500, "activity storage returned an invalid bounded result");
+      }
+      return json({ activity, count: activity.length, limit });
     }
 
     // ── /v1/task-lists — task lists (optionally scoped to a project) ──
@@ -2001,23 +2301,6 @@ export async function handleV1Request(
       if (!Number.isSafeInteger(offset) || offset < 0) {
         return error(400, "dependency offset must be a non-negative integer");
       }
-      if (!requestedPage) {
-        if (typeof store.dependencies?.listAll !== "function") {
-          return error(501, "complete legacy dependency listing is not supported by this storage backend");
-        }
-        const dependencies = await store.dependencies.listAll(contextFromPrincipal(principal));
-        // Preserve the original complete response for older callers. New
-        // clients always send limit/offset and take the storage-bounded path.
-        return json({
-          dependencies,
-          count: dependencies.length,
-          total: dependencies.length,
-          limit: dependencies.length,
-          offset: 0,
-          has_more: false,
-          next_offset: null,
-        });
-      }
       if (typeof store.dependencies?.listPage !== "function") {
         return error(501, "bounded dependency pagination is not supported by this storage backend");
       }
@@ -2033,6 +2316,9 @@ export async function handleV1Request(
         return error(500, "dependency storage returned an invalid bounded page");
       }
       const hasMore = offset + page.dependencies.length < page.total;
+      if (!requestedPage && hasMore) {
+        return error(426, "dependency graph exceeds the bounded legacy window; send limit and offset with an upgraded client");
+      }
       if (hasMore && page.dependencies.length === 0) {
         return error(500, "dependency storage returned a stalled bounded page");
       }
