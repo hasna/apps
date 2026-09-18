@@ -44,6 +44,7 @@ describe.skipIf(!DSN)("real /v1 auth wiring against Postgres", () => {
     for (const stmt of schemaStatements()) {
       await client.query(stmt);
     }
+    await client.query("INSERT INTO calendar_tenants(id) VALUES ('calendar-test') ON CONFLICT DO NOTHING");
     await getApiKeyStore().ensureSchema();
     await client.query(
       `DELETE FROM api_keys WHERE app = 'calendar' AND (agent = $1 OR created_by = $1)`,
@@ -72,6 +73,7 @@ describe.skipIf(!DSN)("real /v1 auth wiring against Postgres", () => {
       scopes: ["calendar:read", "calendar:write"],
       signingSecret: TEST_SIGNING_SECRET,
       agent: AGENT,
+      tid: "calendar-test",
     });
     await getApiKeyStore().insertMinted(minted, AGENT);
 
