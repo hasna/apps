@@ -21,6 +21,7 @@ import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { writeFileSync } from "node:fs";
+import { Database } from "bun:sqlite";
 import { makeTempRoot } from "../lib/test-temp-root";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -52,6 +53,30 @@ function referenceRowsNamed(root: string, name: string): Array<{ slug: string; c
 }
 
 describe("instructions add --kind reference — one name, one row", () => {
+  test("--expected-version rejects stale content without creating a snapshot or fallback config", () => {
+    const root = makeTempRoot("configs-add-cas-");
+    const source = join(root, "rule.md");
+    const args = ["add", source, "--name", "conditional-rule", "--kind", "reference"];
+    writeFileSync(source, "initial\n");
+    expect(runCli(args, isolatedEnv(root)).status).toBe(0);
+    writeFileSync(source, "accepted\n");
+    expect(runCli([...args, "--update", "--expected-version", "1"], isolatedEnv(root)).status).toBe(0);
+    const db = new Database(join(root, "db.sqlite"), { readonly: true });
+    try {
+      const config = db.query("SELECT * FROM configs").get();
+      const snapshots = db.query("SELECT * FROM config_snapshots ORDER BY id").all();
+      expect(snapshots).toHaveLength(2);
+      writeFileSync(source, "rejected\n");
+      const rejected = runCli([...args, "--update", "--expected-version", "1"], isolatedEnv(root));
+      expect(rejected.status).not.toBe(0);
+      expect(rejected.stderr).toContain("version conflict");
+      expect(db.query("SELECT * FROM configs").get()).toEqual(config);
+      expect(db.query("SELECT * FROM config_snapshots ORDER BY id").all()).toEqual(snapshots);
+      expect(runCli(["add", source, "--name", "missing-rule", "--kind", "reference", "--update", "--expected-version", "1"], isolatedEnv(root)).status).not.toBe(0);
+      expect(db.query("SELECT COUNT(*) AS count FROM configs").get()).toEqual({ count: 1 });
+    } finally { db.close(); }
+  });
+
   test("refuses a second reference add for a name a config already owns, and names that config", () => {
     const root = makeTempRoot("configs-add-ref-dup-");
     const source = join(root, "rule.md");

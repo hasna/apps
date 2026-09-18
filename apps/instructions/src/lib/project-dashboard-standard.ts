@@ -1,3 +1,5 @@
+import { ConfigNotFoundError } from "../types/index.js";
+import { isRetiredInstructionSource } from "./instruction-source-policy.js";
 import type { Config, ProfileVariables } from "../types/index.js";
 import { resolveConfigStore, type ConfigStore } from "../data/config-store.js";
 
@@ -96,6 +98,7 @@ export async function ensureProjectDashboardStandardConfig(store: ConfigStore = 
 
   try {
     const existing = await store.getConfig(PROJECT_DASHBOARD_STANDARD_SLUG);
+    if (isRetiredInstructionSource(existing)) return existing;
     if (
       existing.content !== input.content
       || existing.description !== input.description
@@ -107,7 +110,8 @@ export async function ensureProjectDashboardStandardConfig(store: ConfigStore = 
       return await store.updateConfig(existing.id, input);
     }
     return existing;
-  } catch {
+  } catch (error) {
+    if (!(error instanceof ConfigNotFoundError)) throw error;
     return await store.createConfig(input);
   }
 }

@@ -195,6 +195,7 @@ export const DEFAULT_ASSET_SURFACES: Readonly<Partial<Record<ConfigAgent, string
   codex: "cli",
   cursor: "ide",
   opencode: "cli",
+  sumi: "cli",
   codewith: "cli",
   qwen: "cli",
   aicopilot: "cli",

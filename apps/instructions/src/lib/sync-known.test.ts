@@ -72,6 +72,7 @@ describe("KNOWN_CONFIGS", () => {
       "npm",
       "opencode",
       "qwen",
+      "sumi",
       "windsurf-legacy",
       "zsh",
     ]);

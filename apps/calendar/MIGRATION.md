@@ -177,3 +177,48 @@ block release/deployment approval. This follow-up requires exact-commit review.
 No merge, publication, deployment, cloud change, data migration or station02
 operation was performed. Independent exact-commit review is required before
 pushing this follow-up; package-wide release blockers remain unchanged.
+
+## Hosted tenant boundary upgrade
+
+This upgrade requires PostgreSQL 16 or newer. It changes hosted authorization:
+keys without a signed tenant ID are refused, and unassigned legacy records are
+invisible. It does not infer ownership or migrate records automatically.
+
+1. Before deployment, prepare a private, reviewed manifest mapping each existing
+   authorized key/issuer tenant to exact organization and agent IDs, then all
+   related calendars, events, attendees, availability and memberships. Use the
+   authoritative issuer assignment; Calendar org IDs are not issuer tenant IDs.
+   Preserve row counts and ownership evidence. Ambiguous or cross-tenant
+   relationship components must remain unassigned for manual resolution.
+2. Take an owner-controlled database backup and pause writes through the normal
+   deployment mechanism. Apply `calendar-serve migrate` as the migration owner.
+   The ownership migration is one atomic PostgreSQL statement, is repeatable,
+   and leaves every existing `tenant_id` NULL. Do not activate old server code
+   after assigning ownership: it has no tenant predicates.
+3. As the migration owner, provision each reviewed canonical issuer ID in
+   `calendar_tenants`. In an explicit transaction, assign only the manifest's
+   rows, in parent order: orgs, agents, calendars, events, attendees, availability,
+   memberships. Match old ownership and expected row counts before each update.
+   Validate every relationship and the exact selected row set before commit.
+   Stop on a mismatch; do not broaden predicates or assign every row by default.
+4. Audit database grants. The runtime role needs domain-table DML, and SELECT on
+   `calendar_tenants`; it must not insert/update/delete registry entries or alter
+   schema. Registry provisioning and ownership reassignment are owner operations,
+   never API operations. Migration functions execute with the caller's privileges.
+5. Issue replacement tenant-scoped credentials through the normal Contracts
+   issuer where needed, preserve existing scopes, and deliver them through the
+   owner's credential provider. Never put credential values in scripts, logs or
+   the backfill manifest. Activate the new server only after the backfill,
+   credential enrollment, and exact image checks are reviewed.
+6. Prove the deployment first with synthetic tenants and disposable records:
+   both own-tenant success and cross-tenant denial, all relationship edges,
+   missing/unknown tenant rejection, and no legacy-row changes. Then perform
+   bounded read-only checks with existing enrolled principals and compare counts
+   to the approved manifest. Preserve redacted request/result receipts. Remove
+   only the explicitly created synthetic records through their own tenant keys.
+
+If verification fails, stop traffic and preserve evidence. Roll forward or restore
+an approved backup in maintenance; never restore access by dropping tenant
+predicates, giving old keys a default tenant, or switching clients to local mode.
+A tenant can be disabled through an explicit owner update to its registry entry.
+Role-based per-user authorization and cross-tenant sharing remain separate work.

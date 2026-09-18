@@ -50,6 +50,40 @@ function compile(configs: Config[], bindings: ProfileConfigBinding[], provider: 
 }
 
 describe("instruction graph compiler", () => {
+  test("refuses to inject application settings from a legacy mixed profile", () => {
+    const settings = { ...config("shell-config", "export EXAMPLE=1"), category: "shell" as const, format: "text" as const };
+    expect(() => compile([config("prose"), settings], [])).toThrow("category shell is not an instruction source");
+    const optional = compile([config("prose"), settings], [binding(settings.id, spec({ required: false, fallback: "omit" }))]);
+    expect(optional.sources.map((source) => source.id)).toEqual(["prose"]);
+    expect(optional.plan.diagnostics.some((entry) => entry.code === "SOURCE_NOT_INSTRUCTION")).toBe(true);
+  });
+
+  test("honors provider scope on legacy bindings and permits an explicit reviewed reuse", () => {
+    const claudeRule = { ...config("claude-only"), agent: "claude" as const };
+    expect(compile([claudeRule, config("global")], []).sources.map((source) => source.id)).toEqual(["global"]);
+    const explicit = binding(claudeRule.id, spec({ providers: [{ provider: "codex" }] }));
+    expect(compile([claudeRule], [explicit]).sources.map((source) => source.id)).toEqual(["claude-only"]);
+  });
+
+  test("refuses retired rules, unresolved templates, settings and execution policies", () => {
+    for (const source of [
+      { ...config("retired"), tags: ["retired-global-source"] },
+      { ...config("template"), is_template: true },
+      { ...config("settings"), format: "json" as const },
+      { ...config("policy"), target_path: "~/.codex/rules/default.rules" },
+    ]) expect(() => compile([source], [])).toThrow(InstructionGraphValidationError);
+  });
+
+  test("uses a declared provider output when compiling source prose", () => {
+    const source = { ...config("shared-rule", "# Reviewed prose\n\n<!-- claude-only:start -->\nProvider-specific command\n<!-- claude-only:end -->\n"), agent: "claude" as const, outputs: [{ agent: "codex" as const, target_path: "AGENTS.md", transform: "codex-flat" as const }] };
+    const excluded = { ...config("excluded", "Unselected provider rule"), agent: "claude" as const, target_path: "~/.claude/rules/excluded.md" };
+    const compiled = compile([source, excluded], []);
+    expect(compiled.sources).toHaveLength(1);
+    expect(compiled.sources[0]!.content).toContain("# Reviewed prose");
+    expect(compiled.sources[0]!.content).not.toContain("Provider-specific command");
+    expect(compiled.sources[0]!.content).not.toContain("Unselected provider rule");
+  });
+
   test("is deterministic and emits exactly one provider artifact per selected unit", () => {
     const configs = [config("second"), config("first")];
     const bindings = [

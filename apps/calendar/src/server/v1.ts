@@ -7,6 +7,7 @@
  * `calendar:write` (a `calendar:*` key satisfies both). This is a REAL wrapper
  * over the calendar storage lib — there are NO stubs; unknown routes 404.
  */
+import { isValidTenantId } from "@hasna/contracts/auth";
 import { ConflictError, NotFoundError } from "../types/index.js";
 import { getCloudStore, getCloudVerifier } from "./cloud.js";
 
@@ -93,7 +94,17 @@ export async function handleV1Request(
   // Schema is applied out-of-band by the migration task/runner (owner role);
   // the serve process runs as the least-privilege app role (DML only) and never
   // issues DDL on the request path.
-  const store = dependencies.getCloudStore();
+  // Never infer tenant authority from a URL, body, header, or default org.
+  const principal = decision.principal;
+  const tid = principal && Object.hasOwn(principal, "tid") ? principal.tid : null;
+  if (!isValidTenantId(tid)) return error(403, "tenant is required", { reason: "tenant_required" });
+  let store;
+  try {
+    store = await dependencies.getCloudStore(tid);
+  } catch {
+    return error(503, "service unavailable");
+  }
+  if (!store) return error(403, "tenant is not provisioned", { reason: "unknown_tenant" });
 
   if (path === "/v1") return json({ service: "calendar", version: "v1" });
 

@@ -57,7 +57,7 @@ test("review P2: event list forwards nondefault offset and creator", async () =>
   let received: unknown;
   const req = new Request("https://calendar.example.test/v1/events?created_by=agent-b&offset=7&limit=3");
   await handleV1Request(req, new URL(req.url), {
-    getCloudVerifier: () => ({ authenticate: async () => ({ ok: true }) }),
+    getCloudVerifier: () => ({ authenticate: async () => ({ ok: true, principal: { tid: "calendar-test" } }) }),
     getCloudStore: () => ({ listEvents: async (filter: unknown) => { received = filter; return []; } }),
   } as never);
   expect(received).toMatchObject({ created_by: "agent-b", offset: 7, limit: 3 });

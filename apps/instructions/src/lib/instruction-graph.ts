@@ -25,6 +25,8 @@ import type {
 import { isNativeProfileSessionTarget, planSessionRender, sourceFromConfig } from "./session-render.js";
 import { providerVersionSatisfies } from "./provider-version.js";
 import { compileAssetPlan, type AssetPlanMode } from "./asset-plan.js";
+import { instructionSourceRejection } from "./instruction-source-policy.js";
+import { applyTransform } from "./transforms.js";
 
 export { providerVersionSatisfies } from "./provider-version.js";
 
@@ -90,6 +92,7 @@ const DEFAULT_PROVIDER_CAPABILITIES: Readonly<Record<SessionRenderTool, Provider
   codex: capability("codex", ">=0.1.0", "flattened", "AGENTS.md", { asset_surface: "cli" }),
   cursor: capability("cursor", ">=1.0.0", "cursor-rule", ".cursor/rules/*.mdc", { activation_modes: ["always", "glob"], conditional_artifacts: true, asset_surface: "ide" }),
   opencode: capability("opencode", ">=1.0.0", "managed-fragment", "opencode.json instructions", { provider_variant: "v1-instructions", session_surface: "opencode-config-instructions" }),
+  sumi: capability("sumi", ">=0.2.22 <0.3.0", "flattened", "AGENTS.md"),
   codewith: capability("codewith", ">=0.1.0", "flattened", "CODEWITH.md"),
   qwen: capability("qwen", ">=0.1.0", "flattened", "QWEN.md"),
   aicopilot: capability("aicopilot", ">=0.1.0", "flattened", "AICOPILOT.md"),
@@ -375,11 +378,23 @@ export function compileInstructionGraph(input: {
     const binding = row.binding;
     const selector = binding.providers?.find((entry) => entry.provider === input.context.provider || entry.provider === "global");
     if (binding.providers?.length && !selector) continue;
+    const output = config.outputs.find((entry) => entry.agent === input.context.provider);
+    // An explicit binding can intentionally reuse a provider's prose elsewhere.
+    // Legacy bindings otherwise retain the source's declared provider scope.
+    if (!binding.providers?.length && config.agent !== "global" && config.agent !== input.context.provider && !output) {
+      diagnostics.push({ severity: "info", code: "SOURCE_PROVIDER_NOT_SELECTED", config_id: configId, message: `${config.slug} targets ${config.agent}, not ${input.context.provider}.` });
+      continue;
+    }
     if (selector?.version_range && !providerVersionSatisfies(input.context.provider_version, selector.version_range)) {
       diagnostics.push({ severity: binding.required ? "error" : "warning", code: "PROVIDER_SELECTOR_VERSION_MISMATCH", config_id: configId, message: `${config.slug} requires ${input.context.provider} ${selector.version_range}; current version is ${input.context.provider_version}.` });
       continue;
     }
     if (!activationMatches(binding.activation, config, input.context)) continue;
+    const rejection = instructionSourceRejection(config);
+    if (rejection) {
+      diagnostics.push({ severity: !binding.required && binding.fallback === "omit" ? "warning" : "error", code: "SOURCE_NOT_INSTRUCTION", config_id: configId, message: `${config.slug}: ${rejection}.` });
+      continue;
+    }
     if (capability.activation_modes.includes(binding.activation.mode)) {
       selected.add(configId);
       effective.set(configId, binding.activation);
@@ -450,7 +465,11 @@ export function compileInstructionGraph(input: {
   assertExactOnce(units, artifacts);
   const sources = units.map((unit, index) => {
     const config = configs.get(unit.config_id)!;
-    return sourceForUnit(config, unit, index);
+    const output = config.outputs.find((entry) => entry.agent === input.context.provider);
+    // The graph owns dependency selection and exact-once composition. A legacy
+    // flatten transform must not implicitly append other (possibly inactive) rules.
+    const content = output ? applyTransform(config, output, { configs: [config] }) : config.content;
+    return sourceForUnit({ ...config, content }, unit, index);
   });
   const planWithoutHash = {
     schema: INSTRUCTION_GRAPH_PLAN_SCHEMA,

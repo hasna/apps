@@ -20,7 +20,9 @@ export interface ConfigSnapshot { "id": string; "config_id": string; "content": 
 
 export interface CreateConfigInput { "name": string; "category": string; "content": string; "kind"?: string; "agent"?: string; "target_path"?: string; "format"?: string; "description"?: string; "tags"?: Array<string>; "is_template"?: boolean }
 
-export interface UpdateConfigInput { "name"?: string; "kind"?: string; "category"?: string; "agent"?: string; "target_path"?: string | null; "outputs"?: Array<Record<string, unknown>>; "format"?: string; "content"?: string; "description"?: string | null; "tags"?: Array<string>; "is_template"?: boolean; "synced_at"?: string | null }
+export interface UpdateConfigInput { "expected_version"?: number; "name"?: string; "kind"?: string; "category"?: string; "agent"?: string; "target_path"?: string | null; "outputs"?: Array<Record<string, unknown>>; "format"?: string; "content"?: string; "description"?: string | null; "tags"?: Array<string>; "is_template"?: boolean; "synced_at"?: string | null }
+
+export interface ConditionalUpdateConfigInput { "expected_version": number; "name"?: string; "kind"?: string; "category"?: string; "agent"?: string; "target_path"?: string | null; "outputs"?: Array<Record<string, unknown>>; "format"?: string; "content"?: string; "description"?: string | null; "tags"?: Array<string>; "is_template"?: boolean; "synced_at"?: string | null }
 
 export interface CreateProfileInput { "name": string; "description"?: string; "selectors"?: Record<string, unknown>; "variables"?: Record<string, unknown> }
 
@@ -182,6 +184,15 @@ export class GeneratedInstructionsV1Client {
     /** Update a config */
     async updateConfig(id: string, body: UpdateConfigInput, init?: RequestInit): Promise<{ "config"?: Config }> {
       return this.request("PATCH", `/v1/configs/${encodeURIComponent(String(id))}`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Atomically update a config only if its current version matches */
+    async conditionalUpdateConfig(id: string, body: ConditionalUpdateConfigInput, init?: RequestInit): Promise<{ "config"?: Config }> {
+      return this.request("POST", `/v1/configs/${encodeURIComponent(String(id))}/conditional-update`, {
         body,
         query: undefined,
         init,

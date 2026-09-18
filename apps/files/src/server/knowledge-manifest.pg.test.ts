@@ -21,7 +21,11 @@ afterAll(async () => {
   await pool?.end();
 });
 
-async function createFixtureSchema(client: PoolClient): Promise<void> {
+function migrationSqlForSchema(sql: string, schema: string): string {
+  return sql.replaceAll("pg_catalog, public", `pg_catalog, ${schema}`);
+}
+
+async function createFixtureSchema(client: PoolClient, schema: string): Promise<void> {
   await client.query(`
     CREATE TABLE sources (
       id TEXT PRIMARY KEY, type TEXT NOT NULL, enabled BOOLEAN NOT NULL DEFAULT TRUE,
@@ -67,22 +71,31 @@ async function createFixtureSchema(client: PoolClient): Promise<void> {
       metadata TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL, tenant_id UUID
     );
   `);
-  await client.query(FILE_KNOWLEDGE_MANIFEST_MIGRATIONS[0]!.sql);
+  for (const migration of FILE_KNOWLEDGE_MANIFEST_MIGRATIONS) {
+    await client.query(migrationSqlForSchema(migration.sql, schema));
+  }
 }
 
-async function withPgFixture(run: (first: PoolClient, second: PoolClient) => Promise<void>): Promise<void> {
+async function withPgFixture(
+  run: (first: PoolClient, second: PoolClient, schema: string, runtimeRole: string) => Promise<void>,
+): Promise<void> {
   if (!pool) return;
   const first = await pool.connect();
   const second = await pool.connect();
   const schema = `files_manifest_${process.pid}_${++fixtureSequence}`;
+  const runtimeRole = `${schema}_runtime`;
   try {
+    await first.query(`CREATE ROLE ${runtimeRole} NOLOGIN`);
     await first.query(`CREATE SCHEMA ${schema}`);
     await first.query(`SET search_path = ${schema}`);
     await second.query(`SET search_path = ${schema}`);
-    await createFixtureSchema(first);
-    await run(first, second);
+    await createFixtureSchema(first, schema);
+    await run(first, second, schema, runtimeRole);
   } finally {
+    await first.query("RESET ROLE");
+    await second.query("RESET ROLE");
     await first.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
+    await first.query(`DROP ROLE IF EXISTS ${runtimeRole}`);
     first.release();
     second.release();
   }
@@ -95,7 +108,7 @@ async function seedFile(client: PoolClient, tenant: string, suffix: string): Pro
   );
   await client.query(
     `INSERT INTO files(id,source_id,name,mime,size,hash,status,indexed_at,modified_at,tenant_id)
-     VALUES($1,$2,$3,'text/markdown',12,$4,'active','2026-09-17T00:00:00.000Z',NULL,$5)`,
+     VALUES($1,$2,$3,'text/markdown',12,$4,'active','2026-09-17 00:00:00',NULL,$5)`,
     [`f_${suffix}`, `src_${suffix}`, `${suffix}.md`, suffix.repeat(8), tenant],
   );
 }
@@ -112,15 +125,42 @@ async function eventRows(client: PoolClient, tenant = TENANT_A) {
 
 describe("hosted knowledge manifest PostgreSQL change log", () => {
   test.skipIf(!DATABASE_URL)("is global, transactional, snapshot-stable, tenant-bound, and mutation-complete", async () => {
-    await withPgFixture(async (first, second) => {
+    await withPgFixture(async (first, second, schema, runtimeRole) => {
       await seedFile(first, TENANT_A, "a");
       await seedFile(first, TENANT_B, "b");
       const afterInsert = await eventRows(first);
       expect(afterInsert).toHaveLength(1);
       expect(afterInsert[0]!.manifest_snapshot).not.toHaveProperty("path");
+      expect(afterInsert[0]!.manifest_snapshot.indexed_at).toMatch(
+        /^2026-09-17T00:00:00\.000000Z$/,
+      );
       expect(JSON.stringify(afterInsert[0]!.manifest_snapshot)).not.toMatch(/bucket|prefix|region|hostname|machine|local_path/);
-      await first.query(FILE_KNOWLEDGE_MANIFEST_MIGRATIONS[0]!.sql);
+      for (const migration of FILE_KNOWLEDGE_MANIFEST_MIGRATIONS) {
+        await first.query(migrationSqlForSchema(migration.sql, schema));
+      }
       expect(await eventRows(first)).toHaveLength(1);
+      const capture = (await first.query<{ security_definer: boolean; settings: string[] | null }>(
+        `SELECT prosecdef AS security_definer, proconfig AS settings
+         FROM pg_proc
+         WHERE proname = 'files_capture_knowledge_manifest_change'
+           AND pronamespace = current_schema()::regnamespace`,
+      )).rows[0]!;
+      expect(capture.security_definer).toBe(true);
+      expect(capture.settings).toContain(`search_path=pg_catalog, ${schema}`);
+
+      await first.query(`GRANT USAGE ON SCHEMA ${schema} TO ${runtimeRole}`);
+      await first.query(`GRANT SELECT, UPDATE ON files TO ${runtimeRole}`);
+      const beforeRuntimeUpdate = (await eventRows(first)).length;
+      await first.query(`SET ROLE ${runtimeRole}`);
+      await first.query("UPDATE files SET name='runtime-write.md' WHERE id='f_a'");
+      await first.query("RESET ROLE");
+      const afterRuntimeUpdate = await eventRows(first);
+      expect(afterRuntimeUpdate).toHaveLength(beforeRuntimeUpdate + 1);
+      expect(afterRuntimeUpdate.at(-1)!.manifest_snapshot).toMatchObject({
+        file_id: "f_a",
+        name: "runtime-write.md",
+        indexed_at: "2026-09-17T00:00:00.000000Z",
+      });
 
       await first.query("INSERT INTO tags(id,name,tenant_id) VALUES('tag_a','handbook',$1)", [TENANT_A]);
       await first.query("INSERT INTO file_tags(file_id,tag_id,tenant_id) VALUES('f_a','tag_a',$1)", [TENANT_A]);

@@ -822,6 +822,92 @@ export const FILE_KNOWLEDGE_MANIFEST_MIGRATIONS: readonly Migration[] = [
      END;
      $$;`,
   ),
+  defineMigration(
+    "files-knowledge-manifest-0002-normalize-snapshot-timestamps",
+    `CREATE OR REPLACE FUNCTION files_manifest_rfc3339(value TEXT)
+     RETURNS TEXT
+     LANGUAGE plpgsql
+     IMMUTABLE
+     STRICT
+     SET search_path = pg_catalog, public
+     AS $$
+     DECLARE instant TIMESTAMPTZ;
+     BEGIN
+       IF value ~ '(Z|[+-][0-9]{2}:?[0-9]{2})$' THEN
+         instant := value::timestamptz;
+       ELSE
+         instant := value::timestamp AT TIME ZONE 'UTC';
+       END IF;
+       RETURN to_char(
+         instant AT TIME ZONE 'UTC',
+         'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
+       );
+     EXCEPTION WHEN OTHERS THEN
+       RAISE EXCEPTION 'invalid knowledge manifest snapshot timestamp';
+     END;
+     $$;
+
+     CREATE OR REPLACE FUNCTION files_normalize_manifest_snapshot_timestamps()
+     RETURNS TRIGGER
+     LANGUAGE plpgsql
+     SET search_path = pg_catalog, public
+     AS $$
+     DECLARE indexed_value TEXT;
+     DECLARE modified_value TEXT;
+     BEGIN
+       IF NEW.manifest_snapshot IS NULL THEN
+         RETURN NEW;
+       END IF;
+       indexed_value := NEW.manifest_snapshot->>'indexed_at';
+       IF indexed_value IS NULL OR btrim(indexed_value) = '' THEN
+         RAISE EXCEPTION 'knowledge manifest snapshot indexed_at unavailable';
+       END IF;
+       NEW.manifest_snapshot := jsonb_set(
+         NEW.manifest_snapshot,
+         '{indexed_at}',
+         to_jsonb(files_manifest_rfc3339(indexed_value)),
+         FALSE
+       );
+       modified_value := NEW.manifest_snapshot->>'modified_at';
+       IF modified_value IS NOT NULL THEN
+         NEW.manifest_snapshot := jsonb_set(
+           NEW.manifest_snapshot,
+           '{modified_at}',
+           to_jsonb(files_manifest_rfc3339(modified_value)),
+           FALSE
+         );
+       END IF;
+       RETURN NEW;
+     END;
+     $$;
+
+     DROP TRIGGER IF EXISTS files_manifest_snapshot_timestamp_normalize
+       ON knowledge_source_outbox_events;
+     CREATE TRIGGER files_manifest_snapshot_timestamp_normalize
+       BEFORE INSERT OR UPDATE OF manifest_snapshot
+       ON knowledge_source_outbox_events
+       FOR EACH ROW
+       WHEN (NEW.manifest_snapshot IS NOT NULL)
+       EXECUTE FUNCTION files_normalize_manifest_snapshot_timestamps();
+
+     ALTER FUNCTION files_capture_knowledge_manifest_change(TEXT, TEXT, BOOLEAN)
+       SECURITY DEFINER;
+     ALTER FUNCTION files_capture_knowledge_manifest_change(TEXT, TEXT, BOOLEAN)
+       SET search_path TO pg_catalog, public;
+
+     UPDATE knowledge_source_outbox_events
+     SET manifest_snapshot = manifest_snapshot
+     WHERE manifest_snapshot IS NOT NULL
+       AND (
+         manifest_snapshot->>'indexed_at' !~
+           '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$'
+         OR (
+           manifest_snapshot->>'modified_at' IS NOT NULL
+           AND manifest_snapshot->>'modified_at' !~
+             '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$'
+         )
+       );`,
+  ),
 ];
 
 /** Full ordered migration set applied by the runner and checked by /ready. */

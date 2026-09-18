@@ -11,6 +11,8 @@ import { createHash, randomUUID } from "node:crypto";
 import type { TypedQueryClient } from "../generated/storage-kit/index.js";
 import {
   ConfigNotFoundError,
+  ConfigVersionConflictError,
+  validateExpectedConfigVersion,
   ProfileNotFoundError,
   type Config,
   type ConfigFilter,
@@ -559,6 +561,7 @@ export async function updateConfig(
   idOrSlug: string,
   input: UpdateConfigInput,
 ): Promise<Config> {
+  validateExpectedConfigVersion(input.expected_version);
   const existing = await getConfig(client, idOrSlug);
   const sets: string[] = ["updated_at = now()", "version = version + 1"];
   const params: unknown[] = [];
@@ -586,16 +589,31 @@ export async function updateConfig(
   const configIdParam = params.length;
   params.push(randomUUID());
   const snapshotIdParam = params.length;
-  await client.execute(
+  let condition = "";
+  if (input.expected_version !== undefined) {
+    params.push(input.expected_version);
+    condition = ` AND version::bigint = $${params.length}::bigint`;
+  }
+  // Return this exact update's row, not a later read that can observe another writer.
+  // A failed predicate yields no row to snapshot; both writes share one statement.
+  const updated = await client.get<ConfigDbRow>(
     `WITH updated_config AS (
-       UPDATE configs SET ${sets.join(", ")} WHERE id = $${configIdParam}
-       RETURNING id, content, version
+       UPDATE configs SET ${sets.join(", ")} WHERE id = $${configIdParam}${condition}
+       RETURNING *
+     ), inserted_snapshot AS (
+       INSERT INTO config_snapshots (id, config_id, content, version, created_at)
+       SELECT $${snapshotIdParam}, id, content, version, now() FROM updated_config
+       RETURNING config_id
      )
-     INSERT INTO config_snapshots (id, config_id, content, version, created_at)
-     SELECT $${snapshotIdParam}, id, content, version, now() FROM updated_config`,
+     SELECT updated_config.* FROM updated_config
+     JOIN inserted_snapshot ON inserted_snapshot.config_id = updated_config.id`,
     params,
   );
-  return getConfig(client, existing.id);
+  if (!updated) {
+    if (input.expected_version !== undefined) throw new ConfigVersionConflictError(existing.id, input.expected_version);
+    throw new ConfigNotFoundError(existing.id);
+  }
+  return rowToConfig(updated);
 }
 
 export async function deleteConfig(client: TypedQueryClient, idOrSlug: string): Promise<void> {

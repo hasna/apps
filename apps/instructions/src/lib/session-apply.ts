@@ -22,6 +22,7 @@ import {
 import {
   SESSION_RENDER_MANAGED_MARKER,
   SESSION_RENDER_SCHEMA,
+  SESSION_RENDERER_OWNER_ID,
   type SessionRenderFile,
   type SessionRenderFileRole,
   type SessionRenderManifest,
@@ -36,6 +37,7 @@ import {
   detectClaudeAuthorityConflicts,
   type ClaudeOwnedAuthority,
 } from "./session-authority.js";
+import { sessionRenderOwnsPath } from "./session-render-ownership.js";
 
 export type SessionApplyAction = "create" | "update" | "delete" | "unchanged" | "conflict";
 
@@ -80,6 +82,28 @@ export interface SessionApplyResult {
   files: SessionApplyFileResult[];
   conflicts: SessionApplyFileResult[];
   drift: SessionDriftCheck;
+  /** Verified preimages selected for adoption; only applied=true proves adoption. */
+  adoptions: SessionFileAdoptionReceipt[];
+  /** Verified drifted preimages selected for reconciliation; qualified by applied. */
+  reconciliations: SessionFileReconciliationReceipt[];
+}
+
+export interface SessionFileAdoption {
+  relativePath: string;
+  /** SHA-256 of the exact, previously reviewed file bytes. */
+  sha256: string;
+}
+
+export interface SessionFileAdoptionReceipt {
+  path: string;
+  relativePath: string;
+  preimageSha256: string;
+  renderedSha256: string;
+  sourceIds: string[];
+}
+
+export interface SessionFileReconciliationReceipt extends SessionFileAdoptionReceipt {
+  previousManagedSha256: string;
 }
 
 export interface SessionRollbackReceipt {
@@ -96,6 +120,11 @@ export interface SessionRollbackReceipt {
 export interface SessionApplyOptions {
   dryRun?: boolean;
   force?: boolean;
+  adoptFiles?: SessionFileAdoption[];
+  /** Exact reviewed drift on owned outputs; requires expectedManifestSha256. */
+  reconcileFiles?: SessionFileAdoption[];
+  /** Compare-and-swap precondition captured before resolving hosted sources. */
+  expectedManifestSha256?: string;
   /**
    * Registered Instructions configs that own a Claude-home AGENTS.md (see
    * ClaudeOwnedAuthority). Passed to the apply-time authority recheck so an
@@ -172,6 +201,8 @@ interface SessionRenderSnapshot {
     content: string;
   }>;
   afterFiles: SessionRenderSnapshotAfterFileV1[];
+  adoptions?: SessionFileAdoptionReceipt[];
+  reconciliations?: SessionFileReconciliationReceipt[];
 }
 
 interface StoredSessionRenderSnapshot extends Omit<SessionRenderSnapshot, "targetKind" | "afterFiles"> {
@@ -218,17 +249,23 @@ function applySessionRenderUnlocked(
   const targetHome = assertSafeTargetHome(plan.targetHome);
   assertClaudeAuthorityStillClear(plan, targetHome, options.ownedClaudeAuthorities);
   const payloadFiles = [...plan.files, ...(plan.assetFiles ?? [])];
-  const files = [...payloadFiles, plan.manifestFile];
   const manifestPath = resolvePlannedFilePath(plan, plan.manifestFile, targetHome);
+  assertManifestPrecondition(manifestPath, targetHome, options.expectedManifestSha256);
   const previousManifest = readPreviousManifest(manifestPath);
   const previousHashes = previousManifest
     ? new Map(previousManifest.files.map((file) => [file.relativePath, file.sha256]))
     : new Map<string, string>();
+  const adoptions = validateFileAdoptions(plan, targetHome, previousHashes, options);
+  const adoptedHashes = new Map(adoptions.map((entry) => [entry.relativePath, entry.preimageSha256]));
+  const reconciliations = validateFileReconciliations(plan, targetHome, previousManifest, options);
+  const reconciledHashes = new Map(reconciliations.map((entry) => [entry.relativePath, entry.preimageSha256]));
+  const manifestFile = manifestWithFileProvenance(plan, previousManifest, adoptions, reconciliations);
+  const files = [...payloadFiles, manifestFile];
   const currentRelativePaths = new Set(files.map((file) => file.relativePath));
   const drift = checkSessionRenderDrift(targetHome, manifestPath);
 
   const results = [
-    ...files.map((file) => planFileResult(plan, file, targetHome, previousHashes, previousManifest, options)),
+    ...files.map((file) => planFileResult(plan, file, targetHome, previousHashes, previousManifest, options, adoptedHashes, reconciledHashes)),
     ...planStaleFileResults(plan, targetHome, previousManifest, currentRelativePaths, options),
   ];
   assertNotSilentManagedWipeout(plan, results);
@@ -252,6 +289,8 @@ function applySessionRenderUnlocked(
       files: results,
       conflicts,
       drift,
+      adoptions,
+      reconciliations,
     };
   }
 
@@ -265,6 +304,7 @@ function applySessionRenderUnlocked(
   if (!options.dryRun) {
     const allowPortableFallback = coordination === null;
     const forcePortableFileOps = options.test_hooks?.force_portable_file_ops ?? false;
+    assertManifestPrecondition(manifestPath, targetHome, options.expectedManifestSha256);
     ensureSessionTargetHome(targetHome);
     rollback = writeSessionSnapshot(
       plan,
@@ -275,9 +315,12 @@ function applySessionRenderUnlocked(
       coordination,
       allowPortableFallback,
       forcePortableFileOps,
+      adoptions,
+      reconciliations,
     );
     snapshotPath = rollback.snapshotPath;
     options.test_hooks?.before_apply_writes?.({ plan, results });
+    assertManifestPrecondition(manifestPath, targetHome, options.expectedManifestSha256);
     const resultsByPath = new Map(results.map((result) => [result.path, result]));
     for (const file of payloadFiles) {
       applyPlannedFile(
@@ -306,7 +349,7 @@ function applySessionRenderUnlocked(
     }
     applyPlannedFile(
       plan,
-      plan.manifestFile,
+      manifestFile,
       targetHome,
       resultsByPath,
       coordination,
@@ -328,7 +371,218 @@ function applySessionRenderUnlocked(
     files: results,
     conflicts,
     drift,
+    adoptions,
+    reconciliations,
   };
+}
+
+function assertManifestPrecondition(path: string, targetHome: string, expected: string | undefined): void {
+  if (expected === undefined) return;
+  if (!/^[a-f0-9]{64}$/.test(expected)) {
+    throw new SessionApplyError("Expected session manifest SHA-256 must contain 64 lowercase hexadecimal characters.");
+  }
+  if (currentSessionFileHash(path, targetHome) !== expected) {
+    throw new SessionApplyError("Session manifest SHA-256 precondition failed; reload the manifest and resolve a new plan.");
+  }
+}
+
+function validateFileAdoptions(
+  plan: SessionRenderPlan,
+  targetHome: string,
+  previousHashes: Map<string, string>,
+  options: SessionApplyOptions,
+): SessionFileAdoptionReceipt[] {
+  const requests = options.adoptFiles ?? [];
+  if (!Array.isArray(requests)) throw new SessionApplyError("Session file adoptions must be an array.");
+  if (requests.length > 0 && options.force) {
+    throw new SessionApplyError("Exact file adoption cannot be combined with force.");
+  }
+  const seen = new Set<string>();
+  return requests.map((request) => {
+    if (
+      !request || typeof request.relativePath !== "string" || typeof request.sha256 !== "string"
+      || !/^[a-f0-9]{64}$/.test(request.sha256)
+    ) {
+      throw new SessionApplyError("Each file adoption requires a plan-relative path and a 64-character lowercase SHA-256.");
+    }
+    if (seen.has(request.relativePath)) {
+      throw new SessionApplyError(`Duplicate file adoption target: ${request.relativePath}`);
+    }
+    seen.add(request.relativePath);
+    // Only native instruction outputs can be adopted, never the ownership
+    // manifest, assets, stale outputs, or paths outside this exact plan.
+    const candidates = plan.files.filter((file) => file.relativePath === request.relativePath);
+    if (candidates.length !== 1 || candidates[0]!.role === "manifest") {
+      throw new SessionApplyError(`File adoption target is not a unique planned instruction output: ${request.relativePath}`);
+    }
+    const file = candidates[0]!;
+    const path = resolvePlannedFilePath(plan, file, targetHome);
+    if (previousHashes.has(file.relativePath) || sessionRenderOwnsPath(path)) {
+      throw new SessionApplyError(`File adoption target is already managed: ${request.relativePath}`);
+    }
+    const observedSha256 = readExactFilePreimage(path, targetHome, request, "adoption");
+    return {
+      path,
+      relativePath: file.relativePath,
+      preimageSha256: observedSha256,
+      renderedSha256: file.sha256,
+      sourceIds: [...file.sourceIds],
+    };
+  });
+}
+
+function readExactFilePreimage(
+  path: string,
+  targetHome: string,
+  request: SessionFileAdoption,
+  operation: "adoption" | "reconciliation",
+): string {
+  if (currentSessionFileHash(path, targetHome) === null) {
+    throw new SessionApplyError(`File ${operation} target does not exist: ${request.relativePath}`);
+  }
+  const bytes = readFileSync(path);
+  if (!bytes.equals(Buffer.from(bytes.toString("utf8"), "utf8"))) {
+    throw new SessionApplyError(`File ${operation} target must contain losslessly restorable UTF-8: ${request.relativePath}`);
+  }
+  const observedSha256 = createHash("sha256").update(bytes).digest("hex");
+  if (observedSha256 !== request.sha256) {
+    throw new SessionApplyError(`File ${operation} SHA-256 precondition failed: ${request.relativePath}`);
+  }
+  return observedSha256;
+}
+
+function validateFileReconciliations(
+  plan: SessionRenderPlan,
+  targetHome: string,
+  previousManifest: SessionRenderManifest | null,
+  options: SessionApplyOptions,
+): SessionFileReconciliationReceipt[] {
+  const requests = options.reconcileFiles ?? [];
+  if (!Array.isArray(requests)) throw new SessionApplyError("Session file reconciliations must be an array.");
+  if (requests.length === 0) return [];
+  if (options.force) throw new SessionApplyError("Exact file reconciliation cannot be combined with force.");
+  if (options.expectedManifestSha256 === undefined) {
+    throw new SessionApplyError("Exact file reconciliation requires an expected manifest SHA-256 precondition.");
+  }
+  if (
+    !previousManifest || previousManifest.targetOwner?.writer?.id !== SESSION_RENDERER_OWNER_ID
+    || previousManifest.tool !== plan.tool || previousManifest.targetHome !== targetHome
+  ) {
+    throw new SessionApplyError("File reconciliation requires this renderer's manifest for the same tool and target home.");
+  }
+  const seen = new Set<string>();
+  return requests.map((request) => {
+    if (
+      !request || typeof request.relativePath !== "string" || typeof request.sha256 !== "string"
+      || !/^[a-f0-9]{64}$/.test(request.sha256)
+    ) {
+      throw new SessionApplyError("Each file reconciliation requires a plan-relative path and a 64-character lowercase SHA-256.");
+    }
+    if (seen.has(request.relativePath)) {
+      throw new SessionApplyError(`Duplicate file reconciliation target: ${request.relativePath}`);
+    }
+    seen.add(request.relativePath);
+    const candidates = plan.files.filter((file) => file.relativePath === request.relativePath);
+    if (candidates.length !== 1 || candidates[0]!.role === "manifest") {
+      throw new SessionApplyError(`File reconciliation target is not a unique planned instruction output: ${request.relativePath}`);
+    }
+    const file = candidates[0]!;
+    const path = resolvePlannedFilePath(plan, file, targetHome);
+    const owned = previousManifest.files.filter((entry) => entry.relativePath === file.relativePath);
+    if (
+      owned.length !== 1 || owned[0]!.path !== path || owned[0]!.role !== file.role
+      || !/^[a-f0-9]{64}$/.test(owned[0]!.sha256)
+    ) {
+      throw new SessionApplyError(`File reconciliation target is not owned by the observed manifest: ${request.relativePath}`);
+    }
+    const observedSha256 = readExactFilePreimage(path, targetHome, request, "reconciliation");
+    if (observedSha256 === owned[0]!.sha256) {
+      throw new SessionApplyError(`File reconciliation target has no managed drift: ${request.relativePath}`);
+    }
+    if (observedSha256 === file.sha256) {
+      throw new SessionApplyError(`File reconciliation target already matches the planned output: ${request.relativePath}`);
+    }
+    return {
+      path,
+      relativePath: file.relativePath,
+      preimageSha256: observedSha256,
+      renderedSha256: file.sha256,
+      previousManagedSha256: owned[0]!.sha256,
+      sourceIds: [...file.sourceIds],
+    };
+  });
+}
+
+function manifestWithFileProvenance(
+  plan: SessionRenderPlan,
+  previousManifest: SessionRenderManifest | null,
+  adoptions: SessionFileAdoptionReceipt[],
+  reconciliations: SessionFileReconciliationReceipt[],
+): SessionRenderFile {
+  if (
+    adoptions.length === 0 && previousManifest?.adoptions === undefined
+    && reconciliations.length === 0 && previousManifest?.reconciliations === undefined
+  ) return plan.manifestFile;
+  if (previousManifest?.adoptions !== undefined && !Array.isArray(previousManifest.adoptions)) {
+    throw new SessionApplyError("Previous session manifest adoption provenance is invalid.");
+  }
+  const entries = new Map<string, NonNullable<SessionRenderManifest["adoptions"]>[number]>();
+  for (const entry of [
+    ...(previousManifest?.adoptions ?? []),
+    ...adoptions.map(({ path: _path, ...receipt }) => receipt),
+  ]) {
+    if (
+      !entry || typeof entry.relativePath !== "string"
+      || !/^[a-f0-9]{64}$/.test(entry.preimageSha256)
+      || !/^[a-f0-9]{64}$/.test(entry.renderedSha256)
+      || !Array.isArray(entry.sourceIds) || entry.sourceIds.some((id) => typeof id !== "string")
+    ) {
+      throw new SessionApplyError("Previous session manifest adoption provenance is invalid.");
+    }
+    resolveManifestRelativePath(entry.relativePath, plan.targetHome);
+    const previous = entries.get(entry.relativePath);
+    if (previous && JSON.stringify(previous) !== JSON.stringify(entry)) {
+      throw new SessionApplyError(`Conflicting session file adoption provenance: ${entry.relativePath}`);
+    }
+    entries.set(entry.relativePath, entry);
+  }
+  if (previousManifest?.reconciliations !== undefined && !Array.isArray(previousManifest.reconciliations)) {
+    throw new SessionApplyError("Previous session manifest reconciliation provenance is invalid.");
+  }
+  const reconciledEntries = new Map<string, NonNullable<SessionRenderManifest["reconciliations"]>[number]>();
+  for (const entry of [
+    ...(previousManifest?.reconciliations ?? []),
+    ...reconciliations.map(({ path: _path, ...receipt }) => receipt),
+  ]) {
+    if (
+      !entry || typeof entry.relativePath !== "string"
+      || !/^[a-f0-9]{64}$/.test(entry.preimageSha256)
+      || !/^[a-f0-9]{64}$/.test(entry.renderedSha256)
+      || !/^[a-f0-9]{64}$/.test(entry.previousManagedSha256)
+      || !Array.isArray(entry.sourceIds) || entry.sourceIds.some((id) => typeof id !== "string")
+    ) {
+      throw new SessionApplyError("Previous session manifest reconciliation provenance is invalid.");
+    }
+    resolveManifestRelativePath(entry.relativePath, plan.targetHome);
+    // A path may be reconciled more than once. Preserve each distinct reviewed
+    // transition, including its old owned baseline and drifted before-image.
+    const canonical = {
+      relativePath: entry.relativePath,
+      preimageSha256: entry.preimageSha256,
+      renderedSha256: entry.renderedSha256,
+      previousManagedSha256: entry.previousManagedSha256,
+      sourceIds: [...entry.sourceIds],
+    };
+    reconciledEntries.set(JSON.stringify(canonical), canonical);
+  }
+  const manifest = {
+    ...plan.manifest,
+    ...(adoptions.length > 0 || previousManifest?.adoptions !== undefined ? { adoptions: [...entries.values()] } : {}),
+    ...(reconciliations.length > 0 || previousManifest?.reconciliations !== undefined
+      ? { reconciliations: [...reconciledEntries.values()] } : {}),
+  };
+  const content = `${JSON.stringify(manifest, null, 2)}\n`;
+  return { ...plan.manifestFile, content, sha256: sha256(content) };
 }
 
 function assertCursorAuthorityUnchanged(plan: SessionRenderPlan): void {
@@ -1025,12 +1279,33 @@ function planFileResult(
   previousHashes: Map<string, string>,
   previousManifest: SessionRenderManifest | null,
   options: SessionApplyOptions,
+  adoptedHashes: Map<string, string>,
+  reconciledHashes: Map<string, string>,
 ): SessionApplyFileResult {
   const target = resolvePlannedFilePath(plan, file, targetHome);
   const previousContent = existsSync(target) ? readFileSync(target, "utf-8") : null;
   const previousSha256 = previousContent === null ? null : sha256(previousContent);
   const previouslyManaged = isPreviouslyManaged(file, previousSha256, previousHashes, previousManifest);
   const changed = previousContent !== file.content;
+  const exactSha256 = adoptedHashes.get(file.relativePath) ?? reconciledHashes.get(file.relativePath);
+  if (exactSha256 !== undefined) {
+    const operation = adoptedHashes.has(file.relativePath) ? "adoption" : "reconciliation";
+    if (previousSha256 !== exactSha256) {
+      throw new SessionApplyError(`File ${operation} SHA-256 precondition failed: ${file.relativePath}`);
+    }
+    // An identical unmanaged preimage still needs a snapshot and an ownership
+    // transition so restore can remove the newly created manifest safely.
+    return {
+      path: target,
+      relativePath: file.relativePath,
+      role: file.role,
+      action: "update",
+      changed,
+      previousSha256,
+      newSha256: file.sha256,
+      reason: `exact observed SHA-256 ${operation}`,
+    };
+  }
   if (previousContent !== null && !options.force && !previouslyManaged) {
     return {
       path: target,
@@ -1324,12 +1599,17 @@ function writeSessionSnapshot(
   coordination: ProjectContextWriteCoordination | null,
   allowPortableFallback: boolean,
   forcePortableFileOps: boolean,
+  adoptions: SessionFileAdoptionReceipt[],
+  reconciliations: SessionFileReconciliationReceipt[],
 ): SessionRollbackReceipt {
   const existingFiles = results
     .filter((result) => result.action === "update" || result.action === "delete")
-    .filter((result) => existsSync(result.path))
     .map((result) => {
+      assertExpectedSessionFileHash(result.path, targetHome, result.previousSha256);
       const content = readFileSync(result.path, "utf-8");
+      if (sha256(content) !== result.previousSha256) {
+        throw new SessionApplyError(`Session snapshot preimage changed after planning: ${result.relativePath}`);
+      }
       return {
         path: result.path,
         relativePath: result.relativePath,
@@ -1375,11 +1655,17 @@ function writeSessionSnapshot(
     previousManifest,
     files: existingFiles,
     afterFiles,
+    ...(adoptions.length > 0 ? { adoptions } : {}),
+    ...(reconciliations.length > 0 ? { reconciliations } : {}),
   };
+  const snapshotContent = `${JSON.stringify(snapshot, null, 2)}\n`;
+  if ((adoptions.length > 0 || reconciliations.length > 0) && Buffer.byteLength(snapshotContent, "utf8") > 32 * 1024 * 1024) {
+    throw new SessionApplyError("Exact file preimage snapshot exceeds the 32 MiB restore limit.");
+  }
   coordination?.assert_held();
   writeProjectContextCoordinatedFile({
     path: snapshotPath,
-    content: `${JSON.stringify(snapshot, null, 2)}\n`,
+    content: snapshotContent,
     workspace_root: sessionRenderSnapshotWorkspaceRoot(targetHome),
     default_mode: 0o600,
     expected_hash: null,

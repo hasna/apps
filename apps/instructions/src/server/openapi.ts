@@ -199,6 +199,26 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
         UpdateConfigInput: {
           type: "object",
           properties: {
+            expected_version: { type: "integer", minimum: 1, description: "Atomically require this current version; a mismatch returns 409 without changing the config or snapshots." },
+            name: { type: "string" },
+            kind: { type: "string" },
+            category: { type: "string" },
+            agent: { type: "string" },
+            target_path: { type: "string", nullable: true },
+            outputs: { type: "array", items: { type: "object" } },
+            format: { type: "string" },
+            content: { type: "string" },
+            description: { type: "string", nullable: true },
+            tags: { type: "array", items: { type: "string" } },
+            is_template: { type: "boolean" },
+            synced_at: { type: "string", nullable: true },
+          },
+        },
+        ConditionalUpdateConfigInput: {
+          type: "object",
+          required: ["expected_version"],
+          properties: {
+            expected_version: { type: "integer", minimum: 1, description: "Atomically require this current version; a mismatch returns 409 without changing the config or snapshots." },
             name: { type: "string" },
             kind: { type: "string" },
             category: { type: "string" },
@@ -620,6 +640,8 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
             content: { "application/json": { schema: { $ref: "#/components/schemas/UpdateConfigInput" } } },
           },
           responses: {
+            "400": { description: "Invalid expected_version; must be a positive safe integer." },
+            "409": { description: "CONFIG_VERSION_CONFLICT: expected_version no longer matches; config and snapshots are unchanged." },
             "200": {
               content: {
                 "application/json": {
@@ -638,6 +660,8 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
             content: { "application/json": { schema: { $ref: "#/components/schemas/UpdateConfigInput" } } },
           },
           responses: {
+            "400": { description: "Invalid expected_version; must be a positive safe integer." },
+            "409": { description: "CONFIG_VERSION_CONFLICT: expected_version no longer matches; config and snapshots are unchanged." },
             "200": {
               content: {
                 "application/json": {
@@ -659,6 +683,26 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
                 },
               },
             },
+          },
+        },
+      },
+      "/v1/configs/{id}/conditional-update": {
+        post: {
+          operationId: "conditionalUpdateConfig",
+          summary: "Atomically update a config only if its current version matches",
+          description: "Requires expected_version. Older servers return 404 without changing the config. Clients must never retry through an unconditional update route.",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { $ref: "#/components/schemas/ConditionalUpdateConfigInput" } } },
+          },
+          responses: {
+            "200": {
+              content: { "application/json": { schema: { type: "object", properties: { config: { $ref: "#/components/schemas/Config" } } } } },
+            },
+            "400": { description: "expected_version is required and must be a positive safe integer." },
+            "404": { description: "Config not found, or conditional updates are unsupported by this server." },
+            "409": { description: "CONFIG_VERSION_CONFLICT: config and snapshots are unchanged." },
           },
         },
       },

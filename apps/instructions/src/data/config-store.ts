@@ -38,7 +38,7 @@
 import { randomUUID } from "node:crypto";
 import type { Database } from "bun:sqlite";
 import type { FeedbackInput } from "../db/database.js";
-import { ConfigNotFoundError, ProfileNotFoundError } from "../types/index.js";
+import { ConfigNotFoundError, ProfileNotFoundError, validateExpectedConfigVersion } from "../types/index.js";
 import type {
   Config,
   ConfigFilter,
@@ -319,14 +319,14 @@ export interface ConfigStore {
   getProfile(idOrSlug: string): Promise<Profile>;
   getProfileConfigs(idOrSlug: string): Promise<Config[]>;
   getProfileConfigsPage(idOrSlug: string, options?: BoundedReadOptions): Promise<BoundedReadPage<Config>>;
-  getProfileConfigBindings(idOrSlug: string): Promise<ProfileConfigBinding[]>;
+  getProfileConfigBindings(idOrSlug: string, options?: { requireExplicit?: boolean }): Promise<ProfileConfigBinding[]>;
   createProfile(input: CreateProfileInput): Promise<Profile>;
   updateProfile(idOrSlug: string, input: UpdateProfileInput): Promise<Profile>;
   deleteProfile(idOrSlug: string): Promise<void>;
   addConfigToProfile(profileIdOrSlug: string, configId: string): Promise<void>;
   setProfileConfigBinding(profileIdOrSlug: string, configId: string, binding: ProfileConfigBindingSpec): Promise<ProfileConfigBinding>;
   removeConfigFromProfile(profileIdOrSlug: string, configId: string): Promise<void>;
-  getProfileAssetBindings(profileIdOrSlug: string): Promise<ProfileAssetBinding[]>;
+  getProfileAssetBindings(profileIdOrSlug: string, options?: { requireExplicit?: boolean }): Promise<ProfileAssetBinding[]>;
   addAssetToProfile(profileIdOrSlug: string, sourceConfigId: string, binding: ProfileAssetBindingSpec): Promise<ProfileAssetBinding>;
   setProfileAssetBinding(profileIdOrSlug: string, assetKey: string, binding: ProfileAssetBindingSpec): Promise<ProfileAssetBinding>;
   removeAssetFromProfile(profileIdOrSlug: string, assetKey: string): Promise<void>;
@@ -696,9 +696,11 @@ export class CloudConfigStore implements ConfigStore {
   }
 
   async updateConfig(idOrSlug: string, input: UpdateConfigInput): Promise<Config> {
+    validateExpectedConfigVersion(input.expected_version);
+    const conditional = input.expected_version !== undefined;
     const { data } = await this.request<{ config: Config }>(
-      "PATCH",
-      `/configs/${encodeURIComponent(idOrSlug)}`,
+      conditional ? "POST" : "PATCH",
+      `/configs/${encodeURIComponent(idOrSlug)}${conditional ? "/conditional-update" : ""}`,
       input,
     );
     return (data as { config: Config }).config;
@@ -854,7 +856,7 @@ export class CloudConfigStore implements ConfigStore {
     );
   }
 
-  async getProfileConfigBindings(idOrSlug: string): Promise<ProfileConfigBinding[]> {
+  async getProfileConfigBindings(idOrSlug: string, options: { requireExplicit?: boolean } = {}): Promise<ProfileConfigBinding[]> {
     let routeMissing = false;
     const bindings = await aggregateBoundedCollection(
       "profile config bindings",
@@ -874,6 +876,7 @@ export class CloudConfigStore implements ConfigStore {
       (binding) => `${binding.profile_id}\0${binding.config_id}`,
     );
     if (!routeMissing) return bindings;
+    if (options.requireExplicit) throw new Error("HOSTED_BINDINGS_REQUIRED: profile config binding route is unavailable; refusing legacy activation fallback.");
     const profile = await this.getProfile(idOrSlug);
     const configs = await this.getProfileConfigs(idOrSlug);
     return configs.map((config, sort_order) => ({
@@ -973,7 +976,7 @@ export class CloudConfigStore implements ConfigStore {
     );
   }
 
-  async getProfileAssetBindings(profileIdOrSlug: string): Promise<ProfileAssetBinding[]> {
+  async getProfileAssetBindings(profileIdOrSlug: string, options: { requireExplicit?: boolean } = {}): Promise<ProfileAssetBinding[]> {
     let routeMissing = false;
     const assets = await aggregateBoundedCollection(
       "profile asset bindings",
@@ -993,6 +996,7 @@ export class CloudConfigStore implements ConfigStore {
       (asset) => `${asset.profile_id}\0${asset.binding.assetKey}`,
     );
     if (!routeMissing) return assets;
+    if (options.requireExplicit) throw new Error("HOSTED_ASSETS_REQUIRED: profile asset binding route is unavailable; refusing an empty asset fallback.");
     await this.getProfile(profileIdOrSlug);
     return [];
   }

@@ -19,6 +19,7 @@ import type {
   Availability,
   OrgMembership, CreateOrgMembershipInput,
 } from "../types/index.js";
+import { canonicalizeTenantId, isValidTenantId } from "@hasna/contracts/auth";
 import type { CalendarCloudQueryClient } from "./cloud-client.js";
 
 function newId(): string {
@@ -153,14 +154,23 @@ export interface ListEventsFilter {
 export interface TimeRange { start: string; end: string; }
 
 export class CalendarPgStore {
-  constructor(private readonly client: CalendarCloudQueryClient) {}
+  private readonly tenantId: string;
+
+  constructor(private readonly client: CalendarCloudQueryClient, tenantId: string) {
+    if (!isValidTenantId(tenantId)) throw new RangeError("A valid Calendar tenant is required");
+    this.tenantId = canonicalizeTenantId(tenantId);
+  }
+
+  private async query<T = Record<string, unknown>>(sql: string, params: readonly unknown[] = []) {
+    return this.client.query<T>(sql, [this.tenantId, ...params]);
+  }
 
   private async one<T extends Record<string, unknown>>(sql: string, params: readonly unknown[] = []): Promise<T | null> {
-    const res = await this.client.query<T>(sql, params);
+    const res = await this.query<T>(sql, params);
     return res.rows[0] ?? null;
   }
   private async many<T extends Record<string, unknown>>(sql: string, params: readonly unknown[] = []): Promise<T[]> {
-    const res = await this.client.query<T>(sql, params);
+    const res = await this.query<T>(sql, params);
     return res.rows;
   }
 
@@ -169,8 +179,8 @@ export class CalendarPgStore {
     const id = newId();
     const slug = input.slug || slugify(input.name);
     try {
-      await this.client.query(
-        `INSERT INTO orgs (id, name, slug, description, metadata) VALUES ($1,$2,$3,$4,$5::jsonb)`,
+      await this.query(
+        `INSERT INTO orgs (tenant_id, id, name, slug, description, metadata) VALUES ($1,$2,$3,$4,$5,$6::jsonb)`,
         [id, input.name, slug, input.description ?? null, JSON.stringify(input.metadata ?? {})],
       );
     } catch (e) {
@@ -180,24 +190,24 @@ export class CalendarPgStore {
     return (await this.getOrg(id))!;
   }
   async getOrg(idOrSlug: string): Promise<Org | null> {
-    const r = await this.one("SELECT * FROM orgs WHERE id=$1 OR slug=$1", [idOrSlug]);
+    const r = await this.one("SELECT * FROM orgs WHERE tenant_id=$1 AND (id=$2 OR slug=$2)", [idOrSlug]);
     return r ? rowToOrg(r) : null;
   }
   async listOrgs(): Promise<Org[]> {
-    return (await this.many("SELECT * FROM orgs ORDER BY name")).map(rowToOrg);
+    return (await this.many("SELECT * FROM orgs WHERE tenant_id=$1 ORDER BY name")).map(rowToOrg);
   }
   async updateOrg(id: string, input: UpdateOrgInput): Promise<Org> {
     const existing = await this.getOrg(id);
     if (!existing) throw new NotFoundError("Org", id);
-    await this.client.query(
-      `UPDATE orgs SET name=$2, description=$3, metadata=$4::jsonb, updated_at=now() WHERE id=$1`,
+    await this.query(
+      `UPDATE orgs SET name=$3, description=$4, metadata=$5::jsonb, updated_at=now() WHERE tenant_id=$1 AND (id=$2)`,
       [id, input.name ?? existing.name, input.description !== undefined ? input.description : existing.description,
         JSON.stringify(input.metadata ?? existing.metadata)],
     );
     return (await this.getOrg(id))!;
   }
   async deleteOrg(id: string): Promise<boolean> {
-    const r = await this.many("DELETE FROM orgs WHERE id=$1 RETURNING id", [id]);
+    const r = await this.many("DELETE FROM orgs WHERE tenant_id=$1 AND (id=$2) RETURNING id", [id]);
     return r.length > 0;
   }
 
@@ -205,9 +215,9 @@ export class CalendarPgStore {
   async registerAgent(input: RegisterAgentInput): Promise<Agent> {
     const existing = await this.getAgentByName(input.name);
     if (existing) {
-      await this.client.query(
-        `UPDATE agents SET description=$2, role=$3, title=$4, level=$5, capabilities=$6::jsonb, metadata=$7::jsonb,
-          session_id=$8, working_dir=$9, active_org_id=$10, last_seen_at=now() WHERE id=$1`,
+      await this.query(
+        `UPDATE agents SET description=$3, role=$4, title=$5, level=$6, capabilities=$7::jsonb, metadata=$8::jsonb,
+          session_id=$9, working_dir=$10, active_org_id=$11, last_seen_at=now() WHERE tenant_id=$1 AND (id=$2)`,
         [existing.id, input.description ?? existing.description, input.role ?? existing.role,
           input.title ?? existing.title, input.level ?? existing.level,
           JSON.stringify(input.capabilities ?? existing.capabilities),
@@ -217,9 +227,9 @@ export class CalendarPgStore {
       return (await this.getAgent(existing.id))!;
     }
     const id = newId();
-    await this.client.query(
-      `INSERT INTO agents (id, name, description, role, title, level, capabilities, metadata, session_id, working_dir, active_org_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9,$10,$11)`,
+    await this.query(
+      `INSERT INTO agents (tenant_id, id, name, description, role, title, level, capabilities, metadata, session_id, working_dir, active_org_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10,$11,$12)`,
       [id, input.name, input.description ?? null, input.role ?? null, input.title ?? null, input.level ?? null,
         JSON.stringify(input.capabilities ?? []), JSON.stringify(input.metadata ?? {}),
         input.session_id ?? null, input.working_dir ?? null, input.org_id ?? null],
@@ -227,18 +237,18 @@ export class CalendarPgStore {
     return (await this.getAgent(id))!;
   }
   async getAgent(idOrName: string): Promise<Agent | null> {
-    const r = await this.one("SELECT * FROM agents WHERE id=$1 OR name=$1", [idOrName]);
+    const r = await this.one("SELECT * FROM agents WHERE tenant_id=$1 AND (id=$2 OR name=$2)", [idOrName]);
     return r ? rowToAgent(r) : null;
   }
   async getAgentByName(name: string): Promise<Agent | null> {
-    const r = await this.one("SELECT * FROM agents WHERE name=$1", [name]);
+    const r = await this.one("SELECT * FROM agents WHERE tenant_id=$1 AND (name=$2)", [name]);
     return r ? rowToAgent(r) : null;
   }
   async listAgents(): Promise<Agent[]> {
-    return (await this.many("SELECT * FROM agents ORDER BY name")).map(rowToAgent);
+    return (await this.many("SELECT * FROM agents WHERE tenant_id=$1 ORDER BY name")).map(rowToAgent);
   }
   async heartbeatAgent(id: string): Promise<Agent | null> {
-    const r = await this.many("UPDATE agents SET last_seen_at=now() WHERE id=$1 OR name=$1 RETURNING *", [id]);
+    const r = await this.many("UPDATE agents SET last_seen_at=now() WHERE tenant_id=$1 AND (id=$2 OR name=$2) RETURNING *", [id]);
     return r[0] ? rowToAgent(r[0]) : null;
   }
   async updateAgent(id: string, updates: Partial<RegisterAgentInput>): Promise<Agent | null> {
@@ -246,22 +256,22 @@ export class CalendarPgStore {
     if (!existing) throw new NotFoundError("Agent", id);
     const sets: string[] = [];
     const params: unknown[] = [existing.id];
-    const push = (col: string, value: unknown) => { params.push(value); sets.push(`${col}=$${params.length}`); };
+    const push = (col: string, value: unknown) => { params.push(value); sets.push(`${col}=$${params.length + 1}`); };
     if (updates.description !== undefined) push("description", updates.description ?? null);
     if (updates.role !== undefined) push("role", updates.role ?? null);
     if (updates.title !== undefined) push("title", updates.title ?? null);
     if (updates.level !== undefined) push("level", updates.level ?? null);
-    if (updates.capabilities !== undefined) { params.push(JSON.stringify(updates.capabilities)); sets.push(`capabilities=$${params.length}::jsonb`); }
+    if (updates.capabilities !== undefined) { params.push(JSON.stringify(updates.capabilities)); sets.push(`capabilities=$${params.length + 1}::jsonb`); }
     if (updates.session_id !== undefined) push("session_id", updates.session_id ?? null);
     if (updates.working_dir !== undefined) push("working_dir", updates.working_dir ?? null);
     if (updates.org_id !== undefined) push("active_org_id", updates.org_id ?? null);
     if (sets.length === 0) return existing;
     sets.push("last_seen_at=now()");
-    await this.client.query(`UPDATE agents SET ${sets.join(", ")} WHERE id=$1`, params);
+    await this.query(`UPDATE agents SET ${sets.join(", ")} WHERE tenant_id=$1 AND id=$2`, params);
     return this.getAgent(existing.id);
   }
   async deleteAgent(id: string): Promise<boolean> {
-    const r = await this.many("DELETE FROM agents WHERE id=$1 RETURNING id", [id]);
+    const r = await this.many("DELETE FROM agents WHERE tenant_id=$1 AND (id=$2) RETURNING id", [id]);
     return r.length > 0;
   }
 
@@ -285,9 +295,9 @@ export class CalendarPgStore {
     const id = newId();
     const slug = input.slug || slugify(input.name);
     try {
-      await this.client.query(
-        `INSERT INTO calendars (id, org_id, owner_id, slug, name, description, color, timezone, visibility, metadata)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb)`,
+      await this.query(
+        `INSERT INTO calendars (tenant_id, id, org_id, owner_id, slug, name, description, color, timezone, visibility, metadata)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb)`,
         [id, input.org_id, input.owner_id ?? null, slug, input.name, input.description ?? null,
           input.color ?? null, input.timezone ?? "UTC", input.visibility ?? "org", JSON.stringify(input.metadata ?? {})],
       );
@@ -298,20 +308,20 @@ export class CalendarPgStore {
     return (await this.getCalendar(id))!;
   }
   async getCalendar(id: string): Promise<Calendar | null> {
-    const r = await this.one("SELECT * FROM calendars WHERE id=$1", [id]);
+    const r = await this.one("SELECT * FROM calendars WHERE tenant_id=$1 AND (id=$2)", [id]);
     return r ? rowToCalendar(r) : null;
   }
   async listCalendars(orgId?: string): Promise<Calendar[]> {
     const rows = orgId
-      ? await this.many("SELECT * FROM calendars WHERE org_id=$1 ORDER BY name", [orgId])
-      : await this.many("SELECT * FROM calendars ORDER BY org_id, name");
+      ? await this.many("SELECT * FROM calendars WHERE tenant_id=$1 AND (org_id=$2) ORDER BY name", [orgId])
+      : await this.many("SELECT * FROM calendars WHERE tenant_id=$1 ORDER BY org_id, name");
     return rows.map(rowToCalendar);
   }
   async updateCalendar(id: string, input: UpdateCalendarInput): Promise<Calendar> {
     const existing = await this.getCalendar(id);
     if (!existing) throw new NotFoundError("Calendar", id);
-    await this.client.query(
-      `UPDATE calendars SET name=$2, description=$3, color=$4, timezone=$5, visibility=$6, metadata=$7::jsonb, updated_at=now() WHERE id=$1`,
+    await this.query(
+      `UPDATE calendars SET name=$3, description=$4, color=$5, timezone=$6, visibility=$7, metadata=$8::jsonb, updated_at=now() WHERE tenant_id=$1 AND (id=$2)`,
       [id, input.name ?? existing.name, input.description !== undefined ? input.description : existing.description,
         input.color !== undefined ? input.color : existing.color, input.timezone ?? existing.timezone,
         input.visibility ?? existing.visibility, JSON.stringify(input.metadata ?? existing.metadata)],
@@ -319,7 +329,7 @@ export class CalendarPgStore {
     return (await this.getCalendar(id))!;
   }
   async deleteCalendar(id: string): Promise<boolean> {
-    const r = await this.many("DELETE FROM calendars WHERE id=$1 RETURNING id", [id]);
+    const r = await this.many("DELETE FROM calendars WHERE tenant_id=$1 AND (id=$2) RETURNING id", [id]);
     return r.length > 0;
   }
 
@@ -327,10 +337,10 @@ export class CalendarPgStore {
   async createEvent(input: CreateEventInput): Promise<Event> {
     assertEventEndsAfterStart(input.start_at, input.end_at);
     const id = newId();
-    await this.client.query(
-      `INSERT INTO events (id, calendar_id, org_id, title, description, location, start_at, end_at, all_day, timezone,
+    await this.query(
+      `INSERT INTO events (tenant_id, id, calendar_id, org_id, title, description, location, start_at, end_at, all_day, timezone,
         status, busy_type, visibility, recurrence_rule, recurrence_exception_dates, source_task_id, created_by, metadata)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb,$16,$17,$18::jsonb)`,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16::jsonb,$17,$18,$19::jsonb)`,
       [id, input.calendar_id, input.org_id, input.title, input.description ?? null, input.location ?? null,
         input.start_at, input.end_at, input.all_day ?? false, input.timezone ?? "UTC",
         input.status ?? "confirmed", input.busy_type ?? "busy", input.visibility ?? "default",
@@ -341,13 +351,13 @@ export class CalendarPgStore {
     return (await this.getEvent(id))!;
   }
   async getEvent(id: string): Promise<Event | null> {
-    const r = await this.one("SELECT * FROM events WHERE id=$1", [id]);
+    const r = await this.one("SELECT * FROM events WHERE tenant_id=$1 AND (id=$2)", [id]);
     return r ? rowToEvent(r) : null;
   }
   async listEvents(filter: ListEventsFilter = {}): Promise<Event[]> {
-    const conds: string[] = [];
+    const conds: string[] = ["tenant_id=$1"];
     const params: unknown[] = [];
-    const push = (c: string, v: unknown) => { params.push(v); conds.push(c.replace("?", `$${params.length}`)); };
+    const push = (c: string, v: unknown) => { params.push(v); conds.push(c.replace("?", `$${params.length + 1}`)); };
     if (filter.calendar_id) push("calendar_id = ?", filter.calendar_id);
     if (filter.org_id) push("org_id = ?", filter.org_id);
     if (filter.status) push("status = ?", filter.status);
@@ -375,10 +385,10 @@ export class CalendarPgStore {
     const excDates = input.recurrence_exception_dates !== undefined
       ? (input.recurrence_exception_dates ? JSON.stringify(input.recurrence_exception_dates) : null)
       : (existing.recurrence_exception_dates ? JSON.stringify(existing.recurrence_exception_dates) : null);
-    await this.client.query(
-      `UPDATE events SET title=$2, description=$3, location=$4, start_at=$5, end_at=$6, all_day=$7, timezone=$8,
-        status=$9, busy_type=$10, visibility=$11, recurrence_rule=$12, recurrence_exception_dates=$13::jsonb,
-        source_task_id=$14, metadata=$15::jsonb, updated_at=now() WHERE id=$1`,
+    await this.query(
+      `UPDATE events SET title=$3, description=$4, location=$5, start_at=$6, end_at=$7, all_day=$8, timezone=$9,
+        status=$10, busy_type=$11, visibility=$12, recurrence_rule=$13, recurrence_exception_dates=$14::jsonb,
+        source_task_id=$15, metadata=$16::jsonb, updated_at=now() WHERE tenant_id=$1 AND (id=$2)`,
       [id, input.title ?? existing.title, input.description !== undefined ? input.description : existing.description,
         input.location !== undefined ? input.location : existing.location, startAt, endAt,
         input.all_day !== undefined ? input.all_day : existing.all_day, input.timezone ?? existing.timezone,
@@ -390,15 +400,15 @@ export class CalendarPgStore {
     return (await this.getEvent(id))!;
   }
   async deleteEvent(id: string): Promise<boolean> {
-    const r = await this.many("DELETE FROM events WHERE id=$1 RETURNING id", [id]);
+    const r = await this.many("DELETE FROM events WHERE tenant_id=$1 AND (id=$2) RETURNING id", [id]);
     return r.length > 0;
   }
   async findConflicts(calendarId: string, range: TimeRange, excludeEventId?: string): Promise<Event[]> {
     const { start: rStart, end: rEnd } = { start: parseEventTimestamp(range.start), end: parseEventTimestamp(range.end) };
     if (rEnd <= rStart) throw new RangeError("Time range end must be after start");
     const rows = excludeEventId
-      ? await this.many("SELECT * FROM events WHERE calendar_id=$1 AND status!='cancelled' AND id!=$2", [calendarId, excludeEventId])
-      : await this.many("SELECT * FROM events WHERE calendar_id=$1 AND status!='cancelled'", [calendarId]);
+      ? await this.many("SELECT * FROM events WHERE tenant_id=$1 AND (calendar_id=$2 AND status!='cancelled' AND id!=$3)", [calendarId, excludeEventId])
+      : await this.many("SELECT * FROM events WHERE tenant_id=$1 AND (calendar_id=$2 AND status!='cancelled')", [calendarId]);
     return rows.map(rowToEvent)
       .map((event) => ({ event, start: parseEventTimestamp(event.start_at), end: parseEventTimestamp(event.end_at) }))
       .filter(({ start, end }) => start < rEnd && end > rStart)
@@ -409,10 +419,10 @@ export class CalendarPgStore {
     const like = `%${query}%`;
     const rows = orgId
       ? await this.many(
-          `SELECT * FROM events WHERE org_id=$2 AND (title ILIKE $1 OR description ILIKE $1 OR location ILIKE $1)`,
+          `SELECT * FROM events WHERE tenant_id=$1 AND (org_id=$3 AND (title ILIKE $2 OR description ILIKE $2 OR location ILIKE $2))`,
           [like, orgId])
       : await this.many(
-          `SELECT * FROM events WHERE title ILIKE $1 OR description ILIKE $1 OR location ILIKE $1`, [like]);
+          `SELECT * FROM events WHERE tenant_id=$1 AND (title ILIKE $2 OR description ILIKE $2 OR location ILIKE $2)`, [like]);
     return rows.map(rowToEvent)
       .sort((a, b) => compareEventInstants(parseEventTimestamp(a.start_at), parseEventTimestamp(b.start_at)) || a.start_at.localeCompare(b.start_at));
   }
@@ -423,21 +433,21 @@ export class CalendarPgStore {
       throw new RangeError("event_id is required");
     }
     const id = newId();
-    await this.client.query(
-      `INSERT INTO event_attendees (id, event_id, agent_id, display_name, email, status, required)
-       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+    await this.query(
+      `INSERT INTO event_attendees (tenant_id, id, event_id, agent_id, display_name, email, status, required)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
       [id, input.event_id, input.agent_id ?? null, input.display_name ?? null, input.email ?? null,
         input.status ?? "needsAction", input.required !== undefined ? input.required : true],
     );
     return (await this.getAttendee(id))!;
   }
   async getAttendee(id: string): Promise<EventAttendee | null> {
-    const r = await this.one("SELECT * FROM event_attendees WHERE id=$1", [id]);
+    const r = await this.one("SELECT * FROM event_attendees WHERE tenant_id=$1 AND (id=$2)", [id]);
     return r ? rowToAttendee(r) : null;
   }
   async getAttendeesForEvent(eventId: string): Promise<EventAttendee[]> {
     return (await this.many(
-      "SELECT * FROM event_attendees WHERE event_id=$1 ORDER BY required DESC, created_at", [eventId])).map(rowToAttendee);
+      "SELECT * FROM event_attendees WHERE tenant_id=$1 AND (event_id=$2) ORDER BY required DESC, created_at", [eventId])).map(rowToAttendee);
   }
   async updateAttendee(id: string, input: UpdateAttendeeInput): Promise<EventAttendee> {
     const existing = await this.getAttendee(id);
@@ -447,42 +457,42 @@ export class CalendarPgStore {
     // (not via a SQL CASE that reuses $2) so each placeholder is bound exactly
     // once — the reused-parameter form crashed the driver with a 500.
     const respondedAt = existing.responded_at ?? new Date().toISOString();
-    await this.client.query(
-      `UPDATE event_attendees SET status=$2, response_comment=$3, required=$4, responded_at=$5 WHERE id=$1`,
+    await this.query(
+      `UPDATE event_attendees SET status=$3, response_comment=$4, required=$5, responded_at=$6 WHERE tenant_id=$1 AND (id=$2)`,
       [id, newStatus, input.response_comment !== undefined ? input.response_comment : existing.response_comment,
         input.required !== undefined ? input.required : existing.required, respondedAt],
     );
     return (await this.getAttendee(id))!;
   }
   async deleteAttendee(id: string): Promise<boolean> {
-    const r = await this.many("DELETE FROM event_attendees WHERE id=$1 RETURNING id", [id]);
+    const r = await this.many("DELETE FROM event_attendees WHERE tenant_id=$1 AND (id=$2) RETURNING id", [id]);
     return r.length > 0;
   }
 
   // ── Availability ──
   async getAvailabilityForAgent(agentId: string, orgId?: string): Promise<Availability[]> {
     const rows = orgId
-      ? await this.many("SELECT * FROM availability WHERE agent_id=$1 AND org_id=$2 ORDER BY day_of_week", [agentId, orgId])
-      : await this.many("SELECT * FROM availability WHERE agent_id=$1 ORDER BY day_of_week", [agentId]);
+      ? await this.many("SELECT * FROM availability WHERE tenant_id=$1 AND (agent_id=$2 AND org_id=$3) ORDER BY day_of_week", [agentId, orgId])
+      : await this.many("SELECT * FROM availability WHERE tenant_id=$1 AND (agent_id=$2) ORDER BY day_of_week", [agentId]);
     return rows.map(rowToAvailability);
   }
   async upsertAgentAvailability(agentId: string, orgId: string, dayOfWeek: number, startTime: string, endTime: string): Promise<Availability> {
     const existing = await this.one(
-      "SELECT * FROM availability WHERE agent_id=$1 AND org_id=$2 AND day_of_week=$3", [agentId, orgId, dayOfWeek]);
+      "SELECT * FROM availability WHERE tenant_id=$1 AND (agent_id=$2 AND org_id=$3 AND day_of_week=$4)", [agentId, orgId, dayOfWeek]);
     if (existing) {
-      await this.client.query(
-        "UPDATE availability SET start_time=$2, end_time=$3, updated_at=now() WHERE id=$1",
+      await this.query(
+        "UPDATE availability SET start_time=$3, end_time=$4, updated_at=now() WHERE tenant_id=$1 AND (id=$2)",
         [existing.id, startTime, endTime]);
-      return rowToAvailability((await this.one("SELECT * FROM availability WHERE id=$1", [existing.id]))!);
+      return rowToAvailability((await this.one("SELECT * FROM availability WHERE tenant_id=$1 AND (id=$2)", [existing.id]))!);
     }
     const id = newId();
-    await this.client.query(
-      `INSERT INTO availability (id, agent_id, org_id, day_of_week, start_time, end_time) VALUES ($1,$2,$3,$4,$5,$6)`,
+    await this.query(
+      `INSERT INTO availability (tenant_id, id, agent_id, org_id, day_of_week, start_time, end_time) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
       [id, agentId, orgId, dayOfWeek, startTime, endTime]);
-    return rowToAvailability((await this.one("SELECT * FROM availability WHERE id=$1", [id]))!);
+    return rowToAvailability((await this.one("SELECT * FROM availability WHERE tenant_id=$1 AND (id=$2)", [id]))!);
   }
   async deleteAvailability(id: string): Promise<boolean> {
-    const r = await this.many("DELETE FROM availability WHERE id=$1 RETURNING id", [id]);
+    const r = await this.many("DELETE FROM availability WHERE tenant_id=$1 AND (id=$2) RETURNING id", [id]);
     return r.length > 0;
   }
 
@@ -490,23 +500,23 @@ export class CalendarPgStore {
   async createMembership(input: CreateOrgMembershipInput): Promise<OrgMembership> {
     const id = newId();
     try {
-      await this.client.query(
-        `INSERT INTO org_memberships (id, org_id, agent_id, role) VALUES ($1,$2,$3,$4)`,
+      await this.query(
+        `INSERT INTO org_memberships (tenant_id, id, org_id, agent_id, role) VALUES ($1,$2,$3,$4,$5)`,
         [id, input.org_id, input.agent_id, input.role ?? "member"]);
     } catch (e) {
       if (isUniqueViolation(e)) throw new ConflictError("Agent is already a member of this org");
       throw e;
     }
-    return rowToMembership((await this.one("SELECT * FROM org_memberships WHERE id=$1", [id]))!);
+    return rowToMembership((await this.one("SELECT * FROM org_memberships WHERE tenant_id=$1 AND (id=$2)", [id]))!);
   }
   async getMembershipsForOrg(orgId: string): Promise<OrgMembership[]> {
-    return (await this.many("SELECT * FROM org_memberships WHERE org_id=$1 ORDER BY created_at", [orgId])).map(rowToMembership);
+    return (await this.many("SELECT * FROM org_memberships WHERE tenant_id=$1 AND (org_id=$2) ORDER BY created_at", [orgId])).map(rowToMembership);
   }
   async getOrgsForAgent(agentId: string): Promise<OrgMembership[]> {
-    return (await this.many("SELECT * FROM org_memberships WHERE agent_id=$1 ORDER BY role DESC", [agentId])).map(rowToMembership);
+    return (await this.many("SELECT * FROM org_memberships WHERE tenant_id=$1 AND (agent_id=$2) ORDER BY role DESC", [agentId])).map(rowToMembership);
   }
   async deleteMembershipByAgentAndOrg(agentId: string, orgId: string): Promise<boolean> {
-    const r = await this.many("DELETE FROM org_memberships WHERE agent_id=$1 AND org_id=$2 RETURNING id", [agentId, orgId]);
+    const r = await this.many("DELETE FROM org_memberships WHERE tenant_id=$1 AND (agent_id=$2 AND org_id=$3) RETURNING id", [agentId, orgId]);
     return r.length > 0;
   }
 }

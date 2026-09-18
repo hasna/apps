@@ -21,6 +21,9 @@
 // observe a shortfall — see the regression test for the constructed shortfall
 // this module is required to detect.
 
+import type { Config } from "../types/index.js";
+import { instructionSourceRejection } from "./instruction-source-policy.js";
+
 export const GLOBAL_SOURCE_SLUG_PREFIX = "global-";
 
 // The sanctioned way to mark a source as a deliberate, JUSTIFIED omission from
@@ -49,27 +52,28 @@ export const GLOBAL_SOURCE_SLUG_PREFIX = "global-";
 // as a gap. Only `global-hasna-deployment-terms` carries this tag today.
 export const RETIRED_GLOBAL_SOURCE_TAG = "retired-global-source";
 
-export interface GlobalSourceCoverageConfig {
-  slug: string;
-  category: string;
-  tags?: string[] | null;
-}
+export type GlobalSourceCoverageConfig = Pick<Config, "slug" | "category" | "tags" | "format" | "is_template" | "content" | "target_path">;
 
 /** The set of global sources that SHOULD be present in any render that claims
- * global coverage: registered, slug-prefixed `global-`, and not tagged retired. */
+ * global coverage: registered, slug-prefixed `global-`, and eligible instruction
+ * prose under the same policy the compiler enforces. Full source records are
+ * required; settings, templates, binaries and retired rows are not prompts. */
 export function expectedGlobalSourceSlugs(
   registryConfigs: readonly GlobalSourceCoverageConfig[],
 ): string[] {
   return registryConfigs
     .filter((c) => c.slug.startsWith(GLOBAL_SOURCE_SLUG_PREFIX))
-    .filter((c) => !(c.tags ?? []).includes(RETIRED_GLOBAL_SOURCE_TAG))
+    .filter((c) => instructionSourceRejection(c) === null)
     .map((c) => c.slug)
     .sort();
 }
 
 export interface GlobalSourceCoverageResult {
-  /** Registered, active global sources — the independent "should exist" side. */
+  /** Registered, eligible global sources — the independent "should exist" side. */
   expectedSlugs: string[];
+  /** Global-prefixed registry rows that cannot be prompt sources, with the same
+   * reason the compiler uses. They remain visible without inflating coverage. */
+  excludedSources: Array<{ slug: string; reason: string }>;
   /** Slugs actually present on the render plan/manifest being audited. */
   configuredSlugs: string[];
   /** Expected but absent from the render — the actual defect this exists to catch. */
@@ -112,6 +116,13 @@ export function computeGlobalSourceCoverage(
     .sort();
   return {
     expectedSlugs: expected,
+    excludedSources: registryConfigs
+      .filter((config) => config.slug.startsWith(GLOBAL_SOURCE_SLUG_PREFIX))
+      .flatMap((config) => {
+        const reason = instructionSourceRejection(config);
+        return reason ? [{ slug: config.slug, reason }] : [];
+      })
+      .sort((left, right) => left.slug.localeCompare(right.slug)),
     configuredSlugs: [...configuredSet].sort(),
     missingSlugs: missing,
     unexpectedSlugs: unexpected,

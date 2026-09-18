@@ -13,21 +13,44 @@ import { planSessionRender } from "./session-render.js";
 // 13 silently unrendered (1 deliberately retired, 2 fossils feeding another
 // render path, 10 live gaps). This fixture mirrors that exact shape at reduced
 // scale so the test documents the real incident rather than a synthetic one.
+const prose = { format: "markdown" as const, is_template: false, content: "Reviewed synthetic instruction.", target_path: null };
 const REGISTRY = [
-  { slug: "global-fix-on-sight", category: "agent", tags: [] },
-  { slug: "global-credential-exposure-hygiene", category: "agent", tags: [] },
-  { slug: "global-mementos-discipline", category: "agent", tags: [] },
+  { ...prose, slug: "global-fix-on-sight", category: "rules" as const, tags: [] },
+  { ...prose, slug: "global-credential-exposure-hygiene", category: "rules" as const, tags: [] },
+  { ...prose, slug: "global-mementos-discipline", category: "rules" as const, tags: [] },
   // Deliberately withdrawn (owner ruling, 2026-07-29) — tagged so the checker
   // does not perpetually flag an intentional omission as a defect.
-  { slug: "global-hasna-deployment-terms", category: "agent", tags: [RETIRED_GLOBAL_SOURCE_TAG] },
+  { ...prose, slug: "global-hasna-deployment-terms", category: "rules" as const, tags: [RETIRED_GLOBAL_SOURCE_TAG] },
   // Registered today, never added to any render's config list — the live gap.
-  { slug: "global-capture-path-command-instrument", category: "agent", tags: [] },
-  { slug: "global-paste-the-control-output", category: "agent", tags: [] },
+  { ...prose, slug: "global-capture-path-command-instrument", category: "rules" as const, tags: [] },
+  { ...prose, slug: "global-paste-the-control-output", category: "rules" as const, tags: [] },
   // Not a global-* slug at all — must never enter the expected set.
-  { slug: "agent-ceo-charter-codewith", category: "agent", tags: [] },
+  { ...prose, slug: "agent-ceo-charter-codewith", category: "rules" as const, tags: [] },
 ];
 
 describe("expectedGlobalSourceSlugs", () => {
+  test("uses compiler eligibility so settings, templates and retired sources cannot make coverage impossible", () => {
+    const base = { ...prose, slug: "global-reviewed-rule", category: "rules" as const, tags: [] as string[] };
+    const registry = [
+      base,
+      { ...base, slug: "global-agent-settings", category: "agent" as const },
+      { ...base, slug: "global-tool-settings", category: "tools" as const },
+      { ...base, slug: "global-json", format: "json" as const },
+      { ...base, slug: "global-template", is_template: true },
+      { ...base, slug: "global-empty", content: "" },
+      { ...base, slug: "global-binary", content: "bytes\0binary" },
+      { ...base, slug: "global-shell", target_path: "/synthetic/setup.sh" },
+      { ...base, slug: "global-retired", tags: ["retired-instruction-source"] },
+      { ...base, slug: "global-config", tags: ["config-only"] },
+    ];
+    expect(expectedGlobalSourceSlugs(registry)).toEqual([base.slug]);
+    const result = computeGlobalSourceCoverage(registry, [base.slug]);
+    expect(result.complete).toBe(true);
+    expect(result.excludedSources).toHaveLength(9);
+    expect(result.excludedSources.find((source) => source.slug === "global-agent-settings")?.reason).toContain("category agent");
+    expect(computeGlobalSourceCoverage(registry, []).missingSlugs).toEqual([base.slug]);
+  });
+
   test("includes only slug-prefixed, non-retired sources", () => {
     const expected = expectedGlobalSourceSlugs(REGISTRY);
     expect(expected).toEqual([
@@ -142,8 +165,8 @@ describe("computeGlobalSourceCoverage — the constructed-shortfall requirement"
 
     const result = computeGlobalSourceCoverage(
       [
-        { slug: olderId, category: "agent", tags: [] },
-        { slug: newerId, category: "agent", tags: [] },
+        { ...prose, slug: olderId, category: "rules" as const, tags: [] },
+        { ...prose, slug: newerId, category: "rules" as const, tags: [] },
       ],
       accountedGlobalSourceSlugs(plan.manifest),
     );
@@ -185,13 +208,13 @@ describe("computeGlobalSourceCoverage — production-shaped reconciliation (P1 #
   // the new `instructions tag` command (src/cli/index.tsx), not asserted here as a
   // fait accompli.
   const PROD_SHAPED_REGISTRY = [
-    { slug: "global-hasna-deployment-terms", category: "agent", tags: [RETIRED_GLOBAL_SOURCE_TAG] },
-    { slug: "global-agent-rules-standard", category: "agent", tags: ["global", "mandatory"] },
-    { slug: "global-agent-rules-standard-1", category: "agent", tags: [] },
-    { slug: "global-agent-rules-standard-2", category: "agent", tags: [] },
-    { slug: "global-agent-rules-standard-3", category: "agent", tags: [] },
-    { slug: "global-fix-once", category: "agent", tags: [] },
-    { slug: "global-no-mcp-use-clis", category: "agent", tags: [] },
+    { ...prose, slug: "global-hasna-deployment-terms", category: "rules" as const, tags: [RETIRED_GLOBAL_SOURCE_TAG] },
+    { ...prose, slug: "global-agent-rules-standard", category: "rules" as const, tags: ["global", "mandatory"] },
+    { ...prose, slug: "global-agent-rules-standard-1", category: "rules" as const, tags: [] },
+    { ...prose, slug: "global-agent-rules-standard-2", category: "rules" as const, tags: [] },
+    { ...prose, slug: "global-agent-rules-standard-3", category: "rules" as const, tags: [] },
+    { ...prose, slug: "global-fix-once", category: "rules" as const, tags: [] },
+    { ...prose, slug: "global-no-mcp-use-clis", category: "rules" as const, tags: [] },
   ];
   const liveArrayConfiguredSlugs = ["global-fix-once", "global-no-mcp-use-clis"];
 
@@ -216,7 +239,7 @@ describe("computeGlobalSourceCoverage — production-shaped reconciliation (P1 #
     // an as-yet-unseen member as missing. Registering -4 and re-running proves it.
     const registryWithMint = [
       ...PROD_SHAPED_REGISTRY,
-      { slug: "global-agent-rules-standard-4", category: "agent", tags: [] },
+      { ...prose, slug: "global-agent-rules-standard-4", category: "rules" as const, tags: [] },
     ];
     const result = computeGlobalSourceCoverage(registryWithMint, liveArrayConfiguredSlugs);
     expect(result.missingSlugs).toContain("global-agent-rules-standard-4");
@@ -225,7 +248,7 @@ describe("computeGlobalSourceCoverage — production-shaped reconciliation (P1 #
   test("an unrelated genuine gap in the same registry still reports missing (the check has not gone vacuous)", () => {
     const registryWithGenuineGap = [
       ...PROD_SHAPED_REGISTRY,
-      { slug: "global-a-tenth-genuine-gap", category: "agent", tags: [] },
+      { ...prose, slug: "global-a-tenth-genuine-gap", category: "rules" as const, tags: [] },
     ];
     const result = computeGlobalSourceCoverage(registryWithGenuineGap, liveArrayConfiguredSlugs);
     expect(result.missingSlugs).toContain("global-a-tenth-genuine-gap");

@@ -1,95 +1,61 @@
-# Calendar tenant boundary: confirmed missing, NO_GO
+# Calendar tenant boundary
 
-This is a source-backed authorization finding, not an assurance report. No live
-database, deployed policy, user credential or private record was inspected.
-Transport hardening does not close this gap.
+The previous hosted router authenticated scopes but discarded `principal.tid`,
+allowing global organization, agent, calendar, and event access. The former
+exposure-characterization test has been replaced with denial assertions and real
+PostgreSQL cross-tenant tests. This document describes the implemented contract;
+it is not a claim that an existing deployment has been migrated or verified.
 
-## Evidence
+## Authority contract
 
-- `src/server/cloud.ts:getCloudVerifier` sets app, signing secret and key-status
-  verification, but not `requireTenant` or `expectedTid`.
-- `src/server/v1.ts:handleV1Request` checks `calendar:read` / `calendar:write`,
-  then uses the global store. It never consumes `decision.principal.tid`.
-- `@hasna/contracts/auth` provides `ApiKeyPrincipal.tid`, `requireTenant`, and
-  per-call `expectedTid`. Its documented null tenant is not a wildcard.
-- `src/server/pg-store.ts:listOrgs` executes `SELECT * FROM orgs ORDER BY name`;
-  get/update/delete organization queries use only caller-supplied IDs/slugs.
-- `migrations/0001_calendar_schema.sql` defines organizations and relationships,
-  but no issuer-tenant mapping or row-level-security policy. External deployed
-  database policies were not inspected and cannot be assumed to compensate.
+- A signed Contracts API key must carry a valid `tid`. The verifier requires it;
+  the router independently requires the principal's own tenant property. Request
+  headers, query parameters, and JSON bodies cannot select a different tenant.
+- Issuer tenant IDs follow Contracts validation and UUID canonicalization.
+  `calendar_tenants.id` is an explicitly provisioned canonical issuer ID, distinct
+  from Calendar's organization IDs. A tenant can own several Calendar orgs.
+- A missing, unknown, or disabled tenant is denied with 403 before domain access.
+  A failed registry lookup returns a sanitized 503. No tenant is auto-created.
+- Each request gets an immutable tenant-scoped store. Every domain SQL read and
+  final mutation binds `tenant_id`; there is no unscoped store constructor.
+- `calendar:read` and `calendar:write` authorize tenant-wide reads and writes.
+  Existing membership roles and calendar visibility remain domain metadata, not
+  separately enforced user-level RBAC. `public` does not permit cross-tenant or
+  anonymous access. Neither user-level RBAC nor cross-tenant invitations are
+  claimed by this change.
 
-## Adversarial reproduction (offline)
+## Storage contract
 
-`src/server/tenant-gap.test.ts` mints a synthetic signed tenant-A key through the
-real Contracts issuer and verifier, with active-key lookup mocked. The real
-Calendar router and PostgreSQL store execute against a recording query fixture:
+Migration `0003_tenant_boundary.sql` atomically adds nullable ownership columns
+and a tenant registry. It never assigns existing data. New rows receive ownership
+from the authenticated store, and composite foreign keys require all referenced
+parents to share that tenant. Events must also match their calendar's org.
+Organization slugs and agent names are unique within a tenant.
 
-- tenant-A key receives successful list/detail responses for `org-b`;
-- the same key reaches `DELETE FROM orgs WHERE id=$1` with `org-b`;
-- none of the recorded queries receives `tenant-a` as a constraint;
-- an otherwise valid untenanted key is accepted by the current verifier setup.
+Optional-reference deletion clears only the reference column, retaining tenant
+ownership. Delete guards stop old cascading foreign keys from deleting or
+updating unassigned legacy children, including indirect cascades. Unassigned
+rows are invisible to the API; an incomplete backfill can therefore refuse a
+parent delete rather than silently modify data with unknown ownership.
 
-The passing tests deliberately CHARACTERIZE THE VULNERABILITY. They must not be
-reported as passing tenant-isolation tests. No real rows were read or deleted.
+## Deployment gate
 
-## Decisions required before a safe tenant implementation
+Existing deployments must complete the operator procedure in `MIGRATION.md`
+before activating this release. This requires an independently reviewed mapping
+of existing keys and complete related row sets to issuer tenants, replacement
+keys where `tid` is absent, and a read-only preflight. Never assign all data to a
+first organization, a default tenant, or a caller-supplied org ID. The server role
+must have SELECT only on the tenant registry; provisioning belongs to the owner
+migration role. No live backfill, key issuance, or deployment is part of the
+source change.
 
-| Surface | Current source boundary | Missing authoritative rule |
-| --- | --- | --- |
-| Org list/create/delete | Global table; generic app read/write scope | Mapping of issuer `tid` to Calendar org IDs; platform-admin and bootstrap authority |
-| Agents | Globally unique names; optional active org; memberships in multiple orgs | Whether agents are global or tenant-owned; cross-org visibility and updates |
-| Calendars/events | Caller IDs and optional `org_id` filters | Enforce tenant on lookup/update/delete and require calendar/event org consistency |
-| Attendees/availability | Event, agent and org foreign keys | Ownership through parent resources; which cross-org participants are allowed |
-| Memberships | Caller-selected agent/org; list all orgs for an agent | Who may grant roles and enumerate memberships; admin versus member capabilities |
-| Existing data and keys | Some keys may lack `tid`; rows lack issuer mapping | Explicit provisioning/migration and treatment of legacy untenanted identities |
+## Acceptance evidence
 
-Equating `tid` with an org ID, requiring it everywhere, or disabling global
-operations without these rules would invent product semantics and could withdraw
-existing capabilities. This scoped patch makes none of those changes. Tenant
-enforcement remains a concrete release/deployment blocker requiring an approved
-API/data contract, implementation, adversarial denial tests, and independent review.
-
-## Source-contract reinspection (2026-09-02)
-
-Rechecked against PR #1489 head `fbb860631e0e94173103e5a664a07e06013ee2ee`:
-
-- `apps/contracts/docs/AUTH_RBAC_VERIFIER_CONTRACT.md`, "Tenant Identifier",
-  requires an organization-scoped service to reject keys without `tid` (403).
-  Its "Boundary Rules" require predicates before every query/mutation and
-  overlapping-identifier multi-tenant negative fixtures. Calendar does neither.
-- The same contract's "tid -> org" section and
-  `apps/contracts/src/auth/identity.ts:TenantOrgResolver` explicitly distinguish
-  issuer tenant IDs from the service's organization IDs. Unknown mappings must
-  deny; they must not auto-provision an organization. The generic resolver is
-  not a Calendar provisioning rule or evidence that `tid === org.id`.
-- Calendar's only domain migration contains no issuer-tenant mapping. Its
-  OpenAPI has organization CRUD, globally named agents, memberships in multiple
-  organizations, and public/org/private calendars, but no bootstrap or
-  tenant-admin authorization contract. The verified authentication claim alone
-  therefore cannot determine authorized rows for all existing operations.
-- PR #459 overlaps manifest/artifact lifecycle only. It does not supply the
-  missing tenancy contract. No live deployment or private database state was
-  consulted to invent one.
-
-### Minimal contract choices for owner review — not implemented defaults
-
-1. **Shared multi-tenant service:** explicitly provision issuer-tenant-to-local-org
-   mappings, rejecting missing/unknown tenants before domain access. The contract
-   must specify who provisions/rebinds them and how existing organizations and
-   keys migrate, without assuming equivalent IDs or modifying existing data.
-2. **Explicit single-tenant service boundary:** pin one authenticated issuer
-   tenant to one explicitly selected existing organization. This still requires
-   a decision for organization creation/list/delete and global agent operations;
-   it is not a silent downgrade of the current multi-organization capabilities.
-
-Either choice needs the same bounded policy matrix: global versus tenant-owned
-agents; membership role grants and cross-org membership visibility; calendar
-visibility/ownership; event/calendar organization consistency; attendees and
-availability through their parent resources; and administrative/bootstrap
-permissions. Define those decisions before implementation, then cover read,
-create, update, delete, search/conflicts, heartbeat and relationship edges with
-two-tenant allow/deny tests, including overlapping identifiers and an unknown or
-absent tenant. Current exposure-characterization tests are not acceptance tests.
-
-The response-envelope repair does not change authentication, queries, schemas,
-roles, provisioning, or legacy keys. Tenant isolation remains **NO_GO**.
+`src/server/tenant-boundary.pg.test.ts` uses a dedicated disposable PostgreSQL
+schema, synthetic issuer keys, the real router, tenant resolver and store. It
+covers every resource family, overlapping names, search/conflicts, heartbeat,
+availability/memberships, concurrent requests, all parent relationships,
+calendar/org disagreement, unassigned descendants, migration replay and atomic
+rollback. `cloud-auth-wiring.test.ts` also proves the production verifier denies
+an untenanted key before database access. The dedicated PostgreSQL CI job
+requires its test database configuration and refuses a skipped suite.

@@ -204,12 +204,12 @@ describe("global agent rules standard", () => {
     ).toThrow("limits rule files");
   });
 
-  test("platform profiles link the global rules standard when present", async () => {
+  test("platform profiles do not implicitly link the global rules standard", async () => {
     const standard = await ensureGlobalAgentRulesStandardConfig(new LocalConfigStore(db));
     const profiles = await ensurePlatformProfiles(new LocalConfigStore(db));
 
     for (const profile of profiles) {
-      expect(getProfileConfigs(profile.id, db).map((config) => config.id)).toContain(standard.id);
+      expect(getProfileConfigs(profile.id, db).map((config) => config.id)).not.toContain(standard.id);
     }
   });
 });
