@@ -1,7 +1,7 @@
 import { AGENT_POLICY_LIMITS } from "./agent-policy-limits.js";
 import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, readdirSync, realpathSync } from "node:fs";
-import { dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { parseHermesConfig, assertHermesEnvironment } from "./agent-hermes.js";
 import type { IntegrationAgent } from "./agent-adapters.js";
 import { captureDiscoveryDirectories, verifyDiscoveryDirectories, type DiscoveryDirectory } from "./agent-discovery-directories.js";
@@ -10,9 +10,10 @@ import { hashDiscoveryPathFile } from "./agent-discovery-path-bytes.js";
 import { hashManagedPluginRegistry, type ManagedPluginRegistrationWitness } from "./plugin-discovery.js";
 import { readPluginBinding } from "./plugin-admission.js";
 import { captureClaudeMarketplaceRegistry } from "./claude-marketplace-registry.js";
+import { captureClaudeSettings, hashClaudeSettingsReplacement } from "./claude-settings-witness.js";
 export { captureDiscoveryDirectories, type DiscoveryDirectory } from "./agent-discovery-directories.js";
 
-export interface DiscoverySource { path: string; sha256: string | null; hashMode?: "bytes" | "path-bytes" | "claude-plugin-registry" | "claude-marketplace-registry"; managedPlugins?: ManagedPluginRegistrationWitness[]; format?: "json" | "toml" | "yaml"; fields?: string[] }
+export interface DiscoverySource { path: string; sha256: string | null; hashMode?: "bytes" | "path-bytes" | "claude-plugin-registry" | "claude-marketplace-registry" | "claude-settings-v1"; managedPlugins?: ManagedPluginRegistrationWitness[]; format?: "json" | "toml" | "yaml"; fields?: string[] }
 export interface AgentDiscoveryBinding { agent: IntegrationAgent; roots: string[]; sources: DiscoverySource[]; directories?: DiscoveryDirectory[]; method: "automatic" | "reviewed"; builtinNames?: string[] }
 export interface ReviewedDiscoveryInputs { version: 1; agents: Array<{ agent: IntegrationAgent; roots: string[]; sources: DiscoverySource[]; directories?: DiscoveryDirectory[]; pluginHooks: "reviewed-no-skill-injection" }> }
 const digest = (text: string) => createHash("sha256").update(text).digest("hex");
@@ -40,6 +41,12 @@ function read(path: string, changes?: Map<string, string>): string | null {
   return readFileSync(path, "utf8");
 }
 function projected(source: DiscoverySource, changes?: Map<string, string>, budget = discoveryByteBudget()): string | null {
+  if (source.hashMode === "claude-settings-v1") {
+    if (source.format !== undefined || source.fields !== undefined || source.managedPlugins !== undefined || typeof source.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(source.sha256)) throw new Error("Claude settings witnesses require exact typed metadata");
+    const current = captureClaudeSettings(source.path, budget).sha256;
+    if (current !== source.sha256) throw new Error(`Native discovery input changed; run skills hook install with a fresh discovery review: ${source.path}`);
+    return changes?.has(source.path) ? hashClaudeSettingsReplacement(changes.get(source.path)!, budget) : current;
+  }
   if (source.hashMode === "claude-marketplace-registry") {
     if (source.format !== undefined || source.fields !== undefined || source.managedPlugins !== undefined || typeof source.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(source.sha256) || changes?.has(source.path)) throw new Error("Claude marketplace witnesses require an exact reviewed registry without synthetic changes");
     const sha256 = captureClaudeMarketplaceRegistry(source.path, budget).sha256;
@@ -81,6 +88,7 @@ export function verifyAgentDiscovery(binding: AgentDiscoveryBinding): void {
   for (const root of binding.roots) safe(root);
 }
 function assertMarketplaceBinding(binding: AgentDiscoveryBinding, source: DiscoverySource): void {
+  if (source.hashMode === "claude-settings-v1" && (binding.agent !== "claude" || binding.method !== "reviewed" || basename(source.path) !== "settings.json")) throw new Error("Claude settings witnesses require explicit reviewed Claude configuration");
   if (source.hashMode === "claude-marketplace-registry" && (binding.agent !== "claude" || binding.method !== "reviewed")) throw new Error("Claude marketplace witnesses require explicit reviewed Claude discovery");
 }
 export function rebindAgentDiscovery(binding: AgentDiscoveryBinding, changes: Map<string, string>): AgentDiscoveryBinding {
@@ -198,6 +206,7 @@ export function resolveAgentDiscovery(options: { home: string; agent: Integratio
     const supplied = { agent, roots: review.roots, sources: review.sources, ...(review.directories !== undefined ? { directories: review.directories } : {}), method: "reviewed" as const };
     if (review.sources.some(source => source.format !== undefined || source.fields !== undefined)) throw new Error("Explicit discovery reviews require full source-file hashes");
     verifyAgentDiscovery(supplied);
+    if (review.sources.some(source => source.hashMode === "claude-settings-v1" && source.path !== canonical(configPath))) throw new Error("Semantic settings witnesses must name the configured Claude configuration source");
     if (!review.sources.some(source => source.path === canonical(configPath))) throw new Error("Discovery review must include the agent configuration source");
     return { ...supplied, roots: [...new Set([...roots, ...supplied.roots])].sort(), sources: [...sources, ...review.sources], ...(agent === "gemini" ? { builtinNames } : {}) };
   }

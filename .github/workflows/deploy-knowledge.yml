@@ -185,6 +185,7 @@ jobs:
         with:
           name: knowledge-deploy-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
+            trivy-knowledge.json
             ${{ runner.temp }}/knowledge-deploy/deploy-evidence.json
             ${{ runner.temp }}/knowledge-deploy/recovery-receipt.json
             ${{ runner.temp }}/knowledge-deploy/phase-evidence.json

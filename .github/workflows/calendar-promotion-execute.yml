@@ -113,14 +113,14 @@ jobs:
           if-no-files-found: error
           retention-days: 30
       - name: Retain the candidate's synthetic smoke and scanner evidence
-        if: ${{ success() && inputs.phase == 'prepare' }}
+        if: ${{ always() && inputs.phase == 'prepare' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: calendar-candidate-evidence
           path: |
             ${{ runner.temp }}/calendar-smoke.json
             ${{ runner.temp }}/calendar-trivy.json
-          if-no-files-found: error
+          if-no-files-found: ignore
           retention-days: 30
       - name: Retain metadata-only operation and uncertainty receipts
         if: ${{ always() }}

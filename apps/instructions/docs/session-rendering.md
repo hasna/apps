@@ -116,8 +116,16 @@ local path references, including `file://` URLs and `..` traversals, against the
 explicit active project root when supplied and the active provider home. Any
 reference that resolves into the current or another managed namespace is removed;
 relative, encoded, URL, and absolute aliases cannot import another profile's
-private instructions. Truly unmanaged filesystem paths and non-file URLs remain
-unchanged. Malformed or ambiguous `file://` references fail planning. If a profile
+private instructions. Windows drive paths, UNC paths, and `file://` URLs match the
+reserved namespace conservatively without case sensitivity. Drive-root-relative
+Win32 forms such as `\Users\other\...` use the same conservative matching, and
+trailing dots or spaces are removed from Win32 path components before namespace
+classification so `.hasna.` and `instructions ` cannot alias the managed namespace.
+Win32 drive-relative forms such as `C:rules.md`, including encoded or
+mixed-separator aliases, are refused before URI classification because their
+target depends on process drive state. Truly unmanaged filesystem paths and
+non-file URLs remain unchanged.
+Malformed or ambiguous `file://` references fail planning. If a profile
 contains OpenCode config rows, the newest equivalent provider config is used;
 conflicting provider configs fail.
 

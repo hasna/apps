@@ -521,6 +521,7 @@ export { inspectSkillSession, reconcileSkillSession, type SessionReconciliationI
 export { planAgentIntegration, applyAgentIntegration, inventoryNativeSkills, archiveNativeSkills } from "./lib/agent-integration.js";
 export { captureDiscoveryDirectories, captureDiscoveryByteSources, captureDiscoveryPathSources, type DiscoveryDirectory, type DiscoverySource } from "./lib/agent-discovery.js";
 export { captureClaudeMarketplaceRegistry } from "./lib/claude-marketplace-registry.js";
+export { captureClaudeSettings } from "./lib/claude-settings-witness.js";
 export { buildPluginProjection, pluginTreeDigest, type PluginProjectionManifest, type PluginPayloadMapping, type PluginFileWitness } from "./lib/plugin-projection.js";
 export { planPluginAdmission, admitPlugin, resolveAdmittedPlugin, pluginResolverCommand, type PluginAdmissionTarget, type PluginAdmissionBinding, type PluginAdmissionPrincipal, type PluginAdmissionPlan, type PluginAdmissionIdentity, type PluginBundleIdentity, type PluginRoutingIdentity, type PluginAdmissionReceipt } from "./lib/plugin-admission.js";
 export { captureManagedPluginRegistry, type ManagedPluginRegistrationWitness } from "./lib/plugin-discovery.js";

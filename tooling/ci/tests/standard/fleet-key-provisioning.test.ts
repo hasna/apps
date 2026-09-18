@@ -242,16 +242,20 @@ describe("registry: the written inventory of hosted apps", () => {
     expect(missing).toEqual([]);
   });
 
-  test("Shortlinks and Attachments keep canonical fleet coverage after moving to internal-apps", () => {
-    for (const [name, probePath] of [["attachments", "/v1/attachments"], ["shortlinks", "/v1/links"]] as const) {
+  test("Shortlinks and Attachments remain public producer members", () => {
+    for (const name of ["attachments", "shortlinks"] as const) {
+      const packagePath = path.join(ROOT, "apps", name, "package.json");
+      expect(fs.existsSync(packagePath)).toBe(true);
+      const manifest = JSON.parse(fs.readFileSync(packagePath, "utf8")) as { name?: string };
+      expect(manifest.name).toBe(`@hasna/${name}`);
+
       const app = registry.find((entry) => entry.app === name);
       expect(app).toBeDefined();
-      expect(app!.source).toBe("external");
-      expect(app!.notes).toContain("hasna-internal/internal-apps");
+      expect(app!.source).toBe("monorepo");
       expect(app!.baseUrl).toBe(`https://api.hasna.com/${name}`);
-      expect(probeUrlFor(app!.baseUrl, app!.probePath)).toBe(`https://api.hasna.com/${name}${probePath}`);
-      expect(fs.existsSync(path.join(ROOT, "apps", name, "package.json"))).toBe(false);
+      expect(String(app!.notes ?? "")).not.toContain("hasna-internal");
     }
+    expect(fs.existsSync(path.join(ROOT, "docs", "shortlinks-attachments-internal-migration.md"))).toBe(false);
   });
 
   test("messages — the app the issue was filed for — is registered", () => {

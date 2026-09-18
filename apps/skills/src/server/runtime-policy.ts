@@ -1,6 +1,7 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import type { EcsDispatcherConfig } from "../sdk/execution/dispatchers/ecs.js";
 import type { FrozenAdmission, AttemptRecord } from "../sdk/execution/types.js";
+import { assertPureContract, type PureReviewedBundle } from "./runtime-pure-contract.js";
 export const RUNTIME_MAX_INPUT_BYTES = 100_000;
 export const RUNTIME_MAX_BUNDLE_BYTES = 1_000_000;
 export const RUNTIME_MAX_ARTIFACT_BYTES = 2_000_000;
@@ -10,7 +11,7 @@ export interface RuntimeConfig extends EcsDispatcherConfig {
   imageDigest: string;
   apiOrigin: string;
   /** Only independently reviewed exact bundles enter this first credential-free lane. */
-  reviewedBundles: { slug: "pdf-generate"; version: string; sha256: string }[];
+  reviewedBundles: ({ slug: "pdf-generate"; version: string; sha256: string; executionContract?: never } | PureReviewedBundle)[];
 }
 export function readRuntimeConfig(
   env: Record<string, string | undefined> = process.env,
@@ -52,20 +53,23 @@ export function readRuntimeConfig(
       c[key].some((v) => typeof v !== "string" || !v)
     )
       throw Error(`Runtime configuration missing ${key}`);
-  if (
-    !Array.isArray(c.reviewedBundles) ||
-    !c.reviewedBundles.length ||
-    c.reviewedBundles.some(
-      (b) =>
-        b.slug !== "pdf-generate" ||
-        typeof b.version !== "string" ||
-        !/^\d+\.\d+\.\d+$/.test(b.version) ||
-        !/^[a-f0-9]{64}$/.test(b.sha256),
-    )
-  )
-    throw Error(
-      "Runtime requires exact reviewed pdf-generate versions and bundle digests",
-    );
+  if (!Array.isArray(c.reviewedBundles) || !c.reviewedBundles.length)
+    throw Error("Runtime requires exact reviewed versions and bundle digests");
+  const seen = new Set<string>();
+  for (const b of c.reviewedBundles) {
+    if (!b || typeof b.slug !== "string" || !/^[a-z0-9-]+$/.test(b.slug) ||
+        typeof b.version !== "string" || !/^\d+\.\d+\.\d+$/.test(b.version) || !/^[a-f0-9]{64}$/.test(b.sha256))
+      throw Error("Runtime requires exact reviewed versions and bundle digests");
+    if (b.executionContract) {
+      if (b.slug === "pdf-generate") throw Error("pdf-generate is reserved for the legacy PDF contract");
+      assertPureContract(b.executionContract);
+      if (typeof b.tenantId !== "string" || !b.tenantId.trim() || b.imageDigest !== c.imageDigest)
+        throw Error("Pure runtime review must bind tenant and configured image");
+    } else if (b.slug !== "pdf-generate") throw Error("Missing reviewed execution contract");
+    const key = JSON.stringify([b.executionContract ? b.tenantId : null, b.slug, b.version, b.sha256]);
+    if (seen.has(key)) throw Error("Ambiguous runtime review");
+    seen.add(key);
+  }
   return c;
 }
 export function runtimeInput(value: unknown): {
