@@ -17,7 +17,7 @@
  */
 export { readExecutionGrantPolicy, saveExecutionGrantPolicy, resolveExecutionGrant } from "../lib/execution-grant-client.js";
 export type { ExecutionGrant, ExecutionGrantPolicy, ExecutionGrantRequest, ResolvedExecutionGrant } from "../lib/execution-grants.js";
-export { HttpProfileClient, createProfileClient, type ProfileClient } from "../lib/profile-client.js";
+export { HttpProfileClient, createProfileClient, type ProfileClient, type AuthenticatedProfilePrincipal, type AuthenticatedProfileRole } from "../lib/profile-client.js";
 export { resolveSelectedRun, executeSelectedLocal, prepareSelectedSecretBindings, type ResolvedSelectedRun, type SelectedLocalRunOptions } from "../lib/selected-run.js";
 export { readSelectedSecretBindings, type SelectedSecretBindings, type SelectedSecretsClient } from "../lib/execution-secrets.js";
 export type { SkillSelection, SkillProfile, ResolvedSkillSelection, ResolvedSkillProfile, StationSkillStateInput, StationSkillState } from "../types/skill-selection.js";

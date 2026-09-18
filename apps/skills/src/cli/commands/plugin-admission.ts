@@ -10,11 +10,12 @@ export function registerPluginAdmission(parent: Command): void {
     const command = plugin.command(`${name} <skill>`).requiredOption("--selection-profile <id>", "API profile selecting the integration bundle and migrated payloads")
       .requiredOption("--target <file>", "Owner-only JSON target with exact native scopes and executable witnesses")
       .description(name === "plan" ? "Validate original provenance, payload migration and preserved components using the Skills API" : "Materialize the exact reviewed plan and record its immutable admission");
-    if (name === "admit") command.requiredOption("--plan-digest <sha256>", "Exact digest returned by the reviewed plan");
+    if (name === "admit") command.requiredOption("--plan-digest <sha256>", "Exact digest returned by the reviewed plan")
+      .requiredOption("--evidence-digest <sha256>", "Exact authenticated routing-evidence digest returned by the reviewed plan");
     command.action(async (skill, options) => {
       try {
         const target = readPluginJson(options.target); validatePluginTarget(target);
-        const result = name === "plan" ? await planPluginAdmission(skill, options.selectionProfile, target) : await admitPlugin(skill, options.selectionProfile, target, options.planDigest);
+        const result = name === "plan" ? await planPluginAdmission(skill, options.selectionProfile, target) : await admitPlugin(skill, options.selectionProfile, target, options.planDigest, options.evidenceDigest);
         await writeCliOutput(JSON.stringify(result, null, 2));
       } catch (error) { report(error); }
     });
