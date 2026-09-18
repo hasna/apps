@@ -12,7 +12,7 @@ export class FixtureTransports {
   readonly sends: Array<{ provider: "ses" | "resend"; id: string; body: unknown }> = [];
   readonly attempts: Array<{ provider: "ses" | "resend"; id: string; body: unknown; status: number }> = [];
   objectMode: "normal" | "fail" | "stall" = "normal";
-  sendMode: "normal" | "reject" | "uncertain" = "normal";
+  sendMode: "normal" | "reject" | "uncertain" | "unproven" | "missing-receipt" = "normal";
   deleteFailures = 0;
   private stalled: Array<() => void> = [];
 
@@ -71,7 +71,7 @@ export class FixtureTransports {
         if (this.objectMode !== "stall") this.close();
       }
       if (body.send !== undefined) {
-        if (!["normal", "reject", "uncertain"].includes(body.send)) return this.json({}, 400);
+        if (!["normal", "reject", "uncertain", "unproven", "missing-receipt"].includes(body.send)) return this.json({}, 400);
         this.sendMode = body.send;
       }
       if (body.deleteFailures !== undefined) {
@@ -133,13 +133,15 @@ export class FixtureTransports {
         if (this.attempts.length >= 256) return this.json({}, 429);
         const provider = path === "/emails" ? "resend" : "ses";
         const body = await this.input(request);
-        const status = this.sendMode === "reject" ? 400 : this.sendMode === "uncertain" ? 503 : 200;
+        const status = this.sendMode === "reject" || this.sendMode === "unproven" ? 400 : this.sendMode === "uncertain" ? 503 : 200;
         const id = `${provider}-${randomUUID()}`;
         this.attempts.push({ provider, id, body, status });
         this.log(`${provider}.send`, status, id, JSON.stringify(body));
-        if (status === 400) return this.json({ name: "validation_error", message: "synthetic rejection", code: "MessageRejected" }, status);
+        if (status === 400) return this.json({ name: "validation_error", message: "synthetic rejection", code: "MessageRejected",
+          ...(provider === "resend" && this.sendMode === "reject" ? { statusCode: 400 } : {}) }, status);
         if (status === 503) return this.json({ message: "synthetic uncertain response" }, status);
         this.sends.push({ provider, id, body });
+        if (this.sendMode === "missing-receipt") return this.json({});
         return this.json(provider === "ses" ? { MessageId: id } : { id });
       }
       if (request.method === "GET" && path.startsWith("/emails/")) {

@@ -43,12 +43,14 @@ async function run() {
     && repeat.body.sent === true && repeat.body.provider_message_id === sent.body.provider_message_id, "API_SEND_IDEMPOTENCY");
   const afterReplay = await control("state");
   assertNoProviderReplay(beforeReplay, afterReplay);
-  for (const [mode, status, outcome] of [["reject", 422, false], ["uncertain", 502, null]] as const) {
+  const modes = [["reject", 422, false], ["uncertain", 502, null], ...(input.provider === "resend" ? [["unproven", 502, null], ["missing-receipt", 502, null]] : [])] as const;
+  for (const [mode, status, outcome] of modes) {
     await control("mode", { send: mode });
     const beforeFailure = await control("state");
     const result = await request("/v1/messages/send", undefined, { ...body, idempotency_key: crypto.randomUUID() });
     check(result.status === status && result.body.sent === outcome && result.body.retry_safe === (mode === "reject"), "API_PROVIDER_FAILURE_CONTRACT");
-    assertProviderAttempt(beforeFailure, await control("state"), input.provider, mode === "reject" ? 400 : 503);
+    assertProviderAttempt(beforeFailure, await control("state"), input.provider, mode === "uncertain" ? 503 : mode === "missing-receipt" ? 200 : 400);
+    if (mode === "missing-receipt") check(!result.body.provider_message_id && result.body.reconciliation_required === true, "API_MISSING_RECEIPT_UNCERTAIN");
   }
   await control("mode", { send: "normal" });
   return { provider: input.provider, checks: ["readiness", "version", "routes", "tenant_rls", "reply_headers", "from_name", "provider_contracts"],

@@ -172,7 +172,7 @@ class Acceptance:
         self.signing_secret = secrets.token_hex(32)
         self.password = secrets.token_hex(32)
         self.runtime_password = secrets.token_hex(32)
-        self.mounts = [(HERE / name, "/fixtures/"+name) for name in ("transports.ts", "image-task.ts", "api-probe.ts", "probe-assertions.ts")]
+        self.mounts = [(HERE / name, "/fixtures/"+name) for name in ("transports.ts", "image-task.ts", "image-imports.ts", "api-probe.ts", "probe-assertions.ts")]
         self.task_counter = 0
 
     def evidence(self, component, name, value):

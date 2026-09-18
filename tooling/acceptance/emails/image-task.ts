@@ -1,9 +1,8 @@
 /** Runs only inside an admitted disposable image; never imports host application code. */
-import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
+import { loadImageAuth } from "./image-imports.ts";
 
 const input = await Bun.stdin.json();
-const requireImage = createRequire("/app/package.json");
 const check = (condition: unknown, code: string) => { if (!condition) throw new Error(code); };
 const storage = await import("/app/src/storage-kit/index.ts");
 const { emailsSelfHostedMigrations } = await import("/app/src/server/self-hosted/migrations.ts");
@@ -30,7 +29,8 @@ async function run() {
     await db.execute("GRANT USAGE ON SCHEMA public TO pair_runtime");
     await db.execute("GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA public TO pair_runtime");
     await db.execute("GRANT USAGE,SELECT ON ALL SEQUENCES IN SCHEMA public TO pair_runtime");
-    const { ApiKeyStore } = requireImage("@hasna/contracts/auth");
+    stage = "IMPORT_AUTH";
+    const { ApiKeyStore } = await loadImageAuth();
     const { issueSelfHostedApiKey } = await import("/app/src/server/self-hosted/keys.ts");
     const tenants = [];
     for (const letter of ["a", "b"]) {

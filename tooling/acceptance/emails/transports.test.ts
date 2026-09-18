@@ -2,11 +2,13 @@ import { afterEach, expect, test } from "bun:test";
 import { createRequire } from "node:module";
 import { FixtureTransports } from "./transports.ts";
 import { assertNoProviderReplay, assertProviderAttempt, assertProviderRequest } from "./probe-assertions.ts";
+import { loadImageAuth } from "./image-imports.ts";
 
 const require = createRequire(new URL("../../../apps/emails/package.json", import.meta.url));
 const { SQSClient, ReceiveMessageCommand, DeleteMessageCommand, GetQueueAttributesCommand } = require("@aws-sdk/client-sqs");
 const { S3Client, GetObjectCommand } = require("@aws-sdk/client-s3");
 const { SESv2Client, SendEmailCommand } = require("@aws-sdk/client-sesv2");
+const { Resend } = require("resend");
 const active: Array<{ stop: () => void }> = [];
 afterEach(() => { for (const fixture of active.splice(0)) fixture.stop(); });
 
@@ -153,4 +155,31 @@ test("provider failure proof requires an actual matching failed attempt with no 
   expect(() => assertProviderAttempt(before, { ...after, sends: [{ id: "unexpected-success" }] }, "resend", 400)).toThrow("PROVIDER_ATTEMPT_RESULT");
   after.attempts[0].body.to = ["other@external.test"];
   expect(() => assertProviderAttempt(before, after, "resend", 400)).toThrow("PROVIDER_ATTEMPT_RESULT");
+});
+
+test("real Resend SDK exposes numeric rejection status only when its JSON contract supplies it", async () => {
+  const f = fixture();
+  const client = new Resend("synthetic-only", { baseUrl: f.endpoint });
+  const payload = { from: "sender@example.test", to: ["recipient@example.test"], subject: "synthetic", text: "body" };
+  await f.control("mode", { send: "reject" });
+  const rejected = await client.emails.send(payload);
+  expect(rejected.error.statusCode).toBe(400);
+  await f.control("mode", { send: "unproven" });
+  const unproven = await client.emails.send(payload);
+  expect(unproven.error.statusCode).toBeUndefined();
+  expect(unproven.error.name).toBe("validation_error");
+  expect(f.state.sends).toHaveLength(0);
+  await f.control("mode", { send: "missing-receipt" });
+  const missing = await client.emails.send(payload);
+  expect(missing.error).toBeNull();
+  expect(missing.data.id).toBeUndefined();
+  expect(f.state.sends).toHaveLength(1);
+});
+
+test("image bootstrap loads published auth through its import-only export condition", async () => {
+  // The same package intentionally cannot be loaded using require's condition.
+  expect(() => require("@hasna/contracts/auth")).toThrow();
+  const auth = await loadImageAuth(new URL("../../../apps/emails", import.meta.url).pathname);
+  expect(typeof auth.ApiKeyStore).toBe("function");
+  expect(typeof auth.mintApiKey).toBe("function");
 });
