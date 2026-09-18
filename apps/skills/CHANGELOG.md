@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.8.11
+
+### Patch Changes
+
+- 23a727f: Add an explicit Claude marketplace discovery witness that permits validated timestamp updates while preserving registration, source, path and unknown-field guards.
+- e9892b2: Correct the 0.8.11 package artifact by declaring the Secrets SDK used for vault-reference credentials, redacting vault item identifiers from diagnostics, and verifying byte-reproducible packs through a fresh installed-package runtime test. The packed production-only consumer also verifies credential rotation and terminal provider failures in an isolated environment.
+- 0bda70f: Add explicit, reviewed reconciliation of one live Skills session to an exact selection profile revision. Preserve the original receipt, refuse concurrent changes and stale context writes, and keep ordinary session and project pins unchanged until intentionally migrated.
+- e28a4ee: Fence child session creation to the exact parent receipt hash and monotonic generation, lock parent and child receipts in deterministic order, and expire reviewed reconciliation plans after five minutes.
+
 ## 0.8.10
 
 ### Patch Changes
