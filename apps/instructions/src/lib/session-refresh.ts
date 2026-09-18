@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync } from "node:fs";
-import { dirname, join, parse, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, parse, resolve } from "node:path";
 import { z } from "zod";
 import type { ConfigStore } from "../data/config-store.js";
 import type { Config, ProfileConfigBinding } from "../types/index.js";
@@ -19,7 +19,6 @@ import {
 } from "./session-render.js";
 import { stationProfileSource } from "./station-profile.js";
 import { normalizeTargetPath } from "./apply.js";
-import { basename } from "node:path";
 
 const nonempty = z.string().min(1).max(4096);
 const selectorSchema = z.object({
@@ -116,6 +115,21 @@ function readManagedManifest(targetHome: string): { manifest: SessionRenderManif
     || manifest.targetOwner?.targetHome !== targetHome) {
     throw new Error("SESSION_REFRESH_MANIFEST_INVALID: target is not an owned hosted profile render; apply a hosted --compile-profile first.");
   }
+  const recordedProjectRoot = manifest.targetOwner.projectRoot;
+  if (recordedProjectRoot !== null && recordedProjectRoot !== undefined) {
+    if (typeof recordedProjectRoot !== "string" || !isAbsolute(recordedProjectRoot)) {
+      throw new Error("SESSION_REFRESH_MANIFEST_INVALID: recorded project root must be an absolute path.");
+    }
+    const normalizedProjectRoot = resolve(recordedProjectRoot);
+    if (normalizedProjectRoot === parse(normalizedProjectRoot).root
+      || (manifest.targetKind === "project-root" && normalizedProjectRoot !== targetHome)
+      || (manifest.targetKind === "session-home" && manifest.tool !== "opencode")) {
+      throw new Error("SESSION_REFRESH_MANIFEST_INVALID: recorded project root does not match the managed target.");
+    }
+    manifest.targetOwner.projectRoot = normalizedProjectRoot;
+  } else if (manifest.targetKind === "project-root") {
+    throw new Error("SESSION_REFRESH_MANIFEST_INVALID: project-scoped render is missing its recorded project root.");
+  }
   manifest.refreshSelector = normalizeSessionHostedProfileSelector(manifest.refreshSelector);
   return { manifest, sha256: createHash("sha256").update(raw).digest("hex") };
 }
@@ -159,7 +173,11 @@ export async function refreshSessionRender(input: {
     profile_id: profile.id,
     provider_version: selector.providerVersion,
     targetHome,
-    ...(previous.manifest.targetKind === "project-root" ? { projectRoot: targetHome } : {}),
+    ...(previous.manifest.targetKind === "project-root"
+      ? { projectRoot: targetHome }
+      : previous.manifest.targetOwner.projectRoot
+        ? { projectRoot: previous.manifest.targetOwner.projectRoot }
+        : {}),
     sessionId: previous.manifest.sessionId ?? undefined,
     refreshSelector: selector,
     codewithNativeImports: selector.codewithNativeImports,

@@ -107,11 +107,17 @@ Codewith native imports are selected by `--codewith-native-imports` or
 `HASNA_CONFIGS_CODEWITH_NATIVE_IMPORTS=1|true`. Native mode writes managed
 fragments below `.hasna/instructions` and imports them from `CODEWITH.md`.
 
-OpenCode preserves existing non-managed `instructions` entries. Generated
-fragment references are absolute paths anchored to their owning target home,
-because OpenCode resolves relative entries against the active project directory.
-Refreshing removes both legacy relative references and absolute references owned
-by that exact home, while preserving entries owned by other homes. If a profile
+OpenCode preserves existing `instructions` entries only when their canonical
+filesystem targets are outside every Instructions-managed `.hasna/instructions`
+namespace. Generated fragment references are absolute paths anchored to their
+owning target home because OpenCode resolves relative entries against the active
+project directory. Before preservation, refresh percent-decodes and normalizes
+local path references, including `file://` URLs and `..` traversals, against the
+explicit active project root when supplied and the active provider home. Any
+reference that resolves into the current or another managed namespace is removed;
+relative, encoded, URL, and absolute aliases cannot import another profile's
+private instructions. Truly unmanaged filesystem paths and non-file URLs remain
+unchanged. Malformed or ambiguous `file://` references fail planning. If a profile
 contains OpenCode config rows, the newest equivalent provider config is used;
 conflicting provider configs fail.
 

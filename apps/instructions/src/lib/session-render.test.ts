@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   ANTIGRAVITY_RULE_FILE_CHAR_LIMIT,
   CODEWITH_NATIVE_IMPORTS_ENV,
@@ -554,33 +555,102 @@ describe("session render planner", () => {
     });
   });
 
-  test("anchors OpenCode managed references and removes cross-profile instruction leakage", () => {
-    const targetHome = join(tmpRoot, "opencode-global-anchor");
+  const managedOpenCodeReferenceCases: Array<[
+    string,
+    (context: { targetHome: string; projectRoot: string; otherHome: string }) => string,
+    boolean,
+  ]> = [
+    ["absolute cross-profile path", ({ otherHome }) => join(otherHome, ".hasna/instructions/private.md"), false],
+    ["file URL", ({ otherHome }) => pathToFileURL(join(otherHome, ".hasna/instructions/private.md")).href, false],
+    ["encoded file URL", ({ otherHome }) => `${pathToFileURL(otherHome).href}/%2ehasna%2finstructions%2fprivate.md`, false],
+    ["encoded file URL traversal", ({ otherHome }) => `${pathToFileURL(join(otherHome, ".hasna/cache")).href}/%2e%2e/instructions/private.md`, false],
+    ["encoded Windows absolute path", () => "C%3A%5Cother-profile%5C%2ehasna%5Cinstructions%5Cprivate.md", false],
+    ["target-home relative traversal", () => "../other-home/.hasna/cache/../instructions/private.md", false],
+    ["active-project relative traversal", () => "../instructions/private.md", true],
+    ["encoded active-project traversal", () => "%2e%2e%2finstructions%2fprivate.md", true],
+  ];
+  test.each(managedOpenCodeReferenceCases)("removes OpenCode leakage through %s", (label, makeReference, useProjectRoot) => {
+    const caseRoot = join(tmpRoot, `opencode-managed-${label.replaceAll(/[^a-z]+/gi, "-")}`);
+    const targetHome = join(caseRoot, "homes/active-home");
+    const projectRoot = join(caseRoot, "projects/other-profile/.hasna/active-project");
+    const context = {
+      targetHome,
+      projectRoot,
+      otherHome: join(caseRoot, "homes/other-home"),
+    };
+    const reference = makeReference(context);
     mkdirSync(targetHome, { recursive: true });
-    const first = planSessionRender({ tool: "opencode", profile: "global", targetHome,
-      providerSurface: "opencode-config-instructions", sources: [globalIdentity] });
-    const configFile = first.files.find((file) => file.relativePath === "opencode.json")!;
-    const fragment = first.files.find((file) => file.role === "fragment")!;
-    const config = JSON.parse(configFile.content);
-    expect(config.instructions).toEqual([fragment.path]);
-    writeFileSync(configFile.path, JSON.stringify({
-      ...config,
-      instructions: [
-        ...config.instructions,
-        "team-rules.md",
-        "/opt/team/review.md",
-        "/other-profile/.hasna/instructions/private.md",
-      ],
-    }));
-    const next = planSessionRender({ tool: "opencode", profile: "global", targetHome,
-      providerSurface: "opencode-config-instructions", sources: [agentIdentity] });
-    const updated = JSON.parse(next.files.find((file) => file.relativePath === "opencode.json")!.content);
+    writeFileSync(join(targetHome, "opencode.json"), JSON.stringify({ instructions: [reference] }));
+
+    const plan = planSessionRender({
+      tool: "opencode",
+      profile: "global",
+      targetHome,
+      ...(useProjectRoot ? { projectRoot } : {}),
+      providerSurface: "opencode-config-instructions",
+      sources: [globalIdentity],
+    });
+    const updated = JSON.parse(plan.files.find((file) => file.relativePath === "opencode.json")!.content);
+    expect(plan.targetOwner.projectRoot).toBe(useProjectRoot ? projectRoot : null);
+    expect(updated.instructions).toEqual([plan.files.find((file) => file.role === "fragment")!.path]);
+    expect(updated.instructions).not.toContain(reference);
+  });
+
+  const unmanagedOpenCodeReferenceCases: Array<[
+    string,
+    (context: { targetHome: string; projectRoot: string; sharedRoot: string }) => string,
+    boolean,
+  ]> = [
+    ["absolute unmanaged path", ({ sharedRoot }) => join(sharedRoot, "review.md"), false],
+    ["unmanaged file URL", ({ sharedRoot }) => pathToFileURL(join(sharedRoot, "review.md")).href, false],
+    ["encoded unmanaged file URL", ({ sharedRoot }) => `${pathToFileURL(sharedRoot).href}/review%20rules.md`, false],
+    ["encoded unmanaged file URL traversal", ({ sharedRoot }) => `${pathToFileURL(join(sharedRoot, "cache")).href}/%2e%2e/review.md`, false],
+    ["encoded Windows unmanaged path", () => "C%3A%5Cteam%5Creview.md", false],
+    ["target-home relative traversal", () => "../shared/review.md", false],
+    ["active-project relative traversal", () => "../shared/review.md", true],
+    ["encoded unmanaged traversal", () => "%2e%2e%2fshared%2freview.md", true],
+    ["managed-namespace lookalike", () => "../other-project/.hasna/cache/../instruction-set/private.md", true],
+    ["non-file URL", () => "https://example.test/.hasna/instructions/remote.md", true],
+    ["literal percent path", () => "100%-review.md", false],
+  ];
+  test.each(unmanagedOpenCodeReferenceCases)("preserves OpenCode %s", (label, makeReference, useProjectRoot) => {
+    const caseRoot = join(tmpRoot, `opencode-unmanaged-${label.replaceAll(/[^a-z]+/gi, "-")}`);
+    const targetHome = join(caseRoot, "homes/active-home");
+    const projectRoot = join(caseRoot, "projects/other-profile/.hasna/active-project");
+    const reference = makeReference({ targetHome, projectRoot, sharedRoot: join(caseRoot, "shared") });
+    mkdirSync(targetHome, { recursive: true });
+    writeFileSync(join(targetHome, "opencode.json"), JSON.stringify({ instructions: [reference] }));
+
+    const plan = planSessionRender({
+      tool: "opencode",
+      profile: "global",
+      targetHome,
+      ...(useProjectRoot ? { projectRoot } : {}),
+      providerSurface: "opencode-config-instructions",
+      sources: [globalIdentity],
+    });
+    const updated = JSON.parse(plan.files.find((file) => file.relativePath === "opencode.json")!.content);
     expect(updated.instructions).toEqual([
-      "team-rules.md",
-      "/opt/team/review.md",
-      next.files.find((file) => file.role === "fragment")!.path,
+      reference,
+      plan.files.find((file) => file.role === "fragment")!.path,
     ]);
-    expect(updated.instructions).not.toContain("/other-profile/.hasna/instructions/private.md");
+  });
+
+  test.each([
+    "file:../other-home/.hasna/instructions/private.md",
+    "file:///tmp/review.md?source=other-profile",
+    "file:///tmp/review.md#other-profile",
+  ])("refuses ambiguous OpenCode file URL %s", (reference) => {
+    const targetHome = join(tmpRoot, "opencode-ambiguous-file-url");
+    mkdirSync(targetHome, { recursive: true });
+    writeFileSync(join(targetHome, "opencode.json"), JSON.stringify({ instructions: [reference] }));
+    expect(() => planSessionRender({
+      tool: "opencode",
+      profile: "global",
+      targetHome,
+      providerSurface: "opencode-config-instructions",
+      sources: [globalIdentity],
+    })).toThrow("invalid file URL instruction reference");
   });
 
   test("preserves OpenCode settings and unmanaged instruction entries", () => {
