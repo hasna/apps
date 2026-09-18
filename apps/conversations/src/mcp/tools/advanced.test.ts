@@ -6,6 +6,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerAdvancedTools } from "./advanced";
+import { ConversationsToolCatalog, createProfiledConversationsServer } from "../profile.js";
 
 describe("advanced MCP tools", () => {
   let client: Client;
@@ -18,7 +19,8 @@ describe("advanced MCP tools", () => {
     process.env.CONVERSATIONS_AGENT_ID = "advanced-test-agent";
 
     const server = new McpServer({ name: "test-advanced-mcp", version: "0.0.1" });
-    registerAdvancedTools(server, "1.0.0-test");
+    const catalog = new ConversationsToolCatalog();
+    registerAdvancedTools(createProfiledConversationsServer(server, "full", catalog), "1.0.0-test", catalog);
 
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     client = new Client({ name: "test-client", version: "1.0.0" });
@@ -355,8 +357,8 @@ describe("advanced MCP tools", () => {
         name: "search_tools",
         arguments: {},
       }) as any) as any;
-      expect(typeof result).toBe("string");
-      expect(result).toContain("send_message");
+      expect(result.complete_inventory).toBe(true);
+      expect(result.items.some((item: any) => item.name === "add_reaction")).toBe(true);
     });
 
     test("filters tools by query", async () => {
@@ -364,8 +366,8 @@ describe("advanced MCP tools", () => {
         name: "search_tools",
         arguments: { query: "lock" },
       }) as any) as any;
-      expect(typeof result).toBe("string");
-      expect(result).toContain("lock");
+      expect(result.items.length).toBeGreaterThan(0);
+      expect(result.items.every((item: any) => item.name.includes("lock") || item.description.toLowerCase().includes("lock"))).toBe(true);
     });
   });
 
@@ -375,9 +377,7 @@ describe("advanced MCP tools", () => {
         name: "describe_tools",
         arguments: { names: ["send_message", "read_messages"] },
       }) as any) as any;
-      expect(typeof result).toBe("string");
-      expect(result).toContain("send_message");
-      expect(result).toContain("read_messages");
+      expect(result).toMatchObject({ requested: 2, missing: ["send_message", "read_messages"], complete: false });
     });
   });
 

@@ -45,7 +45,7 @@ describe("channel stable id CLI JSON", () => {
 
     const listedBefore = runCli(["channel", "list", "--json"]);
     expect(listedBefore.exitCode, listedBefore.stderr).toBe(0);
-    expect(JSON.parse(listedBefore.stdout)).toContainEqual(expect.objectContaining({
+    expect(JSON.parse(listedBefore.stdout).channels).toContainEqual(expect.objectContaining({
       id: createdChannel.id,
       name: "stable-before",
     }));
@@ -59,7 +59,7 @@ describe("channel stable id CLI JSON", () => {
 
     const listedAfter = runCli(["channel", "list", "--json"]);
     expect(listedAfter.exitCode, listedAfter.stderr).toBe(0);
-    expect(JSON.parse(listedAfter.stdout)).toContainEqual(expect.objectContaining({
+    expect(JSON.parse(listedAfter.stdout).channels).toContainEqual(expect.objectContaining({
       id: createdChannel.id,
       name: "stable-after",
     }));

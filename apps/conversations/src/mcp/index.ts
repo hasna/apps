@@ -24,6 +24,7 @@ import { registerTmuxTools } from "./tools/tmux.js";
 import { registerTaskTools } from "./tools/tasks.js";
 import { registerThreadTools } from "./tools/threads.js";
 import { isStdioMode, resolveMcpHttpPort, startMcpHttpServer } from "./http.js";
+import { ConversationsToolCatalog, createProfiledConversationsServer, resolveConversationsMcpProfile, type ConversationsMcpProfile } from "./profile.js";
 
 import pkg from "../../package.json";
 
@@ -78,20 +79,24 @@ export async function disposeServer(srv: McpServer): Promise<void> {
   try { await drain; } finally { serverDrains.delete(srv); }
 }
 
-export function buildServer(forHttp = false): McpServer {
+export function buildServer(forHttp = false, profile: ConversationsMcpProfile = "full"): McpServer {
   const srv = new McpServer({
     name: "conversations",
     version: pkg.version,
+  }, {
+    instructions: `Active MCP profile: ${profile}. The default core profile keeps discovery bounded; set HASNA_CONVERSATIONS_MCP_PROFILE=full only when the complete administrative inventory is required.`,
   });
+  const catalog = new ConversationsToolCatalog();
+  const tools = createProfiledConversationsServer(srv, profile, catalog);
 
-  registerMessagingTools(srv, resolveProjectId);
-  registerChannelTools(srv);
-  registerProjectTools(srv);
-  registerAgentTools(srv, agentFocus, getAgentFocus);
-  registerAdvancedTools(srv, pkg.version);
-  registerTaskTools(srv);
-  registerTmuxTools(srv);
-  registerThreadTools(srv);
+  registerMessagingTools(tools, resolveProjectId);
+  registerChannelTools(tools);
+  registerProjectTools(tools);
+  registerAgentTools(tools, agentFocus, getAgentFocus);
+  registerAdvancedTools(tools, pkg.version, catalog);
+  registerTaskTools(tools);
+  registerTmuxTools(tools);
+  registerThreadTools(tools);
 
   if (!forHttp) {
     // Building/importing a tool registry must not start account reads. Register
@@ -112,8 +117,8 @@ export function buildServer(forHttp = false): McpServer {
         if (!serverDisposers.has(srv)) {
           const disposers: Array<() => Promise<void>> = [];
           serverDisposers.set(srv, disposers);
-          disposers.push(registerChannelBridge(srv));
-          disposers.push(registerTelegramChannel(srv));
+          disposers.push(registerChannelBridge(tools));
+          disposers.push(registerTelegramChannel(tools));
         }
         await connect(...args);
       } catch (error) { await disposeServer(srv); throw error; }
@@ -149,9 +154,9 @@ export function assertMcpStoreConfigured(env: Record<string, string | undefined>
   assertUnambiguousStoreEnv(env);
 }
 
-async function connectStdio(): Promise<void> {
+async function connectStdio(profile: ConversationsMcpProfile): Promise<void> {
   const transport = new StdioServerTransport();
-  await server.connect(transport);
+  await buildServer(false, profile).connect(transport);
 }
 
 /**
@@ -159,9 +164,9 @@ async function connectStdio(): Promise<void> {
  * startup gate throws rather than exiting so the CLI's own error surface
  * (and its `--json` error contract) reports the refusal.
  */
-export async function startMcpServer() {
+export async function startMcpServer(profile = resolveConversationsMcpProfile()) {
   assertMcpStoreConfigured();
-  await connectStdio();
+  await connectStdio(profile);
 }
 
 const isDirectRun =
@@ -178,10 +183,12 @@ Usage:
   conversations-mcp              stdio transport (default)
   conversations-mcp --http         Streamable HTTP on 127.0.0.1:8856
   conversations-mcp --http --port <n>
+  conversations-mcp --mcp-profile <core|full>
 
 Environment:
   MCP_HTTP=1           Enable HTTP mode
   MCP_HTTP_PORT=<n>    Override default port (8856)
+  HASNA_CONVERSATIONS_MCP_PROFILE=full  Restore the legacy complete tool inventory
 `);
     return;
   }
@@ -189,6 +196,8 @@ Environment:
     console.log(pkg.version);
     return;
   }
+  const profile = resolveConversationsMcpProfile(args);
+
   // The startup gate runs BEFORE either transport exists, so a hosted run
   // with no credential exits non-zero without ever answering `initialize`
   // (stdio) or binding a port (HTTP). The refusal is the chain's own message
@@ -204,20 +213,20 @@ Environment:
     throw error;
   }
   if (isStdioMode(args)) {
-    await connectStdio();
+    await connectStdio(profile);
     return;
   }
   // Default: shared Streamable HTTP server (one process per MCP, many agents).
   startMcpHttpServer({
     name: "conversations",
     port: resolveMcpHttpPort(args),
-    buildServer: () => buildServer(true),
+    buildServer: () => buildServer(true, profile),
   });
 }
 
 if (isDirectRun) {
   main().catch((error) => {
-    console.error("MCP server error:", error);
+    console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);
   });
 }
