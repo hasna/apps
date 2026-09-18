@@ -8,6 +8,7 @@ const rollout = readFileSync(join(root, "tooling/deploy/files-current/verify-ecs
 const ledgerProbe = readFileSync(join(root, "tooling/deploy/files-current/ledger-probe.sh"), "utf8");
 const migrationRunner = readFileSync(join(root, "tooling/deploy/files-current/run-migration.sh"), "utf8");
 const readiness = readFileSync(join(root, "tooling/deploy/files-current/verify-readiness.sh"), "utf8");
+const dataPlane = readFileSync(join(root, "tooling/deploy/files-current/verify-canonical-data-plane.sh"), "utf8");
 const restore = readFileSync(join(root, "tooling/deploy/files-current/restore-service-anchor.sh"), "utf8");
 
 describe("Files current-server deployment lane", () => {
@@ -47,6 +48,9 @@ describe("Files current-server deployment lane", () => {
     expect(workflow).toContain('deploymentCircuitBreaker={enable=true,rollback=false}');
     expect(workflow).toContain('ready_url="${HEALTH_URL%/health}/ready"');
     expect(workflow).toContain('https://api.hasna.com/files/ready');
+    expect(workflow).toContain('verify-canonical-data-plane.sh');
+    expect(workflow).toContain('https://api.hasna.com/files');
+    expect(workflow).toContain('canonical_data_plane:$data_plane_canonical[0]');
     expect(workflow).toContain("hasna.files.production_deploy.v1");
     expect(workflow).toContain('describe-task-definition --task-definition "${PREVIOUS_TASK_DEFINITION}"');
     expect(workflow).not.toContain('describe-task-definition --task-definition "${WEB_FAMILY}"');
@@ -61,6 +65,9 @@ describe("Files current-server deployment lane", () => {
     expect(readiness).toContain('.source_commit == $source');
     expect(readiness).toContain('.image_digest == $digest');
     expect(readiness).not.toContain('has("source_commit") | not');
+    expect(dataPlane).toContain('/v1/knowledge/manifest?limit=1');
+    expect(dataPlane).toContain('credentials_sent:false');
+    expect(dataPlane).toContain('double_v1_paths:0');
     expect(workflow).toContain('HASNA_FILES_DEPLOY_SOURCE_COMMIT');
     expect(workflow).toContain('HASNA_FILES_DEPLOY_IMAGE_DIGEST');
     expect(workflow).toContain('deployed_source_commit');

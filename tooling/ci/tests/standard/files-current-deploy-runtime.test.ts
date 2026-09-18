@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 const root = join(import.meta.dir, "../../../..");
 const anchor = join(root, "tooling/deploy/files-current/assert-service-anchor.sh");
 const readiness = join(root, "tooling/deploy/files-current/verify-readiness.sh");
+const dataPlane = join(root, "tooling/deploy/files-current/verify-canonical-data-plane.sh");
 const migration = join(root, "tooling/deploy/files-current/run-migration.sh");
 const restore = join(root, "tooling/deploy/files-current/restore-service-anchor.sh");
 const scratch: string[] = [];
@@ -101,6 +102,42 @@ esac
     expect((await run(readiness, args, { ...base, FAKE_CURL_MODE: "stale" })).code).toBe(1);
     expect((await run(readiness, args, { ...base, FAKE_CURL_MODE: "misrouted" })).code).toBe(1);
     expect((await run(readiness, args, { ...base, FAKE_CURL_MODE: "multi" })).code).toBe(1);
+  });
+
+  test("canonical data-plane proof requires one /v1 server, the manifest route, and its auth boundary", async () => {
+    const dir = temp();
+    const argsLog = join(dir, "curl-args");
+    executable(join(dir, "curl"), `#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$FAKE_CURL_ARGS"
+if [[ "$*" == *"/openapi.json"* ]]; then
+  case "$FAKE_MODE" in
+    double) printf '{"openapi":"3.0.3","servers":[{"url":"/v1"}],"paths":{"/v1/knowledge/manifest":{"get":{}}}}\n200' ;;
+    missing) printf '{"openapi":"3.0.3","servers":[{"url":"/v1"}],"paths":{}}\n200' ;;
+    redirect) printf '{}\n302' ;;
+    *) printf '{"openapi":"3.0.3","servers":[{"url":"/v1"}],"paths":{"/knowledge/manifest":{"get":{}}}}\n200' ;;
+  esac
+else
+  [[ "$FAKE_MODE" == "route404" ]] && printf '{"error":"not found"}\n404' || printf '{"error":"missing credential"}\n401'
+fi
+`);
+    const receipt = join(dir, "data-plane.json");
+    const base = { PATH: `${dir}:${process.env.PATH}`, FAKE_CURL_ARGS: argsLog, FAKE_MODE: "ok" };
+    const good = await run(dataPlane, ["https://api.hasna.com/files", receipt], base);
+    expect(good.code).toBe(0);
+    expect(JSON.parse(readFileSync(receipt, "utf8"))).toMatchObject({
+      schema: "hasna.files.canonical_data_plane.v1",
+      base_url: "https://api.hasna.com/files",
+      openapi: { server: "/v1", route: "/knowledge/manifest", double_v1_paths: 0 },
+      probe: { http_status: 401, credentials_sent: false, redirects_followed: false },
+      single_v1: true,
+    });
+    const calls = readFileSync(argsLog, "utf8");
+    expect(calls).toContain("https://api.hasna.com/files/openapi.json");
+    expect(calls).toContain("https://api.hasna.com/files/v1/knowledge/manifest?limit=1");
+    expect(calls).not.toContain("authorization");
+    for (const mode of ["double", "missing", "redirect", "route404"]) {
+      expect((await run(dataPlane, ["https://api.hasna.com/files", join(dir, `${mode}.json`)], { ...base, FAKE_MODE: mode })).code).toBe(1);
+    }
   });
 
   test("a waiter failure retains launch identity and best-effort partial state", async () => {

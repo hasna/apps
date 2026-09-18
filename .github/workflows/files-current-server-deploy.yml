@@ -580,6 +580,8 @@ jobs:
             "${ready_url}" "${EXPECTED_VERSION}" "${SOURCE_SHA}" "${IMAGE}" readiness-direct.json
           bash ../../tooling/deploy/files-current/verify-readiness.sh \
             "https://api.hasna.com/files/ready" "${EXPECTED_VERSION}" "${SOURCE_SHA}" "${IMAGE}" readiness-canonical.json
+          bash ../../tooling/deploy/files-current/verify-canonical-data-plane.sh \
+            "https://api.hasna.com/files" data-plane-canonical.json
 
           jq -n \
             --arg source_sha "${SOURCE_SHA}" \
@@ -602,12 +604,13 @@ jobs:
             --slurpfile migration_observed migration-observed.json \
             --slurpfile readiness_direct readiness-direct.json \
             --slurpfile readiness_canonical readiness-canonical.json \
+            --slurpfile data_plane_canonical data-plane-canonical.json \
             --arg deployed_task_definition "${DEPLOYED_TASK_DEFINITION}" \
             --arg deployed_image "${deployed_image}" \
             --arg health_url "${HEALTH_URL}" \
             --arg run_id "${GITHUB_RUN_ID}" \
             --arg architecture "${EXPECTED_CPU_ARCHITECTURE}" \
-            '{schema:"hasna.files.production_deploy.v1",source_sha:$source_sha,image_tag:$image_tag,image_digest:$image_digest,image:$image,architecture:$architecture,account:$account,cluster:$cluster,service:$service,rollback:{task_definition:$previous_task_definition,image:$previous_image},migration:{task_definition:$migration_task_definition,task:$migration_task,image:$migration_image,image_digest:$migration_image_digest,exit_code:0,schema_advanced:($schema_advanced == "true"),ledger_before:$ledger_before[0],ledger_after:$ledger_after[0],launch:$migration_launch[0],observed:$migration_observed[0]},deployed:{task_definition:$deployed_task_definition,image:$deployed_image,architecture:$architecture,health_url:$health_url,readiness:{direct:$readiness_direct[0],canonical:$readiness_canonical[0]}},github_run_id:$run_id}' \
+            '{schema:"hasna.files.production_deploy.v1",source_sha:$source_sha,image_tag:$image_tag,image_digest:$image_digest,image:$image,architecture:$architecture,account:$account,cluster:$cluster,service:$service,rollback:{task_definition:$previous_task_definition,image:$previous_image},migration:{task_definition:$migration_task_definition,task:$migration_task,image:$migration_image,image_digest:$migration_image_digest,exit_code:0,schema_advanced:($schema_advanced == "true"),ledger_before:$ledger_before[0],ledger_after:$ledger_after[0],launch:$migration_launch[0],observed:$migration_observed[0]},deployed:{task_definition:$deployed_task_definition,image:$deployed_image,architecture:$architecture,health_url:$health_url,readiness:{direct:$readiness_direct[0],canonical:$readiness_canonical[0]},canonical_data_plane:$data_plane_canonical[0]},github_run_id:$run_id}' \
             > deploy-evidence.json
 
       - name: Emit RECONCILIATION_REQUIRED after a post-migration deployment failure
