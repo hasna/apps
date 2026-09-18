@@ -59,6 +59,128 @@ async function validateMcpAssignee(value: string, allowSeat: boolean): Promise<s
   return verdict.assignee;
 }
 
+const DEFAULT_MCP_TASK_PAGE_LIMIT = 50;
+const MAX_MCP_TASK_PAGE_LIMIT = 500;
+
+interface McpTaskPage {
+  tasks: Task[];
+  count: number;
+  total: number | null;
+  requested_limit: number;
+  limit: number;
+  server_cap: number | null;
+  offset: number;
+  consumed: number;
+  has_more: boolean | null;
+  next_offset: number | null;
+  next_cursor: string | null;
+  snapshot: string | null;
+  complete: boolean | null;
+}
+
+function positiveSafeInteger(value: unknown): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : null;
+}
+
+function nonNegativeSafeInteger(value: unknown): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+function taskListQuery(params: Record<string, unknown>, limit: number, offset: number): Record<string, string | number> {
+  const query: Record<string, string | number> = { limit };
+  if (typeof params["cursor"] !== "string" || !params["cursor"]) query["offset"] = offset;
+  const status = params["status"];
+  if (status !== undefined) query["status"] = Array.isArray(status) ? status.join(",") : String(status);
+  const priority = params["priority"];
+  if (priority !== undefined) query["priority"] = Array.isArray(priority) ? priority.join(",") : String(priority);
+  for (const key of ["project_id", "task_list_id", "assigned_to", "created_by", "not_created_by"] as const) {
+    const value = params[key];
+    if (typeof value === "string") query[key] = value;
+  }
+  const tags = params["tags"];
+  if (Array.isArray(tags) && tags.length > 0) query["tags"] = tags.join(",");
+  const cursor = params["cursor"];
+  if (typeof cursor === "string" && cursor) query["cursor"] = cursor;
+  return query;
+}
+
+const mcpTaskTagsCapabilityCache = new Map<string, Promise<boolean>>();
+
+async function requireMcpTaskTagsCapability(cloud: NonNullable<ReturnType<typeof getTodosCloudClient>>): Promise<void> {
+  let capability = mcpTaskTagsCapabilityCache.get(cloud.baseUrl);
+  if (!capability) {
+    capability = cloud.transport.get<unknown>("/openapi.json").then((document) => {
+      const paths = document && typeof document === "object" && !Array.isArray(document)
+        ? (document as Record<string, unknown>)["paths"] : null;
+      const tasksPath = paths && typeof paths === "object" && !Array.isArray(paths)
+        ? (paths as Record<string, unknown>)["/v1/tasks"] : null;
+      const get = tasksPath && typeof tasksPath === "object" && !Array.isArray(tasksPath)
+        ? (tasksPath as Record<string, unknown>)["get"] : null;
+      const parameters = get && typeof get === "object" && !Array.isArray(get)
+        ? (get as Record<string, unknown>)["parameters"] : null;
+      return Array.isArray(parameters) && parameters.some((parameter) =>
+        parameter && typeof parameter === "object" &&
+        (parameter as Record<string, unknown>)["name"] === "tags");
+    });
+    mcpTaskTagsCapabilityCache.set(cloud.baseUrl, capability);
+  }
+  if (!(await capability)) throw new Error("REMOTE_TAGS_FILTER_UNSUPPORTED: authority does not advertise tags on GET /v1/tasks");
+}
+
+function parseMcpTaskPage(raw: unknown, fallback: Task[], requestedLimit: number, requestedOffset: number): McpTaskPage {
+  const envelope = raw && typeof raw === "object" && !Array.isArray(raw)
+    ? raw as Record<string, unknown>
+    : {};
+  const tasks = Array.isArray(envelope["tasks"]) ? envelope["tasks"] as Task[] : fallback;
+  const total = nonNegativeSafeInteger(envelope["total"]);
+  const serverLimit = positiveSafeInteger(envelope["limit"]);
+  const serverCap = positiveSafeInteger(envelope["cap"]);
+  const limit = serverLimit ?? serverCap ?? requestedLimit;
+  const offset = nonNegativeSafeInteger(envelope["offset"]) ?? requestedOffset;
+  const consumed = tasks.length;
+  const rawHasMore = envelope["has_more"];
+  const hasMore = typeof rawHasMore === "boolean"
+    ? rawHasMore
+    : total !== null
+      ? offset + consumed < total
+      : null;
+  const rawNextOffset = nonNegativeSafeInteger(envelope["next_offset"]);
+  const nextOffset = rawNextOffset !== null
+    ? rawNextOffset
+    : hasMore === false
+      ? null
+      : consumed > 0
+        ? offset + consumed
+        : null;
+  const nextCursor = typeof envelope["next_cursor"] === "string" && envelope["next_cursor"]
+    ? envelope["next_cursor"]
+    : null;
+  const snapshot = typeof envelope["snapshot"] === "string" && envelope["snapshot"]
+    ? envelope["snapshot"]
+    : null;
+  const rawComplete = envelope["complete"];
+  const complete = typeof rawComplete === "boolean"
+    ? rawComplete
+    : total !== null && hasMore !== null
+      ? !hasMore
+      : null;
+  return {
+    tasks,
+    count: consumed,
+    total,
+    requested_limit: requestedLimit,
+    limit,
+    server_cap: serverCap ?? (serverLimit !== null && serverLimit < requestedLimit ? serverLimit : null),
+    offset,
+    consumed,
+    has_more: hasMore,
+    next_offset: nextOffset,
+    next_cursor: nextCursor,
+    snapshot,
+    complete,
+  };
+}
+
 export function registerTaskCrudTools(server: McpServer, ctx: TaskCrudContext) {
   const { shouldRegisterTool, resolveId, formatError, formatTask, applyFocus } = ctx;
 
@@ -268,27 +390,41 @@ export function registerTaskCrudTools(server: McpServer, ctx: TaskCrudContext) {
         // received the WHOLE TABLE at 200. Enforce the documented contract here
         // so the local store path fails closed too (limit 0/negative would drop
         // the LIMIT clause there exactly as it did remotely).
-        limit: z.number().int().min(1).optional().describe("Max results (default: 50, max 500)"),
-        offset: z.number().int().min(0).optional().describe("Pagination offset"),
+        limit: z.number().int().min(1).max(MAX_MCP_TASK_PAGE_LIMIT).optional().describe("Max results (default: 50, max 500)"),
+        offset: z.number().int().min(0).optional().describe("Pagination offset; continue with next_offset"),
+        cursor: z.string().min(1).max(1024).optional().describe("Opaque authority cursor from next_cursor; preferred over offset when available"),
         metadata: z.record(z.unknown()).optional().describe("Exact top-level metadata filters"),
       },
       async (params) => {
         try {
-          // http authority routing: list from <app-host>/v1 (no local id-resolve).
-          const cloud = getTodosCloudClient();
-          if (cloud) {
-            const tasks = await cloudListTasks(cloud, params as any);
-            if (tasks.length === 0) return { content: [{ type: "text" as const, text: "No tasks found." }] };
-            return { content: [{ type: "text" as const, text: tasks.map(formatTask).join("\n") }] };
+          const limit = params.limit ?? DEFAULT_MCP_TASK_PAGE_LIMIT;
+          const offset = params.offset ?? 0;
+          if (params.cursor !== undefined && params.offset !== undefined) {
+            throw new Error("Pass cursor or offset, not both");
           }
-          const resolved: Record<string, unknown> = { ...params };
-          if (params.project_id) resolved.project_id = resolveId(params.project_id, "projects");
-          if (params.task_list_id) resolved.task_list_id = resolveId(params.task_list_id, "task_lists");
-          if (params.assigned_to) resolved.assigned_to = resolveAssignee(params.assigned_to);
-          const tasks = listTasks(resolved as Parameters<typeof listTasks>[0], undefined) as Task[];
-          if (tasks.length === 0) return { content: [{ type: "text" as const, text: "No tasks found." }] };
-          const lines = tasks.map(formatTask);
-          return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+          // One authoritative page response supplies rows and pagination metadata.
+          // There is deliberately no follow-up probe/count request: a mutation
+          // between two requests made the old result internally inconsistent.
+          const cloud = getTodosCloudClient();
+          let page: McpTaskPage;
+          if (cloud) {
+            if (params.tags?.length) await requireMcpTaskTagsCapability(cloud);
+            const result = await cloud.list<Task>("tasks", { query: taskListQuery(params, limit, offset) });
+            page = parseMcpTaskPage(result.raw, result.items, limit, offset);
+          } else {
+            const resolved: Record<string, unknown> = { ...params, limit, offset };
+            delete resolved["cursor"];
+            if (params.project_id) resolved.project_id = resolveId(params.project_id, "projects");
+            if (params.task_list_id) resolved.task_list_id = resolveId(params.task_list_id, "task_lists");
+            if (params.assigned_to) resolved.assigned_to = resolveAssignee(params.assigned_to);
+            const tasks = listTasks(resolved as Parameters<typeof listTasks>[0], undefined) as Task[];
+            page = parseMcpTaskPage({ tasks }, tasks, limit, offset);
+          }
+          const payload = {
+            ...page,
+            tasks: page.tasks.map(formatTask),
+          };
+          return { content: [{ type: "text" as const, text: compactJson(payload) }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
         }

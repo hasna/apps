@@ -5,6 +5,7 @@ import { getDatabase, resolvePartialId } from "../../db/database.js";
 import { ensureProject, getProject, getProjectByPath, slugify } from "../../db/projects.js";
 import {
   createTask,
+  countTasks,
   getTask,
   getTaskWithRelations,
   listTasks,
@@ -276,32 +277,268 @@ function parseStatus(value: string | undefined): TaskStatus | undefined {
   return parseEnumFlagList(value, { ...TASK_STATUS_FLAG, allowList: false })?.[0];
 }
 
-/**
- * Ceiling on rows a single `todos list` will pull from a REMOTE authority.
- *
- * `GET /v1/tasks` applies no default limit (`src/server/routes.ts` passes
- * `limit: limitParam ? parseInt(limitParam, 10) : undefined`) and exposes no `sort`
- * parameter, so ordering cannot be delegated to the authority. A correct `--sort`
- * therefore needs the whole matching set — which is precisely the O(all-tasks)
- * download this repository has already paid for once, on a fleet with thousands of
- * open tasks.
- *
- * A ceiling resolves the two requirements that were treated as exclusive: the client
- * asks for a bounded page, and when that page comes back full it SAYS the result may
- * be drawn from a truncated scan rather than returning a plausible window in silence.
- *
- * 10,000 matches the bounded scan `handleExportTasks` already uses in
- * `src/server/routes.ts`, so this is the repository's existing convention rather than
- * a new number. `TODOS_LIST_SCAN_LIMIT` overrides it for a genuinely larger store.
- */
-const DEFAULT_LIST_SCAN_LIMIT = 10_000;
+/** Default bounded page for `todos list`; omission must never become exhaustion. */
+const DEFAULT_LIST_PAGE_LIMIT = 50;
+const MAX_LIST_PAGE_LIMIT = 50;
+const LIST_EXHAUST_PAGE_SIZE = 500;
+const MAX_LIST_ALL_ROWS = 5_000;
+const MAX_LIST_PAGE_BYTES = 65_536;
+const MAX_LIST_ALL_BYTES = 1_048_576;
 
-/** Resolved scan ceiling; a malformed override falls back rather than sending NaN. */
-function listScanLimit(): number {
-  const raw = process.env["TODOS_LIST_SCAN_LIMIT"];
-  if (raw === undefined || raw.trim() === "") return DEFAULT_LIST_SCAN_LIMIT;
-  const parsed = Number.parseInt(raw, 10);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : DEFAULT_LIST_SCAN_LIMIT;
+interface CloudTaskPageOptions {
+  limit: number;
+  offset: number;
+  cursor?: string;
+  snapshot?: string;
+}
+
+interface AuthorityTaskPage {
+  tasks: Task[];
+  count: number;
+  total: number | null;
+  requested_limit: number;
+  limit: number;
+  server_cap: number | null;
+  offset: number;
+  consumed: number;
+  has_more: boolean | null;
+  next_offset: number | null;
+  next_cursor: string | null;
+  snapshot: string | null;
+  complete: boolean | null;
+  composed: boolean;
+}
+
+interface TaskListPageEnvelope extends Omit<AuthorityTaskPage, "tasks"> {
+  tasks: Task[];
+  all: boolean;
+  byte_limited: boolean;
+  max_bytes: number;
+  byte_length: number;
+}
+
+function positiveSafeInteger(value: unknown): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : null;
+}
+
+function nonNegativeSafeInteger(value: unknown): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+/** Serialize with an exact self-reported byte length (the digit count can change once). */
+function serializeTaskListEnvelope(envelope: TaskListPageEnvelope): string {
+  let text = "";
+  for (let attempt = 0; attempt < 4; attempt++) {
+    text = `${JSON.stringify(envelope, null, 2)}\n`;
+    const length = Buffer.byteLength(text);
+    if (envelope.byte_length === length) return text;
+    envelope.byte_length = length;
+  }
+  return `${JSON.stringify(envelope, null, 2)}\n`;
+}
+
+function compactTaskListLine(task: Task): string {
+  const id = task.short_id || task.id.slice(0, 8);
+  const assigned = task.assigned_to ? ` ${escapeTerminalControls(task.assigned_to)}` : "";
+  return `${escapeTerminalControls(id)} ${task.status} ${task.priority} ${escapeTerminalControls(task.title)}${assigned}`;
+}
+
+function cloudTaskListQuery(
+  filter: Record<string, unknown>,
+  options: CloudTaskPageOptions,
+): Record<string, string | number> {
+  const query: Record<string, string | number> = { limit: options.limit };
+  if (!options.cursor) query["offset"] = options.offset;
+  if (options.cursor) query["cursor"] = options.cursor;
+  if (options.snapshot) query["snapshot"] = options.snapshot;
+  const status = filter["status"];
+  if (status !== undefined) query["status"] = Array.isArray(status) ? status.join(",") : String(status);
+  const priority = filter["priority"];
+  if (priority !== undefined) query["priority"] = Array.isArray(priority) ? priority.join(",") : String(priority);
+  for (const key of ["project_id", "task_list_id", "assigned_to", "created_by", "not_created_by"] as const) {
+    const value = filter[key];
+    if (typeof value === "string") query[key] = value;
+  }
+  const tags = filter["tags"];
+  if (Array.isArray(tags) && tags.length > 0) query["tags"] = tags.join(",");
+  return query;
+}
+
+function parseAuthorityTaskPage(
+  raw: unknown,
+  fallback: Task[],
+  requestedLimit: number,
+  requestedOffset: number,
+): AuthorityTaskPage {
+  const envelope = raw && typeof raw === "object" && !Array.isArray(raw)
+    ? raw as Record<string, unknown>
+    : {};
+  const tasks = Array.isArray(envelope["tasks"]) ? envelope["tasks"] as Task[] : fallback;
+  const total = nonNegativeSafeInteger(envelope["total"]);
+  const serverLimit = positiveSafeInteger(envelope["limit"]);
+  const serverCap = positiveSafeInteger(envelope["cap"]);
+  const limit = serverLimit ?? serverCap ?? requestedLimit;
+  const offset = nonNegativeSafeInteger(envelope["offset"]) ?? requestedOffset;
+  const consumed = tasks.length;
+  const rawHasMore = envelope["has_more"];
+  const hasMore = typeof rawHasMore === "boolean"
+    ? rawHasMore
+    : total !== null
+      ? offset + consumed < total
+      : null;
+  const rawNextOffset = nonNegativeSafeInteger(envelope["next_offset"]);
+  const nextOffset = rawNextOffset !== null
+    ? rawNextOffset
+    : hasMore === false
+      ? null
+      : consumed > 0
+        ? offset + consumed
+        : null;
+  const nextCursor = typeof envelope["next_cursor"] === "string" && envelope["next_cursor"]
+    ? envelope["next_cursor"]
+    : null;
+  const snapshot = typeof envelope["snapshot"] === "string" && envelope["snapshot"]
+    ? envelope["snapshot"]
+    : null;
+  const rawComplete = envelope["complete"];
+  const complete = typeof rawComplete === "boolean"
+    ? rawComplete
+    : total !== null && hasMore !== null
+      ? !hasMore
+      : null;
+  return {
+    tasks,
+    count: consumed,
+    total,
+    requested_limit: requestedLimit,
+    limit,
+    server_cap: serverCap ?? (serverLimit !== null && serverLimit < requestedLimit ? serverLimit : null),
+    offset,
+    consumed,
+    has_more: hasMore,
+    next_offset: nextOffset,
+    next_cursor: nextCursor,
+    snapshot,
+    complete,
+    composed: false,
+  };
+}
+
+function compareTaskListOrder(a: Task, b: Task): number {
+  const priorityOrder: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
+  return (priorityOrder[a.priority] ?? 4) - (priorityOrder[b.priority] ?? 4)
+    || String(b.created_at ?? "").localeCompare(String(a.created_at ?? ""))
+    || a.id.localeCompare(b.id);
+}
+
+const taskListTagsCapabilityCache = new Map<string, Promise<boolean>>();
+
+async function requireTaskListTagsCapability(
+  cloud: NonNullable<ReturnType<typeof getTodosCloudClient>>,
+): Promise<void> {
+  let capability = taskListTagsCapabilityCache.get(cloud.baseUrl);
+  if (!capability) {
+    capability = cloud.transport.get<unknown>("/openapi.json").then((document) => {
+      const paths = document && typeof document === "object" && !Array.isArray(document)
+        ? (document as Record<string, unknown>)["paths"]
+        : null;
+      const tasksPath = paths && typeof paths === "object" && !Array.isArray(paths)
+        ? (paths as Record<string, unknown>)["/v1/tasks"]
+        : null;
+      const get = tasksPath && typeof tasksPath === "object" && !Array.isArray(tasksPath)
+        ? (tasksPath as Record<string, unknown>)["get"]
+        : null;
+      const parameters = get && typeof get === "object" && !Array.isArray(get)
+        ? (get as Record<string, unknown>)["parameters"]
+        : null;
+      return Array.isArray(parameters) && parameters.some((parameter) =>
+        parameter && typeof parameter === "object" &&
+        (parameter as Record<string, unknown>)["name"] === "tags");
+    });
+    taskListTagsCapabilityCache.set(cloud.baseUrl, capability);
+  }
+  if (!(await capability)) {
+    throw new Error(
+      `REMOTE_TAGS_FILTER_UNSUPPORTED: configured Todos authority ${cloud.baseUrl} does not advertise the tags ` +
+      "query param on GET /v1/tasks; no unfiltered task read was issued",
+    );
+  }
+}
+
+async function requestCloudTaskPage(
+  cloud: NonNullable<ReturnType<typeof getTodosCloudClient>>,
+  filter: Record<string, unknown>,
+  options: CloudTaskPageOptions,
+): Promise<AuthorityTaskPage> {
+  if (Array.isArray(filter["tags"]) && filter["tags"].length > 0) await requireTaskListTagsCapability(cloud);
+  const result = await cloud.list<Task>("tasks", { query: cloudTaskListQuery(filter, options) });
+  return parseAuthorityTaskPage(result.raw, result.items, options.limit, options.offset);
+}
+
+/**
+ * Current authorities understand comma-separated status filters in one snapshot.
+ * A predecessor returned an empty 200 response for that query, so only that empty
+ * shape falls back to scalar pages. Independent scalar responses can never prove a
+ * shared snapshot; `complete` therefore stays unknown, and duplicate totals are
+ * deduped only when every scalar page is itself complete.
+ */
+async function requestCloudTaskSelection(
+  cloud: NonNullable<ReturnType<typeof getTodosCloudClient>>,
+  filter: Record<string, unknown>,
+  options: CloudTaskPageOptions,
+): Promise<AuthorityTaskPage> {
+  const statuses = Array.isArray(filter["status"]) ? filter["status"] as string[] : null;
+  if (!statuses || statuses.length <= 1 || options.cursor) {
+    return requestCloudTaskPage(cloud, filter, options);
+  }
+  if (statuses.length === 0) {
+    const { status: _status, ...rest } = filter;
+    return requestCloudTaskPage(cloud, rest, options);
+  }
+  const combined = await requestCloudTaskPage(cloud, filter, options);
+  if (combined.tasks.length > 0 || (combined.total !== null && combined.total > 0)) return combined;
+
+  const { status: _status, ...rest } = filter;
+  const windowEnd = options.offset + options.limit;
+  const pages = await Promise.all(statuses.map((status) =>
+    requestCloudTaskPage(cloud, { ...rest, status }, { limit: windowEnd, offset: 0 })));
+  const seen = new Set<string>();
+  let duplicate = false;
+  const union = pages.flatMap((page) => page.tasks).filter((task) => {
+    if (seen.has(task.id)) { duplicate = true; return false; }
+    seen.add(task.id);
+    return true;
+  });
+  union.sort(compareTaskListOrder);
+  const tasks = union.slice(options.offset, windowEnd);
+  const totalsKnown = pages.every((page) => page.total !== null);
+  const pagesComplete = pages.every((page) => page.complete === true);
+  const total = totalsKnown
+    ? duplicate
+      ? pagesComplete ? union.length : null
+      : pages.reduce((sum, page) => sum + (page.total ?? 0), 0)
+    : null;
+  const hasMore = total !== null
+    ? options.offset + tasks.length < total
+    : pages.some((page) => page.has_more === true)
+      ? true
+      : null;
+  return {
+    tasks,
+    count: tasks.length,
+    total,
+    requested_limit: options.limit,
+    limit: options.limit,
+    server_cap: null,
+    offset: options.offset,
+    consumed: tasks.length,
+    has_more: hasMore,
+    next_offset: hasMore === false ? null : tasks.length > 0 ? options.offset + tasks.length : null,
+    next_cursor: null,
+    snapshot: null,
+    complete: null,
+    composed: true,
+  };
 }
 
 /** Parse an integer option, rejecting non-numeric input instead of storing NaN. */
@@ -1080,7 +1317,9 @@ export function registerTaskCommands(program: Command) {
     .option("--due-today", "Only tasks due today or earlier")
     .option("--overdue", "Only overdue tasks (past due_at)")
     .option("--recurring", "Only recurring tasks")
-    .option("--limit <n>", "Max tasks to return")
+    .option("--limit <n>", `Max tasks to return (default ${DEFAULT_LIST_PAGE_LIMIT}; >${MAX_LIST_PAGE_LIMIT} requires --all)`)
+    .option("--offset <n>", "Skip this many matching tasks; continue from next_offset")
+    .option("--cursor <cursor>", "Opaque authority cursor from next_cursor; preferred when available")
     .action(async (opts) => {
       const globalOpts = program.opts();
       // Fail closed on an EMPTY project filter value (I38-00523): an
@@ -1250,163 +1489,282 @@ export function registerTaskCommands(program: Command) {
             .catch(() => ({ agents: [], seats: new Set<string>(), allowSeat: true, degraded: true }))
         : undefined;
       if (opts.recurring) filter["has_recurrence"] = true;
+
+      let explicitLimit: number | undefined;
       if (opts.limit !== undefined) {
-        const parsedLimit = Number.parseInt(String(opts.limit), 10);
-        if (!Number.isInteger(parsedLimit) || parsedLimit <= 0) {
+        const parsed = Number.parseInt(String(opts.limit), 10);
+        if (!Number.isInteger(parsed) || parsed <= 0) {
           handleError(new Error(`Invalid --limit value: ${opts.limit}. Must be a positive integer.`));
         }
-        filter["limit"] = parsedLimit;
+        explicitLimit = parsed;
       }
-
-      const creatorFilterActive = Boolean(filter["created_by"] || filter["not_created_by"]);
-      // A server that predates created_by IGNORES these query params and returns an
-      // unfiltered list at 200 — measured against the deployed 0.13.0 API, which
-      // drops created_by entirely. So the client must enforce the filter itself.
-      //
-      // But enforcing it AFTER the server applied `limit` reads a truncated page and
-      // then shrinks it further: `--inbox --limit 20` could return 3 rows, or none,
-      // while the real inbox was larger, with nothing to indicate it. So when the
-      // creator filter is client-enforced, the limit is withheld from the request and
-      // applied here instead — filter first, then truncate, which is the order the
-      // SQL does it in.
-      //
-      // The same reasoning governs every other step that changes WHICH rows or in
-      // WHAT ORDER after the query has run, so the rule is generalised rather than
-      // special-cased per flag:
-      //
-      //   --sort            reorders. Storage orders by `priority_rank, created_at
-      //                     DESC`, never by the requested field, so a limit applied
-      //                     in storage draws the window from the WRONG ordering.
-      //                     `--sort updated --limit 2` returned the 2 highest-
-      //                     priority rows ordered by update time while reading as
-      //                     "the 2 most recently updated" — the row actually
-      //                     updated last was absent, at exit 0, with no indication.
-      //   --due-today       narrow. Applied to a truncated page they shrink it
-      //   --overdue         further, so `--overdue --limit 20` could return 3 while
-      //                     the real overdue set was larger.
-      //
-      // In each case the limit is withheld from the query and applied last, below.
-      // This is not a new cost: every one of these steps ALREADY reads the whole
-      // matching set when no limit is given, so withholding the limit alongside one
-      // of them fetches no more than the same command without `--limit` does.
-      const requestedLimit = filter["limit"] as number | undefined;
-      // The default active-status filter is also reordered after the query: the
-      // remote compatibility path reads each scalar status separately, unions the
-      // pages, and restores the authoritative global order. Leaving the caller's
-      // window on those scalar reads can discard a newer equal-priority row before
-      // the union sees it, so it needs the same bounded scan treatment as --sort.
-      const combinesScalarStatusPages = Boolean(
-        cloud && Array.isArray(filter["status"]) && filter["status"].length > 1,
-      );
-      const reordersAfterQuery = Boolean(opts.sort) || combinesScalarStatusPages;
-      // Exact task-list reads may also narrow after the query when a legacy
-      // authority ignores task_list_id. The caller's output limit must therefore
-      // be applied after the bounded compatibility scan and exact local filter,
-      // just like creator/due filters below.
-      const taskListFilterActive = Boolean(cloud && filter["task_list_id"]);
-      const narrowsAfterQuery = Boolean(opts.dueToday) || Boolean(opts.overdue) ||
-        (creatorFilterActive && cloud) || taskListFilterActive;
-      const withholdLimit = requestedLimit !== undefined && (reordersAfterQuery || narrowsAfterQuery);
-
-      // Withholding the caller's limit fixed the ordering defect and removed the only
-      // BOUND on the request with it: `/v1/tasks` has no default limit, so `--sort
-      // updated --limit 2` asked the authority for every matching row and materialised
-      // it client-side. Measured against a recording stub: the outgoing query was
-      // `status=pending,in_progress` with no limit, where the same command without
-      // `--sort` sent `...&limit=2`. Silently discarding a caller's resource bound is
-      // the same silent-success class this command exists to remove.
-      //
-      // So the limit is REPLACED rather than dropped. A scan ceiling is used instead of
-      // the caller's own limit because a correct global sort genuinely needs more rows
-      // than the caller asked to see, and the authority cannot sort — there is no
-      // `sort` query param to delegate to. The ceiling is raised to the caller's limit
-      // when that is larger, so `--limit 50000` is never answered with fewer rows than
-      // it asked for.
-      //
-      // This also bounds the case that carried no limit at all (`todos list --sort
-      // updated`), which was unbounded before this change and is the same download.
-      // That is a deliberate widening of the fix: leaving it unbounded would have
-      // repaired the symptom the review named while the mechanism stayed live.
-      //
-      // LOCAL is deliberately left unbounded. The cost being controlled here is a
-      // network fetch of an entire shared task set; a local SQLite read of the same
-      // rows is already what `--sort` does on any store, and capping it would trade
-      // correctness for no meaningful saving.
-      const scanCeiling = cloud && (withholdLimit || requestedLimit === undefined)
-        ? Math.max(requestedLimit ?? 0, listScanLimit())
-        : undefined;
-
-      // Truncation probe (todos 52b0a207). When the authority applies the caller's
-      // limit itself — nothing reorders or narrows after the query — a page of
-      // exactly `limit` rows is indistinguishable from a population that happens to
-      // end there: the round-number tell that made `--limit 2000` read as the full
-      // pending set. So the request carries limit+1: the extra row is proof that the
-      // matching set is larger. The withheld path needs no probe — the CLI applies
-      // the window itself and compares the pre-window set, which IS the exact match
-      // count. One extra row on the wire is the cost of never answering a bounded
-      // read as if it were complete.
-      const probeLimit =
-        !withholdLimit && requestedLimit !== undefined ? requestedLimit + 1 : undefined;
-
-      const serverFilter = (() => {
-        const base = withholdLimit
-          ? (() => { const { limit: _dropped, ...rest } = filter; return rest; })()
-          : filter;
-        if (probeLimit !== undefined) return { ...base, limit: probeLimit };
-        return scanCeiling === undefined ? base : { ...base, limit: scanCeiling };
-      })();
-
-      let tasks = cloud ? await cloudListTasks(cloud, serverFilter as any) : listTasks(serverFilter as any);
-
-      // A full page cannot be distinguished from a set that happens to end exactly at
-      // the ceiling, so the ambiguous case warns too — the alternative is staying quiet
-      // in precisely the case where the answer may be wrong. Sorting and narrowing
-      // below then run over a set that is NOT the whole matching set, which is exactly
-      // the "window drawn from the wrong rows" failure the ordering fix removed, so it
-      // is reported rather than absorbed.
-      if (scanCeiling !== undefined && tasks.length >= scanCeiling) {
-        console.error(chalk.yellow(
-          `Warning: this query reached its ${scanCeiling}-row scan limit, so the rows below were\n` +
-          `         selected from a truncated set and may not be the true result.\n` +
-          `         Narrow it (--project, --status, --assigned) or raise TODOS_LIST_SCAN_LIMIT.`,
+      if (explicitLimit !== undefined && (!Number.isSafeInteger(explicitLimit) || explicitLimit < 1)) {
+        handleError(new Error("--limit must be a positive safe integer"));
+      }
+      if (!opts.all && explicitLimit !== undefined && explicitLimit > MAX_LIST_PAGE_LIMIT) {
+        handleError(new Error(
+          `--limit above ${MAX_LIST_PAGE_LIMIT} requires explicit --all; use --offset/next_offset for token-efficient pages`,
         ));
       }
-      if (cloud && creatorFilterActive) {
-        // Enforcing the filter is not the same as the filter being USEFUL. A server
-        // that predates created_by omits the key entirely, so every row reads as
-        // unattributed and the filter — correctly, per the NULL rule below — excludes
-        // nothing. Measured against the deployed 0.13.0 API: `--inbox` returned the
-        // caller's own filing alongside everyone else's. Silently handing back an
-        // unfiltered inbox is the failure this flag exists to prevent, so say so.
-        // A row where the key is PRESENT and null is genuinely unattributed and is
-        // not a server-capability problem — only a missing key indicates the latter.
-        if (tasks.length > 0 && tasks.every((t) => !("created_by" in (t as object)))) {
-          console.error(chalk.yellow(
-            "Warning: this server does not record task authorship, so the creator filter matched nothing to exclude.\n" +
-            "         Results are unfiltered. The API needs upgrading past the release that added created_by.",
-          ));
+      if (explicitLimit !== undefined && explicitLimit > MAX_LIST_ALL_ROWS) {
+        handleError(new Error(`--limit cannot exceed the ${MAX_LIST_ALL_ROWS}-row hard ceiling`));
+      }
+      if (opts.cursor !== undefined && opts.offset !== undefined) {
+        handleError(new Error("Pass --cursor or --offset, not both"));
+      }
+      if (opts.cursor !== undefined && (typeof opts.cursor !== "string" || !opts.cursor || opts.cursor.length > 1_024)) {
+        handleError(new Error("--cursor must be a non-empty authority cursor of at most 1024 characters"));
+      }
+      const requestedOffset = parseIntOption(opts.offset, "--offset") ?? 0;
+      if (!Number.isSafeInteger(requestedOffset) || requestedOffset < 0) {
+        handleError(new Error("--offset must be a non-negative safe integer"));
+      }
+      const requestedLimit = explicitLimit ?? DEFAULT_LIST_PAGE_LIMIT;
+      const exhaustAll = Boolean(
+        opts.all && explicitLimit === undefined && opts.offset === undefined && opts.cursor === undefined,
+      );
+      const exhaustForTransform = Boolean(
+        opts.all && opts.offset === undefined && opts.cursor === undefined &&
+        (opts.sort || opts.dueToday || opts.overdue),
+      );
+      const readWholeSet = exhaustAll || exhaustForTransform;
+      const creatorFilterActive = Boolean(filter["created_by"] || filter["not_created_by"]);
+      const taskListFilterActive = Boolean(cloud && filter["task_list_id"]);
+      const baseFilter = { ...filter };
+
+      let page: AuthorityTaskPage;
+      let directCloudPageRequest: CloudTaskPageOptions | null = null;
+      if (cloud) {
+        if (!readWholeSet) {
+          directCloudPageRequest = {
+            limit: requestedLimit,
+            offset: requestedOffset,
+            ...(opts.cursor ? { cursor: opts.cursor } : {}),
+          };
+          page = await requestCloudTaskSelection(cloud, baseFilter, directCloudPageRequest);
+        } else {
+          const collected: Task[] = [];
+          const seen = new Set<string>();
+          const totals = new Set<number>();
+          const snapshots = new Set<string>();
+          let snapshotPages = 0;
+          let currentOffset = 0;
+          let currentCursor: string | undefined;
+          let last: AuthorityTaskPage | null = null;
+          let pageCount = 0;
+          while (true) {
+            const current = await requestCloudTaskSelection(cloud, baseFilter, {
+              limit: LIST_EXHAUST_PAGE_SIZE,
+              offset: currentOffset,
+              ...(currentCursor ? { cursor: currentCursor } : {}),
+            });
+            pageCount++;
+            last = current;
+            if (current.total !== null) totals.add(current.total);
+            if (current.snapshot) { snapshots.add(current.snapshot); snapshotPages++; }
+            for (const task of current.tasks) {
+              if (seen.has(task.id)) continue;
+              seen.add(task.id);
+              collected.push(task);
+              if (collected.length > MAX_LIST_ALL_ROWS) {
+                handleError(new Error(
+                  `Refusing --all: result exceeds the ${MAX_LIST_ALL_ROWS}-row hard ceiling; ` +
+                  "narrow the query and continue with --offset or --cursor.",
+                ));
+              }
+            }
+            const prettyBytes = Buffer.byteLength(`${JSON.stringify(redactBroadTasks(collected), null, 2)}\n`);
+            if (prettyBytes > MAX_LIST_ALL_BYTES) {
+              handleError(new Error(
+                `Refusing --all: pretty JSON response exceeds the ${MAX_LIST_ALL_BYTES}-byte hard ceiling; ` +
+                "use paginated output with --limit/--offset or narrow the query.",
+              ));
+            }
+            if (current.has_more !== true) break;
+            if (current.next_cursor) {
+              if (current.next_cursor === currentCursor) {
+                handleError(new Error("REMOTE_API_INCOMPATIBLE: task cursor pagination did not advance"));
+              }
+              currentCursor = current.next_cursor;
+              currentOffset = current.next_offset ?? current.offset + current.consumed;
+            } else if (current.next_offset !== null && current.next_offset > currentOffset) {
+              currentOffset = current.next_offset;
+            } else {
+              handleError(new Error("REMOTE_API_INCOMPATIBLE: task pagination reported more rows without a progressing continuation"));
+            }
+          }
+          const consistentTotal = totals.size === 1 ? [...totals][0]! : null;
+          const snapshotConsistent = pageCount === 1 || (snapshots.size === 1 && snapshotPages === pageCount);
+          page = {
+            tasks: collected,
+            count: collected.length,
+            total: consistentTotal,
+            requested_limit: LIST_EXHAUST_PAGE_SIZE,
+            limit: last?.limit ?? LIST_EXHAUST_PAGE_SIZE,
+            server_cap: last?.server_cap ?? null,
+            offset: 0,
+            consumed: last ? last.offset + last.consumed : 0,
+            has_more: last?.has_more ?? null,
+            next_offset: last?.next_offset ?? (last?.has_more === null && last ? last.offset + last.consumed : null),
+            next_cursor: last?.next_cursor ?? null,
+            snapshot: snapshotConsistent ? last?.snapshot ?? null : null,
+            complete: pageCount === 1
+              ? last?.complete ?? null
+              : snapshotConsistent && last?.complete === true
+                ? true
+                : null,
+            composed: pageCount > 1 || Boolean(last?.composed),
+          };
         }
-        const wantCreatedBy = filter["created_by"] as string | undefined;
-        const excludeCreatedBy = filter["not_created_by"] as string | undefined;
-        tasks = tasks.filter((t) => {
-          const raw = (t as { created_by?: string | null }).created_by ?? null;
-          // Case-insensitive, matching the SQL on both backends — a row stored before
-          // write-time canonicalisation carries whatever case it was written with.
-          const author = raw === null ? null : canonicalAgentRef(raw);
-          if (wantCreatedBy && author !== canonicalAgentRef(wantCreatedBy)) return false;
-          // NULL author is unattributable, not "someone else" — keep it.
-          if (excludeCreatedBy && author !== null && author === canonicalAgentRef(excludeCreatedBy)) return false;
-          return true;
-        });
+      } else {
+        if (opts.cursor) handleError(new Error("--cursor requires the hosted authority; local SQLite supports --offset only"));
+        const localTotal = countTasks(baseFilter as Parameters<typeof countTasks>[0]);
+        const localLimit = readWholeSet ? Math.min(Math.max(localTotal, 1), MAX_LIST_ALL_ROWS + 1) : requestedLimit;
+        const localOffset = readWholeSet ? 0 : requestedOffset;
+        const localTasks = listTasks(
+          { ...baseFilter, limit: localLimit, offset: localOffset } as Parameters<typeof listTasks>[0],
+        );
+        if (readWholeSet && localTasks.length > MAX_LIST_ALL_ROWS) {
+          handleError(new Error(`Refusing --all: result exceeds the ${MAX_LIST_ALL_ROWS}-row hard ceiling`));
+        }
+        const hasMore = localOffset + localTasks.length < localTotal;
+        page = {
+          tasks: localTasks,
+          count: localTasks.length,
+          total: localTotal,
+          requested_limit: readWholeSet ? localLimit : requestedLimit,
+          limit: readWholeSet ? localLimit : requestedLimit,
+          server_cap: null,
+          offset: localOffset,
+          consumed: localTasks.length,
+          has_more: hasMore,
+          next_offset: hasMore ? localOffset + localTasks.length : null,
+          next_cursor: null,
+          snapshot: null,
+          complete: !hasMore,
+          composed: false,
+        };
       }
-      if (opts.dueToday) {
-        const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999);
-        tasks = tasks.filter(t => t.due_at && t.due_at <= todayEnd.toISOString());
+
+      let warnedMissingCreator = false;
+      const applyClientNarrowing = (source: Task[]): { rows: Task[]; narrowed: boolean } => {
+        let rows = source;
+        let narrowed = false;
+        if (cloud && creatorFilterActive) {
+          if (!warnedMissingCreator && rows.length > 0 && rows.every((t) => !("created_by" in (t as object)))) {
+            warnedMissingCreator = true;
+            console.error(chalk.yellow(
+              "Warning: this server does not record task authorship, so the creator filter matched nothing to exclude.\n" +
+              "         Results are unfiltered. The API needs upgrading past the release that added created_by.",
+            ));
+          }
+          const before = rows.length;
+          const wantCreatedBy = filter["created_by"] as string | undefined;
+          const excludeCreatedBy = filter["not_created_by"] as string | undefined;
+          rows = rows.filter((t) => {
+            const raw = (t as { created_by?: string | null }).created_by ?? null;
+            const author = raw === null ? null : canonicalAgentRef(raw);
+            if (wantCreatedBy && author !== canonicalAgentRef(wantCreatedBy)) return false;
+            if (excludeCreatedBy && author !== null && author === canonicalAgentRef(excludeCreatedBy)) return false;
+            return true;
+          });
+          narrowed ||= rows.length !== before;
+        }
+        if (taskListFilterActive) {
+          const before = rows.length;
+          const taskListId = filter["task_list_id"] as string;
+          rows = rows.filter((task) => task.task_list_id === taskListId);
+          narrowed ||= rows.length !== before;
+        }
+        if (opts.dueToday) {
+          const before = rows.length;
+          const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999);
+          rows = rows.filter(t => t.due_at && t.due_at <= todayEnd.toISOString());
+          narrowed ||= rows.length !== before;
+        }
+        if (opts.overdue) {
+          const before = rows.length;
+          const now = new Date().toISOString();
+          rows = rows.filter(t => t.due_at && t.due_at < now && t.status !== "completed");
+          narrowed ||= rows.length !== before;
+        }
+        return { rows, narrowed };
+      };
+
+      const firstNarrowed = applyClientNarrowing(page.tasks);
+      let tasks = firstNarrowed.rows;
+      let narrowedClientSide = firstNarrowed.narrowed;
+
+      // A predecessor may ignore creator/task-list predicates. Fill the requested
+      // output page by walking its own authoritative continuation; never issue a
+      // separate total/probe request and never advance by the filtered row count.
+      if (cloud && !readWholeSet && narrowedClientSide && tasks.length < requestedLimit) {
+        const outputIds = new Set(tasks.map((task) => task.id));
+        let last = page;
+        let pagesRead = 1;
+        const snapshots = new Set<string>();
+        let snapshotPages = 0;
+        if (page.snapshot) { snapshots.add(page.snapshot); snapshotPages++; }
+        while (tasks.length < requestedLimit && last.has_more === true) {
+          const remaining = requestedLimit - tasks.length;
+          const nextOptions = last.next_cursor
+            ? { limit: remaining, offset: last.next_offset ?? last.offset + last.consumed, cursor: last.next_cursor }
+            : last.next_offset !== null
+              ? { limit: remaining, offset: last.next_offset }
+              : null;
+          if (!nextOptions || nextOptions.offset <= last.offset) {
+            handleError(new Error("REMOTE_API_INCOMPATIBLE: filtered task pagination did not provide a progressing continuation"));
+          }
+          const next = await requestCloudTaskSelection(cloud, baseFilter, nextOptions);
+          pagesRead++;
+          if (next.snapshot) { snapshots.add(next.snapshot); snapshotPages++; }
+          const narrowed = applyClientNarrowing(next.tasks);
+          narrowedClientSide ||= narrowed.narrowed;
+          for (const task of narrowed.rows) {
+            if (outputIds.has(task.id)) continue;
+            outputIds.add(task.id);
+            tasks.push(task);
+          }
+          page.consumed += next.consumed;
+          last = next;
+          if (next.consumed === 0 && next.has_more === true) {
+            handleError(new Error("REMOTE_API_INCOMPATIBLE: filtered task pagination stalled"));
+          }
+        }
+        if (pagesRead > 1) {
+          page.has_more = last.has_more;
+          page.next_offset = last.next_offset;
+          page.next_cursor = last.next_cursor;
+          page.server_cap = last.server_cap;
+          page.limit = last.limit;
+          page.composed = true;
+          const snapshotConsistent = snapshots.size === 1 && snapshotPages === pagesRead;
+          page.snapshot = snapshotConsistent ? last.snapshot : null;
+          page.complete = snapshotConsistent && last.complete === true ? true : null;
+          page.total = page.complete === true ? tasks.length : null;
+        }
       }
-      if (opts.overdue) {
-        const now = new Date().toISOString();
-        tasks = tasks.filter(t => t.due_at && t.due_at < now && t.status !== "completed");
+
+      let outputCapped = false;
+      if (!readWholeSet && tasks.length > requestedLimit) {
+        const fullFilteredCount = tasks.length;
+        let consumedPrefix = 0;
+        let visible = 0;
+        for (const rawTask of page.tasks) {
+          consumedPrefix++;
+          if (applyClientNarrowing([rawTask]).rows.length > 0) visible++;
+          if (visible >= requestedLimit) break;
+        }
+        tasks = tasks.slice(0, requestedLimit);
+        outputCapped = true;
+        page.total = page.complete === true && !page.composed ? fullFilteredCount : null;
+        page.has_more = true;
+        page.complete = false;
+        page.next_cursor = null;
+        page.next_offset = page.offset + consumedPrefix;
+        page.consumed = consumedPrefix;
       }
+
       if (opts.sort) {
         const priorityOrder: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
         tasks.sort((a: any, b: any) => {
@@ -1417,35 +1775,42 @@ export function registerTaskCommands(program: Command) {
           return 0;
         });
       }
-
-      // The window is taken LAST, once the set and its order are final. When the
-      // limit was left on the query this is a no-op — storage already truncated.
-      //
-      // A bounded read must be distinguishable from the full population (todos
-      // 52b0a207 — the silent `--limit` cap, measured at exactly 2000 / 4000 / 10000
-      // of a 63,541-task set at rc=0 with no signal). The +1 probe above makes the
-      // forwarded path exact: the extra row proves the matching set is larger. The
-      // withheld path compares the pre-window set, which IS the exact match count.
-      // Either way the truncation is reported on STDERR — the same channel as the
-      // scan-ceiling warning — so `--json` stdout stays a clean parseable array and
-      // every existing consumer keeps parsing it.
-      let truncatedByLimit = false;
-      if (requestedLimit !== undefined) {
-        if (withholdLimit) {
-          truncatedByLimit = tasks.length > requestedLimit;
-          tasks = tasks.slice(0, requestedLimit);
-        } else if (tasks.length > requestedLimit) {
-          truncatedByLimit = true;
-          tasks = tasks.slice(0, requestedLimit);
+      if (exhaustForTransform && explicitLimit !== undefined && tasks.length > explicitLimit) {
+        const fullCount = tasks.length;
+        tasks = tasks.slice(0, explicitLimit);
+        page.total = fullCount;
+        page.has_more = true;
+        page.next_offset = explicitLimit;
+        page.next_cursor = null;
+        page.complete = false;
+      }
+      if (narrowedClientSide && page.composed) {
+        page.total = null;
+        page.complete = null;
+      } else if (narrowedClientSide && !outputCapped) {
+        if (page.complete === true) {
+          page.total = tasks.length;
+          page.has_more = false;
+          page.next_offset = null;
+        } else {
+          page.total = null;
+          page.complete = null;
         }
       }
-      if (truncatedByLimit) {
-        console.error(chalk.yellow(
-          `Warning: the matching set has more than --limit ${requestedLimit} rows, so only the first\n` +
-          `         ${requestedLimit} are shown. This read is bounded — raise --limit or narrow the\n` +
-          `         query (--project, --status, --assigned) to see the full population.`,
-        ));
-      }
+      page.tasks = tasks;
+      page.count = tasks.length;
+
+      // Byte fitting may need to ask the authority for a smaller page. Retain the
+      // exact request start and the unmodified authority page only while the rows
+      // are still a direct page in authority order. A composed/filter-filled/sorted
+      // page has no single cursor boundary that can be shortened safely.
+      const byteTrimAuthoritySource = cloud && directCloudPageRequest && !readWholeSet &&
+        !narrowedClientSide && !outputCapped && !page.composed && !opts.sort
+        ? {
+            request: { ...directCloudPageRequest },
+            page: { ...page, tasks: [...page.tasks] },
+          }
+        : null;
 
       // `--assigned` fails open the same way an out-of-vocabulary status did, but
       // it is a REFERENCE rather than a closed vocabulary, so the remedy differs.
@@ -1544,15 +1909,217 @@ export function registerTaskCommands(program: Command) {
       }
 
       const fmt = opts.format || (globalOpts.json ? "json" : "table");
-      const outputTasks = redactBroadTasks(tasks);
+      let outputTasks = redactBroadTasks(tasks);
+      const maxBytes = opts.all ? MAX_LIST_ALL_BYTES : MAX_LIST_PAGE_BYTES;
+      let byteLimited = false;
+      if (page.has_more !== false && outputTasks.length > 0 && opts.format !== "json" && fmt !== "compact") {
+        const continuation = page.next_cursor
+          ? `--cursor ${page.next_cursor}`
+          : page.next_offset !== null
+            ? `--offset ${page.next_offset}`
+            : "the authority-provided continuation";
+        console.error(chalk.yellow(
+          `Warning: this is a bounded or snapshot-unknown page. Continue with ${continuation}, ` +
+          "or use --format json/compact for pagination metadata.",
+        ));
+      }
+
+      const buildEnvelope = (
+        pageValue: AuthorityTaskPage = page,
+        taskValue: Task[] = outputTasks,
+        limited = byteLimited,
+      ): TaskListPageEnvelope => ({
+        ...pageValue,
+        tasks: taskValue,
+        count: taskValue.length,
+        all: exhaustAll,
+        byte_limited: limited,
+        max_bytes: maxBytes,
+        byte_length: 0,
+      });
+
+      const previewTrimmedPage = (count: number): AuthorityTaskPage => ({
+        ...page,
+        tasks: page.tasks.slice(0, count),
+        count,
+        consumed: count,
+        has_more: true,
+        next_offset: page.offset + count,
+        complete: false,
+      });
+
+      const largestFittingPrefix = (
+        render: (pageValue: AuthorityTaskPage, taskValue: Task[], limited: boolean) => string,
+      ): number => {
+        for (let count = outputTasks.length - 1; count >= 1; count--) {
+          const candidateTasks = outputTasks.slice(0, count);
+          if (Buffer.byteLength(render(previewTrimmedPage(count), candidateTasks, true)) <= MAX_LIST_PAGE_BYTES) {
+            return count;
+          }
+        }
+        return 0;
+      };
+
+      const applyByteLimitedPrefix = async (count: number): Promise<void> => {
+        if (count < 1) {
+          handleError(new Error(
+            `A single task plus pagination metadata exceeds the ${MAX_LIST_PAGE_BYTES}-byte page ceiling; ` +
+            "narrow the query or use a less verbose output format.",
+          ));
+        }
+        byteLimited = true;
+
+        if (byteTrimAuthoritySource) {
+          const source = byteTrimAuthoritySource;
+          const refetched = await requestCloudTaskSelection(cloud!, baseFilter, {
+            ...source.request,
+            limit: count,
+            ...(source.page.snapshot ? { snapshot: source.page.snapshot } : {}),
+          });
+          const mismatch = (detail: string): never => handleError(new Error(
+            "REMOTE_API_INCOMPATIBLE: authority could not reproduce the byte-limited task page " +
+            `from its original cursor/snapshot (${detail}); refusing an unsafe continuation`,
+          ));
+
+          if (refetched.composed) mismatch("the smaller response was composed from independent pages");
+          if (refetched.tasks.length < 1 || refetched.tasks.length > count) {
+            mismatch(`requested ${count} rows but received ${refetched.tasks.length}`);
+          }
+          if (refetched.offset !== source.page.offset) {
+            mismatch(`offset changed from ${source.page.offset} to ${refetched.offset}`);
+          }
+          if (source.page.snapshot && refetched.snapshot !== source.page.snapshot) {
+            mismatch(`snapshot changed from ${source.page.snapshot} to ${refetched.snapshot ?? "null"}`);
+          }
+          if (source.page.total !== null && refetched.total !== source.page.total) {
+            mismatch(`total changed from ${source.page.total} to ${refetched.total ?? "null"}`);
+          }
+          for (let index = 0; index < refetched.tasks.length; index++) {
+            if (refetched.tasks[index]?.id !== source.page.tasks[index]?.id) {
+              mismatch(`task prefix changed at row ${index}`);
+            }
+          }
+
+          const shortened = refetched.tasks.length < source.page.tasks.length;
+          if (shortened) {
+            if (refetched.has_more === false) mismatch("smaller response claimed there is no continuation");
+            if (source.page.snapshot || source.page.next_cursor || source.request.cursor) {
+              if (!refetched.next_cursor) mismatch("smaller snapshot/cursor page omitted next_cursor");
+              if (refetched.next_cursor === source.request.cursor) mismatch("next_cursor did not advance");
+              if (source.page.next_cursor && refetched.next_cursor === source.page.next_cursor) {
+                mismatch("smaller page retained the original full-page next_cursor");
+              }
+            } else if (refetched.next_offset === null || refetched.next_offset <= refetched.offset) {
+              mismatch("smaller offset page omitted a progressing continuation");
+            }
+            if (refetched.next_offset !== null && refetched.next_offset !== refetched.offset + refetched.consumed) {
+              mismatch(
+                `next_offset ${refetched.next_offset} does not match offset ${refetched.offset} + consumed ${refetched.consumed}`,
+              );
+            }
+            // The original page proves that additional rows exist after this exact
+            // reproduced prefix, even when a legacy envelope leaves has_more null.
+            refetched.has_more = true;
+            refetched.complete = false;
+          }
+
+          // requested_limit describes the caller's request. `limit` and `consumed`
+          // describe the smaller authority page that can actually be emitted;
+          // keep an advertised cap separately when it is larger than this retry.
+          refetched.requested_limit = source.page.requested_limit;
+          if (shortened) refetched.limit = Math.min(refetched.limit, refetched.consumed);
+          page = refetched;
+          outputTasks = redactBroadTasks(refetched.tasks);
+          return;
+        }
+
+        // Local and legacy offset-only pages have no authority cursor to preserve.
+        // Advance by exactly the emitted prefix and make `consumed` agree with it.
+        // Never silently downgrade a cursor/snapshot page to this offset path.
+        if (page.snapshot || page.next_cursor || directCloudPageRequest?.cursor) {
+          handleError(new Error(
+            "REMOTE_API_INCOMPATIBLE: cannot byte-limit a composed or transformed cursor/snapshot page " +
+            "without losing its exact continuation; narrow the query or lower --limit.",
+          ));
+        }
+        page = previewTrimmedPage(count);
+        page.next_cursor = null;
+        outputTasks = outputTasks.slice(0, count);
+      };
 
       if (fmt === "json") {
-        output(outputTasks, true);
+        // Keep the long-standing global --json bare-array contract. Explicit
+        // --format json is the additive authority-envelope surface.
+        if (opts.format !== "json") {
+          const text = `${JSON.stringify(outputTasks, null, 2)}\n`;
+          if (exhaustAll && Buffer.byteLength(text) > MAX_LIST_ALL_BYTES) {
+            handleError(new Error(
+              `Refusing --all: pretty JSON response exceeds the ${MAX_LIST_ALL_BYTES}-byte hard ceiling; ` +
+              "use paginated output with --limit/--offset or narrow the query.",
+            ));
+          }
+          process.stdout.write(text);
+          return;
+        }
+        const renderJsonPage = (
+          pageValue: AuthorityTaskPage,
+          taskValue: Task[],
+          limited: boolean,
+        ): string => serializeTaskListEnvelope(buildEnvelope(pageValue, taskValue, limited));
+        let text = renderJsonPage(page, outputTasks, byteLimited);
+        if (exhaustAll && Buffer.byteLength(text) > MAX_LIST_ALL_BYTES) {
+          handleError(new Error(
+            `Refusing --all: formatted response exceeds the ${MAX_LIST_ALL_BYTES}-byte hard ceiling; ` +
+            "use paginated output with --limit/--offset or narrow the query.",
+          ));
+        }
+        while (!exhaustAll && Buffer.byteLength(text) > MAX_LIST_PAGE_BYTES && outputTasks.length > 0) {
+          await applyByteLimitedPrefix(largestFittingPrefix(renderJsonPage));
+          text = renderJsonPage(page, outputTasks, byteLimited);
+        }
+        if (Buffer.byteLength(text) > maxBytes) {
+          handleError(new Error(`Task list metadata alone exceeds the ${maxBytes}-byte output ceiling`));
+        }
+        process.stdout.write(text);
+        return;
+      }
+
+      if (fmt === "compact") {
+        // Preserve the legacy scripting contract: an empty compact list is zero bytes.
+        if (outputTasks.length === 0) {
+          process.stdout.write("");
+          return;
+        }
+        const renderCompactPage = (
+          pageValue: AuthorityTaskPage,
+          taskValue: Task[],
+        ): string => {
+          const lines = taskValue.map(compactTaskListLine);
+          const footer =
+            `# page count=${lines.length} total=${pageValue.total ?? "unknown"} requested_limit=${pageValue.requested_limit} ` +
+            `limit=${pageValue.limit} offset=${pageValue.offset} has_more=${pageValue.has_more ?? "unknown"} ` +
+            `next_offset=${pageValue.next_offset ?? "null"} next_cursor=${pageValue.next_cursor ?? "null"} ` +
+            `complete=${pageValue.complete ?? "unknown"}`;
+          return [...lines, footer].join("\n") + "\n";
+        };
+        let text = renderCompactPage(page, outputTasks);
+        if (exhaustAll && Buffer.byteLength(text) > MAX_LIST_ALL_BYTES) {
+          handleError(new Error(
+            `Refusing --all: compact response exceeds the ${MAX_LIST_ALL_BYTES}-byte hard ceiling; ` +
+            "use --limit/--offset or narrow the query.",
+          ));
+        }
+        while (!exhaustAll && Buffer.byteLength(text) > MAX_LIST_PAGE_BYTES && outputTasks.length > 0) {
+          await applyByteLimitedPrefix(largestFittingPrefix((pageValue, taskValue) =>
+            renderCompactPage(pageValue, taskValue)));
+          text = renderCompactPage(page, outputTasks);
+        }
+        process.stdout.write(text);
         return;
       }
 
       if (outputTasks.length === 0) {
-        if (fmt === "compact" || fmt === "csv") process.stdout.write("");
+        if (fmt === "csv") process.stdout.write("");
         else console.log(chalk.dim("No tasks found."));
         return;
       }
@@ -1566,18 +2133,12 @@ export function registerTaskCommands(program: Command) {
         return;
       }
 
-      if (fmt === "compact") {
-        for (const t of outputTasks) {
-          const id = t.short_id || t.id.slice(0, 8);
-          const assigned = t.assigned_to ? ` ${t.assigned_to}` : "";
-          process.stdout.write(`${id} ${t.status} ${t.priority} ${t.title}${assigned}\n`);
-        }
-        return;
-      }
-
-      console.log(chalk.bold(`${outputTasks.length} task(s):\n`));
-      for (const t of outputTasks) {
-        console.log(formatTaskLine(t));
+      const totalLabel = page.total === null ? "unknown total," : `of ${page.total}`;
+      console.log(chalk.bold(`${outputTasks.length} ${totalLabel} task(s):\n`));
+      for (const t of outputTasks) console.log(formatTaskLine(t));
+      if (page.has_more !== false) {
+        if (page.next_cursor) console.log(chalk.dim(`\nContinue with: todos list --cursor ${page.next_cursor}`));
+        else if (page.next_offset !== null) console.log(chalk.dim(`\nContinue with: todos list --limit ${requestedLimit} --offset ${page.next_offset}`));
       }
     });
 

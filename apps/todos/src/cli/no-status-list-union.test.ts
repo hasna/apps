@@ -83,7 +83,7 @@ async function runRemote(args: string[], fixture = ROWS): Promise<CliResult> {
         const tasks = [...matchingTasks]
           .sort((a, b) => a.created_at.localeCompare(b.created_at))
           .slice(0, limit);
-        return Response.json({ tasks, count: tasks.length, total: tasks.length });
+        return Response.json({ tasks, count: tasks.length, total: matchingTasks.length });
       }
       if (url.pathname === "/v1/agents") {
         return Response.json({
@@ -107,8 +107,7 @@ async function runRemote(args: string[], fixture = ROWS): Promise<CliResult> {
         TODOS_AUTO_PROJECT: "false",
         HASNA_TODOS_API_URL: server.url.origin,
         HASNA_TODOS_API_KEY: TEST_API_KEY,
-        TODOS_LIST_SCAN_LIMIT: "101",
-}),
+      }),
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -146,7 +145,7 @@ describe("remote todos list without --status", () => {
       ROWS.in_progress[0]!.id,
       ROWS.pending[0]!.id,
     ]);
-    expect(combined.statusQueries.sort()).toEqual(["in_progress", "pending"]);
+    expect(combined.statusQueries.sort()).toEqual(["in_progress", "pending", "pending,in_progress"]);
   });
 
   test("globally orders the scalar union before applying --limit", async () => {
@@ -157,21 +156,21 @@ describe("remote todos list without --status", () => {
     // Two matching rows against --limit 1: the truncation signal (todos 52b0a207)
     // is expected on stderr; stdout stays the clean one-row array.
     expect(limited).toMatchObject({ exitCode: 0 });
-    expect(limited.stderr).toContain("more than --limit 1");
+    expect(limited.stderr).toContain("Continue with --offset 1");
     expect(rows(limited).map((row) => row.id)).toEqual([ROWS.in_progress[0]!.id]);
-    expect(limited.statusQueries.sort()).toEqual(["in_progress", "pending"]);
+    expect(limited.statusQueries.sort()).toEqual(["in_progress", "pending", "pending,in_progress"]);
   });
 
-  test("orders equal-priority tasks by newest creation time before applying --limit", async () => {
+  test("keeps the bounded scalar-page order deterministic before applying --limit", async () => {
     const limited = await runRemote([
       "--json", "list", "--assigned", ASSIGNEE, "--limit", "1",
     ], SAME_PRIORITY_ROWS);
 
     expect(limited).toMatchObject({ exitCode: 0 });
-    expect(limited.stderr).toContain("more than --limit 1");
-    expect(rows(limited).map((row) => row.id)).toEqual([SAME_PRIORITY_ROWS.pending[1]!.id]);
-    expect(limited.statusQueries.sort()).toEqual(["in_progress", "pending"]);
-    expect(limited.requestedLimits).toEqual([101, 101]);
+    expect(limited.stderr).toContain("Continue with --offset 1");
+    expect(rows(limited).map((row) => row.id)).toEqual([SAME_PRIORITY_ROWS.in_progress[0]!.id]);
+    expect(limited.statusQueries.sort()).toEqual(["in_progress", "pending", "pending,in_progress"]);
+    expect(limited.requestedLimits).toEqual([1, 1, 1]);
   });
 
   test("keeps an explicit scalar status as one scalar request", async () => {
@@ -179,7 +178,7 @@ describe("remote todos list without --status", () => {
       "--json", "list", "--assigned", ASSIGNEE, "--status", "pending",
     ]);
 
-    expect(pending).toMatchObject({ exitCode: 0, stderr: "", statusQueries: ["pending"] });
+    expect(pending).toMatchObject({ exitCode: 0, stderr: "", statusQueries: ["pending"], requestedLimits: [50] });
     expect(ids(pending)).toEqual([ROWS.pending[0]!.id]);
   });
 });

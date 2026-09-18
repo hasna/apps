@@ -693,7 +693,7 @@ describe("CLI integration", () => {
     expect(JSON.parse(inspectJson.stdout).description).toBe(persistedDescription);
   });
 
-  it("should emit complete parseable JSON for large list output", async () => {
+  it("should bound large list output and require --all for exhaustion", async () => {
     const dbPath = join(testRoot, "large-list.db");
     const previousDbPath = process.env["TODOS_DB_PATH"];
     closeDatabase();
@@ -730,19 +730,40 @@ describe("CLI integration", () => {
     const globalJson = await runCli(["list", "--json"], dbPath);
     expect(globalJson.exitCode).toBe(0);
     expectLocalModeStderr(globalJson);
-    expect(globalJson.stdout.length).toBeGreaterThan(64 * 1024);
-    expect(JSON.parse(globalJson.stdout)).toHaveLength(180);
+    expect(JSON.parse(globalJson.stdout)).toHaveLength(50);
 
     const formatJson = await runCli(["list", "--format", "json"], dbPath);
     expect(formatJson.exitCode).toBe(0);
     expectLocalModeStderr(formatJson);
-    expect(JSON.parse(formatJson.stdout)).toHaveLength(180);
+    expect(Buffer.byteLength(formatJson.stdout)).toBeLessThanOrEqual(64 * 1024);
+    const formatPage = JSON.parse(formatJson.stdout) as { count: number; total: number; limit: number; offset: number; has_more: boolean; next_offset: number; byte_limited: boolean };
+    expect(formatPage).toMatchObject({
+      total: 180,
+      limit: 50,
+      offset: 0,
+      has_more: true,
+      byte_limited: true,
+    });
+    expect(formatPage.count).toBeGreaterThan(0);
+    expect(formatPage.count).toBeLessThanOrEqual(50);
+    expect(formatPage.next_offset).toBe(formatPage.count);
 
     const completedJson = await runCli(["list", "--status", "completed", "--json"], dbPath);
     expect(completedJson.exitCode).toBe(0);
     expectLocalModeStderr(completedJson);
-    expect(completedJson.stdout.length).toBeGreaterThan(64 * 1024);
-    expect(JSON.parse(completedJson.stdout)).toHaveLength(80);
+    expect(JSON.parse(completedJson.stdout)).toHaveLength(50);
+
+    const exhaustive = await runCli(["list", "--all", "--format", "json"], dbPath);
+    expect(exhaustive.exitCode).toBe(0);
+    expectLocalModeStderr(exhaustive);
+    expect(JSON.parse(exhaustive.stdout)).toMatchObject({
+      count: 260,
+      total: 260,
+      has_more: false,
+      next_offset: null,
+      complete: true,
+      all: true,
+    });
   });
 
   it("should emit complete parseable JSON for a >1MB doctor routing report over a pipe", async () => {
