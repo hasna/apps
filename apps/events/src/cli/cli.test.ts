@@ -132,7 +132,7 @@ describe("CLI smoke behavior", () => {
     expect(JSON.parse(listHooks.stdout)).toEqual([]);
 
     const listEvents = await runCli(["events", "list"]);
-    expect(JSON.parse(listEvents.stdout)).toEqual([]);
+    expect(JSON.parse(listEvents.stdout)).toMatchObject({ events: [], count: 0, limit: 20, has_more: false, compact: true });
   });
 
   test("can be embedded with app name and default source", async () => {
@@ -190,7 +190,9 @@ describe("CLI smoke behavior", () => {
 
       const listEvents = await runCli(["events", "list", "--limit", "1"]);
       expect(listEvents.exitCode).toBe(0);
-      expect(JSON.parse(listEvents.stdout)[0]).toMatchObject({ type: "smoke.created" });
+      expect(JSON.parse(listEvents.stdout).events[0]).toMatchObject({ type: "smoke.created" });
+      const legacyList = await runCli(["events", "list", "--limit", "1", "--full"]);
+      expect(JSON.parse(legacyList.stdout)[0]).toMatchObject({ type: "smoke.created", data: expect.any(Object) });
 
       const replay = await runCli(["events", "replay", "--dry-run"]);
       expect(replay.exitCode).toBe(0);

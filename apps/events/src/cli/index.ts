@@ -7,6 +7,7 @@ import { DurableEventsBroker } from "../durable.js";
 import { runDurableWorker } from "../durable-worker.js";
 import { parseFilterOptions } from "../filter-options.js";
 import { webhookTargetPolicyFromEnv } from "../cli-webhook-policy.js";
+import { applyFullEventLimit, eventListSnapshotPage } from "./list-cursor.js";
 
 interface ParsedArgs {
   json: boolean;
@@ -148,7 +149,7 @@ Usage:
   ${name} [--dir <path>] [--json] channels status
   ${name} [--dir <path>] [--json] status
   ${name} [--dir <path>] [--json] events emit <type>${options.source ? "" : " --source <source>"} [options]
-  ${name} [--dir <path>] [--json] events list [--limit <n>]
+  ${name} [--dir <path>] [--json] events list [--cursor <cursor>] [--limit <n>] [--full]
   ${name} [--dir <path>] [--json] events replay [--id <event-id>] [--cursor <cursor>] [--limit <n>] [--dry-run]
   ${name} [--dir <path>] [--json] durable channel <url> [options]
   ${name} [--dir <path>] [--json] durable enqueue <type> --source <source> [options]
@@ -249,7 +250,7 @@ function printEventsHelp(options: RunEventsCliOptions = {}): void {
 
 Usage:
   ${name} [--dir <path>] [--json] events emit <type>${options.source ? "" : " --source <source>"} [options]
-  ${name} [--dir <path>] [--json] events list [--limit <n>]
+  ${name} [--dir <path>] [--json] events list [--cursor <cursor>] [--limit <n>] [--full]
   ${name} [--dir <path>] [--json] events replay [--id <event-id>] [--cursor <cursor>] [--limit <n>] [--dry-run]
 
 Emit options:
@@ -265,7 +266,9 @@ Emit options:
 List options:
   --source <source>         Filter by exact source
   --type <type>             Filter by exact type
-  --limit <n>               Most recent events; 0 or omitted lists all
+  --cursor <cursor>          Opaque cursor returned by a previous list page
+  --limit <n>               Maximum events (default 20, max 1000)
+  --full                    Return the legacy full event records; omitted limit lists all
 
 Replay options:
   --id <event-id>           Filter by exact event id
@@ -652,21 +655,48 @@ async function handleEvents(client: EventsClient, command: string | undefined, t
 
   if (command === "list") {
     const args = [...tail];
-    const limit = numberOption(takeOption(args, "--limit"));
+    const rawLimit = numberOption(takeOption(args, "--limit"));
+    const cursor = takeOption(args, "--cursor");
     const type = takeOption(args, "--type");
     const source = takeOption(args, "--source");
-    let events = await client.listEvents();
-    if (type) events = events.filter((event) => event.type === type);
-    if (source) events = events.filter((event) => event.source === source);
-    if (limit) events = events.slice(-limit);
-    output(parsed, events, () => {
-      if (events.length === 0) {
-        console.log("No events recorded.");
-        return;
-      }
-      for (const event of events) {
-        console.log(`${event.time}\t${event.id}\t${event.source}\t${event.type}\t${event.severity}`);
-      }
+    const full = takeFlag(args, "--full");
+    if (full) {
+      let events = await client.listEvents({ type, source });
+      events = applyFullEventLimit(events, rawLimit);
+      output(parsed, events, () => {
+        if (events.length === 0) return console.log("No events recorded.");
+        for (const event of events) console.log(`${event.time}\t${event.id}\t${event.source}\t${event.type}\t${event.severity}`);
+      });
+      return;
+    }
+    const limit = Math.max(1, Math.min(1000, Math.floor(rawLimit ?? 20)));
+    const allEvents = await client.listEvents({ type, source });
+    const page = eventListSnapshotPage(allEvents, { limit, cursor, type, source });
+    const compact = {
+      events: page.events.map((event) => ({
+        id: event.id,
+        time: event.time,
+        source: event.source,
+        type: event.type,
+        severity: event.severity,
+        subject: event.subject ?? null,
+        message: event.message ? event.message.replace(/\s+/g, " ").slice(0, 160) : null,
+        schemaVersion: event.schemaVersion,
+      })),
+      count: page.count,
+      total: page.total,
+      limit,
+      cursor: cursor ?? null,
+      snapshot_id: page.snapshot_id,
+      next_cursor: page.next_cursor,
+      has_more: page.has_more,
+      compact: true,
+      hint: "Continue with --cursor when has_more is true; pass --full for legacy event data and metadata.",
+    };
+    output(parsed, compact, () => {
+      if (page.events.length === 0) return console.log("No events recorded.");
+      for (const event of page.events) console.log(`${event.time}\t${event.id}\t${event.source}\t${event.type}\t${event.severity}`);
+      if (page.next_cursor) console.log(`next cursor: ${page.next_cursor}`);
     });
     return;
   }
