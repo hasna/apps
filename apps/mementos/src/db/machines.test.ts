@@ -10,6 +10,8 @@ import {
   listMachines,
   registerMachine,
   setPrimaryMachine,
+  registerMachineRecord,
+  renameMachine,
 } from "./machines.js";
 
 function freshDb(): Database {
@@ -28,7 +30,7 @@ function freshDb(): Database {
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       last_seen_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
-    CREATE INDEX IF NOT EXISTS idx_machines_hostname ON machines(hostname);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_machines_hostname ON machines(hostname);
     CREATE INDEX IF NOT EXISTS idx_machines_primary ON machines(is_primary);
     CREATE TRIGGER IF NOT EXISTS machines_single_primary_insert
     AFTER INSERT ON machines
@@ -84,6 +86,37 @@ function seedMachine(
 }
 
 describe("machine primary protection", () => {
+  it("registers by normalized hostname without allowing repeat registration to rename the stable identity", () => {
+    const db = freshDb();
+    const first = registerMachine("First name", db as any);
+    const again = registerMachine("Takeover name", db as any);
+    expect(again.id).toBe(first.id);
+    expect(again.name).toBe("First name");
+    expect(listMachines(db as any)).toHaveLength(1);
+    db.close();
+  });
+
+  it("returns a specific name conflict without mutating either stable identity", () => {
+    const db = freshDb();
+    const first = registerMachineRecord({ hostname: "first", platform: "linux", name: "shared" }, db as any).machine;
+    expect(() => registerMachineRecord({ hostname: "second", platform: "linux", name: "shared" }, db as any)).toThrow("Machine name already taken");
+    expect(listMachines(db as any).map((machine) => machine.id)).toEqual([first.id]);
+    db.close();
+  });
+
+  it("administrative rename and primary changes do not falsify last-seen liveness", () => {
+    const db = freshDb();
+    const first = registerMachineRecord({ hostname: "first", platform: "linux" }, db as any).machine;
+    const second = registerMachineRecord({ hostname: "second", platform: "linux" }, db as any).machine;
+    const firstSeen = first.last_seen_at;
+    const secondSeen = second.last_seen_at;
+    renameMachine(first.id, "renamed", db as any);
+    setPrimaryMachine(second.id, db as any);
+    expect(listMachines(db as any).find((machine) => machine.id === first.id)?.last_seen_at).toBe(firstSeen);
+    expect(listMachines(db as any).find((machine) => machine.id === second.id)?.last_seen_at).toBe(secondSeen);
+    db.close();
+  });
+
   it("keeps the first machine as a candidate until a primary is explicitly set", () => {
     const db = freshDb();
     const alpha = registerMachine("alpha", db as any);
@@ -120,7 +153,7 @@ describe("machine primary protection", () => {
     expect(listMachines(db as any).filter((machine) => machine.is_primary)).toHaveLength(1);
     expect(getPrimaryMachineStartupWarning(db as any)).toBeNull();
 
-    setPrimaryMachine(alpha.name, db as any);
+    setPrimaryMachine(alpha.id, db as any);
     expect(getPrimaryMachine(db as any)?.id).toBe(alpha.id);
     expect(listMachines(db as any).filter((machine) => machine.is_primary)).toHaveLength(1);
 

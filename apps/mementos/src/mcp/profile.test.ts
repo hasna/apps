@@ -93,6 +93,10 @@ describe("Mementos MCP profiles", () => {
     expect(coreNames).toContain("describe_tools");
     expect(coreNames).not.toContain("migrate_pg");
     expect(coreNames).not.toContain("memory_gdpr_erase");
+    expect(coreNames).not.toContain("register_machine");
+    expect(coreNames).not.toContain("list_machines");
+    expect(coreNames).not.toContain("rename_machine");
+    expect(coreNames).not.toContain("set_primary_machine");
     expect(core.result.tools).toHaveLength(23);
     expect(Buffer.byteLength(JSON.stringify(core.result))).toBeLessThanOrEqual(16 * 1024);
 
@@ -110,6 +114,7 @@ describe("Mementos MCP profiles", () => {
       ["graph", "graph_query"],
       ["automation", "memory_auto_process"],
       ["admin", "memory_gdpr_erase"],
+      ["admin", "register_machine"],
       ["storage", "mementos_storage_status"],
       ["hooks", "webhook_create"],
     ];
@@ -122,12 +127,33 @@ describe("Mementos MCP profiles", () => {
     }
   });
 
+  test("machine tools remain exclusive to admin and exact full profiles", async () => {
+    const machineTools = ["register_machine", "list_machines", "rename_machine", "set_primary_machine"];
+    expect(MEMENTOS_MCP_PROFILE_TOOLS.admin.filter((name) => machineTools.includes(name))).toEqual(machineTools);
+    for (const [profile, tools] of Object.entries(MEMENTOS_MCP_PROFILE_TOOLS)) {
+      if (profile === "admin") continue;
+      expect(tools.filter((name) => machineTools.includes(name))).toEqual([]);
+    }
+    for (const profile of ["core", "search", "graph", "automation", "storage", "hooks", "search,graph"]) {
+      const names = (await listTools(profile)).result.tools.map((tool) => tool.name);
+      expect(names.filter((name) => machineTools.includes(name))).toEqual([]);
+    }
+    for (const profile of ["admin", "full"]) {
+      const names = (await listTools(profile)).result.tools.map((tool) => tool.name);
+      expect(names.filter((name) => machineTools.includes(name)).sort()).toEqual([...machineTools].sort());
+    }
+    for (const profile of MEMENTOS_MCP_PROFILES.filter((profile) => profile !== "full")) {
+      expect(Object.keys((buildServer(profile) as InternalServer)._registeredResources)).toEqual([]);
+    }
+  });
+
   test("comma-separated profiles compose without enabling full", async () => {
     const { result } = await listTools("search,graph");
     const names = result.tools.map((tool) => tool.name);
     expect(names).toContain("memory_search_semantic");
     expect(names).toContain("graph_query");
     expect(names).not.toContain("migrate_pg");
+    expect(names).not.toContain("register_machine");
   });
 
   test("reduced profiles omit legacy unpaged resources", () => {

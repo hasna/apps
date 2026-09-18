@@ -53,14 +53,14 @@
       "kind": "mcp",
       "status": "supported",
       "mcpBin": "mementos-mcp",
-      "authMode": "local-only"
+      "authMode": "api-key"
     },
     {
       "name": "cli",
       "kind": "cli",
       "status": "supported",
       "bin": "mementos",
-      "authMode": "local-only"
+      "authMode": "api-key"
     }
   ],
   "storage": {

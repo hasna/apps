@@ -269,35 +269,87 @@ export function getDatabase(dbPath?: string): Database {
 }
 
 function runMigrations(db: Database): void {
+  let currentLevel = 0;
   try {
     const result = db
       .query("SELECT MAX(id) as max_id FROM _migrations")
       .get() as { max_id: number | null } | null;
-    const currentLevel = result?.max_id ?? 0;
-
-    for (let i = currentLevel; i < MIGRATIONS.length; i++) {
-      try {
-        applyMigration(db, i);
-      } catch (e) {
-        console.warn(`[mementos] Migration ${i + 1} failed: ${e instanceof Error ? e.message : String(e)}`);
-      }
-    }
+    currentLevel = result?.max_id ?? 0;
   } catch {
-    for (let i = 0; i < MIGRATIONS.length; i++) {
-      try {
-        applyMigration(db, i);
-      } catch (e) {
-        console.warn(`[mementos] Migration ${i + 1} failed: ${e instanceof Error ? e.message : String(e)}`);
+    // Fresh database: migration 1 creates the ledger.
+  }
+
+  for (let i = currentLevel; i < MIGRATIONS.length; i++) {
+    try {
+      applyMigration(db, i);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      // Migration 41 establishes the identity invariant used by the hosted
+      // registration upsert. Continuing without it would reintroduce duplicate
+      // identities, so ambiguous legacy data fails startup for reconciliation.
+      if (i === 40) {
+        throw new Error(`Mementos migration 41 refused unsafe machine identity data: ${message}`);
       }
+      console.warn(`[mementos] Migration ${i + 1} failed: ${message}`);
     }
   }
 }
 
 function applyMigration(db: Database, index: number): void {
-  if (index === 32) {
-    ensureMachinePrimaryColumn(db);
+  if (index === 32) ensureMachinePrimaryColumn(db);
+  if (index === 40) {
+    applyMachineIdentityMigration(db);
+    return;
   }
   db.exec(MIGRATIONS[index]!);
+}
+
+export function applyMachineIdentityMigration(db: Database): void {
+  db.transaction(() => {
+    const rows = db.query(
+      "SELECT id, name, hostname, platform, is_primary, created_at, last_seen_at FROM machines",
+    ).all() as Array<{
+      id: string;
+      name: string;
+      hostname: string;
+      platform: string;
+      is_primary: number | boolean;
+      created_at: string;
+      last_seen_at: string;
+    }>;
+    const identities = new Map<string, string>();
+    let primaryCount = 0;
+    for (const row of rows) {
+      const canonical = row.hostname.trim().replace(/\.+$/, "").toLowerCase();
+      const createdAt = new Date(row.created_at).getTime();
+      const lastSeenAt = new Date(row.last_seen_at).getTime();
+      const primaryValueValid = row.is_primary === 0 || row.is_primary === 1
+        || row.is_primary === false || row.is_primary === true;
+      if (
+        !row.id ||
+        !row.name || row.name.length > 128 || /[\u0000-\u001f\u007f]/.test(row.name) ||
+        !canonical || canonical.length > 253 || /[\u0000-\u001f\u007f/\\\s]/.test(canonical) ||
+        !row.platform || row.platform.length > 64 || row.platform !== row.platform.trim().toLowerCase() || !/^[a-z0-9._-]+$/.test(row.platform) ||
+        !primaryValueValid ||
+        !Number.isFinite(createdAt) || !Number.isFinite(lastSeenAt) || lastSeenAt < createdAt
+      ) {
+        throw new Error(`invalid legacy machine row ${row.id || "(missing id)"}`);
+      }
+      const owner = identities.get(canonical);
+      if (owner && owner !== row.id) {
+        throw new Error(`ambiguous normalized hostname '${canonical}' belongs to both ${owner} and ${row.id}`);
+      }
+      identities.set(canonical, row.id);
+      if (Boolean(row.is_primary)) primaryCount += 1;
+    }
+    if (primaryCount > 1) {
+      throw new Error(`legacy machine registry contains ${primaryCount} primary rows`);
+    }
+
+    db.exec(MIGRATIONS[40]!);
+    const receipt = db.query("SELECT id FROM _migrations WHERE id = 41").get() as { id: number } | null;
+    if (receipt?.id !== 41) throw new Error("machine identity migration did not record completion");
+  });
 }
 
 function ensureMachinePrimaryColumn(db: Database): void {

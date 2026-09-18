@@ -21,14 +21,14 @@ beforeEach(() => {
 });
 
 describe("existing-memory project-link schema", () => {
-  test("migration 40 installs the exact immutable SQLite receipt contract", () => {
+  test("migration 41 retains the migration 40 immutable SQLite receipt contract", () => {
     const db = getDatabase();
     const migration = db.query("SELECT MAX(id) AS id FROM _migrations").get() as { id: number };
     const columns = db.query(
       "PRAGMA table_info(mementos_memory_project_link_receipts)",
     ).all() as Array<{ name: string }>;
 
-    expect(migration.id).toBe(40);
+    expect(migration.id).toBe(41);
     expect(columns.map(({ name }) => name)).toEqual(MEMORY_PROJECT_LINK_RECEIPT_COLUMNS);
 
     const project = registerProject("Dubai", "/projects/dubai-link-schema");
@@ -62,8 +62,8 @@ describe("existing-memory project-link schema", () => {
     const sqlite = sqliteMementosMemoryProjectLinkSchemaSql();
     const postgres = postgresMementosMemoryProjectLinkSchemaSql();
 
-    expect(MIGRATIONS.at(-1)).toContain(sqlite);
-    expect(PG_MIGRATIONS.at(-1)).toContain(postgres);
+    expect(MIGRATIONS.at(-2)).toContain(sqlite);
+    expect(PG_MIGRATIONS.at(-2)).toContain(postgres);
     for (const column of MEMORY_PROJECT_LINK_RECEIPT_COLUMNS) {
       expect(sqlite).toMatch(new RegExp(`\\b${column}\\b`));
       expect(postgres).toMatch(new RegExp(`\\b${column}\\b`));

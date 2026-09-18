@@ -1,5 +1,6 @@
 import { SqliteAdapter as Database } from "../storage.js";
 import { getCurrentMachineId } from "../db/machines.js";
+import { isApiMode } from "../db/api-mode.js";
 import type { MemoryFilter, Memory } from "../types/index.js";
 
 export function resolveVisibleMachineId(
@@ -12,7 +13,10 @@ export function resolveVisibleMachineId(
 
   try {
     return getCurrentMachineId(db);
-  } catch {
+  } catch (error) {
+    // A hosted identity failure must never widen visibility to machine-agnostic.
+    // Explicit local callers retain the historical nullable discovery behavior.
+    if (!db && isApiMode()) throw error;
     return null;
   }
 }

@@ -19,8 +19,17 @@
  * printed, in full or in part.
  */
 import { createHash } from "node:crypto";
-import { PgAdapter, PgAdapterAsync } from "../src/storage.js";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { PgAdapter, PgAdapterAsync, markServerContext } from "../src/storage.js";
 import { applyPgMigrations } from "../src/db/pg-migrate.js";
+import { PG_MIGRATIONS } from "../src/db/pg-migrations.js";
+import { closeDatabase, resetDatabase } from "../src/db/database.js";
+import { matchRoute } from "../src/server/router.js";
+import "../src/server/routes/agents.js";
+import { MachineRegistryError, registerMachineRecord } from "../src/db/machines.js";
+import { acquireLock, checkLock, releaseLock } from "../src/db/locks.js";
 import {
   getMementosProjectResourceExact,
   readAllMementosProjectResources,
@@ -50,16 +59,108 @@ const projectId = crypto.randomUUID();
 const knowledgeId = crypto.randomUUID();
 const sessionJobId = crypto.randomUUID();
 const laterMemoryId = crypto.randomUUID();
+const machineHostname = `pg-machine-${probeSuffix}`;
+const invalidMachineId = crypto.randomUUID();
 const probeKey = `pg-test-gate-${probeSuffix}`;
 const probeValue = `pg-test-gate value ${probeSuffix}`;
+const machineIdentityMigration = PG_MIGRATIONS.find((migration) =>
+  migration.includes("mementos_m41_machine_preflight")
+);
+if (!machineIdentityMigration) fail("PostgreSQL machine identity migration is missing");
+const machineIdentityMigrationIndex = PG_MIGRATIONS.indexOf(machineIdentityMigration);
 let checks = 0;
 
 try {
   // 1. Schema — the repo's own migration set must apply cleanly.
-  const migrations = await applyPgMigrations(connectionString);
-  if (migrations.errors.length > 0) fail(`migration errors: ${migrations.errors.join("; ")}`);
-  if (migrations.totalMigrations === 0) fail("no PostgreSQL migrations were found to apply");
+  const [migrations, concurrentMigrations] = await Promise.all([
+    applyPgMigrations(connectionString),
+    applyPgMigrations(connectionString),
+  ]);
+  for (const migrationRun of [migrations, concurrentMigrations]) {
+    if (migrationRun.errors.length > 0) fail(`migration errors: ${migrationRun.errors.join("; ")}`);
+    if (migrationRun.totalMigrations === 0) fail("no PostgreSQL migrations were found to apply");
+  }
+  const appliedVersions = migrations.applied.length + concurrentMigrations.applied.length;
+  if (appliedVersions !== migrations.totalMigrations) {
+    fail("concurrent migration runners did not apply every version exactly once");
+  }
+  const hostnameConstraint = await pg.get(
+    "SELECT pg_get_constraintdef(oid) AS definition FROM pg_constraint WHERE conname = 'machines_hostname_canonical'",
+  );
+  if (!hostnameConstraint || !String(hostnameConstraint.definition).includes("lower")) {
+    fail("machine hostname canonicalization is not database-enforced");
+  }
+  let nonCanonicalRefused = false;
+  try {
+    await pg.run(
+      "INSERT INTO machines (id, name, hostname, platform) VALUES ($1, $2, $3, $4)",
+      invalidMachineId,
+      `invalid-machine-${probeSuffix}`,
+      "UPPER-HOST.",
+      "linux",
+    );
+  } catch {
+    nonCanonicalRefused = true;
+  }
+  if (!nonCanonicalRefused) fail("PostgreSQL accepted a noncanonical machine hostname");
   checks++;
+
+  // Migration-41 negative controls. Seed each legacy-invalid row only after
+  // dropping the final runtime constraints inside a transaction, then execute
+  // the exact migration body. Its preflight must fail, and the outer
+  // transaction must restore rows, constraints, and the migration receipt.
+  const invalidMigrationCases = [
+    {
+      label: "control-character name",
+      id: `pg-invalid-name-${probeSuffix}`,
+      name: `bad\nname-${probeSuffix}`,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      lastSeenAt: "2026-01-01T00:00:00.000Z",
+    },
+    {
+      label: "reversed liveness timestamps",
+      id: `pg-invalid-time-${probeSuffix}`,
+      name: `pg-invalid-time-${probeSuffix}`,
+      createdAt: "2026-02-01T00:00:00.000Z",
+      lastSeenAt: "2026-01-01T00:00:00.000Z",
+    },
+  ];
+  for (const invalidCase of invalidMigrationCases) {
+    let refused = false;
+    try {
+      await pg.transaction(async (client) => {
+        await client.query("DELETE FROM _pg_migrations WHERE version = $1", [machineIdentityMigrationIndex]);
+        await client.query("DELETE FROM _migrations WHERE id = 41");
+        await client.query("ALTER TABLE machines DROP CONSTRAINT IF EXISTS machines_name_runtime");
+        await client.query("ALTER TABLE machines DROP CONSTRAINT IF EXISTS machines_liveness_runtime");
+        await client.query(
+          `INSERT INTO machines (id, name, hostname, platform, is_primary, created_at, last_seen_at)
+           VALUES ($1, $2, $3, 'linux', FALSE, $4, $5)`,
+          [invalidCase.id, invalidCase.name, invalidCase.id, invalidCase.createdAt, invalidCase.lastSeenAt],
+        );
+        await client.query(machineIdentityMigration);
+        await client.query("INSERT INTO _pg_migrations (version) VALUES ($1)", [machineIdentityMigrationIndex]);
+      });
+    } catch {
+      refused = true;
+    }
+    if (!refused) fail(`migration 41 accepted ${invalidCase.label}`);
+    if (await pg.get("SELECT id FROM machines WHERE id = $1", invalidCase.id)) {
+      fail(`migration 41 failed to roll back ${invalidCase.label} row`);
+    }
+    if (!(await pg.get("SELECT id FROM _migrations WHERE id = 41"))) {
+      fail(`migration 41 failed to restore its schema receipt after ${invalidCase.label} refusal`);
+    }
+    if (!(await pg.get("SELECT version FROM _pg_migrations WHERE version = $1", machineIdentityMigrationIndex))) {
+      fail(`migration 41 failed to restore its runner receipt after ${invalidCase.label} refusal`);
+    }
+    for (const constraintName of ["machines_name_runtime", "machines_liveness_runtime"]) {
+      if (!(await pg.get("SELECT 1 FROM pg_constraint WHERE conname = $1", constraintName))) {
+        fail(`migration 41 failed to restore ${constraintName} after ${invalidCase.label} refusal`);
+      }
+    }
+    checks++;
+  }
 
   // 2. Write and read back through the postgres adapter.
   await pg.run(
@@ -68,6 +169,48 @@ try {
     `pg-test-gate-agent-${agentId.slice(0, 8)}`,
     "agent"
   );
+  const lockPg = new PgAdapter(connectionString);
+  try {
+    const lockResource = `pg-empty-lock-${probeSuffix}`;
+    const empty = checkLock("memory", lockResource, undefined, lockPg as any);
+    if (empty.length !== 0) fail("empty PostgreSQL lock lookup returned a lock");
+    const acquired = acquireLock(agentId, "memory", lockResource, "exclusive", 60, lockPg as any);
+    if (!acquired) fail("PostgreSQL lock acquisition returned no receipt");
+    const visible = checkLock("memory", lockResource, undefined, lockPg as any);
+    if (visible.length !== 1 || visible[0]?.id !== acquired.id) {
+      fail("PostgreSQL lock lookup did not return the acquired lock");
+    }
+    if (!releaseLock(acquired.id, agentId, lockPg as any)) {
+      fail("PostgreSQL lock release did not delete the acquired lock");
+    }
+    if (checkLock("memory", lockResource, undefined, lockPg as any).length !== 0) {
+      fail("PostgreSQL empty lock lookup was not restored after release");
+    }
+  } finally {
+    lockPg.close();
+  }
+
+  // Route-level regression for the production incident: the normal empty GET
+  // must serialize [] with 200, never fail while comparing timestamptz to text.
+  const originalDatabaseUrl = process.env["HASNA_MEMENTOS_DATABASE_URL"];
+  process.env["HASNA_MEMENTOS_DATABASE_URL"] = connectionString;
+  markServerContext();
+  resetDatabase();
+  try {
+    const route = matchRoute("GET", "/api/locks");
+    if (!route) fail("GET /api/locks route is not registered");
+    const request = new Request(`http://mementos.test/api/locks?resource_type=memory&resource_id=missing-${probeSuffix}`);
+    const response = await route.handler(request, new URL(request.url), route.params);
+    const body = await response.json();
+    if (response.status !== 200 || !Array.isArray(body) || body.length !== 0) {
+      fail("GET /v1/locks did not return an empty 200 array for an unlocked resource");
+    }
+  } finally {
+    closeDatabase();
+    if (originalDatabaseUrl === undefined) delete process.env["HASNA_MEMENTOS_DATABASE_URL"];
+    else process.env["HASNA_MEMENTOS_DATABASE_URL"] = originalDatabaseUrl;
+  }
+  checks++;
   await pg.run(
     `INSERT INTO memories (id, key, value, category, scope, importance, source, status, agent_id)
      VALUES ($1, $2, $3, 'knowledge', 'private', 5, 'system', 'active', $4)`,
@@ -300,8 +443,90 @@ try {
     racePool.close();
   }
 
+  // 7. Real cross-process concurrency through registerMachineRecord. Every
+  // worker executes the synchronous server code path against its own Postgres
+  // connection. The database unique hostname invariant must collapse all
+  // simultaneous inserts to one stable id without a SELECT-before-INSERT race.
+  await pg.run("DELETE FROM machines WHERE hostname = $1", machineHostname);
+  const workerPath = new URL("./fixtures/pg-machine-register-worker.ts", import.meta.url).pathname;
+  const barrierDir = mkdtempSync(join(tmpdir(), "mementos-pg-machine-barrier-"));
+  const barrierFile = join(barrierDir, "release");
+  const readyFiles = Array.from({ length: 12 }, (_, index) => join(barrierDir, `ready-${index}`));
+  const workers = Array.from({ length: 12 }, (_, index) => Bun.spawn(
+    ["bun", "run", workerPath],
+    {
+      env: {
+        ...(process.env as Record<string, string>),
+        HASNA_MEMENTOS_DATABASE_URL: connectionString,
+        MEMENTOS_PG_MACHINE_HOSTNAME: machineHostname,
+        MEMENTOS_PG_MACHINE_NAME: `concurrent-${index}`,
+        MEMENTOS_PG_MACHINE_READY_FILE: readyFiles[index]!,
+        MEMENTOS_PG_MACHINE_BARRIER_FILE: barrierFile,
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  ));
+  const readyDeadline = Date.now() + 10_000;
+  while (!readyFiles.every(existsSync)) {
+    if (Date.now() >= readyDeadline) fail("machine concurrency workers did not reach the start barrier");
+    await Bun.sleep(10);
+  }
+  writeFileSync(barrierFile, "release", { mode: 0o600 });
+  const receipts = await Promise.all(workers.map(async (worker, index) => {
+    const [exitCode, stdout, stderr] = await Promise.all([
+      worker.exited,
+      new Response(worker.stdout).text(),
+      new Response(worker.stderr).text(),
+    ]);
+    if (exitCode !== 0) {
+      fail(`machine concurrency worker ${index} failed: ${stderr.trim() || "no diagnostic"}`);
+    }
+    try {
+      return JSON.parse(stdout) as { id: string; name: string; hostname: string; created: boolean };
+    } catch {
+      fail(`machine concurrency worker ${index} returned malformed output`);
+    }
+  }));
+  rmSync(barrierDir, { recursive: true, force: true });
+  const stableIds = new Set(receipts.map((receipt) => receipt.id));
+  const persistedNames = new Set(receipts.map((receipt) => receipt.name));
+  if (stableIds.size !== 1 || persistedNames.size !== 1 || receipts.some((receipt) => receipt.hostname !== machineHostname)) {
+    fail("concurrent machine registration did not converge on one stable identity and persisted winner name");
+  }
+  if (receipts.filter((receipt) => receipt.created).length !== 1) {
+    fail("concurrent machine registration did not produce exactly one creator receipt");
+  }
+  const machineRows = await pg.all("SELECT id, hostname FROM machines WHERE hostname = $1", machineHostname);
+  if (machineRows.length !== 1 || machineRows[0]?.id !== receipts[0]?.id) {
+    fail("database hostname invariant did not retain exactly one machine row");
+  }
+  const conflictPg = new PgAdapter(connectionString);
+  const conflictName = `pg-machine-name-${probeSuffix}`;
+  const conflictHosts = [`pg-name-a-${probeSuffix}`, `pg-name-b-${probeSuffix}`];
+  try {
+    registerMachineRecord({ hostname: conflictHosts[0]!, platform: "linux", name: conflictName }, conflictPg as any);
+    let nameConflictRefused = false;
+    try {
+      registerMachineRecord({ hostname: conflictHosts[1]!, platform: "linux", name: conflictName }, conflictPg as any);
+    } catch (error) {
+      nameConflictRefused = error instanceof MachineRegistryError && error.code === "MACHINE_NAME_CONFLICT";
+    }
+    if (!nameConflictRefused) fail("PostgreSQL machine registration did not classify a unique-name conflict");
+  } finally {
+    conflictPg.run("DELETE FROM machines WHERE hostname IN (?, ?)", conflictHosts[0], conflictHosts[1]);
+    conflictPg.close();
+  }
+  const uniqueIndex = await pg.get(
+    `SELECT indexdef FROM pg_indexes WHERE schemaname = current_schema() AND indexname = 'idx_machines_hostname'`,
+  );
+  if (!uniqueIndex || !/CREATE UNIQUE INDEX/i.test(String(uniqueIndex.indexdef))) {
+    fail("machine hostname identity index is not database-enforced as UNIQUE");
+  }
+  checks++;
+
   console.log(
-    `[pg-test-gate] PASS: ${checks} live PostgreSQL checks (schema, round-trip, delete, audit-value-hash, project-resources, stale-response race)`
+    `[pg-test-gate] PASS: ${checks} live PostgreSQL checks (schema, canonical machine constraint, migration refusal/rollback, empty lock read/round-trip, memory round-trip, delete, audit-value-hash, project-resources, stale-response race, concurrent machine identity)`
   );
 } catch (error) {
   fail(error instanceof Error ? error.message : String(error));
@@ -311,6 +536,9 @@ try {
   await pg.run("DELETE FROM memories WHERE id = $1", laterMemoryId).catch(() => {});
   await pg.run("DELETE FROM session_memory_jobs WHERE id = $1", sessionJobId).catch(() => {});
   await pg.run("DELETE FROM projects WHERE id = $1", projectId).catch(() => {});
+  await pg.run("DELETE FROM machines WHERE id = $1", invalidMachineId).catch(() => {});
+  await pg.run("UPDATE machines SET is_primary = FALSE WHERE hostname = $1", machineHostname).catch(() => {});
+  await pg.run("DELETE FROM machines WHERE hostname = $1", machineHostname).catch(() => {});
   await pg.run("DELETE FROM agents WHERE id = $1", agentId).catch(() => {});
   await pg.close();
 }
