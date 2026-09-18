@@ -41,7 +41,8 @@ test("ECS provider KMS selects container task-role credentials even when general
 test("real SDK signs provider KMS with ECS metadata and does not fall back after metadata failure",()=>{
  const home=mkdtempSync(join(tmpdir(),"emails-kms-credentials-"));
  try{
-  const child=spawnSync(process.execPath,[fileURLToPath(new URL("./provider-root-kms.credentials.fixture.mjs",import.meta.url))],{
+  const child=spawnSync(process.execPath,["--no-env-file","--no-install",fileURLToPath(new URL("./provider-root-kms.credentials.fixture.mjs",import.meta.url))],{
+   cwd:home,
    env:{PATH:process.env.PATH??"",HOME:home,TMPDIR:home,NO_COLOR:"1"},
    encoding:"utf8",timeout:15000,maxBuffer:32*1024,
   });
