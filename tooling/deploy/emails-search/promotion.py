@@ -18,6 +18,8 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import shutil
+import tempfile
 import time
 import tarfile
 import time
@@ -41,6 +43,75 @@ OCI_LAYER = "application/vnd.oci.image.layer.v1.tar+gzip"
 READ_ONLY_TASK_FIELDS = {"taskDefinitionArn", "revision", "status", "requiresAttributes", "compatibilities", "registeredAt", "registeredBy", "deregisteredAt"}
 TASK_FIELDS = {"family", "taskRoleArn", "executionRoleArn", "networkMode", "containerDefinitions", "volumes", "placementConstraints", "requiresCompatibilities", "cpu", "memory", "tags", "pidMode", "ipcMode", "proxyConfiguration", "inferenceAccelerators", "ephemeralStorage", "runtimePlatform", "enableFaultInjection"}
 ROOT = Path(__file__).resolve().parent
+
+_spec = importlib.util.spec_from_file_location("emails_overlay_recipes", ROOT / "recipes.py")
+recipes = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(recipes)
+IDENTITY = recipes.select()
+
+
+def select_recipe(name):
+    # Called exactly once by the CLI, before any cloud authority is exercised.
+    global IDENTITY, BASE, BASE_CONFIG, PATHS
+    IDENTITY = recipes.select(name)
+    BASE, BASE_CONFIG, PATHS = IDENTITY["base"], IDENTITY["config"], IDENTITY["paths"]
+
+
+def purpose_fields():
+    return {} if IDENTITY["name"] == recipes.SEARCH else {"purpose": IDENTITY["name"]}
+
+
+def recipe_path():
+    return ROOT / IDENTITY["file"]
+
+
+def migration_module():
+    spec = importlib.util.spec_from_file_location("emails_overlay_migration", ROOT.parent / "emails-current" / "migration_admission.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def migration_equality(candidate_digest):
+    # Authenticate actual registry manifests, every layer and parser-bound input.
+    # No import/evaluation of image code and no mutation or secret APIs.
+    from types import SimpleNamespace
+    cache = {}
+    def cached_blob(descriptor):
+        key = (descriptor["digest"], descriptor["size"])
+        if key not in cache:
+            cache[key] = blob(descriptor)
+        return cache[key]
+    transport = SimpleNamespace(aws=aws, blob=cached_blob, sha=sha, digest=digest, encode=encode, REPO=REPO)
+    return migration_module().admit(BASE, candidate_digest, transport)
+
+
+def delivery_readiness():
+    spec = importlib.util.spec_from_file_location("emails_delivery_public", ROOT.parent / "emails-current" / "public_proof.py")
+    public = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(public)
+    version, ready = public.get("/version"), public.get("/ready")
+    require(version == {"status": "ok", "version": "1.4.10", "mode": "self_hosted", "name": "emails"}, "DELIVERY_PUBLIC_VERSION")
+    require(ready.get("status") == "ready" and ready.get("version") == "1.4.10" and ready.get("mode") == "self_hosted"
+            and ready.get("pendingMigrations") == [] and ready.get("migrationIssues") == [], "DELIVERY_PUBLIC_SCHEMA_READY")
+    return {"version": "1.4.10", "ready": True, "pendingMigrations": 0, "migrationIssues": 0}
+
+
+def delivery_live_proof(selected, image_digest, desired):
+    service = current_service()
+    require(service_binding(service) == selected and service["desiredCount"] == desired, "DELIVERY_LIVE_SERVICE")
+    service_digest = reconciliation_service_digest(service)
+    first, first_digest = running_task_snapshot({selected})
+    require(len(first) == desired and all(
+        row["taskDefinition"] == selected and row["lastStatus"] == "RUNNING"
+        and row["healthStatus"] == "HEALTHY" and row["imageDigest"] == image_digest
+        for row in first), "DELIVERY_LIVE_TASKS")
+    ready = delivery_readiness()
+    require(reconciliation_service_digest(current_service()) == service_digest, "DELIVERY_LIVE_RACE")
+    second, second_digest = running_task_snapshot({selected})
+    require(first_digest == second_digest and same_json(first, second), "DELIVERY_LIVE_RACE")
+    require(reconciliation_service_digest(current_service()) == service_digest, "DELIVERY_LIVE_RACE")
+    return {"taskDefinition": selected, "imageDigest": image_digest, "runningTasks": first, "publicReady": ready}
 
 
 def require(ok, reason):
@@ -66,6 +137,9 @@ def sha(value):
 
 
 def save(path, value):
+    if IDENTITY["name"] == recipes.DELIVERY:
+        require(isinstance(value, dict) and value.get("purpose", recipes.DELIVERY) == recipes.DELIVERY, "RECEIPT_PURPOSE")
+        value = {**value, **purpose_fields()}
     data = encode(value) + b"\n"
     with path.open("xb") as f:
         os.chmod(path, 0o600)
@@ -142,19 +216,24 @@ def blob(descriptor):
 
 
 def recipe():
-    value = json.loads((ROOT / "recipe.json").read_bytes())
-    require(value.get("schema") == "emails.source-overlay-recipe.v1" and value["baseImageDigest"] == BASE, "RECIPE_BASE")
+    value = json.loads(recipe_path().read_bytes())
+    require(value.get("schema") == IDENTITY["schema"] and value["baseImageDigest"] == BASE, "RECIPE_BASE")
+    require(value.get("purpose") == (None if IDENTITY["name"] == recipes.SEARCH else IDENTITY["name"]), "RECIPE_PURPOSE")
+    if IDENTITY["name"] == recipes.DELIVERY:
+        require(value.get("baseConfigDigest") == BASE_CONFIG and value.get("packageVersionPreserved") == "1.4.10", "RECIPE_BASE_CONFIG")
+        require(all(value.get(key) is False for key in ("dependenciesChanged", "migrationsChanged", "entrypointChanged", "fullProducerEquivalenceClaimed")), "RECIPE_COMPATIBILITY")
     require(len(value["files"]) == 3 and {r["path"] for r in value["files"]} == set(PATHS), "RECIPE_SCOPE")
-    require(all((r["uid"], r["gid"], r["mode"]) == (0, 0, 0o644) for r in value["files"]), "RECIPE_OWNERSHIP")
-    require(value["patchFile"] == "search-capacity.patch", "RECIPE_PATCH")
+    require(all((r["uid"], r["gid"], r["mode"]) == IDENTITY["metadata"][r["path"]] for r in value["files"]), "RECIPE_OWNERSHIP")
+    require(value["patchFile"] == IDENTITY["patch"], "RECIPE_PATCH")
     require(hashlib.sha256((ROOT / value["patchFile"]).read_bytes()).hexdigest() == value["patchSha256"], "PATCH_DRIFT")
     return value
 
 
-def active_preimages(manifest, config, fetch=blob):
+def active_preimages(manifest, config, fetch=blob, paths=None):
+    paths = PATHS if paths is None else paths
     require(1 <= len(manifest["layers"]) <= 32 and len(manifest["layers"]) == len(config["rootfs"]["diff_ids"]), "LAYER_COUNT")
-    ancestors = {str(p) for n in PATHS for p in Path(n).parents if str(p) != "."}
-    relevant = set(PATHS) | ancestors
+    ancestors = {str(p) for n in paths for p in Path(n).parents if str(p) != "."}
+    relevant = set(paths) | ancestors
     state = {}
     total = 0
     for index, desc in enumerate(manifest["layers"]):
@@ -190,8 +269,30 @@ def active_preimages(manifest, config, fetch=blob):
         for name in removed:
             state.pop(name, None)
         state.update(additions)
-    require(ancestors <= state.keys() and set(PATHS) <= state.keys(), "MISSING_IMAGE_SOURCE")
-    return {p: state[p] for p in PATHS}
+    require(ancestors <= state.keys() and set(paths) <= state.keys(), "MISSING_IMAGE_SOURCE")
+    return {p: state[p] for p in paths}
+
+
+def delivery_runtime_checks(preimages, files):
+    """Exercise authenticated route/provider source with synthetic boundaries."""
+    helper = "app/src/lib/reply-headers.ts"
+    raw, uid, gid, mode = preimages[helper]
+    require((hashlib.sha256(raw).hexdigest(), uid, gid, mode) == (
+        "96c4abb0079d659ac8d49926986b63b15e7bd602a62fad5c9e3018aac0e44a24", 0, 0, 0o664), "REPLY_HELPER_DRIFT")
+    bun = shutil.which("bun")
+    require(bun is not None, "DELIVERY_TEST_RUNTIME_REQUIRED")
+    with tempfile.TemporaryDirectory(prefix="emails-delivery-source-") as directory:
+        root = Path(directory)
+        for test_mode in ("baseline", "patched"):
+            for path in (*PATHS, helper):
+                target = root / path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(files[path] if test_mode == "patched" and path in files else preimages[path][0])
+            result = subprocess.run([bun, "--no-env-file", str(ROOT / "delivery_runtime_test.ts"),
+                                     "--source-root", directory, "--mode", test_mode],
+                                    capture_output=True, cwd=directory, timeout=60,
+                                    env={"PATH": str(Path(bun).parent)})
+            require(result.returncode == 0, "DELIVERY_RUNTIME_TEST_REFUSED")
 
 
 def make_layer(files):
@@ -202,7 +303,7 @@ def make_layer(files):
             data = files[path]
             require(isinstance(data, bytes) and len(data) <= 4 * 1024 * 1024, "OVERLAY_FILE_LIMIT")
             member = tarfile.TarInfo(path)
-            member.size, member.uid, member.gid, member.mode, member.mtime = len(data), 0, 0, 0o644, 0
+            member.size, member.uid, member.gid, member.mode, member.mtime = len(data), *IDENTITY["metadata"][path], 0
             tar.addfile(member, io.BytesIO(data))
     data = out.getvalue()
     compressed = io.BytesIO()
@@ -215,7 +316,7 @@ def append_overlay(manifest, config, layer, diff_id, source):
     require(re.fullmatch(r"[0-9a-f]{40}", source), "SOURCE_COMMIT")
     updated = copy.deepcopy(config)
     updated["rootfs"]["diff_ids"].append(sha(diff_id))
-    updated.setdefault("history", []).append({"created_by": "hasna/apps reviewed Emails search overlay " + source})
+    updated.setdefault("history", []).append({"created_by": "hasna/apps reviewed Emails " + IDENTITY["history"] + " overlay " + source})
     config_bytes = encode(updated)
     result = copy.deepcopy(manifest)
     result["config"] = {"mediaType": OCI_CONFIG, "digest": digest(config_bytes), "size": len(config_bytes)}
@@ -233,16 +334,38 @@ def build(source):
     require(manifest["config"]["digest"] == BASE_CONFIG and manifest["config"]["mediaType"] == OCI_CONFIG, "BASE_CONFIG_DRIFT")
     config = json.loads(blob(manifest["config"]))
     require(config["architecture"] == "amd64" and config["os"] == "linux" and config["rootfs"]["type"] == "layers", "BASE_PLATFORM")
-    pre = active_preimages(manifest, config)
+    cache = {}
+    def cached_blob(descriptor):
+        key = (descriptor["digest"], descriptor["size"])
+        if key not in cache:
+            cache[key] = blob(descriptor)
+        return cache[key]
+    read_paths = (*PATHS, "app/src/lib/reply-headers.ts") if IDENTITY["name"] == recipes.DELIVERY else PATHS
+    pre = active_preimages(manifest, config, cached_blob, read_paths)
     for row in rules["files"]:
         data, uid, gid, mode = pre[row["path"]]
         require((len(data), hashlib.sha256(data).hexdigest(), uid, gid, mode) == (row["beforeBytes"], row["beforeSha256"], row["uid"], row["gid"], row["mode"]), "PREIMAGE_DRIFT")
-    files = apply_reviewed_patch(rules, (ROOT / "search-capacity.patch").read_bytes(), {p: pre[p][0] for p in PATHS})
+    files = apply_reviewed_patch(rules, (ROOT / IDENTITY["patch"]).read_bytes(), {p: pre[p][0] for p in PATHS}, IDENTITY["name"])
     for row in rules["files"]:
         require(len(files[row["path"]]) == row["afterBytes"] and hashlib.sha256(files[row["path"]]).hexdigest() == row["afterSha256"], "POSTIMAGE_DRIFT")
     layer, diff_id = make_layer(files)
     result, config_bytes = append_overlay(manifest, config, layer, diff_id, source)
-    receipt = {"baseImageDigest": BASE, "baseConfigDigest": BASE_CONFIG, "imageDigest": digest(encode(result)), "configDigest": digest(config_bytes), "layerDigest": digest(layer), "layerDiffId": diff_id, "baseLayers": manifest["layers"], "files": rules["files"], "runtimeConfigurationPreserved": True, "baseLayersPreserved": True, "imageExecuted": False, "dependencyInstallation": False}
+    receipt = {**purpose_fields(), "baseImageDigest": BASE, "baseConfigDigest": BASE_CONFIG, "imageDigest": digest(encode(result)), "configDigest": digest(config_bytes), "layerDigest": digest(layer), "layerDiffId": diff_id, "baseLayers": manifest["layers"], "files": rules["files"], "runtimeConfigurationPreserved": True, "baseLayersPreserved": True, "imageExecuted": False, "dependencyInstallation": False}
+    if IDENTITY["name"] == recipes.DELIVERY:
+        delivery_runtime_checks(pre, files)
+        # Before any upload, inspect the reconstructed OCI candidate as well as
+        # its authenticated parent. The registry copy is inspected again after
+        # preparation and before promotion/rollback/reconciliation.
+        from types import SimpleNamespace
+        cache[(digest(layer), len(layer))] = layer
+        transport = SimpleNamespace(blob=cached_blob, sha=sha, digest=digest)
+        migration = migration_module()
+        before = migration.active_inputs(manifest, config, transport)
+        after = migration.active_inputs(result, json.loads(config_bytes), transport)
+        migration.validate_routing(before)
+        migration.validate_routing(after)
+        require(before == after, "MIGRATION_DEFINITION_DRIFT")
+        receipt["migrationInputsDigest"] = digest(encode({name: digest(raw) for name, raw in before.items()}))
     return result, config_bytes, layer, receipt
 
 
@@ -261,11 +384,12 @@ def task_candidate(task, image_digest):
     require(len({r["name"] for r in rows}) == len(rows), "DUPLICATE_ENVIRONMENT")
     env = {r["name"]: r["value"] for r in rows}
     require(env.get("EMAILS_MODE") == "self_hosted", "EMAILS_MODE")
-    owned = "EMAILS_SEARCH_CONCURRENCY"
-    require(not any(r.get("name") in {owned, "EMAILS_PG_POOL_MAX", "EMAILS_MODE"} for r in web.get("secrets", [])), "RUNTIME_SECRET_CONFLICT")
-    pool = env.get("EMAILS_PG_POOL_MAX", "10")
-    require(re.fullmatch(r"[1-9][0-9]*", pool) and 9 <= int(pool) <= 1000, "POOL_CAPACITY")
-    web["environment"] = [r for r in rows if r["name"] != owned] + [{"name": owned, "value": "8"}]
+    if IDENTITY["name"] == recipes.SEARCH:
+        owned = "EMAILS_SEARCH_CONCURRENCY"
+        require(not any(r.get("name") in {owned, "EMAILS_PG_POOL_MAX", "EMAILS_MODE"} for r in web.get("secrets", [])), "RUNTIME_SECRET_CONFLICT")
+        pool = env.get("EMAILS_PG_POOL_MAX", "10")
+        require(re.fullmatch(r"[1-9][0-9]*", pool) and 9 <= int(pool) <= 1000, "POOL_CAPACITY")
+        web["environment"] = [r for r in rows if r["name"] != owned] + [{"name": owned, "value": "8"}]
     web["image"] = REPOSITORY + "@" + image_digest
     return result
 
@@ -330,10 +454,16 @@ def prepare(source, out):
     task_candidate(before, BASE)
     manifest, cfg, layer, image_receipt = build(source)
     candidate = task_candidate(before, image_receipt["imageDigest"])
+    if IDENTITY["name"] == recipes.DELIVERY:
+        delivery_live_proof(before_arn, BASE, service["desiredCount"])
     before_hash = digest(encode(before))
     require(service_binding(current_service()) == before_arn and digest(encode(task_read(before_arn))) == before_hash, "PREPARE_RUNTIME_DRIFT")
-    tag = "search-capacity-" + source
-    intent = {"schema": "emails.promotion-prepared.v1", "sourceCommit": source, "recipeSha256": hashlib.sha256((ROOT / "recipe.json").read_bytes()).hexdigest(), "taskDefinitionBefore": before_arn, "taskBeforeDigest": before_hash, "taskAfterDigest": digest(encode(candidate)), "desiredCount": service["desiredCount"], "image": image_receipt, "tag": tag}
+    tag = IDENTITY["name"] + "-" + source
+    intent = {**purpose_fields(), "schema": IDENTITY["preparedSchema"], "sourceCommit": source, "recipeSha256": hashlib.sha256(recipe_path().read_bytes()).hexdigest(), "taskDefinitionBefore": before_arn, "taskBeforeDigest": before_hash, "taskAfterDigest": digest(encode(candidate)), "desiredCount": service["desiredCount"], "image": image_receipt, "tag": tag}
+    if IDENTITY["name"] == recipes.DELIVERY:
+        run_id = os.environ.get("GITHUB_RUN_ID", "")
+        require(re.fullmatch(r"[1-9][0-9]{0,19}", run_id), "PREPARATION_RUN_ID")
+        intent["producerRunId"] = run_id
     save(out / "prepare-intent.json", intent)
     upload_blob(layer, out / "layer-private.bin")
     upload_blob(cfg, out / "config-private.bin")
@@ -346,6 +476,8 @@ def prepare(source, out):
         put = aws("ecr", "put-image", body={"repositoryName": REPO, "imageTag": tag, "imageManifest": encode(manifest).decode(), "imageManifestMediaType": OCI_MANIFEST})
         require(put["image"]["imageId"]["imageDigest"] == image_receipt["imageDigest"], "PUT_IMAGE_DIGEST_DRIFT")
     require(image_manifest(image_receipt["imageDigest"]) == manifest, "PUSH_READBACK_DRIFT")
+    if IDENTITY["name"] == recipes.DELIVERY:
+        intent["migrationAdmission"] = migration_equality(image_receipt["imageDigest"])
     plan_hash = save(out / "prepared.json", intent)
     save(out / "summary.json", {"phase": "prepared", "preparedSha256": plan_hash, "imageDigest": image_receipt["imageDigest"], "runtimeChanged": False})
 
@@ -354,11 +486,14 @@ def reviewed_plan(source, prepared, expected_hash):
     raw = prepared.read_bytes()
     require(re.fullmatch(r"[0-9a-f]{64}", expected_hash) and hashlib.sha256(raw).hexdigest() == expected_hash and len(raw) < 65536, "PREPARED_DIGEST")
     plan = json.loads(raw)
-    require(plan["schema"] == "emails.promotion-prepared.v1" and plan["sourceCommit"] == source and plan["recipeSha256"] == hashlib.sha256((ROOT / "recipe.json").read_bytes()).hexdigest(), "PREPARED_SOURCE")
+    require(plan["schema"] == IDENTITY["preparedSchema"] and plan["sourceCommit"] == source and plan["recipeSha256"] == hashlib.sha256(recipe_path().read_bytes()).hexdigest(), "PREPARED_SOURCE")
+    require(plan.get("purpose") == (None if IDENTITY["name"] == recipes.SEARCH else IDENTITY["name"]), "PREPARED_PURPOSE")
     # Reconstruct all immutable image bytes from the same reviewed source. A
     # substituted artifact cannot change the admitted source or image config.
     manifest, cfg, layer, image_receipt = build(source)
     require(plan["image"] == image_receipt and image_manifest(image_receipt["imageDigest"]) == manifest, "PREPARED_IMAGE_DRIFT")
+    if IDENTITY["name"] == recipes.DELIVERY:
+        require(plan.get("migrationAdmission") == migration_equality(image_receipt["imageDigest"]), "PREPARED_MIGRATION_DRIFT")
     return plan, image_receipt
 
 
@@ -371,6 +506,8 @@ def promote(source, out, prepared, expected_hash):
     require(digest(encode(before)) == plan["taskBeforeDigest"], "TASK_PLAN_DRIFT")
     candidate = task_candidate(before, image_receipt["imageDigest"])
     require(digest(encode(candidate)) == plan["taskAfterDigest"], "CANDIDATE_PLAN_DRIFT")
+    if IDENTITY["name"] == recipes.DELIVERY:
+        delivery_live_proof(before_arn, BASE, service["desiredCount"])
     save(out / "register-intent.json", {"preparedSha256": expected_hash, "taskBefore": before_arn, "taskCandidateDigest": plan["taskAfterDigest"], "imageDigest": image_receipt["imageDigest"]})
     # ECS describes an untagged task as tags=[], but rejects that field during
     # registration. Preserve the canonical candidate for digest/readback checks.
@@ -400,7 +537,9 @@ def promote(source, out, prepared, expected_hash):
         for task in rows["tasks"]:
             web = [c for c in task.get("containers", []) if c.get("name") == "emails"]
             require(task.get("taskDefinitionArn") == new_arn and task.get("lastStatus") == "RUNNING" and task.get("healthStatus") == "HEALTHY" and len(web) == 1 and web[0].get("imageDigest") == image_receipt["imageDigest"], "LIVE_IMAGE_DRIFT")
-        save(out / "promoted.json", {"preparedSha256": expected_hash, "sourceCommit": source, "taskBefore": before_arn, "taskAfter": new_arn, "imageDigest": image_receipt["imageDigest"], "runningTasks": tasks, "searchConcurrency": 8, "runtimeConfigurationPreserved": True})
+        if IDENTITY["name"] == recipes.DELIVERY:
+            save(out / "public-ready.json", delivery_live_proof(new_arn, image_receipt["imageDigest"], plan["desiredCount"]))
+        save(out / "promoted.json", {"preparedSha256": expected_hash, "sourceCommit": source, "taskBefore": before_arn, "taskAfter": new_arn, "imageDigest": image_receipt["imageDigest"], "runningTasks": tasks, **({"searchConcurrency": 8} if IDENTITY["name"] == recipes.SEARCH else purpose_fields()), "runtimeConfigurationPreserved": True})
     except Exception:
         # A failed waiter/read is uncertainty, not permission for an automatic
         # rollback. Preserve the exact previous revision for a separately
@@ -600,6 +739,48 @@ def reconciliation_service_digest(service):
     return digest(encode(controlled))
 
 
+def reconcile_delivery(source, out, expected_hash, plan, image_receipt, prepared_source):
+    """Only the exact prepared base or exact image-only candidate may be live."""
+    previous = plan["taskDefinitionBefore"]
+    before = task_read(previous)
+    require(before.get("taskDefinitionArn") == previous and before.get("status") == "ACTIVE", "RECONCILE_BASE_IDENTITY")
+    candidate = task_candidate(before, image_receipt["imageDigest"])
+    require(digest(encode(candidate)) == plan["taskAfterDigest"], "RECONCILE_BASE_PAYLOAD_DRIFT")
+    service = current_service()
+    selected = service_binding(service)
+    require(service["desiredCount"] == plan["desiredCount"], "RECONCILE_DESIRED_COUNT")
+    if selected == previous:
+        live_image = BASE
+    else:
+        require(selected.startswith(f"arn:aws:ecs:{REGION}:{ACCOUNT}:task-definition/{SERVICE}:"), "RECONCILE_FOREIGN_TASK")
+        actual = task_read(selected)
+        require(actual.get("taskDefinitionArn") == selected and actual.get("status") == "ACTIVE" and same_json(task_payload(actual), candidate), "RECONCILE_CANDIDATE_DRIFT")
+        live_image = image_receipt["imageDigest"]
+    service_digest = reconciliation_service_digest(service)
+    tasks, tasks_digest = running_task_snapshot({selected})
+    require(len(tasks) == service["desiredCount"] and all(
+        row["taskDefinition"] == selected and row["lastStatus"] == "RUNNING"
+        and row["healthStatus"] == "HEALTHY" and row["imageDigest"] == live_image
+        for row in tasks), "RECONCILE_RUNNING_TASKS")
+    require(reconciliation_service_digest(current_service()) == service_digest, "RECONCILE_SERVICE_RACE")
+    ready = delivery_readiness()
+    require(reconciliation_service_digest(current_service()) == service_digest, "RECONCILE_SERVICE_RACE")
+    repeated, repeated_digest = running_task_snapshot({selected})
+    require(tasks_digest == repeated_digest and same_json(tasks, repeated), "RECONCILE_RUNNING_TASK_RACE")
+    require(reconciliation_service_digest(current_service()) == service_digest, "RECONCILE_SERVICE_RACE")
+    save(out / "reconciled.json", {
+        "schema": "emails.delivery-reconciliation.v1", "sourceCommit": source,
+        "preparedSourceCommit": prepared_source, "producerRunId": plan["producerRunId"],
+        "preparedSha256": expected_hash, "recipeSha256": plan["recipeSha256"],
+        "taskBefore": previous, "taskCandidateDigest": plan["taskAfterDigest"],
+        "service": {"taskDefinition": selected, "desiredCount": service["desiredCount"],
+                    "imageDigest": live_image, "runningTasks": tasks, "stable": True, "healthy": True},
+        "publicReady": ready, "state": "base_live_stable" if selected == previous else "candidate_live_stable",
+        "rollback": {"automatic": False, "preMigrationAnchor": previous,
+                     "validAfterForwardMigration": False, "requiresSeparateReview": True},
+    })
+
+
 def reconcile(source, out, prepared, expected_hash):
     """Read-only reconciliation of the exact reviewed 88/89 promotion state.
 
@@ -610,6 +791,8 @@ def reconcile(source, out, prepared, expected_hash):
     current exact-main workflow source.
     """
     plan, image_receipt, prepared_source = historical_reviewed_plan(source, prepared, expected_hash)
+    if IDENTITY["name"] == recipes.DELIVERY:
+        return reconcile_delivery(source, out, expected_hash, plan, image_receipt, prepared_source)
     expected_before = plan["taskDefinitionBefore"]
     require(expected_before.endswith(":88"), "RECONCILE_EXPECTED_TASK_88")
     expected_candidate = expected_before.rsplit(":", 1)[0] + ":89"
@@ -734,23 +917,29 @@ def rollback(source, out, prepared, expected_hash):
     require(current.startswith(f"arn:aws:ecs:{REGION}:{ACCOUNT}:task-definition/{SERVICE}:"), "ROLLBACK_TASK_FAMILY")
     actual = task_read(current)
     require({k: v for k, v in actual.items() if k not in READ_ONLY_TASK_FIELDS} == candidate, "ROLLBACK_FOREIGN_DEPLOYMENT")
+    if IDENTITY["name"] == recipes.DELIVERY:
+        delivery_readiness()
     fresh = current_service()
     require(fresh.get("taskDefinition") == current and fresh.get("desiredCount") == plan["desiredCount"], "ROLLBACK_PRE_UPDATE_DRIFT")
     save(out / "rollback-intent.json", {"preparedSha256": expected_hash, "from": current, "to": before_arn})
     aws("ecs", "update-service", "--cluster", CLUSTER, "--service", SERVICE, "--task-definition", before_arn)
     live = wait_for_service(before_arn, plan["desiredCount"])
     require(service_binding(live) == before_arn and live["desiredCount"] == plan["desiredCount"], "ROLLBACK_LIVE_DRIFT")
+    if IDENTITY["name"] == recipes.DELIVERY:
+        save(out / "public-ready.json", delivery_live_proof(before_arn, BASE, plan["desiredCount"]))
     save(out / "rolled-back.json", {"preparedSha256": expected_hash, "taskBefore": current, "taskAfter": before_arn, "newRegistrations": 0, "deregisteredTasks": 0})
 
 
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("phase", choices=["prepare", "reconcile", "promote", "rollback"])
+    p.add_argument("--recipe", choices=recipes.NAMES, default=recipes.SEARCH)
     p.add_argument("--source", required=True)
     p.add_argument("--out", type=Path, required=True)
     p.add_argument("--prepared", type=Path)
     p.add_argument("--prepared-sha256")
     args = p.parse_args()
+    select_recipe(args.recipe)
     require(re.fullmatch(r"[0-9a-f]{40}", args.source), "SOURCE_COMMIT")
     require(aws("sts", "get-caller-identity")["Account"] == ACCOUNT, "AWS_ACCOUNT")
     os.umask(0o077)

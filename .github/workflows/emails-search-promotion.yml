@@ -6,6 +6,11 @@ name: emails-search-promotion
 on:
   workflow_dispatch:
     inputs:
+      recipe:
+        type: choice
+        options: [search-capacity, delivery-headers]
+        default: search-capacity
+        required: true
       phase:
         type: choice
         options: [prepare, reconcile, promote, rollback]
@@ -42,9 +47,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PHASE: ${{ inputs.phase }}
+          RECIPE: ${{ inputs.recipe }}
           PREPARED_RUN: ${{ inputs.prepared_run_id }}
           PREPARED_SHA: ${{ inputs.prepared_sha256 }}
-        run: python3 -I -B tooling/deploy/emails-search/gate.py --source "$GITHUB_SHA" --phase "$PHASE" --run "$PREPARED_RUN" --prepared-sha256 "$PREPARED_SHA"
+        run: python3 -I -B tooling/deploy/emails-search/gate.py --recipe "$RECIPE" --source "$GITHUB_SHA" --phase "$PHASE" --run "$PREPARED_RUN" --prepared-sha256 "$PREPARED_SHA"
   execute:
     needs: gate
     permissions:
@@ -53,6 +59,7 @@ jobs:
       id-token: write
     uses: ./.github/workflows/emails-search-promotion-execute.yml
     with:
+      recipe: ${{ inputs.recipe }}
       phase: ${{ inputs.phase }}
       source: ${{ github.sha }}
       prepared_run_id: ${{ inputs.prepared_run_id }}

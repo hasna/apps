@@ -14,6 +14,11 @@ test("Emails AWS JSON transport verifies sealed descriptors and local CLI parsin
   expect(result.exitCode).toBe(0);
   expect(result.stderr.toString()).toContain("Ran 13 tests");
 }, 35_000);
+test("Emails delivery recipe refuses mixed purposes and preserves image-only task changes", () => {
+  const result = Bun.spawnSync(["python3", "-I", "-B", "tooling/deploy/emails-search/delivery_test.py"], { cwd: root, timeout: 30_000 });
+  expect(result.exitCode).toBe(0);
+  expect(result.stderr.toString()).toContain("OK");
+});
 test("Emails authority is only behind explicit main CI and production review", () => {
   const caller = asMap(parseYaml(readFileSync(resolve(root, ".github/workflows/emails-search-promotion.yml"), "utf8")));
   const execute = asMap(parseYaml(readFileSync(resolve(root, ".github/workflows/emails-search-promotion-execute.yml"), "utf8")));
@@ -38,4 +43,14 @@ test("Emails authority is only behind explicit main CI and production review", (
   expect(asMap(asMap(caller.on).workflow_dispatch).inputs).toBeDefined();
   expect(readFileSync(resolve(root, ".github/workflows/emails-search-promotion.yml"), "utf8")).toContain("options: [prepare, reconcile, promote, rollback]");
   expect(readFileSync(resolve(root, ".github/workflows/emails-search-promotion-execute.yml"), "utf8")).toContain("emails-search-reconciled");
+  const inputs = asMap(asMap(asMap(caller.on).workflow_dispatch).inputs);
+  expect(asMap(inputs.recipe).options).toEqual(["search-capacity", "delivery-headers"]);
+  expect(asMap(inputs.recipe).default).toBe("search-capacity");
+  expect(asMap(asMap(asMap(execute.on).workflow_call).inputs).recipe).toEqual({ type: "string", required: "false", default: "search-capacity" });
+  expect(String(steps.find(s => String(s.run).includes("promotion.py"))?.run)).toContain('--recipe "$RECIPE"');
+  const checks = steps.findIndex(s => String(s.run).includes("delivery_test.py"));
+  expect(checks).toBeGreaterThanOrEqual(0);
+  expect(checks).toBeLessThan(aws);
+  expect(String(steps.find(s => String(s.run).includes("emails-current/gate.py"))?.run)).toContain('test "$RECIPE" = "search-capacity"');
+  expect(String(steps.find(s => String(s.run).includes("emails-migration/gate.py"))?.run)).toContain('test "$RECIPE" = "search-capacity"');
 });
