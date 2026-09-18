@@ -891,7 +891,7 @@ describe("self-hosted parity: mailbox-filter actions, enabled/order and mutate a
     expect(index.checksum).toBe("sha256:8a4993106ae807beee656330992745a668395a973a155283f3cda44590f5c710");
   });
 
-  test("0043 inbound message-identity column appends last: a stored key the RLS role can use", () => {
+  test("0043 inbound message-identity column retains its stored RLS key before 0044", () => {
     const migrations = emailsSelfHostedMigrations();
     const ids = migrations.map((m) => m.id);
     // BUG-0050 third verification: the lookup must compare a plain stored column with
@@ -901,8 +901,11 @@ describe("self-hosted parity: mailbox-filter actions, enabled/order and mutate a
     // `proleakproof = f`), so it Seq Scans on every ingest. Same repair as 0019's
     // sort_ts. The NULLIF is load-bearing: mail with no Message-ID keys NULL and can
     // never match another such row.
-    expect(ids.at(-1)).toBe("0043_inbound_message_identity_column");
-    const column = migrations.at(-1)!;
+    expect(ids.indexOf("0044_message_provider_provenance_tenant_backfill")).toBe(
+      ids.indexOf("0043_inbound_message_identity_column") + 1,
+    );
+    expect(ids.at(-1)).toBe("0044_message_provider_provenance_tenant_backfill");
+    const column = migrations[ids.indexOf("0043_inbound_message_identity_column")]!;
     expect(column.sql).toContain("ADD COLUMN IF NOT EXISTS rfc_message_id text");
     expect(column.sql).toContain(
       "GENERATED ALWAYS AS (NULLIF(lower(btrim(COALESCE(headers->>'message-id', ''), '<>')), '')) STORED",
