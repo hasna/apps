@@ -15,10 +15,9 @@
 FROM --platform=linux/arm64 oven/bun:1.3.14-alpine AS build
 WORKDIR /app
 
-# Install dependencies first (better layer caching). The repo does not commit a
-# lockfile (*.lock is gitignored), so resolve from package.json.
-COPY package.json ./
-RUN bun install
+# Install the reviewed package lock without resolving newer dependencies.
+COPY package.json bun.lock ./
+RUN bun install --frozen-lockfile
 
 # Build the CLI, MCP, serve bins + dist (also regenerates the OpenAPI SDK).
 COPY . .
@@ -33,7 +32,7 @@ WORKDIR /app
 # verification enabled; without the RDS root in the trust store, the
 # migrate/serve handshake fails with 'self signed certificate in certificate
 # chain' — see O15-00668).
-COPY docker/rds-global-bundle.pem /etc/ssl/certs/rds-global-bundle.pem
+COPY --chmod=0644 docker/rds-global-bundle.pem /etc/ssl/certs/rds-global-bundle.pem
 ENV NODE_ENV=production \
     PORT=8080 \
     NODE_EXTRA_CA_CERTS=/etc/ssl/certs/rds-global-bundle.pem \
@@ -47,6 +46,10 @@ COPY --from=build /app/dist ./dist
 COPY --from=build /app/src ./src
 COPY --from=build /app/scripts ./scripts
 COPY --from=build /app/package.json ./package.json
+
+# Keep code root-owned while allowing the non-root runtime to read archives
+# created under an owner-only workstation umask.
+RUN chmod -R a+rX /app
 
 # Drop privileges (the bun base image ships a non-root `bun` user).
 USER bun
