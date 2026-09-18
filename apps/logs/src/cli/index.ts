@@ -2,6 +2,14 @@
 import { readFileSync } from "node:fs";
 import { registerEventsCommands } from "@hasna/events/commander";
 import { Command } from "commander";
+import {
+  DEFAULT_COMPACT_LOG_MAX_BYTES,
+  DEFAULT_LOG_LIST_LIMIT,
+  buildCompactLogOutput,
+  parseCompactLogMaxBytes,
+  parseLogListLimit,
+  parseLogListOffset,
+} from "../lib/compact-output.ts";
 import { statsWindowDays } from "../lib/count.ts";
 import { streamServerEvents } from "../lib/event-stream-client.ts";
 import type { CliEventWatchFilter } from "../lib/event-watch.ts";
@@ -184,10 +192,23 @@ program
     "Until timestamp or relative (e.g. logs list --since 2h --until 1h)",
   )
   .option("--text <query>", "Full-text search")
-  .option("--limit <n>", "Max results", "100")
-  .option("--format <fmt>", "Output format: table|json|compact", "table")
+  .option("--limit <n>", "Max results", String(DEFAULT_LOG_LIST_LIMIT))
+  .option("--offset <n>", "Skip results before listing", "0")
+  .option(
+    "--max-bytes <n>",
+    "Compact output byte ceiling",
+    String(DEFAULT_COMPACT_LOG_MAX_BYTES),
+  )
+  .option("--format <fmt>", "Output format: compact|table|json", "compact")
   .option("--json", "Output as JSON (alias for --format json)")
   .action(async (opts) => {
+    const format = opts.json ? "json" : String(opts.format);
+    if (!new Set(["compact", "table", "json"]).has(format)) {
+      throw new Error('--format must be "compact", "table", or "json"');
+    }
+    const limit = parseLogListLimit(opts.limit);
+    const offset = parseLogListOffset(opts.offset);
+    const compact = format === "compact";
     const rows = await getStore().listLogs({
       project_id: await getStore().resolveProjectId(opts.project),
       page_id: opts.page,
@@ -196,17 +217,20 @@ program
       since: parseRelativeTime(opts.since),
       until: parseRelativeTime(opts.until),
       text: opts.text,
-      limit: Number(opts.limit),
+      limit: compact ? limit + 1 : limit,
+      offset,
     });
-    if (opts.json || opts.format === "json") {
+    if (format === "json") {
       console.log(JSON.stringify(rows, null, 2));
       return;
     }
-    if (opts.format === "compact") {
-      for (const r of rows)
-        console.log(
-          `${r.timestamp} [${r.level.toUpperCase()}] ${r.service ?? "-"} ${r.message}`,
-        );
+    if (compact) {
+      const output = buildCompactLogOutput(rows, {
+        limit,
+        offset,
+        maxBytes: parseCompactLogMaxBytes(opts.maxBytes),
+      });
+      process.stdout.write(output.text);
       return;
     }
     for (const r of rows) {

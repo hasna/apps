@@ -195,22 +195,56 @@ export class ApiStore implements Store {
     if (query.text) q.q = query.text;
     if (query.since) q.since = query.since;
     if (query.until) q.until = query.until;
-    if (query.limit !== undefined) q.limit = query.limit;
-    if (query.offset !== undefined) q.offset = query.offset;
-    const levels = levelsOf(query.level);
+    const levels = [...new Set(levelsOf(query.level))];
     if (levels.length === 1) q.level = levels[0];
-    const res = await this.client.list<Record<string, unknown>>(LOGS, {
-      query: q,
-    });
-    const raw = res.raw as { logs?: unknown[] } | null;
-    const list = raw?.logs;
-    const arr = Array.isArray(list) ? list : res.items;
-    let rows = (arr as Record<string, unknown>[]).map(toLogRow);
-    if (levels.length > 1) {
-      const set = new Set(levels);
-      rows = rows.filter((r) => set.has(r.level));
+
+    const readPage = async (
+      limit: number,
+      offset: number,
+    ): Promise<LogRow[]> => {
+      const res = await this.client.list<Record<string, unknown>>(LOGS, {
+        query: { ...q, limit, offset },
+      });
+      const raw = res.raw as { logs?: unknown[] } | null;
+      const list = raw?.logs;
+      const arr = Array.isArray(list) ? list : res.items;
+      return (arr as Record<string, unknown>[]).map(toLogRow);
+    };
+
+    const requestedLimit = Number.isFinite(query.limit)
+      ? Math.min(Math.max(Math.floor(query.limit!), 1), 1000)
+      : 100;
+    const requestedOffset = Math.max(
+      0,
+      Math.floor(Number.isFinite(query.offset) ? query.offset! : 0),
+    );
+    if (levels.length <= 1) {
+      return readPage(requestedLimit, requestedOffset);
     }
-    return rows;
+
+    // Older hosted producers accept only one level. Scan bounded server pages
+    // and apply the union before the caller's matching-row offset/limit so a
+    // page never becomes sparse or reports a false continuation.
+    const wanted = new Set(levels);
+    const matches: LogRow[] = [];
+    const pageSize = 1000;
+    const maxPages = 500;
+    let serverOffset = 0;
+    let matchingOffset = 0;
+    for (let page = 0; page < maxPages; page += 1) {
+      const rows = await readPage(pageSize, serverOffset);
+      for (const row of rows) {
+        if (!wanted.has(row.level)) continue;
+        if (matchingOffset < requestedOffset) matchingOffset += 1;
+        else matches.push(row);
+        if (matches.length >= requestedLimit) return matches;
+      }
+      serverOffset += rows.length;
+      if (rows.length < pageSize) return matches;
+    }
+    throw new Error(
+      `Hosted multi-level log scan exceeded ${maxPages} pages before producing a truthful result; narrow the filters or offset.`,
+    );
   }
 
   async tailLogs(projectId: string | undefined, n: number): Promise<LogRow[]> {
