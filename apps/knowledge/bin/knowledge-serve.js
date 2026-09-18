@@ -1918,16 +1918,8 @@ function knowledgeRegistryContract(input) {
   };
 }
 
-// src/store.ts
-var SLEEP_BUFFER = new Int32Array(new SharedArrayBuffer(4));
-var heldLockPaths = new Set;
-var LOCK_CONTENTION_CODES = new Set(["EEXIST", "EPERM", "EBUSY"]);
-function makeId() {
-  return `k_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-}
-function makeShortId(id) {
-  return id.replace(/^k_/, "").slice(0, 12);
-}
+// src/guarded-review.ts
+import { createHmac, randomUUID as randomUUID2, timingSafeEqual } from "crypto";
 
 // src/guarded-write-contract.ts
 import { createHash as createHash2, randomUUID } from "crypto";
@@ -1935,6 +1927,7 @@ var KNOWLEDGE_GUARDED_WRITE_CONTRACT = "FCAME-1";
 var KNOWLEDGE_PRIVATE_INPUT_SCHEMA = "hasna.knowledge.private-input.v1";
 var KNOWLEDGE_PRIVATE_TITLE_LOOKUP_SCHEMA = "hasna.knowledge.private-title-lookup.v1";
 var KNOWLEDGE_PRIVATE_QUERY_SCHEMA = "hasna.knowledge.private-query.v1";
+var KNOWLEDGE_PRIVATE_EDIT_APPROVAL_SCHEMA = "hasna.knowledge.private-edit-approval.v1";
 var KNOWLEDGE_RELATIONS_SCHEMA = "hasna.knowledge.relations.v1";
 var KNOWLEDGE_RELATIONS_METADATA_KEY = "hasna_knowledge_relations";
 var DEFAULT_KNOWLEDGE_GUARDED_LIMITS = Object.freeze({
@@ -2561,6 +2554,203 @@ function knowledgeGuardedUtf8Bytes(value) {
   return Buffer.byteLength(JSON.stringify(value), "utf8");
 }
 
+// src/guarded-review.ts
+var KNOWLEDGE_PRIVATE_REVIEW_SCHEMA = "hasna.knowledge.private-review.v1";
+var KNOWLEDGE_PRIVATE_REVIEW_TOKEN_SCHEMA = "hasna.knowledge.private-review-token.v1";
+
+class KnowledgePrivateReviewError extends Error {
+  code;
+  status;
+  constructor(code, status) {
+    super(code);
+    this.code = code;
+    this.status = status;
+    this.name = "KnowledgePrivateReviewError";
+  }
+}
+var descriptors = new WeakMap;
+var approvals = new WeakMap;
+var same = (left, right) => canonicalKnowledgeGuardedJson(left) === canonicalKnowledgeGuardedJson(right);
+function deepFreeze(value) {
+  if (value && typeof value === "object") {
+    for (const child of Object.values(value))
+      deepFreeze(child);
+    Object.freeze(value);
+  }
+  return value;
+}
+function assertBoundText2(value, field, maxLength = 512) {
+  if (typeof value !== "string" || !value || value !== value.trim() || value.length > maxLength || /[\u0000-\u001f\u007f]/.test(value))
+    throw new Error(`${field} is invalid.`);
+}
+function signedToken(payload, secret) {
+  const encoded = Buffer.from(canonicalKnowledgeGuardedJson(payload), "utf8").toString("base64url");
+  const signature = createHmac("sha256", secret).update(encoded, "utf8").digest("base64url");
+  return `${encoded}.${signature}`;
+}
+function verifiedToken(token, secret) {
+  try {
+    if (typeof token !== "string" || token.length > 8192)
+      throw new Error;
+    const parts = token.split(".");
+    if (parts.length !== 2 || !parts[0] || !parts[1])
+      throw new Error;
+    const expected = createHmac("sha256", secret).update(parts[0], "utf8").digest();
+    const actual = Buffer.from(parts[1], "base64url");
+    if (actual.length !== expected.length || !timingSafeEqual(actual, expected))
+      throw new Error;
+    return JSON.parse(Buffer.from(parts[0], "base64url").toString("utf8"));
+  } catch {
+    throw new KnowledgePrivateReviewError("private_review_authorization_invalid");
+  }
+}
+function issueKnowledgePrivateReviewAuthorization(secret, request, requestDigest, reviewerActor) {
+  assertBoundText2(reviewerActor, "reviewer_actor");
+  const payload = {
+    schema: KNOWLEDGE_PRIVATE_REVIEW_TOKEN_SCHEMA,
+    request_digest: requestDigest,
+    binding: structuredClone(request.binding),
+    target_id: request.target_id,
+    expected_version: request.expected_version,
+    expected_content_sha256: request.expected_content_sha256,
+    expected_binding_state: request.expected_binding_state,
+    reviewer_actor: reviewerActor,
+    expires_at: request.expires_at,
+    nonce: randomUUID2()
+  };
+  return deepFreeze({
+    schema: KNOWLEDGE_PRIVATE_REVIEW_TOKEN_SCHEMA,
+    request_digest: requestDigest,
+    reviewer_actor: reviewerActor,
+    expires_at: request.expires_at,
+    token: signedToken(payload, secret)
+  });
+}
+function verifyKnowledgePrivateReviewAuthorization(secret, authorization) {
+  const payload = verifiedToken(authorization?.token, secret);
+  try {
+    if (!authorization || !same(Object.keys(authorization).sort(), ["expires_at", "request_digest", "reviewer_actor", "schema", "token"]))
+      throw new Error;
+    if (authorization.schema !== KNOWLEDGE_PRIVATE_REVIEW_TOKEN_SCHEMA || payload.schema !== KNOWLEDGE_PRIVATE_REVIEW_TOKEN_SCHEMA)
+      throw new Error;
+    if (authorization.request_digest !== payload.request_digest || authorization.reviewer_actor !== payload.reviewer_actor || authorization.expires_at !== payload.expires_at)
+      throw new Error;
+    if (!/^[a-f0-9]{64}$/.test(payload.request_digest) || !/^[a-f0-9]{64}$/.test(payload.expected_content_sha256))
+      throw new Error;
+    assertKnowledgeGuardedBinding(payload.binding);
+    assertBoundText2(payload.target_id, "target_id");
+    if (!Number.isSafeInteger(payload.expected_version) || payload.expected_version < 1)
+      throw new Error;
+    if (!["legacy_unbound", "bound_to_requested"].includes(payload.expected_binding_state))
+      throw new Error;
+    assertBoundText2(payload.reviewer_actor, "reviewer_actor");
+    if (!Number.isFinite(Date.parse(payload.expires_at)) || Date.parse(payload.expires_at) <= Date.now())
+      throw new Error;
+    assertBoundText2(payload.nonce, "nonce");
+    return payload;
+  } catch {
+    throw new KnowledgePrivateReviewError("private_review_authorization_invalid");
+  }
+}
+function issueKnowledgePrivateEditApprovalGrant(options) {
+  const expiration = new Date(Math.min(Date.parse(options.review.expires_at), Date.parse(options.descriptor.expires_at), Date.now() + 5 * 60 * 1000)).toISOString();
+  const payload = {
+    contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+    schema: KNOWLEDGE_PRIVATE_EDIT_APPROVAL_SCHEMA,
+    approval_id: `kpea_${randomUUID2()}`,
+    review_request_digest: options.review.request_digest,
+    review_nonce_sha256: knowledgeGuardedContentSha256(options.review.nonce),
+    mutation_deterministic_key: options.deterministicKey,
+    binding_digest: options.descriptor.binding_digest,
+    target_id: options.descriptor.target_id,
+    expected_version: options.review.expected_version,
+    expected_content_sha256: options.review.expected_content_sha256,
+    approved_by: options.approvedBy,
+    approved_actor: options.approvedActor,
+    expires_at: expiration
+  };
+  return deepFreeze({ ...payload, token: signedToken(payload, options.secret) });
+}
+function verifyKnowledgePrivateEditApprovalGrant(secret, grant) {
+  const payload = verifiedToken(grant?.token, secret);
+  try {
+    if (!grant || !same(Object.keys(grant).sort(), [
+      "approval_id",
+      "approved_actor",
+      "approved_by",
+      "binding_digest",
+      "contract",
+      "expected_content_sha256",
+      "expected_version",
+      "expires_at",
+      "mutation_deterministic_key",
+      "review_nonce_sha256",
+      "review_request_digest",
+      "schema",
+      "target_id",
+      "token"
+    ]))
+      throw new Error;
+    const comparable = { ...grant };
+    delete comparable.token;
+    if (!same(payload, comparable))
+      throw new Error;
+    if (payload.contract !== KNOWLEDGE_GUARDED_WRITE_CONTRACT || payload.schema !== KNOWLEDGE_PRIVATE_EDIT_APPROVAL_SCHEMA)
+      throw new Error;
+    for (const digest of [payload.review_request_digest, payload.review_nonce_sha256, payload.binding_digest, payload.expected_content_sha256]) {
+      if (!/^[a-f0-9]{64}$/.test(digest))
+        throw new Error;
+    }
+    if (!/^fcame1_[a-f0-9]{64}$/.test(payload.mutation_deterministic_key))
+      throw new Error;
+    for (const text of [payload.approval_id, payload.target_id, payload.approved_by, payload.approved_actor])
+      assertBoundText2(text, "approval field");
+    if (!Number.isSafeInteger(payload.expected_version) || payload.expected_version < 1)
+      throw new Error;
+    if (!Number.isFinite(Date.parse(payload.expires_at)) || Date.parse(payload.expires_at) <= Date.now())
+      throw new Error;
+    return payload;
+  } catch {
+    throw new KnowledgePrivateReviewError("private_edit_approval_invalid");
+  }
+}
+function assertKnowledgePrivateReviewRequest(value) {
+  try {
+    if (!value || typeof value !== "object" || Array.isArray(value))
+      throw new Error;
+    const v = value;
+    if (!same(Object.keys(v).sort(), ["binding", "contract", "expected_binding_state", "expected_content_sha256", "expected_version", "expires_at", "operation_id", "schema", "step_id", "target_id"]))
+      throw new Error;
+    if (v.contract !== KNOWLEDGE_GUARDED_WRITE_CONTRACT || v.schema !== KNOWLEDGE_PRIVATE_REVIEW_SCHEMA)
+      throw new Error;
+    assertKnowledgeGuardedBinding(v.binding);
+    for (const text of [v.operation_id, v.step_id, v.target_id])
+      assertBoundText2(text, "review field");
+    if (!Number.isSafeInteger(v.expected_version) || v.expected_version < 1)
+      throw new Error;
+    if (typeof v.expected_content_sha256 !== "string" || !/^[a-f0-9]{64}$/.test(v.expected_content_sha256))
+      throw new Error;
+    if (!["legacy_unbound", "bound_to_requested"].includes(v.expected_binding_state))
+      throw new Error;
+    const expiration = typeof v.expires_at === "string" ? Date.parse(v.expires_at) : NaN;
+    if (!Number.isFinite(expiration) || expiration <= Date.now() || expiration > Date.now() + 3600000)
+      throw new Error;
+  } catch {
+    throw new KnowledgePrivateReviewError("private_review_descriptor_invalid");
+  }
+}
+
+// src/store.ts
+var SLEEP_BUFFER = new Int32Array(new SharedArrayBuffer(4));
+var heldLockPaths = new Set;
+var LOCK_CONTENTION_CODES = new Set(["EEXIST", "EPERM", "EBUSY"]);
+function makeId() {
+  return `k_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+function makeShortId(id) {
+  return id.replace(/^k_/, "").slice(0, 12);
+}
+
 // src/query-contract.ts
 var KNOWLEDGE_BOUNDED_QUERY_CAPABILITY = "hasna.knowledge.bounded-query.v1";
 
@@ -3135,9 +3325,13 @@ function rowsToManifest(row, stepRows) {
 class GuardedWriteRepo {
   client;
   authority;
-  constructor(client, authority) {
+  legacyOwnerTenantId;
+  reviewApprovalSecret;
+  constructor(client, authority, legacyOwnerTenantId, reviewApprovalSecret) {
     this.client = client;
     this.authority = authority;
+    this.legacyOwnerTenantId = legacyOwnerTenantId;
+    this.reviewApprovalSecret = reviewApprovalSecret;
   }
   binding(envelope) {
     return envelope.descriptor.binding;
@@ -3200,14 +3394,14 @@ class GuardedWriteRepo {
           AND (
             (
               authority_classification IS NULL
-              AND (tenant_id IS NULL OR tenant_id::text = $2)
+              AND (tenant_id::text = $2 OR (tenant_id IS NULL AND $2 = $3::text))
             )
             OR tenant_id::text = $2
           )
-        LIMIT 1`, [fullId, binding.tenant_id]);
+        LIMIT 1`, [fullId, binding.tenant_id, this.legacyOwnerTenantId]);
     if (!row)
       return null;
-    const legacyForRequestedTenant = row.authority_classification == null && row.authority_id == null && row.scope == null && row.parent_id == null && (row.tenant_id == null || String(row.tenant_id) === binding.tenant_id);
+    const legacyForRequestedTenant = row.authority_classification == null && row.authority_id == null && row.scope == null && row.parent_id == null && (row.tenant_id == null ? binding.tenant_id === this.legacyOwnerTenantId : String(row.tenant_id) === binding.tenant_id);
     const requested = rowMatchesGuardedBinding(row, binding);
     return {
       contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
@@ -3220,6 +3414,68 @@ class GuardedWriteRepo {
       content_sha256: legacyForRequestedTenant || requested ? knowledgeGuardedContentSha256(String(row.content ?? "")) : null,
       limits
     };
+  }
+  async reviewPrivate(envelope, reviewerActor) {
+    const { descriptor: d, limits } = envelope;
+    const b = d.binding;
+    const row = await this.client.get(`SELECT * FROM knowledge_items WHERE id = $1 AND (
+        ($2 = 'legacy_unbound' AND authority_classification IS NULL AND authority_id IS NULL
+          AND scope IS NULL AND parent_id IS NULL
+          AND (tenant_id::text = $3 OR (tenant_id IS NULL AND $3 = $8::text)))
+        OR ($2 = 'bound_to_requested' AND authority_classification = $4 AND authority_id = $5
+          AND tenant_id::text = $3 AND scope = $6 AND parent_id = $7)
+      ) LIMIT 1`, [d.target_id, d.expected_binding_state, b.tenant_id, b.authority.classification, b.authority.authority_id, b.scope, b.parent_id, this.legacyOwnerTenantId]);
+    if (!row)
+      return null;
+    const item = rowToItem(row);
+    if (item.version !== d.expected_version || knowledgeGuardedContentSha256(item.content) !== d.expected_content_sha256) {
+      throw new HttpError(409, "private_review_precondition_failed");
+    }
+    if (!this.reviewApprovalSecret)
+      throw new HttpError(503, "private_review_approval_authority_unconfigured");
+    const requestDigest = knowledgeGuardedDigest(envelope);
+    return {
+      contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+      exact: true,
+      bounded: true,
+      private: true,
+      item_count: 1,
+      binding: b,
+      binding_state: d.expected_binding_state,
+      request_digest: requestDigest,
+      item,
+      limits,
+      review_authorization: issueKnowledgePrivateReviewAuthorization(this.reviewApprovalSecret, d, requestDigest, reviewerActor)
+    };
+  }
+  async approvePrivateEdit(envelope, review, approvedActor) {
+    if (!this.reviewApprovalSecret)
+      throw new HttpError(503, "private_review_approval_authority_unconfigured");
+    return this.client.transaction(async (tx) => {
+      const nonceSha256 = knowledgeGuardedContentSha256(review.nonce);
+      const consumed = await tx.get(`INSERT INTO knowledge_private_review_nonce_consumptions (
+           nonce_sha256, review_request_digest, reviewer_actor,
+           mutation_deterministic_key, consumed_at
+         ) VALUES ($1,$2,$3,$4,$5)
+         ON CONFLICT (nonce_sha256) DO NOTHING
+         RETURNING nonce_sha256`, [
+        nonceSha256,
+        review.request_digest,
+        review.reviewer_actor,
+        envelope.deterministic_key,
+        new Date().toISOString()
+      ]);
+      if (consumed?.nonce_sha256 !== nonceSha256)
+        return null;
+      return issueKnowledgePrivateEditApprovalGrant({
+        secret: this.reviewApprovalSecret,
+        review,
+        descriptor: envelope.descriptor,
+        deterministicKey: envelope.deterministic_key,
+        approvedBy: envelope.approved_by,
+        approvedActor
+      });
+    });
   }
   async executeAdoption(envelope, actor) {
     const binding = envelope.binding;
@@ -3301,8 +3557,8 @@ class GuardedWriteRepo {
       }
       const existing = await tx.get(`SELECT * FROM knowledge_items
           WHERE id = $1
-            AND (tenant_id IS NULL OR tenant_id::text = $2)
-          FOR UPDATE`, [envelope.target_id, binding.tenant_id]);
+            AND (tenant_id::text = $2 OR (tenant_id IS NULL AND $2 = $3::text))
+          FOR UPDATE`, [envelope.target_id, binding.tenant_id, this.legacyOwnerTenantId]);
       if (!existing) {
         const receipt2 = await this.finishAdoption(tx, envelope, "rejected", "not_found", null, null);
         return {
@@ -3312,7 +3568,7 @@ class GuardedWriteRepo {
           duplicate: false
         };
       }
-      const legacyForRequestedTenant = existing.authority_classification == null && existing.authority_id == null && existing.scope == null && existing.parent_id == null && (existing.tenant_id == null || String(existing.tenant_id) === binding.tenant_id);
+      const legacyForRequestedTenant = existing.authority_classification == null && existing.authority_id == null && existing.scope == null && existing.parent_id == null && (existing.tenant_id == null ? binding.tenant_id === this.legacyOwnerTenantId : String(existing.tenant_id) === binding.tenant_id);
       const requested = rowMatchesGuardedBinding(existing, binding);
       if (envelope.action === "adopt" && !legacyForRequestedTenant || envelope.action === "rollback" && (!requested || existing.guarded_adoption_receipt_id !== envelope.adoption_receipt_id)) {
         const code = envelope.action === "adopt" ? requested ? "already_bound" : "binding_mismatch" : requested ? "adoption_receipt_not_current" : "binding_mismatch";
@@ -3363,7 +3619,7 @@ class GuardedWriteRepo {
              AND scope IS NULL
              AND parent_id IS NULL
              AND guarded_adoption_receipt_id IS NULL
-             AND (tenant_id IS NULL OR tenant_id::text = $3)
+             AND (tenant_id::text = $3 OR (tenant_id IS NULL AND $3 = $10::text))
              AND encode(sha256(convert_to(coalesce(content, ''), 'UTF8')), 'hex') = $9
            RETURNING *`, [
         binding.authority.classification,
@@ -3374,7 +3630,8 @@ class GuardedWriteRepo {
         computeKnowledgeGuardedAdoptionReceiptId(envelope.deterministic_key),
         envelope.target_id,
         envelope.expected_version,
-        envelope.expected_content_sha256
+        envelope.expected_content_sha256,
+        this.legacyOwnerTenantId
       ]) : await tx.get(`UPDATE knowledge_items SET
              authority_classification = NULL,
              authority_id = NULL,
@@ -3915,8 +4172,10 @@ class GuardedWriteRepo {
       }
       const expectedVersion = descriptor.precondition.kind === "version" ? descriptor.precondition.expected_version : 0;
       const currentVersion = Number(existing.version ?? 1);
-      if (currentVersion !== expectedVersion) {
-        const receipt2 = await this.finish(tx, envelope, "rejected", "version_conflict", null);
+      const unmanifestedApproval = descriptor.manifest ? null : envelope.review_approval;
+      const staleApproval = unmanifestedApproval && (Date.parse(unmanifestedApproval.expires_at) <= Date.now() || unmanifestedApproval.expected_version !== currentVersion || unmanifestedApproval.expected_content_sha256 !== knowledgeGuardedContentSha256(String(existing.content ?? "")));
+      if (currentVersion !== expectedVersion || staleApproval) {
+        const receipt2 = await this.finish(tx, envelope, "rejected", staleApproval ? "review_approval_stale" : "version_conflict", null);
         return {
           contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
           deterministic_key: envelope.deterministic_key,
@@ -5227,6 +5486,44 @@ function knowledgeOpenApi(version) {
           }
         }
       },
+      "/v1/guarded-writes/reviews": {
+        post: {
+          operationId: "reviewPrivateKnowledge",
+          summary: "Read one private bound or legacy item at an exact reviewed version and digest",
+          description: "Read-only. Requires tenant-bound knowledge:read authorization, exact authority, binding state, version, content SHA-256, expiry and positive producer limits. Returns the full item only through authenticated transport to the package-owned in-process reviewer. Never adopts or mutates an item.",
+          requestBody: { required: true, content: { "application/json": { schema: {
+            type: "object",
+            required: ["descriptor", "limits"],
+            additionalProperties: false,
+            properties: { descriptor: { type: "object" }, limits: { type: "object" } }
+          } } } },
+          responses: {
+            "200": { description: "One private item for the in-process reviewer; caller-visible result is digest-only." },
+            "403": { description: "Wrong authority or tenant." },
+            "404": { description: "No exact item at the requested binding state." },
+            "409": { description: "Version or content changed; obtain fresh binding-state evidence." },
+            "413": { description: "Request or response exceeds the producer byte limit." }
+          }
+        }
+      },
+      "/v1/guarded-writes/review-approvals": {
+        post: {
+          operationId: "approveReviewedPrivateKnowledgeEdit",
+          summary: "Exchange exact reviewed-revision evidence for one mutation-bound approval",
+          description: "Requires knowledge:write by the same authenticated principal that obtained the signed review token. Transactionally consumes the review nonce exactly once and returns a short-lived grant bound to that principal, reviewed version/content digest, update binding digest, and mutation deterministic key. approved_by is annotation only. No private body is accepted or returned.",
+          requestBody: { required: true, content: { "application/json": { schema: {
+            type: "object",
+            required: ["review_authorization", "descriptor", "deterministic_key", "approved_by", "limits"],
+            additionalProperties: false
+          } } } },
+          responses: {
+            "201": { description: "Metadata-only exact-mutation approval grant." },
+            "400": { description: "Review token, revision, descriptor, mutation key, or bounds mismatch." },
+            "403": { description: "Wrong authority, tenant, or authenticated reviewer principal." },
+            "409": { description: "The signed review nonce was already consumed." }
+          }
+        }
+      },
       "/v1/guarded-writes/receipts/{deterministicKey}": {
         get: {
           operationId: "reconcileGuardedKnowledgeWrite",
@@ -5452,12 +5749,91 @@ function assertExactRequestKeys(value, field, expected) {
     throw new Error(`${field} keys do not match the FCAME-1 request schema.`);
   }
 }
-function validateGuardedEnvelope(value, headerBounds, authority, idempotencyKey) {
+function validatePrivateEditApprovalEnvelope(value, headerBounds, authority, secret) {
+  try {
+    if (!value || typeof value !== "object" || Array.isArray(value))
+      throw new Error;
+    const envelope = value;
+    assertExactRequestKeys(value, "private edit approval envelope", [
+      "approved_by",
+      "descriptor",
+      "deterministic_key",
+      "limits",
+      "review_authorization"
+    ]);
+    assertKnowledgeGuardedBounds(envelope.limits);
+    if (canonicalKnowledgeGuardedJson(envelope.limits) !== canonicalKnowledgeGuardedJson(headerBounds))
+      throw new Error;
+    const review = verifyKnowledgePrivateReviewAuthorization(secret, envelope.review_authorization);
+    const descriptor = envelope.descriptor;
+    if (!descriptor || descriptor.contract !== KNOWLEDGE_GUARDED_WRITE_CONTRACT || descriptor.schema !== KNOWLEDGE_PRIVATE_INPUT_SCHEMA || descriptor.verb !== "update" || descriptor.manifest !== null)
+      throw new Error;
+    assertExactRequestKeys(descriptor, "private input descriptor", [
+      "binding",
+      "binding_digest",
+      "contract",
+      "descriptor_id",
+      "expires_at",
+      "manifest",
+      "operation_id",
+      "payload_digest",
+      "precondition",
+      "schema",
+      "step_id",
+      "target_id",
+      "verb"
+    ]);
+    assertKnowledgeGuardedBinding(descriptor.binding);
+    assertConfiguredAuthority(descriptor.binding, authority);
+    assertKnowledgeGuardedPrecondition(descriptor.verb, descriptor.precondition);
+    if (descriptor.precondition.kind !== "version")
+      throw new Error;
+    const expiresAt = Date.parse(descriptor.expires_at);
+    if (!Number.isFinite(expiresAt) || expiresAt <= Date.now() || expiresAt > Date.now() + 3600000)
+      throw new Error;
+    const bindingDigest = knowledgeGuardedDigest({
+      binding: descriptor.binding,
+      operation_id: descriptor.operation_id,
+      step_id: descriptor.step_id,
+      verb: descriptor.verb,
+      target_id: descriptor.target_id,
+      precondition: descriptor.precondition,
+      payload_digest: descriptor.payload_digest,
+      manifest: descriptor.manifest
+    });
+    if (bindingDigest !== descriptor.binding_digest)
+      throw new Error;
+    const deterministicKey = computeKnowledgeGuardedDeterministicKey({
+      binding: descriptor.binding,
+      operation_id: descriptor.operation_id,
+      step_id: descriptor.step_id,
+      verb: descriptor.verb,
+      target_id: descriptor.target_id,
+      payload_digest: descriptor.payload_digest,
+      precondition: descriptor.precondition,
+      manifest: descriptor.manifest
+    });
+    if (deterministicKey !== envelope.deterministic_key)
+      throw new Error;
+    if (review.expected_binding_state !== "bound_to_requested" || canonicalKnowledgeGuardedJson(review.binding) !== canonicalKnowledgeGuardedJson(descriptor.binding) || review.target_id !== descriptor.target_id || review.expected_version !== descriptor.precondition.expected_version)
+      throw new Error;
+    if (typeof envelope.approved_by !== "string" || !envelope.approved_by || envelope.approved_by !== envelope.approved_by.trim() || envelope.approved_by.length > 512 || /[\u0000-\u001f\u007f]/.test(envelope.approved_by))
+      throw new Error;
+    if (knowledgeGuardedUtf8Bytes(envelope) > headerBounds.max_bytes)
+      throw new Error;
+    return { envelope, review };
+  } catch (error) {
+    if (error instanceof HttpError)
+      throw error;
+    throw new HttpError(400, "private_edit_approval_invalid");
+  }
+}
+function validateGuardedEnvelope(value, headerBounds, authority, idempotencyKey, reviewApprovalSecret, executionActor) {
   try {
     if (!value || typeof value !== "object")
       throw new Error("guarded write envelope is required.");
     const envelope = value;
-    assertExactRequestKeys(value, "guarded write envelope", ["contract", "descriptor", "deterministic_key", "limits", "payload"]);
+    assertExactRequestKeys(value, "guarded write envelope", ["contract", "descriptor", "deterministic_key", "limits", "payload", "review_approval"]);
     const descriptor = envelope.descriptor;
     if (envelope.contract !== KNOWLEDGE_GUARDED_WRITE_CONTRACT) {
       throw new Error("unsupported guarded-write contract.");
@@ -5531,6 +5907,23 @@ function validateGuardedEnvelope(value, headerBounds, authority, idempotencyKey)
     });
     if (envelope.deterministic_key !== expectedKey || idempotencyKey !== expectedKey) {
       throw new Error("deterministic key must match both the frozen tuple and Idempotency-Key.");
+    }
+    if (descriptor.verb === "create") {
+      if (envelope.review_approval !== null)
+        throw new Error("create forbids private edit approval.");
+    } else if (descriptor.manifest) {
+      if (envelope.review_approval !== null)
+        throw new Error("manifest-bound update forbids a second approval channel.");
+    } else {
+      if (!reviewApprovalSecret || !envelope.review_approval)
+        throw new Error("private_edit_approval_required");
+      const approval = verifyKnowledgePrivateEditApprovalGrant(reviewApprovalSecret, envelope.review_approval);
+      if (approval.mutation_deterministic_key !== expectedKey || approval.binding_digest !== descriptor.binding_digest || approval.target_id !== descriptor.target_id || descriptor.precondition.kind !== "version" || approval.expected_version !== descriptor.precondition.expected_version) {
+        throw new Error("private_edit_approval_mismatch");
+      }
+      if (approval.approved_actor !== executionActor) {
+        throw new HttpError(403, "private_edit_approval_principal_mismatch");
+      }
     }
     if (knowledgeGuardedUtf8Bytes(envelope) > headerBounds.max_bytes) {
       throw new Error("guarded write envelope exceeds the producer byte cap.");
@@ -5758,6 +6151,9 @@ function validateGuardedManifestEnvelope(value, bounds, authority, idempotencyKe
 function principalActor(principal) {
   return principal.agent ? `agent:${principal.agent}` : `key:${principal.kid}`;
 }
+function principalApprovalIdentity(principal) {
+  return `key:${principal.kid}`;
+}
 function parseExpectedVersion(req, body) {
   const header = req.headers.get("if-match");
   if (header != null && header.trim() !== "" && header.trim() !== "*") {
@@ -5778,8 +6174,11 @@ function parseExpectedVersion(req, body) {
   return parsed;
 }
 function createServeHandler(deps) {
+  const legacyOwnerTenantId = resolveKnowledgeLegacyOwnerTenantId({
+    HASNA_KNOWLEDGE_LEGACY_OWNER_TENANT_ID: deps.legacyOwnerTenantId
+  });
   const repo = new NoteRepo(deps.client);
-  const guardedRepo = deps.guardedAuthority ? new GuardedWriteRepo(deps.client, deps.guardedAuthority) : null;
+  const guardedRepo = deps.guardedAuthority ? new GuardedWriteRepo(deps.client, deps.guardedAuthority, legacyOwnerTenantId ?? null, deps.reviewApprovalSecret?.trim() || null) : null;
   const projectLinksForTenant = (tenantId) => deps.projectLinksAuthority?.(tenantId) ?? createPostgresKnowledgeProjectLinksAuthority({
     client: deps.client,
     itemResolver: (id) => repo.get(id, tenantId),
@@ -5834,6 +6233,70 @@ function createServeHandler(deps) {
           storageType: "s3",
           artifactUriPrefix: process.env.HASNA_KNOWLEDGE_S3_PREFIX ?? null
         }));
+      }
+      if (path === "/v1/guarded-writes/reviews") {
+        if (method !== "POST")
+          return json({ error: "method_not_allowed" }, 405);
+        if (!guardedRepo)
+          return json({ error: "guarded_authority_unconfigured" }, 503);
+        const startedAt = Date.now();
+        const tenantId = req.headers.get("x-knowledge-tenant-id");
+        if (!tenantId)
+          throw new HttpError(400, "x-knowledge-tenant-id is required.");
+        const principal = await authOrThrow(req, ["knowledge:read"], tenantId);
+        const bounds = guardedBoundsFromHeaders(req);
+        const raw = await readBoundedJson(req, bounds, startedAt);
+        let envelope;
+        try {
+          if (!raw || typeof raw !== "object" || Array.isArray(raw))
+            throw new Error;
+          assertExactRequestKeys(raw, "review envelope", ["descriptor", "limits"]);
+          envelope = raw;
+          assertKnowledgePrivateReviewRequest(envelope.descriptor);
+          assertKnowledgeGuardedBounds(envelope.limits);
+          if (canonicalKnowledgeGuardedJson(envelope.limits) !== canonicalKnowledgeGuardedJson(bounds))
+            throw new Error;
+        } catch {
+          throw new HttpError(400, "private_review_descriptor_invalid");
+        }
+        assertConfiguredAuthority(envelope.descriptor.binding, guardedRepo.authority);
+        if (envelope.descriptor.binding.tenant_id !== tenantId)
+          throw new HttpError(403, "private_review_tenant_mismatch");
+        const result = await guardedRepo.reviewPrivate(envelope, principalApprovalIdentity(principal));
+        const response = result ? boundedJson(result, 200, bounds, startedAt) : boundedJson({ error: "not_found" }, 404, bounds, startedAt);
+        response.headers.set("cache-control", "no-store");
+        return response;
+      }
+      if (path === "/v1/guarded-writes/review-approvals") {
+        if (method !== "POST")
+          return json({ error: "method_not_allowed" }, 405);
+        if (!guardedRepo)
+          return json({ error: "guarded_authority_unconfigured" }, 503);
+        if (!deps.reviewApprovalSecret?.trim()) {
+          return json({ error: "private_review_approval_authority_unconfigured" }, 503);
+        }
+        const startedAt = Date.now();
+        const tenantId = req.headers.get("x-knowledge-tenant-id");
+        if (!tenantId)
+          throw new HttpError(400, "x-knowledge-tenant-id is required.");
+        const principal = await authOrThrow(req, ["knowledge:write"], tenantId);
+        const bounds = guardedBoundsFromHeaders(req);
+        const raw = await readBoundedJson(req, bounds, startedAt);
+        const { envelope, review } = validatePrivateEditApprovalEnvelope(raw, bounds, guardedRepo.authority, deps.reviewApprovalSecret);
+        if (envelope.descriptor.binding.tenant_id !== tenantId) {
+          throw new HttpError(403, "private_edit_approval_tenant_mismatch");
+        }
+        const actor = principalApprovalIdentity(principal);
+        if (review.reviewer_actor !== actor) {
+          throw new HttpError(403, "private_review_principal_mismatch");
+        }
+        const grant = await guardedRepo.approvePrivateEdit(envelope, review, actor);
+        if (!grant) {
+          throw new HttpError(409, "private_review_authorization_replayed");
+        }
+        const response = boundedJson(grant, 201, bounds, startedAt);
+        response.headers.set("cache-control", "no-store");
+        return response;
       }
       if (path === "/v1/guarded-manifests" && method === "POST") {
         if (!guardedRepo) {
@@ -5955,7 +6418,7 @@ function createServeHandler(deps) {
         const principal = await authOrThrow(req, ["knowledge:write"], tenantId);
         const bounds = guardedBoundsFromHeaders(req);
         const raw = await readBoundedJson(req, bounds, startedAt);
-        const envelope = validateGuardedEnvelope(raw, bounds, guardedRepo.authority, req.headers.get("idempotency-key"));
+        const envelope = validateGuardedEnvelope(raw, bounds, guardedRepo.authority, req.headers.get("idempotency-key"), deps.reviewApprovalSecret?.trim() || null, principalApprovalIdentity(principal));
         if (envelope.descriptor.binding.tenant_id !== tenantId) {
           throw new HttpError(403, "descriptor tenant does not match the authenticated request tenant.");
         }
@@ -6325,17 +6788,28 @@ function resolveKnowledgeGuardedAuthority(env = process.env) {
   assertKnowledgeGuardedBinding(binding);
   return binding.authority;
 }
+function resolveKnowledgeLegacyOwnerTenantId(env) {
+  const value = env.HASNA_KNOWLEDGE_LEGACY_OWNER_TENANT_ID;
+  if (value === undefined)
+    return;
+  if (!value || value !== value.trim() || value.length > 64 || /[\s\x00-\x1f\x7f]/.test(value)) {
+    throw new Error("HASNA_KNOWLEDGE_LEGACY_OWNER_TENANT_ID must be an exact nonempty tenant ID.");
+  }
+  return value;
+}
 async function startKnowledgeServe(options = {}) {
   const env = options.env ?? process.env;
+  const legacyOwnerTenantId = resolveKnowledgeLegacyOwnerTenantId(env);
   const port = options.port ?? Number(env.PORT ?? env.HASNA_KNOWLEDGE_SERVE_PORT ?? 8080);
   const hostname = options.hostname ?? env.HOST ?? "0.0.0.0";
   const version = resolveVersion();
   normalizePostgresDatabaseUrl(env);
   const client = createKnowledgeDatabaseClient();
   const store = new ApiKeyStore(client);
+  const signingSecret = resolveSigningSecret(env);
   const verifier = verifyApiKey({
     app: KNOWLEDGE_SERVE_APP,
-    signingSecret: resolveSigningSecret(env),
+    signingSecret,
     keyStatus: store.keyStatus,
     audit: (e) => {
       if (e.outcome === "deny") {
@@ -6348,7 +6822,9 @@ async function startKnowledgeServe(options = {}) {
     verifier,
     store,
     version,
-    guardedAuthority: resolveKnowledgeGuardedAuthority(env)
+    guardedAuthority: resolveKnowledgeGuardedAuthority(env),
+    legacyOwnerTenantId,
+    reviewApprovalSecret: signingSecret
   });
   const BunGlobal = globalThis.Bun;
   if (!BunGlobal?.serve) {
