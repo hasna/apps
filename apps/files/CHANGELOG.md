@@ -1,5 +1,106 @@
 # Changelog
 
+## 0.5.0
+
+### Minor Changes
+
+- 1f9e897: Add an explicit token-bounded page contract without breaking existing Files JSON consumers. `files list --json`, `files search --json`, `list_files`, and `search_files` preserve their historical full bare-array defaults. CLI callers opt into compact receipts with `--agent-json`; MCP callers use `format: "page"`. CLI page-only controls, including explicit `--detail compact`, reject unless `--agent-json` is selected, and compact detail is defaulted only after that mode selection. Page mode provides truthful continuation, byte-budget receipts, allowlisted fields, explicit full page detail, and a 500-row page cap.
+
+  Add bounded exhaustive reads through CLI `--all` and MCP `all: true`. Exhaustive mode requires the receipt-bearing compact contract, starts at offset zero, walks bounded service pages, and refuses if the whole query exceeds 5,000 rows or 1 MiB. `_meta.end_reached` reports tail status; `_meta.complete` is true only when the response covers the whole query from offset zero.
+
+  Keep the minimal/standard/full MCP profiles, capability and transport filtering, exact `get_file` path, hosted `/v1` authority behavior, and fail-closed local-store boundary. Hosted context-pack remains unavailable pending an owned tenant-scoped, revision-aware service contract. Local search continues to scan filtered candidates to true exhaustion with deterministic rank/id ordering.
+
+- 66e3138: Resolve the app home to `~/.hasna/files` on every platform, per the 2026-09-04
+  home-layout ruling.
+
+  `apps/files` carried a private fork of the deleted `@hasna/paths`
+  (hasna/apps#1535) in `src/lib/paths.ts` and again in `scripts/ensure-data-dir.mjs`.
+  It resolved an XDG / macOS layout — `~/.local/share/hasna/files` on Linux,
+  `~/Library/Application Support/Hasna/files` on macOS — labelled `~/.hasna/files`
+  "legacy (pre-XDG)", and preferred the XDG root over it. The ruling makes
+  `~/.hasna/<app>` the only canonical home, so the fork is removed.
+
+  The silent adoption rule is removed with it. The data root used to switch to the
+  XDG path merely because a `files.db` already existed there, which relocated a
+  station's home with no operator intent and let a local SQLite artefact select
+  live behaviour. Local SQLite remains supported only under the explicit
+  `HASNA_FILES_LOCAL=1` opt-in; its mere presence never selects the transport or
+  home.
+
+  Overrides are unchanged in spirit and now the only way the home moves:
+  `HASNA_FILES_DATA_DIR` / `FILES_DATA_DIR` / `HASNA_FILES_HOME` / `FILES_HOME`
+  name the data root directly when absolute; `HASNA_DATA_HOME` relocates it to
+  `<HASNA_DATA_HOME>/files`; `HASNA_HOME` relocates the `~/.hasna` root.
+  `HASNA_CONFIG_HOME`, `HASNA_STATE_HOME` and `HASNA_CACHE_HOME` never move the
+  data root. Relative or whitespace home/data-root overrides are treated as unset
+  rather than resolved against the working directory.
+
+  The postinstall script no longer creates an XDG directory at install time.
+  Runtime and postinstall root selection are covered by one parity matrix.
+
+  **Upgrade note.** A station that had adopted the XDG root implicitly — data at
+  `~/.local/share/hasna/files` or `~/Library/Application Support/Hasna/files` with
+  `HASNA_DATA_HOME` unset — will now resolve `~/.hasna/files` instead. Nothing is
+  moved or deleted. If the canonical database is absent, explicit local startup
+  refuses with `FILES_STRANDED_XDG_DATA` rather than creating an empty database
+  beside the old one. Stop Files processes and back up both roots, then either set
+  `HASNA_FILES_DATA_DIR` to the retained root or perform an offline migration that
+  preserves the database, WAL/SHM state, configuration, and other root contents.
+  Explicitly selected data roots remain authoritative and are not silently
+  redirected by unrelated retired data.
+
+- 16e80df: Serve the knowledge-source manifest from the authenticated Files `/v1` API.
+
+  `files knowledge manifest` and the MCP `export_knowledge_manifest` now use
+  `GET /v1/knowledge/manifest` when the hosted transport is selected. The service
+  assigns every manifest-visible file, tag, project, collection, revision,
+  extraction, and source mutation a transaction-serialized global change cursor.
+  It persists privacy-minimized immutable snapshots so pages remain pinned to one
+  high watermark even while later writes commit.
+
+  Hosted page and checkpoint cursors are signed, versioned, tenant-bound, and
+  query-bound. They use lossless decimal strings and are deliberately distinct
+  from local per-file `sync_version` cursors. Hosted `since_sync_version` is
+  refused; use the signed `since_cursor`. Filtered deltas are also refused until a
+  separate membership-exit tombstone contract exists, while filtered full
+  snapshots remain available.
+
+  Every hosted manifest read resolves the authenticated API key's tenant before
+  querying and applies that tenant to the watermark and immutable snapshot scan.
+  The hosted projection omits station identity, local/source paths, S3
+  bucket/prefix/region/object keys, and hashes derived from those coordinates.
+  Extraction is reported available only when a tenant-bound materialized
+  extraction matches the current revision; MIME capability alone is not evidence.
+  Current-revision partial extractions preserve the `partial` status while
+  remaining readable with an explicit extraction reference; stale-revision
+  partial rows remain unavailable.
+
+  OpenAPI now defines the complete query, success, item, cursor, and refusal
+  schemas, and the generated SDK returns the typed manifest contract. CLI and MCP
+  clients reject malformed or unattested 2xx responses. Hosted filter evidence is
+  a closed typed object and must exactly attest the requested source, project,
+  collection, tag, status, time, and delta selection on every page. Runtime
+  validation also enforces every required field, closed source/status enums,
+  nonblank identifiers and cursors, typed nonblank hashes, strict RFC 3339
+  timestamps, and rejects unknown or sensitive response fields. Existing local
+  manifest behavior, compact Files output, MCP profiles, canonical Files home, fresh
+  credential resolution, and `https://api.hasna.com/files` plus one
+  client-appended `/v1` remain unchanged.
+
+  `include_acl_summary` and `include_evidence_assets` continue to refuse rather
+  than fabricating empty data. Hosted S3 manifest artifacts remain unavailable;
+  a local `--out` / `output_local_path` artifact is still supported.
+
+- 46a5a48: Serve knowledge-source resolve, doctor, extracted-text, and snapshot reads over the authenticated Files `/v1` API without opening local SQLite. Hosted revision refs fail closed until an exact revision-aware byte route exists, so current bytes are never labeled as an older revision. Direct hosted snapshot commands also bind the extraction response to the exact requested file before framing success. MIME policy is shared across content, extraction, snapshots, and signed downloads; hosted doctor readiness requires a bounded extraction; `status=all` is exact; signed downloads require read scope. Snapshot framing is isolated in a pure module with no SQLite, AWS, filesystem, credential, or network imports.
+
+  Deploy the updated `files-serve` before publishing this client release because hosted doctor depends on exact `status=all` semantics and read-scoped signing.
+
+### Patch Changes
+
+- d39db56: Reject truncated or size-mismatched hosted downloads before committing the output. The content service now reports the expected object size on full reads, and the streaming client cancels failed reads and reports its actual byte count.
+- 17b86d8: Normalize hosted knowledge-manifest snapshot timestamps to strict RFC 3339 for existing and future rows, and execute the owner-managed global cursor capture through a fixed-search-path security-definer function so runtime file mutations remain authorized.
+- 6728edc: Remove operational skill content from the public repository and package assets. Keep Skills catalogs and payloads in operator-owned storage, retire static selections and implicit legacy source imports, and reject tracked skill payloads in CI. Instructions no longer reloads a bundled or working-directory inbox contract by default. Project recommendations use the owner's skill tags rather than a shipped list of skill names.
+
 ## 0.4.1
 
 ### Patch Changes

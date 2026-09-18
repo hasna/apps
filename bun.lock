@@ -446,7 +446,7 @@
     },
     "apps/files": {
       "name": "@hasna/files",
-      "version": "0.4.1",
+      "version": "0.5.0",
       "bin": {
         "files": "dist/cli/index.js",
         "files-mcp": "dist/mcp/index.js",
