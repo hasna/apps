@@ -39,6 +39,24 @@ export interface Stats { "total_files": number; "total_size": number; "by_ext"?:
 
 export interface ExtractedText { "source_ref": string; "file_id"?: string; "revision_id"?: string; "status": string; "mime": string; "bytes_read": number; "total_size"?: number; "truncated": boolean; "redacted": boolean; "segments": Array<Record<string, unknown>>; "metadata": Record<string, unknown> }
 
+export interface KnowledgeManifestFilters { "source_id"?: string; "collection_id"?: string; "project_id"?: string; "tag"?: string; "status": "active" | "deleted" | "moved" | "all"; "delta": boolean; "after"?: string; "before"?: string }
+
+export interface KnowledgeManifestRoot { "open_files_root": string; "source_id": string; "source_type": "local" | "s3" | "google_drive"; "evidence_hash": string }
+
+export interface KnowledgeManifestStorage { "provider": "local" | "s3" | "unknown"; "source_id": string }
+
+export interface KnowledgeManifestReadableExtraction { "text_available": true; "status": "available" | "partial"; "extracted_text_ref": string }
+
+export interface KnowledgeManifestUnavailableExtraction { "text_available": false; "status": "unavailable" | "unsupported" | "error" | "stale"; "status_reason": string }
+
+export type KnowledgeManifestExtraction = KnowledgeManifestReadableExtraction | KnowledgeManifestUnavailableExtraction;
+
+export interface KnowledgeManifestFile { "kind": "file"; "source_ref": string; "revision_ref"?: string; "revision_id"?: string; "change_cursor": string; "source_revision_hash": string; "file_id": string; "source_id": string; "source_type": "local" | "s3" | "google_drive"; "name": string; "mime": string; "size": number; "hash"?: string; "status": "active" | "deleted" | "moved"; "updated_at": string; "deleted": boolean; "tombstone"?: boolean; "tags": Array<string>; "open_files_root": KnowledgeManifestRoot; "storage": KnowledgeManifestStorage; "extraction": KnowledgeManifestExtraction; "permissions": { "mode": "read_only"; "allowed_purposes": Array<string> }; "permission_labels": Array<string> }
+
+export interface KnowledgeManifest { "filter_contract": "files.knowledge.manifest.v1"; "cursor_contract": "files.knowledge.manifest.change.v1"; "manifest_id": string; "generated_at": string; "format": "json" | "jsonl"; "filters": KnowledgeManifestFilters; "item_count": number; "cursor"?: string; "next_cursor"?: string; "has_more": boolean; "complete": boolean; "delta": boolean; "high_watermark": string; "delta_cursor": string; "tombstone_count": number; "items": Array<KnowledgeManifestFile> }
+
+export interface KnowledgeManifestError { "error": string; "reason": "invalid_manifest_cursor" | "invalid_manifest_query" | "unknown_manifest_query" | "legacy_sync_version_unavailable" | "acl_summary_unavailable" | "evidence_assets_unavailable" | "filtered_delta_unavailable" | "tenant_binding_missing" | "manifest_store_incompatible" }
+
 export interface FileAsset { "id": string; "org_id": string; "company_id"?: string; "app": string; "kind": string; "classification": string; "version": number; "canonical_ref": string; "provenance_type": string; "provenance_id": string; "provenance_ref"?: string; "external_references": Array<string>; "idempotency_key"?: string; "original_name": string; "content_type": string; "size": number; "checksum": string; "checksum_algorithm": "sha256"; "storage_provider": "s3" | "local"; "bucket"?: string; "region"?: string; "object_key": string; "quarantine_key"?: string; "status": "pending_upload" | "uploaded" | "verified" | "archived" | "deleted"; "scan_status": "pending" | "clean" | "skipped" | "suspicious" | "blocked"; "retention_until"?: string; "retention_policy"?: string; "storage_class"?: string; "legal_hold": boolean; "immutable": boolean; "metadata": Record<string, unknown>; "created_at": string; "updated_at": string; "verified_at"?: string }
 
 export interface FileUploadIntent { "id": string; "asset_id": string; "method": "PUT"; "upload_url"?: string; "expires_at": string; "status": "pending" | "completed" | "expired" | "cancelled"; "expected_checksum": string; "expected_checksum_algorithm": string; "expected_size": number; "required_headers": Record<string, string>; "metadata": Record<string, unknown>; "created_at": string; "completed_at"?: string }
@@ -306,6 +324,15 @@ export class FilesClient {
       return this.request("DELETE", `/files/${encodeURIComponent(String(id))}/tags`, {
         body,
         query: undefined,
+        init,
+      });
+    }
+
+    /** Export a tenant-bound, immutable knowledge-source manifest page */
+    async exportKnowledgeManifest(query?: { "source_id"?: string; "collection_id"?: string; "project_id"?: string; "tag"?: string; "status"?: "active" | "deleted" | "moved" | "all"; "include_deleted"?: boolean; "delta"?: boolean; "since_cursor"?: string; "since_sync_version"?: number; "after"?: string; "before"?: string; "cursor"?: string; "limit"?: number; "format"?: "json" | "jsonl"; "include_acl_summary"?: boolean; "include_evidence_assets"?: boolean }, init?: RequestInit): Promise<KnowledgeManifest> {
+      return this.request("GET", `/knowledge/manifest`, {
+        body: undefined,
+        query,
         init,
       });
     }

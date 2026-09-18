@@ -500,7 +500,10 @@ export interface KnowledgeSourceManifestOptions {
 
 export type KnowledgeSourceManifestExtractionStatus =
   | "available"
+  | "unavailable"
   | "pending"
+  | "stale"
+  | "partial"
   | ExtractedTextStatus;
 
 export interface KnowledgeSourceManifestMachineEvidence {
@@ -516,11 +519,15 @@ export interface KnowledgeSourceManifestOpenFilesRootEvidence {
   open_files_root: string;
   source_id: string;
   source_type: SourceType;
-  source_path: string;
-  machine: KnowledgeSourceManifestMachineEvidence;
+  /** Local-only evidence. Hosted manifests deliberately omit this field. */
+  source_path?: string;
+  /** Local-only evidence. Hosted manifests deliberately omit station identity. */
+  machine?: KnowledgeSourceManifestMachineEvidence;
+  /** Local-only evidence. Hosted manifests never disclose filesystem roots. */
   local?: {
     path: string;
   };
+  /** Local-only evidence. Hosted manifests never disclose object-store coordinates. */
   s3?: {
     bucket: string;
     prefix?: string;
@@ -535,13 +542,17 @@ export interface KnowledgeSourceManifestFileItem {
   revision_ref?: string;
   revision_id?: string;
   s3_object_id?: string;
-  sync_version: number;
+  /** Local SQLite synchronization revision. Omitted by the hosted manifest. */
+  sync_version?: number;
+  /** Globally monotonic hosted manifest change cursor as a lossless decimal string. */
+  change_cursor?: string;
   source_revision_hash: string;
   file_id: string;
   source_id: string;
   source_name?: string;
   source_type?: SourceType;
-  path: string;
+  /** Local/source path. Hosted manifests omit it to avoid disclosing private coordinates. */
+  path?: string;
   name: string;
   mime: string;
   size: number;
@@ -626,6 +637,10 @@ export type KnowledgeSourceManifestItem =
   | KnowledgeSourceManifestEvidenceAssetItem;
 
 export interface KnowledgeSourceManifest {
+  /** Exact response-shape attestation required by hosted clients. */
+  filter_contract?: "files.knowledge.manifest.v1";
+  /** Identifies whether cursors are local sync revisions or signed hosted changes. */
+  cursor_contract?: "files.knowledge.manifest.local-sync.v1" | "files.knowledge.manifest.change.v1";
   manifest_id: string;
   generated_at: string;
   format: KnowledgeSourceManifestFormat;
@@ -633,8 +648,11 @@ export interface KnowledgeSourceManifest {
   item_count: number;
   cursor?: string;
   next_cursor?: string;
+  has_more?: boolean;
+  /** True only when this response covers the whole selected query from its beginning. */
+  complete?: boolean;
   delta: boolean;
-  high_watermark: number;
+  high_watermark: number | string;
   delta_cursor: string;
   tombstone_count: number;
   items: KnowledgeSourceManifestItem[];

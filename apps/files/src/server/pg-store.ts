@@ -44,6 +44,7 @@ import type {
 import type { CreateUploadIntentInput, UpdateFileAssetStatusInput } from "../lib/evidence.js";
 import { FILES_API_MAX_PAGE_SIZE } from "../lib/api-pagination.js";
 import type { RemoteFileLocator } from "./file-content.js";
+import { parseHostedManifestChangeRow, type HostedManifestChangeRow } from "../lib/knowledge-manifest-shared.js";
 
 const APP = "files";
 
@@ -1745,3 +1746,122 @@ export async function completeFileUpload(
   return getFile(client, fileId);
 }
 
+
+// ─── knowledge manifest ───────────────────────────────────────────────────────
+//
+// Hosted manifests are read from immutable, tenant-bound snapshots in the
+// knowledge-source outbox. Each relevant PostgreSQL mutation appends a global
+// sequence cursor through migration files-knowledge-manifest-0001. A page pins
+// one high watermark, so later writes cannot change either row membership or
+// row contents during the walk.
+
+export interface KnowledgeManifestQuery {
+  tenant_id: string;
+  source_id?: string;
+  collection_id?: string;
+  project_id?: string;
+  tag?: string;
+  status?: string;
+  include_deleted?: boolean;
+  delta?: boolean;
+  after?: string;
+  before?: string;
+  high_watermark: string;
+  since_cursor: string;
+  page_after: string;
+  limit: number;
+}
+
+/** Latest globally monotonic manifest cursor visible to one authenticated tenant. */
+export async function knowledgeManifestHighWatermark(
+  client: TypedQueryClient,
+  tenantId: string,
+): Promise<string> {
+  const row = await client.get<Record<string, unknown>>(
+    `SELECT COALESCE(MAX(cursor), 0)::text AS high_watermark
+     FROM knowledge_source_outbox_events
+     WHERE tenant_id = $1
+       AND manifest_snapshot IS NOT NULL`,
+    [tenantId],
+  );
+  const value = String(row?.high_watermark ?? "0");
+  if (!/^(0|[1-9][0-9]*)$/.test(value)) {
+    throw new Error("Hosted knowledge manifest store returned an invalid high watermark.");
+  }
+  return value;
+}
+
+/**
+ * Return a stable page of the latest per-file snapshots at or before the pinned
+ * watermark. In delta mode only files changed after since_cursor participate.
+ * Every predicate is evaluated against the immutable snapshot, not current
+ * mutable relation tables.
+ */
+export async function listKnowledgeManifestRows(
+  client: TypedQueryClient,
+  opts: KnowledgeManifestQuery,
+): Promise<HostedManifestChangeRow[]> {
+  const params: unknown[] = [opts.tenant_id, opts.high_watermark];
+  const eventWhere = [
+    "tenant_id = $1",
+    "manifest_snapshot IS NOT NULL",
+    "cursor <= $2",
+  ];
+  if (opts.delta || opts.since_cursor !== "0") {
+    params.push(opts.since_cursor);
+    eventWhere.push(`cursor > $${params.length}`);
+  }
+
+  const filteredWhere: string[] = [];
+  params.push(opts.page_after);
+  filteredWhere.push(`cursor > $${params.length}`);
+
+  const effectiveStatus = opts.status ?? (opts.include_deleted || opts.delta ? "all" : "active");
+  if (effectiveStatus !== "all") {
+    params.push(effectiveStatus);
+    filteredWhere.push(`snapshot->>'status' = $${params.length}`);
+  }
+  if (opts.source_id) {
+    params.push(opts.source_id);
+    filteredWhere.push(`snapshot->>'source_id' = $${params.length}`);
+  }
+  if (opts.collection_id) {
+    params.push(opts.collection_id);
+    filteredWhere.push(`snapshot->'collection_ids' ? $${params.length}`);
+  }
+  if (opts.project_id) {
+    params.push(opts.project_id);
+    filteredWhere.push(`snapshot->'project_ids' ? $${params.length}`);
+  }
+  if (opts.tag) {
+    params.push(opts.tag.trim().toLowerCase());
+    filteredWhere.push(`snapshot->'tags' ? $${params.length}`);
+  }
+  if (opts.after) {
+    params.push(opts.after);
+    filteredWhere.push(`COALESCE(snapshot->>'modified_at', snapshot->>'indexed_at') >= $${params.length}`);
+  }
+  if (opts.before) {
+    params.push(opts.before);
+    filteredWhere.push(`COALESCE(snapshot->>'modified_at', snapshot->>'indexed_at') <= $${params.length}`);
+  }
+
+  const limit = Math.max(1, Math.floor(opts.limit));
+  params.push(limit);
+  const rows = await client.many<Record<string, unknown>>(
+    `WITH latest AS (
+       SELECT DISTINCT ON (file_id)
+         cursor, file_id, manifest_snapshot AS snapshot
+       FROM knowledge_source_outbox_events
+       WHERE ${eventWhere.join(" AND ")}
+       ORDER BY file_id, cursor DESC
+     )
+     SELECT cursor, file_id, snapshot
+     FROM latest
+     WHERE ${filteredWhere.join(" AND ")}
+     ORDER BY cursor ASC, file_id ASC
+     LIMIT $${params.length}`,
+    params,
+  );
+  return rows.map(parseHostedManifestChangeRow);
+}
