@@ -1020,7 +1020,9 @@ export function listMemoriesPage(filter?: MemoryFilter, db?: Database): MemoryLi
   if (conditions.length > 0) {
     sql += ` WHERE ${conditions.join(" AND ")}`;
   }
-  sql += " ORDER BY importance DESC, created_at DESC";
+  // Offset pages need a total order while the result set is unchanged; id is
+  // the immutable final tie-breaker for equal importance/timestamps.
+  sql += " ORDER BY importance DESC, created_at DESC, id DESC";
 
   if (f.limit) {
     sql += " LIMIT ?";
@@ -1273,8 +1275,10 @@ export function listMemoryHistoryPage(
   }
   const d = db || getDatabase();
   const params: SQLQueryBindings[] = [limit];
+  // Same unchanged-result-set guarantee as listMemoriesPage: equal access
+  // timestamps are stabilized by the immutable id tie-breaker.
   let sql =
-    "SELECT * FROM memories WHERE status = 'active' AND accessed_at IS NOT NULL ORDER BY accessed_at DESC LIMIT ?";
+    "SELECT * FROM memories WHERE status = 'active' AND accessed_at IS NOT NULL ORDER BY accessed_at DESC, id DESC LIMIT ?";
   if (offset) {
     sql += " OFFSET ?";
     params.push(offset);
