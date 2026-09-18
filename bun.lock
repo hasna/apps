@@ -178,7 +178,7 @@
     },
     "apps/contracts": {
       "name": "@hasna/contracts",
-      "version": "1.2.0",
+      "version": "1.2.1",
       "bin": {
         "contracts": "dist/cli/index.js",
         "contracts-cli": "dist/cli/contracts-cli.js",
