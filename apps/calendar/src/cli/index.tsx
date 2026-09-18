@@ -564,7 +564,7 @@ function calendarCommand(name: string) {
 
 function listCommand(name: string) {
   return calendarCommand(name)
-    .option("--limit <n>", `Max rows for human output (default ${DEFAULT_PAGE_LIMIT}, max ${MAX_PAGE_LIMIT})`, parseInteger)
+    .option("--limit <n>", `Maximum rows per page (default ${DEFAULT_PAGE_LIMIT}, max ${MAX_PAGE_LIMIT})`, parseInteger)
     .option("--cursor <n>", "Zero-based row offset for the next page", parseInteger)
     .option("--verbose", "Show full fields within the selected page")
     .option("--full", "Return the legacy complete full JSON array (requires --json)");

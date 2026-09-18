@@ -263,6 +263,18 @@ describe("calendar CLI", () => {
     }
   });
 
+  test("list help describes the limit as a per-page bound", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "calendar-cli-"));
+    try {
+      const result = await runCalendar(["list", "--help"], join(tempDir, "calendar.db"));
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("Maximum rows per page (default 20, max 100)");
+      expect(result.stdout).not.toContain("human output");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   test("event list is compact and paged by default", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "calendar-cli-"));
     const dbPath = join(tempDir, "calendar.db");
