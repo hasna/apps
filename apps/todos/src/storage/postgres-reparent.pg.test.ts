@@ -70,6 +70,9 @@ describe.skipIf(!PG_URL)("postgres tasks.update — re-parent semantics", () => 
     for (const id of [PROJECT_A, PROJECT_B]) {
       await client.query(`INSERT INTO todos_sync_records (service, object_type, object_id, payload, updated_at) VALUES ($1, 'projects', $2, $3::jsonb, now())`, [SERVICE, id, {id, name: `Fixture ${id}`, path: `/fixture/${id}`, task_list_id: `fixture-${id}`, parent_id: null}]);
     }
+    for (const [id, project_id] of [[LIST_A, PROJECT_A], [LIST_B, PROJECT_B]]) {
+      await client.query(`INSERT INTO todos_sync_records (service, object_type, object_id, payload, updated_at) VALUES ($1, 'task_lists', $2, $3::jsonb, now())`, [SERVICE, id, { id, name: `Fixture ${id}`, slug: `fixture-${id}`, project_id }]);
+    }
     store = createPostgresTodosStorageAdapter({ client, service: SERVICE });
     racingStore = createPostgresTodosStorageAdapter({ client: racingClient, service: SERVICE });
   });
