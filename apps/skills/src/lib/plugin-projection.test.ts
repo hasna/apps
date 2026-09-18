@@ -43,3 +43,68 @@ test("overlapping skill roots cannot silently remove declared ordinary component
     expect(() => buildPluginProjection(entries)).toThrow("ordinary component");
   }
 });
+
+function unversionedFixture(extra: SkillBundleEntry[] = [], nativeFields: Record<string, unknown> = {}) {
+  const f = fixture([entry("README.md", "See commands/old.md for the original command documentation."), ...extra]);
+  f.original[0] = entry(".claude-plugin/plugin.json", JSON.stringify({ name: "fixture", skills: ["./extra"], commands: ["./custom"], ...nativeFields }));
+  const manifest = { ...f.manifest, schemaVersion: 2, upstream: { ...f.manifest.upstream, version: null, revision: "a".repeat(40), treeDigest: pluginTreeDigest(f.original) }, review: { ...f.manifest.review, documentation: [{ path: "README.md", sourceDigest: pluginTreeDigest([f.original.find(item => item.path === "README.md")!]) }] } };
+  return { original: f.original, manifest, entries: () => [entry("plugin-projection.json", JSON.stringify(manifest)), ...f.original.map(item => ({ ...item, path: `original/${item.path}` }))] };
+}
+test("versionless immutable upstream preserves manifest and explicitly reviewed README bytes", () => {
+  const f = unversionedFixture(), result = buildPluginProjection(f.entries());
+  expect(result.manifest.upstream.version).toBeNull();
+  expect(JSON.parse(new TextDecoder().decode(result.files.find(item => item.path === ".claude-plugin/plugin.json")!.bytes))).toEqual({ name: "fixture" });
+  expect(result.files.find(item => item.path === "README.md")!.bytes).toEqual(f.original.find(item => item.path === "README.md")!.bytes);
+});
+test("schema one cannot acquire null versions or documentation exceptions", () => {
+  const f = unversionedFixture(); f.manifest.schemaVersion = 1;
+  expect(() => buildPluginProjection(f.entries())).toThrow();
+});
+test("versionless identity refuses invented or mutable provenance and declared native versions", () => {
+  for (const revision of ["main", "1aa8f02ec832", "a".repeat(39), "A".repeat(40)]) {
+    const f = unversionedFixture(); f.manifest.upstream.revision = revision;
+    expect(() => buildPluginProjection(f.entries())).toThrow();
+  }
+  for (const version of ["1.0.0", null, "", 7]) {
+    const f = unversionedFixture([], { version });
+    expect(() => buildPluginProjection(f.entries())).toThrow();
+  }
+});
+test("documentation exemption cannot hide runtime dependencies or selected components", () => {
+  for (const nativeFields of [{ agents: "./README.md" }, { agents: "./" }, { hooks: "./README.md" }, { mcpServers: { fixture: { command: "cat README.md" } } }]) {
+    const f = unversionedFixture([], nativeFields);
+    expect(() => buildPluginProjection(f.entries())).toThrow();
+  }
+  for (const path of ["tools/run.sh", "agents/observer-2.md", "hooks/hooks.json", "CLAUDE.md"]) {
+    const f = unversionedFixture([entry(path, "Read README.md")]);
+    expect(() => buildPluginProjection(f.entries())).toThrow();
+  }
+  const executable = unversionedFixture(); executable.original.find(item => item.path === "README.md")!.mode = 0o755;
+  executable.manifest.upstream.treeDigest = pluginTreeDigest(executable.original);
+  executable.manifest.review.documentation[0]!.sourceDigest = pluginTreeDigest([executable.original.find(item => item.path === "README.md")!]);
+  expect(() => buildPluginProjection(executable.entries())).toThrow();
+});
+test("documentation review is exact, bounded, and never inferred from markdown extension", () => {
+  for (const change of ["missing", "digest", "path", "duplicate", "runtime"]) {
+    const f = unversionedFixture(change === "runtime" ? [entry("agents/runtime.md", "Read commands/old.md")] : []);
+    if (change === "missing") f.manifest.review.documentation = [];
+    if (change === "digest") f.manifest.review.documentation[0]!.sourceDigest = `sha256:${"0".repeat(64)}`;
+    if (change === "path") f.manifest.review.documentation[0]!.path = "agents/runtime.md";
+    if (change === "duplicate") f.manifest.review.documentation.push(f.manifest.review.documentation[0]!);
+    expect(() => buildPluginProjection(f.entries())).toThrow();
+  }
+});
+
+test("schema two supports exact declared versions and preserves absent native version bytes", () => {
+  const declared = unversionedFixture([], { version: "2.0.0" });
+  const declaredManifest = { ...declared.manifest, upstream: { ...declared.manifest.upstream, version: "2.0.0" } };
+  const result = buildPluginProjection([entry("plugin-projection.json", JSON.stringify(declaredManifest)), ...declared.original.map(item => ({ ...item, path: `original/${item.path}` }))]);
+  expect(result.manifest.upstream.version).toBe("2.0.0");
+  const absent = unversionedFixture(); absent.original[0] = entry(".claude-plugin/plugin.json", '{ "name": "fixture" }\n');
+  // Remove the custom payloads when their native custom roots are absent.
+  absent.original = absent.original.filter(item => !item.path.startsWith("custom/") && !item.path.startsWith("extra/"));
+  absent.manifest.payloads = absent.manifest.payloads.filter(item => !item.path.startsWith("custom/") && !item.path.startsWith("extra/"));
+  absent.manifest.upstream.treeDigest = pluginTreeDigest(absent.original);
+  const projected = buildPluginProjection([entry("plugin-projection.json", JSON.stringify(absent.manifest)), ...absent.original.map(item => ({ ...item, path: `original/${item.path}` }))]);
+  expect(projected.files.find(item => item.path === ".claude-plugin/plugin.json")!.bytes).toEqual(absent.original[0]!.bytes);
+});
