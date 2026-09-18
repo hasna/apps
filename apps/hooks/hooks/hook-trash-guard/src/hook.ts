@@ -47,8 +47,9 @@
  */
 
 import { homedir } from "os";
-import { isAbsolute, join, normalize, resolve, sep } from "path";
-import { statSync } from "fs";
+import { dirname, isAbsolute, join, normalize, resolve, sep } from "path";
+import { readFileSync, realpathSync, statSync } from "fs";
+import { spawnSync } from "node:child_process";
 import {
   SYSTEM_PROTECTED_ROOTS,
   getCommand,
@@ -63,10 +64,10 @@ const RULE = "trash-guard";
 
 /**
  * Default Bash-tool timeout (ms) re-supplied on the rewrite. The rewritten
- * command is a same-device move, not a byte copy, so it is fast; an explicit
+ * command uploads and verifies the hosted capsule before source cleanup; an explicit
  * value keeps the rewritten tool_input complete.
  */
-const DEFAULT_TIMEOUT_MS = 120000;
+const DEFAULT_TIMEOUT_MS = 600000;
 
 /** Description supplied only when the model did not provide one. */
 const DEFAULT_DESCRIPTION = "Delete via trash guard (rm intercepted and made recoverable)";
@@ -864,22 +865,37 @@ function gitHasDryRun(segment: Segment, verbIndex: number): boolean {
 /* ------------------------------------------------------------------ */
 
 /**
- * Locate the `trash` executable on PATH and return its absolute path, or null
- * when there is nothing to redirect to. Presence only — the guard decision
- * never waits on the binary, its store, or a network.
+ * A command called trash may be Apple's unrelated system utility. Resolve
+ * package provenance before executing a bounded, credential-free identity
+ * probe. Never invoke an unknown executable merely to discover what it is.
  */
 export function findTrashBinary(env: NodeJS.ProcessEnv = process.env): string | null {
   const pathValue = env.PATH ?? "";
-  for (const dir of pathValue.split(":")) {
-    if (!dir) continue;
-    // resolve(): a relative PATH entry still yields the absolute path the
-    // rewrite must use, so the rewritten command never depends on PATH again.
+  const deadline = Date.now() + 2_000;
+  for (const dir of pathValue.split(":").slice(0, 64)) {
+    if (!isAbsolute(dir) || Date.now() >= deadline) continue;
     const candidate = resolve(dir, "trash");
     try {
       const stat = statSync(candidate);
-      if (stat.isFile() && (stat.mode & 0o111) !== 0) return candidate;
+      if (!stat.isFile() || (stat.mode & 0o111) === 0 || (stat.mode & 0o022) !== 0) continue;
+      const executable = realpathSync(candidate);
+      const packageRoot = resolve(dirname(executable), "../..");
+      const manifestPath = join(packageRoot, "package.json");
+      const manifestStat = statSync(manifestPath);
+      if (!manifestStat.isFile() || manifestStat.size > 16_384 || (manifestStat.mode & 0o022) !== 0) continue;
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+      if (manifest.name !== "@hasna/trash" || typeof manifest.version !== "string" ||
+          typeof manifest.bin?.trash !== "string" || realpathSync(resolve(packageRoot, manifest.bin.trash)) !== executable) continue;
+      const probe = spawnSync(candidate, ["--identity"], {
+        encoding: "utf8", timeout: Math.max(1, Math.min(500, deadline - Date.now())), maxBuffer: 2_048,
+        env: { PATH: pathValue }, stdio: ["ignore", "pipe", "pipe"],
+      });
+      if (probe.error || probe.status !== 0) continue;
+      const identity = JSON.parse(probe.stdout);
+      if (identity.name === "@hasna/trash" && identity.version === manifest.version &&
+          identity.guardProtocol === "hasna.trash.guard.v1") return candidate;
     } catch {
-      // not there — keep looking
+      // Missing, unrelated, malformed or unresponsive packages are not targets.
     }
   }
   return null;
@@ -1004,10 +1020,18 @@ function resolveTrash(deps: GuardDependencies): { path: string | null; error: st
 }
 
 const ABSENT_REASON =
-  "[trash-guard] `trash` is not on PATH, so this `rm` cannot be redirected into a recoverable delete — and an unrecoverable delete is never allowed, so the command is refused rather than run. Install @hasna/trash (`npm install -g @hasna/trash`), which puts the binary on PATH, then re-run the same command: it is then rewritten to `trash guard` and the files land in trash instead of disappearing.";
+  "[trash-guard] No verified @hasna/trash guard was found on PATH. This deletion is refused. Install the current @hasna/trash package with Bun and run its setup; the operating-system trash utility is not a compatible guard.";
 
 export function evaluate(input: CodewithHookInput, deps: GuardDependencies): CodewithHookOutput {
   if (input.hook_event_name !== "PreToolUse") return { continue: true };
+  if (["apply_patch", "ApplyPatch", "functions.apply_patch"].includes(input.tool_name ?? "")) {
+    const patch = input.tool_input?.command;
+    if (typeof patch !== "string") return deny("[trash-guard] Unreadable patch input; deletion safety cannot be checked.");
+    if (/^\s*\*\*\* Delete File:/m.test(patch)) {
+      return deny("[trash-guard] Delete File would bypass recoverable deletion. First use `trash put -- <path>` or the trash_put MCP tool, then submit any remaining edits without the deletion block.");
+    }
+    return { continue: true };
+  }
   if (input.tool_name !== "Bash") return { continue: true };
 
   // A command we cannot READ is a payload we cannot verify, and the harness
@@ -1089,7 +1113,7 @@ export function evaluate(input: CodewithHookInput, deps: GuardDependencies): Cod
 
 /** Verdict used when the hook itself fails: refuse anything that could delete. */
 export function fallbackVerdict(command: string): CodewithHookOutput {
-  return mentionsDeleteVerb(command)
+  return mentionsDeleteVerb(command) || /^\s*\*\*\* Delete File:/m.test(command)
     ? deny(
         "[trash-guard] The hook failed while classifying this command, so it cannot be proven free of an unredirected delete. Re-run the delete as a plain `rm -- <path>` command.",
       )
@@ -1101,10 +1125,14 @@ export async function run(): Promise<void> {
   const command = getCommand(input);
   try {
     const cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
-    respond(evaluate(input, { home: homedir(), cwd, findTrash: findTrashBinary }));
+    const verdict = evaluate(input, { home: homedir(), cwd, findTrash: findTrashBinary });
+    // Native Codex rejects `continue` in PreToolUse JSON. Silence is the
+    // documented no-op for both Codex and Claude; emit only actual decisions.
+    if (!("continue" in verdict && verdict.continue === true)) respond(verdict);
   } catch (error) {
     warn(`${RULE} failed: ${error instanceof Error ? error.message : String(error)}`);
-    respond(fallbackVerdict(command));
+    const verdict = fallbackVerdict(command);
+    if (!("continue" in verdict && verdict.continue === true)) respond(verdict);
   }
 }
 

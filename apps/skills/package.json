@@ -1,6 +1,6 @@
 {
   "name": "@hasna/skills",
-  "version": "0.8.7",
+  "version": "0.8.9",
   "description": "Skills library for AI coding agents",
   "type": "module",
   "bin": {
@@ -38,6 +38,7 @@
     "bin/",
     "migrations/",
     "docs/skill-standard.md",
+    "docs/plugin-admission.md",
     "schemas/",
     "LICENSE",
     "README.md",

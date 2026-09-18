@@ -1,3 +1,19 @@
+## 0.7.1
+
+### Patch Changes
+
+- 03d3f00: Accept bounded hosted profile pages without assuming that every compatible
+  server orders profiles by UUID. Profile exports retain duplicate-ID, total,
+  cursor, and retry checks while supporting the name-ordered deployed API.
+
+- b64d6f0: Preserve sparse and duplicate legacy snapshot histories in v2 exports and restores.
+
+- df3ab69: Sign immutable S3 create requests with AWS SigV4 credentials and refuse incomplete credential configuration before dispatch.
+
+- 44251bc: Make Instructions collection reads content-free and source-bounded by default for human and MCP listing, add an additive `/v1/configs?view=summary` projection, and add compact/full JSON envelopes with field selection, explicit complete reads, pretty-print opt-in, and truthful pagination metadata. Legacy full-array JSON remains available and now honors explicit limits and cursors.
+
+- 37e67b3: Keep `instructions-serve` under one explicit Bun listener so the production task does not auto-serve the exported Hono app a second time and exit with `EADDRINUSE`.
+
 ## 0.7.0
 
 ### Minor Changes

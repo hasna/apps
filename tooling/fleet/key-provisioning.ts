@@ -374,6 +374,7 @@ export interface KeyAssessment {
 
 export interface AssessInput {
   app: string;
+  keySecretId?: string;
   secretPresent: boolean;
   verdict: ProbeVerdict;
   /** `none` when the app carries a documented probe exemption. */
@@ -385,16 +386,17 @@ export interface AssessInput {
 /** Turn a secret lookup + a probe verdict into the state that drives action. */
 export function assessKey(input: AssessInput): KeyAssessment {
   const { app, secretPresent, verdict } = input;
+  const secretId = input.keySecretId ?? keySecretIdFor(app);
   const seen = input.statuses
     ? ` (unkeyed=${input.statuses.withoutKey ?? "n/a"}, keyed=${input.statuses.withKey ?? "n/a"})`
     : "";
   if (!secretPresent) {
-    return { app, state: "missing", detail: `${keySecretIdFor(app)} does not exist — nothing can call ${app}` };
+    return { app, state: "missing", detail: `${secretId} does not exist — client acceptance for ${app} is unproven` };
   }
   if (input.keyCheck === "none") {
     // The key EXISTS, which is the half that can be checked without a gated
     // route. Reported every run so the exemption never goes quiet.
-    return { app, state: "exempt", detail: `${keySecretIdFor(app)} exists; ${app} has no API-key-gated route to probe` };
+    return { app, state: "exempt", detail: `${secretId} exists; ${app} has no API-key-gated route to probe` };
   }
   switch (verdict) {
     case "authenticated":
@@ -403,7 +405,7 @@ export function assessKey(input: AssessInput): KeyAssessment {
       return {
         app,
         state: "rejected",
-        detail: `${keySecretIdFor(app)} exists but ${app} refuses it — revoked, expired, or signed by a rotated secret${seen}`,
+        detail: `${secretId} exists but ${app} refuses it — revoked, expired, or signed by a rotated secret${seen}`,
       };
     case "ungated":
       return {
@@ -695,15 +697,15 @@ export async function checkApp(app: FleetApp, io: Io, region: string): Promise<K
         `user sign-in and membership NOT tested (issuer ${app.issuer}; current base ${app.baseUrl}; target ${app.targetClientBase})` };
   }
   const secret = await io.readSecret(app.keySecretId, region);
-  if (!secret) return assessKey({ app: app.app, secretPresent: false, verdict: "unreachable" });
+  if (!secret) return assessKey({ app: app.app, keySecretId: app.keySecretId, secretPresent: false, verdict: "unreachable" });
   if (app.keyCheck === "none") {
-    return assessKey({ app: app.app, secretPresent: true, verdict: "unreachable", keyCheck: "none" });
+    return assessKey({ app: app.app, keySecretId: app.keySecretId, secretPresent: true, verdict: "unreachable", keyCheck: "none" });
   }
   const url = probeUrlFor(app.baseUrl, app.probePath);
   const withoutKey = await io.probe(url, null, { auth: app.probeAuth });
   const withKey = await io.probe(url, secret, { auth: app.probeAuth });
   const verdict = classifyProbe(withoutKey, withKey);
-  return assessKey({ app: app.app, secretPresent: true, verdict, statuses: { withoutKey, withKey } });
+  return assessKey({ app: app.app, keySecretId: app.keySecretId, secretPresent: true, verdict, statuses: { withoutKey, withKey } });
 }
 
 // --------------------------------------------------------------------------

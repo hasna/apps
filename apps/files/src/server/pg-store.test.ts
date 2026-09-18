@@ -407,3 +407,14 @@ describe("pg-store ranked search — content scope served by the hosted store, n
     expect(out[1].search_document_kinds).toBeUndefined();
   });
 });
+
+describe("pg-store exact status=all semantics", () => {
+  test("status=all omits the active-only predicate instead of querying a literal all status", async () => {
+    const { client, sql, params } = recordingClient();
+    await listFiles(client, { status: "all", limit: 10 });
+    const query = sql.find((text) => /SELECT (?:DISTINCT )?f\.\*/.test(text));
+    expect(query).toBeDefined();
+    expect(query).not.toContain("f.status =");
+    expect(params.flat()).not.toContain("all");
+  });
+});

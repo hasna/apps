@@ -12,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { createSandbox, type Sandbox } from "../testing/sandbox.js";
-import { lockIsHeld, withFileLock } from "./lock.js";
+import { lockIsHeld, withFileLock, withFileLockSync } from "./lock.js";
 
 let sandbox: Sandbox;
 
@@ -85,15 +85,38 @@ describe("withFileLock", () => {
     expect(lockIsHeld(lockPath())).toBe(false);
   });
 
-  test("a stale lock is taken over rather than blocking forever", async () => {
+  test("age alone never permits taking over a lock", async () => {
     writeLock("long-dead", 10 * 60_000);
-    const result = await withFileLock("sweep", lockPath(), () => "ran");
-    expect(result).toBe("ran");
-    expect(existsSync(lockPath())).toBe(false);
+    expect(lockIsHeld(lockPath())).toBe(true);
+  });
+
+  test("a live holder remains exclusive after its timestamp becomes old", async () => {
+    await withFileLock("sweep", lockPath(), async () => {
+      const stamp = new Date(Date.now() - 60_000);
+      utimesSync(lockPath(), stamp, stamp);
+      let entered = false;
+      await expect(withFileLock("sweep", lockPath(), () => { entered = true; }, { timeoutMs: 20 })).rejects.toThrow(/lock/);
+      expect(entered).toBe(false);
+      expect(lockIsHeld(lockPath())).toBe(true);
+    });
   });
 
   test("a lock with a fresh mtime is respected (not stale)", () => {
     writeLock("live", 0);
     expect(lockIsHeld(lockPath())).toBe(true);
   });
+});
+
+test("synchronous source acquisition waits for a sibling process without stealing a held lock", async () => {
+  writeLock("sibling");
+  const child = Bun.spawn({ cmd: [process.execPath, "-e", 'setTimeout(() => require("node:fs").unlinkSync(process.argv[1]), 50)', lockPath()], stdout: "ignore", stderr: "pipe" });
+  try {
+    expect(withFileLockSync("source", lockPath(), () => 42, { timeoutMs: 1500 })).toBe(42);
+    expect(existsSync(lockPath())).toBe(false);
+  } finally { await child.exited; }
+});
+test("synchronous acquisition times out without entering or replacing the holder", () => {
+  writeLock("still-held"); let entered = false;
+  expect(() => withFileLockSync("source", lockPath(), () => { entered = true; }, { timeoutMs: 20 })).toThrow();
+  expect(entered).toBe(false); expect(JSON.parse(readFileSync(lockPath(), "utf8")).token).toBe("still-held");
 });

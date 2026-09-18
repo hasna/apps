@@ -151,7 +151,7 @@ describe("doctor", () => {
     const store = makeTestStore(sandbox, { config: { retention: { maxTotalBytes: 4, maxEntries: 100 } } });
     store.put(sandbox.file("f.bin", "12345678"));
     store.put(sandbox.file("g.bin", "12345678")); // refused: over quota, not excluded
-    store.put(sandbox.file("proj/node_modules/h.bin", "12345678")); // refused, then deleted (excluded)
+    store.put(sandbox.file("proj/node_modules/h.bin", "12345678"), { allowUncaptured: true }); // explicit operator override
 
     const refusals = check(store.doctor(), "capture.refusals");
     expect(refusals.status).toBe("warn");

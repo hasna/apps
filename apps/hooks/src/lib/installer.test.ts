@@ -173,7 +173,7 @@ describe("installer", () => {
       const entry = settings.hooks.PreToolUse.find((e: any) =>
         e.hooks?.some((h: any) => h.command === "hooks run trash-guard")
       );
-      expect(entry.matcher).toBe("Bash");
+      expect(entry.matcher).toBe("^(Bash|apply_patch|ApplyPatch|functions\\.apply_patch)$");
       // The harness default is 600s and a TIMED-OUT HOOK DOES NOT BLOCK — the
       // guard's registration must carry a timeout it can meet.
       expect(entry.hooks[0].timeout).toBe(5);

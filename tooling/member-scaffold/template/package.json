@@ -4,6 +4,15 @@
   "type": "module",
   "description": "__MEMBER_DESC__",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hasna/apps.git",
+    "directory": "apps/__MEMBER__"
+  },
+  "homepage": "https://github.com/hasna/apps/tree/main/apps/__MEMBER__#readme",
+  "bugs": {
+    "url": "https://github.com/hasna/apps/issues"
+  },
   "bin": {
     "__MEMBER__": "dist/cli/index.js",
     "__MEMBER__-mcp": "dist/mcp/index.js",

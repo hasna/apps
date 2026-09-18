@@ -70,6 +70,10 @@ async function fixture(mode: Mode, action: (invoke: (human?: boolean, force?: bo
     const row = { method: request.method ?? "", path: request.url ?? "", ifMatch: typeof request.headers["if-match"] === "string" ? request.headers["if-match"] : null };
     calls.push(row);
     if (request.headers.authorization !== `Bearer ${token}`) { response.writeHead(401); response.end(); return; }
+    if (request.method === "GET" && request.url === "/prefix/api/v1/capabilities") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ contractVersion: 1, apiVersion: 1, capabilities: ["skills.registry"], permissions: { publish: true } })); return;
+    }
     if (request.method === "GET") {
       if (mode === "transport") { request.socket.destroy(); return; }
       const status = /^\d+$/.test(mode) ? Number(mode) : mode.includes("404") ? 404 : 200;
@@ -155,8 +159,10 @@ for (const mode of ["current", "domain404", "nested-domain404", "bump", "bump-co
   if (conflict) expect(value.error).toContain("NEWER revision"); else { expect(value.published).toBe(true); expect(value.version).toBe(mode === "bump" ? "1.2.4" : "1.2.3"); }
   const ifMatch = mode.includes("404") || mode.startsWith("catalogue") ? null : "original-revision_A.1";
   expect(calls).toEqual([{ method: "GET", path: "/prefix/api/v1/skills/preflight-owned", ifMatch: null },
+    { method: "GET", path: "/prefix/api/v1/capabilities", ifMatch: null },
     { method: "POST", path: "/prefix/api/v1/skills", ifMatch, version: "1.2.3" },
-    ...(mode.startsWith("bump") ? [{ method: "POST", path: "/prefix/api/v1/skills", ifMatch, version: "1.2.4" }] : [])]);
+    ...(mode.startsWith("bump") ? [{ method: "GET", path: "/prefix/api/v1/capabilities", ifMatch: null },
+      { method: "POST", path: "/prefix/api/v1/skills", ifMatch, version: "1.2.4" }] : [])]);
 }), 15_000);
 
 test("force-new-version cannot bypass a failed revision preflight", () => fixture("500", async (invoke, calls) => {

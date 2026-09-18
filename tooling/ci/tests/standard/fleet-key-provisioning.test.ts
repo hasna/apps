@@ -305,8 +305,27 @@ describe("registry: the written inventory of hosted apps", () => {
     expect(registry.find((a) => a.app === "todos")!.baseUrl).toBe("https://todos.hasna.xyz");
   });
 
-  test("every key secret sits in the hasna/oss/<app>/api-key namespace", () => {
-    for (const app of registry.filter((a) => a.authMode === "fleet-api-key")) expect(app.keySecretId).toBe(keySecretIdFor(app.app));
+  test("every key secret uses the registered app namespace", () => {
+    for (const app of registry.filter((a) => a.authMode === "fleet-api-key")) {
+      expect(app.keySecretId).toBe(app.app === "trash" ? "trash/prod/clients/deploy-probe" : keySecretIdFor(app.app));
+    }
+  });
+
+  test("Trash audits its deployment identity without distributing a shared station key", async () => {
+    const trash = registry.find((app) => app.app === "trash")!;
+    expect(trash.probeAuth).toBe("bearer");
+    expect(trash.probePath).toBe("/v1/status");
+    expect(trash.notes).toContain("station-bound");
+    const lookedUp: string[] = [];
+    const result = await checkApp(trash, {
+      readSecret: async (id) => { lookedUp.push(id); return null; },
+      probe: async () => { throw new Error("must not probe without a key"); },
+      aws: async () => { throw new Error("audit must not mint"); },
+    }, "us-east-1");
+    expect(lookedUp).toEqual(["trash/prod/clients/deploy-probe"]);
+    expect(result.state).toBe("missing");
+    expect(result.detail).toContain("trash/prod/clients/deploy-probe");
+    expect(result.detail).not.toContain("hasna/oss/trash");
   });
 
   test("every probe path is absolute and every base URL is https", () => {

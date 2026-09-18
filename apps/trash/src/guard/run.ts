@@ -1,3 +1,4 @@
+import { VERSION } from "../version.js";
 /**
  * The guard's executor — the rewrite target `trash guard ...`.
  *
@@ -447,7 +448,7 @@ export function stdinAnswerer(fd: number = 0): () => string | null {
   };
 }
 
-function makeAsker(options: GuardRunOptions, io: GuardIO): (question: string) => boolean {
+function makeAsker(options: Pick<GuardRunOptions, "ask" | "stdinFd">, io: GuardIO): (question: string) => boolean {
   if (options.ask) return options.ask;
   const nextLine = stdinAnswerer(options.stdinFd ?? 0);
   return (question: string) => {
@@ -462,7 +463,26 @@ function makeAsker(options: GuardRunOptions, io: GuardIO): (question: string) =>
  * Run one intercepted delete command. Returns the exit code the user's shell
  * must see, plus counts a caller can log.
  */
+type CaptureOutcome = "captured" | "failed" | "refused";
+type CaptureRequest = { absolute: string; operand: string };
+export type GuardAsyncOptions = Omit<GuardRunOptions, "store"> & {
+  capture(absolute: string, operand: string): Promise<CaptureOutcome>;
+};
+
 export function runGuard(options: GuardRunOptions): GuardRunResult {
+  const steps = guardSteps(options); let step = steps.next();
+  while (!step.done) step = steps.next(capture(options, step.value.absolute, step.value.operand));
+  return step.value;
+}
+
+/** The same grammar and exit-code engine, with asynchronous hosted capture. */
+export async function runGuardAsync(options: GuardAsyncOptions): Promise<GuardRunResult> {
+  const steps = guardSteps(options); let step = steps.next();
+  while (!step.done) step = steps.next(await options.capture(step.value.absolute, step.value.operand));
+  return step.value;
+}
+
+function* guardSteps(options: Omit<GuardRunOptions, "store">): Generator<CaptureRequest, GuardRunResult, CaptureOutcome> {
   const io = options.io;
   const parsed = parseGuardArgs(options.argv, options.rmdir === true);
   const prog = options.progName ?? (options.rmdir === true ? "rmdir" : "rm");
@@ -559,7 +579,7 @@ export function runGuard(options: GuardRunOptions): GuardRunResult {
         continue;
       }
       if (interactive === "always" && !ask(`${prog}: remove directory '${operand}'? `)) continue;
-      const outcome = capture(options, absolute!, operand);
+      const outcome = yield { absolute: absolute!, operand };
       if (outcome === "refused") {
         refused += 1;
         continue;
@@ -606,7 +626,7 @@ export function runGuard(options: GuardRunOptions): GuardRunResult {
       if (!ask(question)) continue;
     }
 
-    const outcome = capture(options, absolute!, operand);
+    const outcome = yield { absolute: absolute!, operand };
     if (outcome === "refused") {
       refused += 1;
       continue;
@@ -659,7 +679,7 @@ function capture(options: GuardRunOptions, absolute: string, operand: string): "
       return "failed";
     case "refused": {
       if (options.allowUncaptured === true) {
-        const forced = options.store.put(absolute, { cwd: options.cwd, force: true, ...record })[0];
+        const forced = options.store.put(absolute, { cwd: options.cwd, allowUncaptured: true, ...record })[0];
         if (forced && (forced.status === "deleted_without_capture" || forced.status === "captured")) {
           return "captured";
         }
@@ -684,7 +704,7 @@ function capture(options: GuardRunOptions, absolute: string, operand: string): "
       // §11.7: a capture refusal refuses the DELETE. The path is untouched.
       io.stderr(`${prog}: cannot remove '${operand}': capture refused (${outcome.detail})\n`);
       io.stderr(
-        `trash guard: '${operand}' was NOT deleted. Re-run with --allow-uncaptured to delete it anyway, or add it to capture.excludeGlobs.\n`,
+        `trash guard: '${operand}' was NOT deleted. Free space or adjust capture limits, then retry. --allow-uncaptured explicitly discards recoverability.\n`,
       );
       return "refused";
     }
@@ -693,7 +713,7 @@ function capture(options: GuardRunOptions, absolute: string, operand: string): "
   }
 }
 
-const GUARD_VERSION = "0.0.0";
+const GUARD_VERSION = VERSION;
 
 const RM_HELP = `Usage: rm [OPTION]... [FILE]...
 Remove (unlink) the FILE(s) — through the trash guard, so a delete is

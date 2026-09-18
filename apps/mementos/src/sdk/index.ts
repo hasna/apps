@@ -174,6 +174,64 @@ export interface Agent {
   last_seen_at: string | null;
 }
 
+/** A registered machine in the shared machine registry. */
+export interface MementosMachine {
+  /** Stable server identity used by mutations and memory attribution. */
+  id: string;
+  /** Human display name; renaming does not change identity. */
+  name: string;
+  /** Account-local registration idempotency key, not an authorization boundary. */
+  hostname: string;
+  platform: string;
+  is_primary: boolean;
+  created_at: string;
+  last_seen_at: string;
+}
+
+export const MEMENTOS_MACHINE_REGISTRATION_CONTRACT = "mementos.machine-registration.v1" as const;
+export const MEMENTOS_MACHINE_LIST_CONTRACT = "mementos.machines.v1" as const;
+export const MEMENTOS_MACHINE_MUTATION_CONTRACT = "mementos.machine-mutation.v1" as const;
+export const MEMENTOS_MACHINE_TOUCH_CONTRACT = "mementos.machine-touch.v1" as const;
+
+export interface MementosMachineRegistrationInput {
+  hostname: string;
+  platform: string;
+  name?: string;
+}
+
+export interface MementosMachineRegistrationReceipt {
+  contract: typeof MEMENTOS_MACHINE_REGISTRATION_CONTRACT;
+  machine: MementosMachine;
+  created: boolean;
+  identity: { idempotency_key: "normalized_hostname"; stable_id: string };
+}
+
+export interface MementosMachineListReceipt {
+  contract: typeof MEMENTOS_MACHINE_LIST_CONTRACT;
+  machines: MementosMachine[];
+  count: number;
+  complete: true;
+}
+
+export interface MementosMachineMutationReceipt {
+  contract: typeof MEMENTOS_MACHINE_MUTATION_CONTRACT;
+  machine: MementosMachine;
+}
+
+export interface MementosMachineTouchReceipt {
+  contract: typeof MEMENTOS_MACHINE_TOUCH_CONTRACT;
+  touched: true;
+  id: string;
+  touched_at: string;
+  machine: MementosMachine;
+}
+
+export interface MementosMachineDeleteReceipt {
+  contract: typeof MEMENTOS_MACHINE_MUTATION_CONTRACT;
+  deleted: true;
+  id: string;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -730,6 +788,86 @@ function sdkProtocolError(operation: string, detail: string): MementosError {
 
 function sessionProtocolError(detail: string): MementosError {
   return sdkProtocolError("session jobs", detail);
+}
+
+function sdkObject(value: unknown, operation: string, field = "response"): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw sdkProtocolError(operation, `expected ${field} to be a JSON object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+const SDK_MACHINE_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+
+function sdkMachineHostname(value: string, operation: string): string {
+  const normalized = value.trim().replace(/\.+$/, "").toLowerCase();
+  if (!normalized || normalized.length > 253 || /[\u0000-\u001f\u007f/\\\s]/.test(normalized) || normalized !== value) {
+    throw sdkProtocolError(operation, "machine.hostname is not canonical");
+  }
+  return normalized;
+}
+
+function sdkMachinePlatform(value: string, operation: string): string {
+  const normalized = value.trim().toLowerCase();
+  if (!normalized || normalized.length > 64 || !/^[a-z0-9._-]+$/.test(normalized) || normalized !== value) {
+    throw sdkProtocolError(operation, "machine.platform is not canonical");
+  }
+  return normalized;
+}
+
+function sdkMachineName(value: unknown, operation: string): string {
+  if (typeof value !== "string" || !value || value.length > 128 || /[\u0000-\u001f\u007f]/.test(value)) {
+    throw sdkProtocolError(operation, "machine.name is outside the public contract");
+  }
+  return value;
+}
+
+function sdkMachineTimestamp(value: unknown, operation: string, field: string): string {
+  if (typeof value !== "string" || !SDK_MACHINE_TIMESTAMP.test(value)) {
+    throw sdkProtocolError(operation, `machine.${field} is not a canonical UTC timestamp`);
+  }
+  const parsed = new Date(value);
+  if (!Number.isFinite(parsed.getTime()) || parsed.toISOString() !== value) {
+    throw sdkProtocolError(operation, `machine.${field} is not a real calendar timestamp`);
+  }
+  return value;
+}
+
+function sdkMachine(value: unknown, operation: string): MementosMachine {
+  const machine = sdkObject(value, operation, "machine");
+  if (typeof machine["id"] !== "string" || !machine["id"]) {
+    throw sdkProtocolError(operation, "expected machine.id to be a non-empty string");
+  }
+  if (typeof machine["hostname"] !== "string" || typeof machine["platform"] !== "string") {
+    throw sdkProtocolError(operation, "expected machine hostname/platform strings");
+  }
+  if (typeof machine["is_primary"] !== "boolean") {
+    throw sdkProtocolError(operation, "expected machine.is_primary to be a boolean");
+  }
+  const createdAt = sdkMachineTimestamp(machine["created_at"], operation, "created_at");
+  const lastSeenAt = sdkMachineTimestamp(machine["last_seen_at"], operation, "last_seen_at");
+  if (lastSeenAt < createdAt) throw sdkProtocolError(operation, "machine.last_seen_at precedes created_at");
+  return {
+    id: machine["id"],
+    name: sdkMachineName(machine["name"], operation),
+    hostname: sdkMachineHostname(machine["hostname"], operation),
+    platform: sdkMachinePlatform(machine["platform"], operation),
+    is_primary: machine["is_primary"],
+    created_at: createdAt,
+    last_seen_at: lastSeenAt,
+  };
+}
+
+function sdkMachineMutation(value: unknown, operation: string, expectedId: string): MementosMachine {
+  const response = sdkObject(value, operation);
+  if (response["contract"] !== MEMENTOS_MACHINE_MUTATION_CONTRACT) {
+    throw sdkProtocolError(operation, `expected contract '${MEMENTOS_MACHINE_MUTATION_CONTRACT}'`);
+  }
+  const machine = sdkMachine(response["machine"], operation);
+  if (machine.id !== expectedId) {
+    throw sdkProtocolError(operation, "returned machine id does not match the requested stable id");
+  }
+  return machine;
 }
 
 function sessionObject(value: unknown, field = "response"): Record<string, unknown> {
@@ -1645,6 +1783,107 @@ export class MementosClient {
 
   listAgentsByProject(projectId: string): Promise<{ agents: Agent[]; count: number }> {
     return this.get(`/api/agents`, { project_id: projectId });
+  }
+
+  // --------------------------------------------------------------------------
+  // Machines
+  // --------------------------------------------------------------------------
+
+  async listMachines(): Promise<{ machines: MementosMachine[]; count: number; complete: true }> {
+    const operation = "GET /v1/machines";
+    const response = sdkObject(await this.get<unknown>("/api/machines"), operation);
+    if (response["contract"] !== MEMENTOS_MACHINE_LIST_CONTRACT || response["complete"] !== true || !Array.isArray(response["machines"])) {
+      throw sdkProtocolError(operation, `expected contract '${MEMENTOS_MACHINE_LIST_CONTRACT}', complete=true, and a machines array`);
+    }
+    const machines = response["machines"].map((entry, index) => sdkMachine(entry, `${operation} machines[${index}]`));
+    if (!Number.isSafeInteger(response["count"]) || response["count"] !== machines.length) {
+      throw sdkProtocolError(operation, "count does not match machines.length");
+    }
+    if (
+      new Set(machines.map((machine) => machine.id)).size !== machines.length ||
+      new Set(machines.map((machine) => machine.hostname)).size !== machines.length ||
+      new Set(machines.map((machine) => machine.name)).size !== machines.length
+    ) {
+      throw sdkProtocolError(operation, "machine ids, hostnames, or names are duplicated");
+    }
+    if (machines.filter((machine) => machine.is_primary).length > 1) {
+      throw sdkProtocolError(operation, "more than one machine is primary");
+    }
+    return { machines, count: machines.length, complete: true };
+  }
+
+  /**
+   * Register or re-announce a machine. The normalized hostname is the
+   * account-local idempotency key; the returned machine id is stable.
+   */
+  async registerMachine(input: MementosMachineRegistrationInput): Promise<MementosMachine> {
+    const operation = "POST /v1/machines";
+    const response = sdkObject(await this.post<unknown>("/api/machines", input), operation);
+    if (response["contract"] !== MEMENTOS_MACHINE_REGISTRATION_CONTRACT || typeof response["created"] !== "boolean") {
+      throw sdkProtocolError(operation, `expected contract '${MEMENTOS_MACHINE_REGISTRATION_CONTRACT}' and a boolean created receipt`);
+    }
+    const machine = sdkMachine(response["machine"], operation);
+    const identity = sdkObject(response["identity"], operation, "identity");
+    if (identity["idempotency_key"] !== "normalized_hostname" || identity["stable_id"] !== machine.id) {
+      throw sdkProtocolError(operation, "identity receipt does not match the stable machine id");
+    }
+    const expectedHostname = sdkMachineHostname(input.hostname.trim().replace(/\.+$/, "").toLowerCase(), operation);
+    const expectedPlatform = sdkMachinePlatform(input.platform.trim().toLowerCase(), operation);
+    if (machine.hostname !== expectedHostname || machine.platform !== expectedPlatform) {
+      throw sdkProtocolError(operation, "registration receipt does not match the requested hostname/platform");
+    }
+    if (response["created"] === true) {
+      const expectedName = input.name?.trim() || expectedHostname;
+      if (machine.name !== expectedName) throw sdkProtocolError(operation, "created registration receipt does not match the requested name");
+    }
+    return machine;
+  }
+
+  async getMachine(id: string): Promise<MementosMachine> {
+    return sdkMachineMutation(await this.get<unknown>(`/api/machines/${encodeURIComponent(id)}`), "GET /v1/machines/:id", id);
+  }
+
+  async renameMachine(id: string, name: string): Promise<MementosMachine> {
+    const normalizedName = name.trim();
+    const machine = sdkMachineMutation(
+      await this.patch<unknown>(`/api/machines/${encodeURIComponent(id)}`, { name: normalizedName }),
+      "PATCH /v1/machines/:id",
+      id,
+    );
+    if (machine.name !== normalizedName) throw sdkProtocolError("PATCH /v1/machines/:id", "returned name does not match the requested rename");
+    return machine;
+  }
+
+  async setPrimaryMachine(id: string): Promise<MementosMachine> {
+    const machine = sdkMachineMutation(
+      await this.post<unknown>(`/api/machines/${encodeURIComponent(id)}/primary`),
+      "POST /v1/machines/:id/primary",
+      id,
+    );
+    if (!machine.is_primary) throw sdkProtocolError("POST /v1/machines/:id/primary", "returned machine is not primary");
+    return machine;
+  }
+
+  async touchMachine(id: string): Promise<MementosMachine> {
+    const operation = "POST /v1/machines/:id/touch";
+    const response = sdkObject(await this.post<unknown>(`/api/machines/${encodeURIComponent(id)}/touch`), operation);
+    if (response["contract"] !== MEMENTOS_MACHINE_TOUCH_CONTRACT || response["touched"] !== true || response["id"] !== id) {
+      throw sdkProtocolError(operation, "expected touched=true for the requested stable id");
+    }
+    const machine = sdkMachine(response["machine"], operation);
+    if (machine.id !== id || response["touched_at"] !== machine.last_seen_at) {
+      throw sdkProtocolError(operation, "touch receipt does not match the returned machine");
+    }
+    return machine;
+  }
+
+  async deleteMachine(id: string): Promise<{ deleted: true; id: string }> {
+    const operation = "DELETE /v1/machines/:id";
+    const response = sdkObject(await this.delete<unknown>(`/api/machines/${encodeURIComponent(id)}`), operation);
+    if (response["contract"] !== MEMENTOS_MACHINE_MUTATION_CONTRACT || response["deleted"] !== true || response["id"] !== id) {
+      throw sdkProtocolError(operation, "expected deleted=true for the requested stable id");
+    }
+    return { deleted: true, id };
   }
 
   // --------------------------------------------------------------------------

@@ -73,12 +73,13 @@ import {
   writeTempSync,
 } from "./fsx.js";
 import { firstMatchingGlob, isExcludedPath } from "./glob.js";
-import { inspectSource, evaluateDeletability, type CaptureRefusalDraft } from "./inspect.js";
+import { inspectSource, inspectAncestors, checkProtectedPath, evaluateDeletability, type CaptureRefusalDraft } from "./inspect.js";
+import { hashPath, sha256Text } from "./hash.js";
 import { describeMode, resolveTrashMode, type TrashMode } from "./mode.js";
 import { listRefusals, recordRefusal, tallyRefusals, type RefusalRecord } from "./refusals.js";
 import { planRetention, type RetentionPlan, type SweepStep } from "./retention.js";
 import { resolveTrashRoots, getHomeDir, type TrashRootOverrides, type TrashRoots } from "../paths.js";
-import { withFileLock } from "./lock.js";
+import { LockTimeoutError, withFileLock, withFileLockSync } from "./lock.js";
 
 export interface RemoteVerification {
   key: string;
@@ -112,7 +113,10 @@ export interface TrashStoreOptions {
 }
 
 export interface PutOptions {
+  /** rm compatibility only; never permission to discard uncaptured data. */
   force?: boolean;
+  /** Explicit irreversible operator override; never inferred from force or exclusions. */
+  allowUncaptured?: boolean;
   agent?: string;
   retentionDays?: number | null;
   cwd?: string;
@@ -322,17 +326,18 @@ export class TrashStore {
   /**
    * Trash one or more paths.
    *
-   * Refusal policy (§11.7, binding): if capture fails on a path that does NOT
-   * match an `excludeGlobs` entry, the DELETE IS REFUSED and the path stays; if
-   * it matches one, the delete proceeds and the refusal is recorded. `--force`
-   * overrides a capture refusal but never a protected path.
+   * Capture failure preserves the source. Only an explicit allowUncaptured
+   * operator action may override it; ordinary force and legacy exclusion
+   * patterns never grant permission to discard data.
    */
   put(targets: string | string[], options: PutOptions = {}): PutOutcome[] {
     this.ensureInit();
     const list = Array.isArray(targets) ? targets : [targets];
     const outcomes: PutOutcome[] = [];
     for (const target of list) {
-      outcomes.push(this.putOne(target, options));
+      const source = resolve(options.cwd ?? process.cwd(), target);
+      outcomes.push(withFileLockSync("trash-source", join(this.roots.state, "source-locks", `${sha256Text(source)}.lock`),
+        () => this.putOne(target, options), { timeoutMs: 5000 }));
     }
     return outcomes;
   }
@@ -405,7 +410,7 @@ export class TrashStore {
     }
 
     const excludeGlob = firstMatchingGlob(inspection.absolutePath, this.config.capture.excludeGlobs);
-    const exempt = excludeGlob !== null || options.force === true;
+    const exempt = options.allowUncaptured === true;
 
     if (draft.length > 0 || inspection.source === null) {
       const reason: CaptureRefusalDraft = draft[0] ?? {
@@ -419,7 +424,7 @@ export class TrashStore {
         reason,
         excludeGlob !== null,
         excludeGlob,
-        options.force === true,
+        options.allowUncaptured === true,
         deleted,
         options.agent ?? null,
       );
@@ -432,7 +437,7 @@ export class TrashStore {
           refusals: [record],
           detail:
             `${reason.detail} — capture refused, so the delete is refused too (§11.7). ` +
-            "Pass --force to delete anyway, or add the path to capture.excludeGlobs.",
+            "Free space or adjust the capture limit, then retry. --force does not bypass capture.",
         };
       }
       // The exempt class: the delete proceeds without a capture, and the refusal
@@ -445,7 +450,7 @@ export class TrashStore {
         status: "deleted_without_capture",
         entryId: null,
         refusals: [record],
-        detail: `${reason.detail} — path matched ${excludeGlob ?? "--force"}; deleted without a capture (recorded)`,
+        detail: `${reason.detail} — explicit --allow-uncaptured; deleted without a capture (recorded)`,
       };
     }
 
@@ -478,7 +483,7 @@ export class TrashStore {
           { reason: "io_error", detail: `entry id ${entry.id} already exists — refusing to clobber an identity` },
           excludeGlob !== null,
           excludeGlob,
-          options.force === true,
+          options.allowUncaptured === true,
           false,
           options.agent ?? null,
         );
@@ -512,7 +517,7 @@ export class TrashStore {
           { reason: "cross_device", detail: "the move crossed a filesystem boundary (EXDEV) — never copied" },
           excludeGlob !== null,
           excludeGlob,
-          options.force === true,
+          options.allowUncaptured === true,
           exempt,
           options.agent ?? null,
         );
@@ -777,23 +782,24 @@ export class TrashStore {
   // Metadata updates (§14.7: atomic replace + a revision field)
   // =========================================================================
 
-  updateEntry(id: string, mutate: (entry: TrashEntry) => TrashEntry, attempts = 5): TrashEntry {
+  private withEntryLock<T>(id: string, action: () => T): T {
+    return withFileLockSync("trash-entry", join(this.roots.state, "locks", `${assertSafeEntryId(id)}.lock`), action);
+  }
+
+  updateEntry(id: string, mutate: (entry: TrashEntry) => TrashEntry, _attempts = 5): TrashEntry {
     this.ensureInit();
-    assertSafeEntryId(id);
-    for (let attempt = 0; attempt < attempts; attempt += 1) {
-      const current = this.info(id);
-      if (!current) throw new Error(`no such entry: ${id}`);
-      const next = mutate({ ...current });
-      next.revision = current.revision + 1;
-      next.updatedAt = new Date(this.clock()).toISOString();
-      // Read-modify-write with a revision guard: a concurrent update that won
-      // the race is detected (its revision differs) and this attempt re-reads.
-      const reread = this.info(id);
-      if (!reread || reread.revision !== current.revision) continue;
-      writeFileAtomic(this.infoPath(id), `${JSON.stringify(next, null, 2)}\n`);
-      return next;
-    }
-    throw new Error(`entry ${id} is being updated concurrently; retry`);
+    return this.withEntryLock(id, () => this.updateEntryLocked(id, mutate));
+  }
+
+  private updateEntryLocked(id: string, mutate: (entry: TrashEntry) => TrashEntry): TrashEntry {
+    const current = this.info(id);
+    if (!current) throw new Error(`no such entry: ${id}`);
+    const next = mutate(structuredClone(current));
+    if (next.id !== current.id) throw new Error("an entry mutation cannot change its identity");
+    next.revision = current.revision + 1;
+    next.updatedAt = new Date(this.clock()).toISOString();
+    writeFileAtomic(this.infoPath(id), `${JSON.stringify(next, null, 2)}\n`);
+    return next;
   }
 
   setPinned(id: string, pinned: boolean): TrashEntry {
@@ -810,6 +816,10 @@ export class TrashStore {
 
   restore(id: string, options: { to?: string; overwrite?: boolean } = {}): RestoreResult {
     this.ensureInit();
+    return this.withEntryLock(id, () => this.restoreLocked(id, options));
+  }
+
+  private restoreLocked(id: string, options: { to?: string; overwrite?: boolean }): RestoreResult {
     const entry = this.info(id);
     if (!entry) throw new Error(`no such entry: ${id}`);
     if (entry.status !== "staged") {
@@ -819,8 +829,16 @@ export class TrashStore {
     if (lstatOrNull(payload) === null) {
       throw new Error(`entry ${id} has no payload at ${payload}`);
     }
+    this.assertPayloadIntegrity(payload, entry);
 
     const destination = options.to ? resolve(options.to) : entry.originalPath;
+    const protectedPath = checkProtectedPath(destination, {
+      home: getHomeDir(this.env),
+      extraRoots: [this.roots.files, this.roots.info, this.roots.state, dirname(this.roots.config)],
+    });
+    if (protectedPath) throw new Error(`refusing to restore into ${protectedPath}`);
+    const ancestorRefusal = inspectAncestors(destination)[0];
+    if (ancestorRefusal) throw new Error(`refusing to restore: ${ancestorRefusal.detail}`);
     if (lstatOrNull(destination) !== null && options.overwrite !== true) {
       throw new Error(
         `refusing to restore over ${destination} — the path is occupied (restore is no-clobber; ` +
@@ -835,7 +853,7 @@ export class TrashStore {
     // Persist the in-flight state BEFORE the move: the entry survives until the
     // restored bytes are durable, and recovery can tell a half-done restore
     // apart from a complete one (§14.8).
-    this.updateEntry(id, (current) => ({ ...current, status: "restoring", restoredTo: destination }));
+    this.updateEntryLocked(id, (current) => ({ ...current, status: "restoring", restoredTo: destination }));
 
     try {
       if (entry.kind === "dir") {
@@ -859,11 +877,12 @@ export class TrashStore {
       fsyncDirectory(this.roots.files);
     } catch (error) {
       // Roll the status back so the entry stays restorable; nothing was moved.
-      this.updateEntry(id, (current) => ({ ...current, status: "staged", restoredTo: null }));
+      this.updateEntryLocked(id, (current) => ({ ...current, status: "staged", restoredTo: null }));
       throw error;
     }
 
     this.crashAt?.("after_restore_move");
+    this.assertPayloadIntegrity(destination, entry);
     removeFile(this.infoPath(entry.id));
     fsyncDirectory(this.roots.info);
     return {
@@ -873,6 +892,16 @@ export class TrashStore {
       sizeBytes: entry.sizeBytes,
       sha256: entry.sha256,
     };
+  }
+
+  private assertPayloadIntegrity(path: string, entry: TrashEntry): void {
+    try {
+      const actual = hashPath(path, { maxBytes: entry.sizeBytes });
+      if (actual.kind === entry.kind && actual.sizeBytes === entry.sizeBytes && actual.sha256 === entry.sha256) return;
+    } catch {
+      // The caller keeps the payload/receipt for inspection and recovery.
+    }
+    throw new Error(`entry ${entry.id} failed integrity verification; its receipt has been retained`);
   }
 
   // =========================================================================
@@ -887,13 +916,16 @@ export class TrashStore {
     const result: PurgeResult = { purged: [], bytes: 0, dryRun };
     for (const id of ids) {
       assertSafeEntryId(id);
-      const entry = this.info(id);
-      if (!entry) continue;
       if (dryRun) continue;
-      this.removeEntryPayload(entry);
-      removeFile(this.infoPath(id));
-      result.purged.push(id);
-      result.bytes += entry.sizeBytes;
+      this.withEntryLock(id, () => {
+        const entry = this.info(id);
+        if (!entry) return;
+        if (entry.status === "restoring") throw new Error(`entry ${id} is restoring; purge refused`);
+        this.removeEntryPayload(entry);
+        removeFile(this.infoPath(id));
+        result.purged.push(id);
+        result.bytes += entry.sizeBytes;
+      });
     }
     fsyncDirectory(this.roots.info);
     return result;
@@ -1010,12 +1042,20 @@ export class TrashStore {
     }
 
     if (fresh.remote !== null) {
+      const stored = fresh.remote;
       const missing = await this.verifyRemoteEntry(fresh);
       if (!missing.ok) {
         return { deleted: false, basis: missing.basis, detail: missing.detail, verification: { id: fresh.id, fresh: false, detail: missing.detail } };
       }
+      return this.withEntryLock(fresh.id, () => {
+      const current = this.info(fresh.id);
+      if (!current) return { deleted: false, basis: "gone", detail: "entry disappeared during verification" };
+      if (current.pinned) return { deleted: false, basis: "pinned", detail: "pinned during remote verification" };
+      if (current.revision !== fresh.revision || current.status !== "staged") {
+        return { deleted: false, basis: "entry_changed", detail: "entry changed during remote verification; retry selection" };
+      }
       // Refresh the confirmation with the verification that just authorized THIS delete.
-      this.updateEntry(fresh.id, (entry) => ({
+      this.updateEntryLocked(fresh.id, (entry) => ({
         ...entry,
         remote: {
           key: missing.verification.key,
@@ -1025,7 +1065,6 @@ export class TrashStore {
           confirmedAt: new Date(this.clock()).toISOString(),
         },
       }));
-      const stored = fresh.remote;
       const freshEnough = this.clock() - Date.parse(stored.confirmedAt) <= this.config.retention.remoteVerificationHorizonMs;
       this.removeEntryPayload(fresh);
       removeFile(this.infoPath(fresh.id));
@@ -1042,6 +1081,7 @@ export class TrashStore {
             : "stored confirmation was older than the verification horizon — deleted only on the live re-verification",
         },
       };
+      });
     }
 
     // The local-only arm: no remote copy exists and none is expected (§15.11.1).
@@ -1053,14 +1093,20 @@ export class TrashStore {
         detail: "an un-uploaded entry in a hosted instance is never deleted to make room",
       };
     }
-    this.removeEntryPayload(fresh);
-    removeFile(this.infoPath(fresh.id));
-    fsyncDirectory(this.roots.info);
-    return {
-      deleted: true,
-      basis: step.basis,
-      detail: "local-only instance, past retentionDays, explicit apply — the only arm that may expire un-uploaded bytes",
-    };
+    return this.withEntryLock(fresh.id, () => {
+      const current = this.info(fresh.id);
+      if (!current || current.revision !== fresh.revision || current.pinned || current.status !== "staged") {
+        return { deleted: false, basis: "entry_changed", detail: "entry changed before commit; retry selection" };
+      }
+      this.removeEntryPayload(current);
+      removeFile(this.infoPath(current.id));
+      fsyncDirectory(this.roots.info);
+      return {
+        deleted: true,
+        basis: step.basis,
+        detail: "local-only instance, past retentionDays, explicit apply — the only arm that may expire un-uploaded bytes",
+      };
+    });
   }
 
   private async verifyRemoteEntry(
@@ -1208,16 +1254,32 @@ export class TrashStore {
 
     for (const entry of this.list({ includeRestored: true })) {
       if (entry.status !== "restoring") continue;
+      try {
+      this.withEntryLock(entry.id, () => {
+      const current = this.info(entry.id);
+      if (!current || current.status !== "restoring") return;
       const payloadPath = this.payloadPath(entry.id);
       const destination = entry.restoredTo ?? entry.originalPath;
       if (lstatOrNull(payloadPath) === null && lstatOrNull(destination) !== null) {
+        try {
+          if (inspectAncestors(destination).length > 0) throw new Error("unsafe destination");
+          this.assertPayloadIntegrity(destination, entry);
+        } catch {
+          report.unresolvable.push(`${entry.id} (restore destination failed integrity or ancestry verification — receipt retained)`);
+          return;
+        }
         removeFile(this.infoPath(entry.id));
         report.restoredEntries.push(entry.id);
-        continue;
+        return;
       }
       if (lstatOrNull(payloadPath) !== null) {
-        this.updateEntry(entry.id, (current) => ({ ...current, status: "staged", restoredTo: null }));
+        this.updateEntryLocked(entry.id, (current) => ({ ...current, status: "staged", restoredTo: null }));
         report.pendingRestores.push(entry.id);
+      }
+      });
+      } catch (error) {
+        if (!(error instanceof LockTimeoutError)) throw error;
+        report.inFlight.push(entry.id);
       }
     }
 

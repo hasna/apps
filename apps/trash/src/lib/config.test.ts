@@ -41,22 +41,15 @@ describe("defaults — the safe posture", () => {
     expect(DEFAULT_TRASH_CONFIG.version).toBe(1);
   });
 
-  test("the local clock is 30 days and the cloud clock OUTLIVES it", () => {
+  test("both retention defaults preserve recoverability for 90 days", () => {
     const { retention, cloud } = DEFAULT_TRASH_CONFIG;
-    expect(retention.retentionDays).toBe(30);
+    expect(retention.retentionDays).toBe(90);
     expect(cloud.retentionDays).toBe(90);
     expect(cloud.retentionDays! >= retention.retentionDays!).toBe(true);
   });
 
-  test("the default exclude list is exactly the not-precious class", () => {
-    expect([...DEFAULT_TRASH_CONFIG.capture.excludeGlobs]).toEqual([
-      "**/node_modules/**",
-      "**/.git/objects/**",
-      "**/target/**",
-      "**/dist/**",
-      "**/.venv/**",
-      "**/__pycache__/**",
-    ]);
+  test("default capture classifies no folder as expendable", () => {
+    expect([...DEFAULT_TRASH_CONFIG.capture.excludeGlobs]).toEqual([]);
     expect(DEFAULT_TRASH_CONFIG.capture.onRefuse).toBe("record");
   });
 });
@@ -163,7 +156,7 @@ describe("config set / unset", () => {
     const base = mergeTrashConfig();
     const set = setConfigValue(base, "retention.retentionDays", "45d");
     expect(set.retention.retentionDays).toBe(45);
-    expect(unsetConfigValue(set, "retention.retentionDays").retention.retentionDays).toBe(30);
+    expect(unsetConfigValue(set, "retention.retentionDays").retention.retentionDays).toBe(90);
   });
 
   test("`never` is meaningful only for the two clocks", () => {
@@ -176,7 +169,7 @@ describe("config set / unset", () => {
   test("a TTL suffix is accepted for the clocks and refused for anything else", () => {
     const base = mergeTrashConfig();
     expect(setConfigValue(base, "retention.retentionDays", "12h").retention.retentionDays).toBe(0.5);
-    expect(setConfigValue(base, "cloud.retentionDays", "45d").cloud.retentionDays).toBe(45);
+    expect(setConfigValue(base, "cloud.retentionDays", "95d").cloud.retentionDays).toBe(95);
     expect(() => setConfigValue(base, "cloud.retentionDays", "0d")).toThrow(/invalid TTL/);
     expect(() => setConfigValue(base, "retention.remoteVerificationHorizonMs", "30d")).toThrow(/cannot parse value/);
   });

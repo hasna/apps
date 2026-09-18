@@ -4292,10 +4292,11 @@ var package_default = {
   },
   repository: {
     type: "git",
-    url: "git+https://github.com/hasna/knowledge.git"
+    url: "https://github.com/hasna/apps.git",
+    directory: "apps/knowledge"
   },
   bugs: {
-    url: "https://github.com/hasna/knowledge/issues"
+    url: "https://github.com/hasna/apps/issues"
   },
   author: "Hasna Inc. <hasna@example.com>",
   engines: {
@@ -4322,7 +4323,8 @@ var package_default = {
     "@types/bun": "1.3.14",
     "@types/pg": "^8.15.6",
     typescript: "5.9.3"
-  }
+  },
+  homepage: "https://github.com/hasna/apps/tree/main/apps/knowledge#readme"
 };
 
 // src/knowledge-db.ts

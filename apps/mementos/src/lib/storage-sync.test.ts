@@ -57,6 +57,7 @@ function freshDb(): Database {
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       last_seen_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
+    CREATE UNIQUE INDEX idx_machines_hostname ON machines(hostname);
   `);
   return db;
 }

@@ -12,7 +12,7 @@ import { describe, expect, test } from "bun:test";
 import { DEFAULT_TRASH_CONFIG } from "./config.js";
 import { firstMatchingGlob, globToRegExp, isExcludedPath, normalizeForMatch } from "./glob.js";
 
-const EXCLUDES = DEFAULT_TRASH_CONFIG.capture.excludeGlobs;
+const EXCLUDES = ["**/node_modules/**", "**/.git/objects/**", "**/dist/**", "**/target/**", "**/.venv/**", "**/__pycache__/**"];
 
 describe("globToRegExp — the supported grammar", () => {
   test("a pattern never matches a mere string PREFIX", () => {
@@ -77,7 +77,7 @@ describe("isExcludedPath / firstMatchingGlob", () => {
     expect(firstMatchingGlob("/a/src/x", globs)).toBeNull();
   });
 
-  test("the default list covers the not-precious class and nothing else", () => {
+  test("explicit legacy patterns match only their named folders; defaults match nothing", () => {
     const excluded = [
       "/w/proj/node_modules/left-pad/index.js",
       "/w/proj/.git/objects/ab/cdef",
@@ -86,7 +86,10 @@ describe("isExcludedPath / firstMatchingGlob", () => {
       "/w/proj/.venv/lib/python3.12/site-packages/x.py",
       "/w/proj/__pycache__/mod.cpython-312.pyc",
     ];
-    for (const path of excluded) expect(isExcludedPath(path, EXCLUDES)).toBe(true);
+    for (const path of excluded) {
+      expect(isExcludedPath(path, EXCLUDES)).toBe(true);
+      expect(isExcludedPath(path, DEFAULT_TRASH_CONFIG.capture.excludeGlobs)).toBe(false);
+    }
 
     const precious = [
       "/w/proj/src/main.ts",

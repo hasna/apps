@@ -78,10 +78,7 @@ Remote flow:
    manifest/extracted text it is allowed to read, and store knowledge artifacts
    in a local app data directory or its own configured S3 bucket.
 
-The current CLI and MCP knowledge manifest, resolver, extraction, doctor, and
-outbox tools are on-box workflows over the local files index. They fail in API
-mode rather than reading a stale local database. The current `/v1` service does
-not expose those knowledge-specific workflows.
+Knowledge resolution, bounded extraction, snapshots, and doctor checks use the hosted Files data plane when API authority is selected. Manifest and outbox workflows remain on-box until they have dedicated tenant-scoped `/v1` contracts. Hosted revision refs are refused rather than substituting current bytes under an older revision identity.
 
 Example hosted paths:
 
@@ -146,17 +143,15 @@ Knowledge workflow examples:
 files knowledge manifest --source <source_id> --format jsonl --out manifest.jsonl
 files knowledge doctor open-files://file/f_123 --json
 files knowledge resolve open-files://file/f_123 --purpose knowledge_index --json
-files extract-text f_123 --json
+files extract-text f_123 --output-file extraction.json --json
 files extract-snapshot f_123 --json
 files knowledge outbox poll --consumer open-knowledge --json
 files knowledge outbox ack open-knowledge <cursor> --json
 ```
 
-Current MCP tools expose the corresponding on-box surface:
-`export_knowledge_manifest`, `doctor_knowledge_sources`,
+MCP exposes `export_knowledge_manifest`, `doctor_knowledge_sources`,
 `resolve_knowledge_source`, `resolve_extracted_text`, `poll_knowledge_outbox`, and
-`ack_knowledge_outbox`. Manifest, doctor, resolve, extraction, and polling are
-read-only. Acknowledging the outbox updates a consumer checkpoint and therefore
+`ack_knowledge_outbox`. Doctor and resolver operations use the hosted Files API when selected; manifest and outbox operations remain on-box. Manifest, doctor, resolve, extraction, and polling are read-only. Acknowledging the outbox updates a consumer checkpoint and therefore
 requires the MCP `mutations` capability. None of these tools grants write access
 to source-file bytes.
 
@@ -166,6 +161,10 @@ JSON issue codes for missing refs, stale revisions, restricted ACLs, deleted
 rows, disabled sources, unsupported content, and missing extracted text support.
 Recommendations are machine-readable (`reindex`, `source_review`, `fix_ref`,
 `skip`, or `none`) and never include raw source bytes or credentials.
+
+## Hosted resolver integrity
+
+Hosted file refs resolve through the configured Files app base (`https://api.hasna.com/files`) with one client-appended `/v1`. Hosted revision refs are refused until the service exposes an exact revision-aware byte route; the client never substitutes current bytes while retaining an older revision label. Hosted doctor performs a bounded extraction before reporting extracted-text readiness, and `status=all` is forwarded exactly. Content, extraction, snapshots, and signed downloads share the same MIME policy.
 
 ## Read-Only Resolver
 

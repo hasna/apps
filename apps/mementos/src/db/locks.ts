@@ -36,14 +36,22 @@ function parseLockRow(row: unknown, operation = "lock response"): ResourceLock {
   if (!LOCK_TYPES.has(lockType as LockType)) {
     throw new MementosApiProtocolError(operation, "unsupported 'lock_type'");
   }
+  const timestamp = (field: "locked_at" | "expires_at"): string => {
+    const value = object[field];
+    const date = value instanceof Date ? value : new Date(typeof value === "string" ? value : Number.NaN);
+    if (!Number.isFinite(date.getTime())) {
+      throw new MementosApiProtocolError(operation, `expected '${field}' to be a timestamp`);
+    }
+    return date.toISOString();
+  };
   return {
     id: expectString(object, "id", operation),
     resource_type: resourceType as ResourceType,
     resource_id: expectString(object, "resource_id", operation),
     agent_id: expectString(object, "agent_id", operation),
     lock_type: lockType as LockType,
-    locked_at: expectString(object, "locked_at", operation),
-    expires_at: expectString(object, "expires_at", operation),
+    locked_at: timestamp("locked_at"),
+    expires_at: timestamp("expires_at"),
   };
 }
 
@@ -93,9 +101,9 @@ export function acquireLock(
   // Check if this agent already holds a lock on this resource with same type (heartbeat / TTL refresh)
   const ownLock = d
     .query(
-      "SELECT * FROM resource_locks WHERE resource_type = ? AND resource_id = ? AND agent_id = ? AND lock_type = ? AND expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"
+      "SELECT * FROM resource_locks WHERE resource_type = ? AND resource_id = ? AND agent_id = ? AND lock_type = ? AND expires_at > ?"
     )
-    .get(resourceType, resourceId, agentId, lockType) as Record<string, unknown> | null;
+    .get(resourceType, resourceId, agentId, lockType, now()) as Record<string, unknown> | null;
 
   if (ownLock) {
     // Refresh TTL on existing lock
@@ -111,9 +119,9 @@ export function acquireLock(
     // Check if any OTHER agent holds an active exclusive lock
     const existing = d
       .query(
-        "SELECT * FROM resource_locks WHERE resource_type = ? AND resource_id = ? AND lock_type = 'exclusive' AND agent_id != ? AND expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"
+        "SELECT * FROM resource_locks WHERE resource_type = ? AND resource_id = ? AND lock_type = 'exclusive' AND agent_id != ? AND expires_at > ?"
       )
-      .get(resourceType, resourceId, agentId) as Record<string, unknown> | null;
+      .get(resourceType, resourceId, agentId, now()) as Record<string, unknown> | null;
 
     if (existing) {
       return null;
@@ -216,13 +224,13 @@ export function checkLock(
   cleanExpiredLocks(d);
 
   const query = lockType
-    ? "SELECT * FROM resource_locks WHERE resource_type = ? AND resource_id = ? AND lock_type = ? AND expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"
-    : "SELECT * FROM resource_locks WHERE resource_type = ? AND resource_id = ? AND expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')";
+    ? "SELECT * FROM resource_locks WHERE resource_type = ? AND resource_id = ? AND lock_type = ? AND expires_at > ?"
+    : "SELECT * FROM resource_locks WHERE resource_type = ? AND resource_id = ? AND expires_at > ?";
 
   const rows = (
     lockType
-      ? d.query(query).all(resourceType, resourceId, lockType)
-      : d.query(query).all(resourceType, resourceId)
+      ? d.query(query).all(resourceType, resourceId, lockType, now())
+      : d.query(query).all(resourceType, resourceId, now())
   ) as Record<string, unknown>[];
 
   return rows.map((row) => parseLockRow(row));
@@ -249,13 +257,13 @@ export function agentHoldsLock(
   const d = db || getDatabase();
 
   const query = lockType
-    ? "SELECT * FROM resource_locks WHERE agent_id = ? AND resource_type = ? AND resource_id = ? AND lock_type = ? AND expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"
-    : "SELECT * FROM resource_locks WHERE agent_id = ? AND resource_type = ? AND resource_id = ? AND expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')";
+    ? "SELECT * FROM resource_locks WHERE agent_id = ? AND resource_type = ? AND resource_id = ? AND lock_type = ? AND expires_at > ?"
+    : "SELECT * FROM resource_locks WHERE agent_id = ? AND resource_type = ? AND resource_id = ? AND expires_at > ?";
 
   const row = (
     lockType
-      ? d.query(query).get(agentId, resourceType, resourceId, lockType)
-      : d.query(query).get(agentId, resourceType, resourceId)
+      ? d.query(query).get(agentId, resourceType, resourceId, lockType, now())
+      : d.query(query).get(agentId, resourceType, resourceId, now())
   ) as Record<string, unknown> | null;
 
   return row ? parseLockRow(row) : null;
@@ -274,9 +282,9 @@ export function listAgentLocks(agentId: string, db?: Database): ResourceLock[] {
   cleanExpiredLocks(d);
   const rows = d
     .query(
-      "SELECT * FROM resource_locks WHERE agent_id = ? AND expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now') ORDER BY locked_at DESC"
+      "SELECT * FROM resource_locks WHERE agent_id = ? AND expires_at > ? ORDER BY locked_at DESC"
     )
-    .all(agentId) as Record<string, unknown>[];
+    .all(agentId, now()) as Record<string, unknown>[];
   return rows.map((row) => parseLockRow(row));
 }
 
@@ -296,11 +304,12 @@ export interface ExpiredLockInfo {
  */
 export function cleanExpiredLocksWithInfo(db?: Database): ExpiredLockInfo[] {
   const d = db || getDatabase();
+  const cutoff = now();
   const expired = d.query(
-    "SELECT id, resource_type, resource_id, agent_id, lock_type FROM resource_locks WHERE expires_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"
-  ).all() as ExpiredLockInfo[];
+    "SELECT id, resource_type, resource_id, agent_id, lock_type FROM resource_locks WHERE expires_at <= ?"
+  ).all(cutoff) as ExpiredLockInfo[];
   if (expired.length > 0) {
-    d.run("DELETE FROM resource_locks WHERE expires_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now')");
+    d.run("DELETE FROM resource_locks WHERE expires_at <= ?", cutoff);
   }
   return expired;
 }
@@ -312,6 +321,6 @@ export function cleanExpiredLocks(db?: Database): number {
     return expectNonNegativeInteger(expectObject(data, operation), "cleaned", operation);
   }
   const d = db || getDatabase();
-  const result = d.run("DELETE FROM resource_locks WHERE expires_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now')");
+  const result = d.run("DELETE FROM resource_locks WHERE expires_at <= ?", now());
   return result.changes;
 }

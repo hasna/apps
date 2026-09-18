@@ -7,6 +7,7 @@ import { normalizeHermesHookInput, assertHermesTool } from "../../lib/agent-herm
 import { selectedProfileId } from "./context.js";
 import { AGENT_ADAPTERS, INTEGRATION_AGENTS, normalizeAgentHookEvent } from "../../lib/agent-adapters.js";
 import { planAgentIntegration, applyAgentIntegration, inventoryNativeSkills, archiveNativeSkills, assertManagedAgentBridge, hookContextOutput, normalizeAgentHookPrompt, type IntegrationAgent } from "../../lib/agent-integration.js";
+import { enrollCodexNativeHooks } from "../../lib/agent-codex-trust.js";
 
 const RECOVERABLE_CONTEXT_CACHE_ERRORS = new Set(["CACHED_PROFILE_EXPIRED", "CACHED_PROFILE_MISSING", "CACHED_BUNDLE_MISSING"]);
 
@@ -50,8 +51,8 @@ export function registerAgentIntegration(parent: Command): void {
     .action(async () => { await writeCliOutput(JSON.stringify({ agents: INTEGRATION_AGENTS.map(agent => ({ agent, bridge: true, ...AGENT_ADAPTERS[agent] })), inventoryOnly: ["codewith", "windsurf", "pi", "amp", "cline", "roo", "copilot"], limitations: ["Cursor prompt hooks gate submission; selected context is injected at session start only.", "Native discovery checks cover known home roots and current project ancestors. External plugin hook injection and arbitrary added directories require separate review.", "Hermes injects selected prompt context, but native pre_llm_call fails open. Exact native hook trust, bundled reseeding opt-out, native payload retirement and a supervised pre-tool guard are required. Child failures block explicitly; native host/supervisor death is not a universal fail-closed guarantee.", "Restart agents and use their normal hook trust controls after installation."] }, null, 2)); });
   hook.command("install")
     .option("--agent <agent>", `Agent to configure: ${INTEGRATION_AGENTS.join(", ")}, all`, "all")
-    .option("--command <path>", "Skills executable used by the hook", "skills")
-    .option("--selection-profile <id>", "Shared selection profile", "default")
+    .option("--command <path>", "Skills executable used by the hook (preserves existing binding; new agents use skills)")
+    .option("--selection-profile <id>", "Selection profile (preserves existing binding; new agents use default)")
     .option("--include-vendor", "Retained for compatibility; vendor system skills are always inventoried and disabled", false)
     .option("--discovery-inputs <file>", "Advanced reviewed active plugin roots and source hashes for unsupported registrations")
     .option("--allow-root-aliases", "Allow home .claude/.codex aliases to existing directories within this home", false)
@@ -67,6 +68,24 @@ export function registerAgentIntegration(parent: Command): void {
         const receipt = { applied: options.apply, planned: plan.changes.map(change => change.path), ...result, rootAliases: plan.rootAliases ?? [], discovery: plan.discoveryAfter, nativeSkills: plan.nativeSkills.map(entry => ({ agent: entry.agent, path: entry.path, managed: entry.managed, vendor: entry.vendor, system: entry.system === true, bridge: entry.bridge === true })), requiresNativeRetirement: plan.nativeSkills.some(entry => !entry.bridge && !entry.system) };
         if (options.json) await writeCliOutput(JSON.stringify(receipt));
         else await writeCliOutput(`${options.apply ? "Configured" : "Planned"} ${plan.changes.length} agent configuration change(s).${options.apply ? " Restart the agent and trust the installed hook configuration." : " Use --apply to install."}`);
+      } catch (error) { console.error((error as Error).message); process.exitCode = 1; }
+    });
+
+  hook.command("trust")
+    .requiredOption("--agent <agent>", "Native trust adapter (codex)")
+    .option("--codex-command <path>", "Installed Codex executable used for its native configuration API", "codex")
+    .option("--apply", "Enable and trust only the exact managed Skills hook identities", false)
+    .option("--plan-digest <sha256>", "Exact reviewed dry-run digest required with --apply")
+    .option("--json", "Output the native trust plan or receipt", false)
+    .description("Plan or enroll exact Skills hooks through Codex native trust controls")
+    .action(async (options) => {
+      try {
+        if (options.agent !== "codex") throw new Error("Native trust enrollment currently supports --agent codex only");
+        const result = await enrollCodexNativeHooks({ codexCommand: options.codexCommand, apply: options.apply, reviewedPlanDigest: options.planDigest });
+        if (options.json) await writeCliOutput(JSON.stringify(result));
+        else await writeCliOutput(result.applied
+          ? `Enrolled ${result.planned.length} Skills hook(s) for new Codex processes. Existing sessions were not reloaded; use their native hook controls.`
+          : result.planned.length ? `Planned ${result.planned.length} native hook trust change(s). Review the --json plan, then use --apply --plan-digest ${result.planDigest}.` : "The managed Skills hooks are enabled and trusted for new Codex processes. Existing session dispatch was not checked.");
       } catch (error) { console.error((error as Error).message); process.exitCode = 1; }
     });
 

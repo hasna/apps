@@ -196,9 +196,14 @@ get_focus
 unfocus
 ```
 
-Use stable agent and project IDs in memory calls after registration. A primary
-machine controls fallback visibility/synchronization behavior; startup warns
-when no primary machine is configured.
+Use stable agent and project IDs in memory calls after registration. Machine
+registration uses the normalized hostname as an account-local idempotency key,
+not as an authorization boundary; the returned machine `id` is the stable
+identity required by rename and primary mutations. Re-registering the same
+hostname refreshes its presence but never renames or takes over the existing
+row. A primary machine controls fallback visibility/synchronization behavior;
+startup warns when no primary machine is configured. Machine tools are exposed
+only by the `admin` and `full` MCP profiles.
 
 ### Knowledge graph (19)
 

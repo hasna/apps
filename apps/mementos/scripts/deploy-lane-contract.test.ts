@@ -1,4 +1,12 @@
-import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -19,13 +27,22 @@ import { afterEach, describe, expect, test } from "bun:test";
 
 // apps/mementos/scripts/ -> repository root
 const repositoryRoot = fileURLToPath(new URL("../../..", import.meta.url));
-const rootWorkflowPath = new URL("../../../.github/workflows/deploy-mementos.yml", import.meta.url);
+const rootWorkflowPath = new URL(
+  "../../../.github/workflows/deploy-mementos.yml",
+  import.meta.url,
+);
 // One level up from scripts/ is apps/mementos/.github/workflows/deploy.yml.
 // (Review finding: a "../../" form resolves to apps/.github/workflows/ and
 // makes this assertion vacuous — the dead nested lane would pass it.)
-const nestedWorkflowPath = new URL("../.github/workflows/deploy.yml", import.meta.url);
+const nestedWorkflowPath = new URL(
+  "../.github/workflows/deploy.yml",
+  import.meta.url,
+);
 const nestedWorkflowsDir = new URL("../.github/workflows/", import.meta.url);
-const deployScriptPath = new URL("../scripts/production-deploy.sh", import.meta.url);
+const deployScriptPath = new URL(
+  "../scripts/production-deploy.sh",
+  import.meta.url,
+);
 
 type WorkflowStep = {
   name?: string;
@@ -61,7 +78,9 @@ type Workflow = {
   jobs?: Record<string, WorkflowJob>;
 };
 
-function envValues(...sources: Array<Record<string, string> | undefined>): Record<string, string> {
+function envValues(
+  ...sources: Array<Record<string, string> | undefined>
+): Record<string, string> {
   const merged: Record<string, string> = {};
   for (const source of sources) {
     if (!source) continue;
@@ -74,7 +93,8 @@ function allWorkflowEnv(workflow: Workflow): Record<string, string> {
   const values: Record<string, string> = { ...envValues(workflow.env) };
   for (const job of Object.values(workflow.jobs ?? {})) {
     Object.assign(values, envValues(job?.env));
-    for (const step of job?.steps ?? []) Object.assign(values, envValues(step?.env));
+    for (const step of job?.steps ?? [])
+      Object.assign(values, envValues(step?.env));
   }
   return values;
 }
@@ -133,7 +153,9 @@ describe("mementos deploy lane contract", () => {
     // the nested lane; it must not return. The value lives in the
     // production-environment secret MEMENTOS_CORS_ORIGIN; the deploy script's
     // require_env keeps the gate fail-closed if the secret is ever unset.
-    expect(allEnv.MEMENTOS_CORS_ORIGIN).toBe("${{ secrets.MEMENTOS_CORS_ORIGIN }}");
+    expect(allEnv.MEMENTOS_CORS_ORIGIN).toBe(
+      "${{ secrets.MEMENTOS_CORS_ORIGIN }}",
+    );
     expect(source).not.toMatch(/hasna\.[a-z]{2,}/);
   });
 
@@ -143,8 +165,12 @@ describe("mementos deploy lane contract", () => {
     expect(allEnv.SERVICE).toBe("mementos-prod");
     expect(allEnv.WEB_FAMILY).toBe("mementos-prod");
     expect(allEnv.WEB_CONTAINER).toBe("mementos");
+    expect(allEnv.MIGRATION_FAMILY).toBe("mementos-prod-migrate");
+    expect(allEnv.MIGRATION_CONTAINER).toBe("mementos-migrate");
     expect(allEnv.ECR_REPOSITORY).toBe("mementos");
-    expect(allEnv.ECR_URL).toContain(".dkr.ecr.us-east-1.amazonaws.com/mementos");
+    expect(allEnv.ECR_URL).toContain(
+      ".dkr.ecr.us-east-1.amazonaws.com/mementos",
+    );
   });
 
   test("production-deploy.sh fails loudly without MEMENTOS_CORS_ORIGIN and injects it", () => {
@@ -164,21 +190,66 @@ describe("mementos deploy lane contract", () => {
     const deployJob = workflow.jobs?.deploy;
     expect(deployJob, "the workflow must declare a deploy job").toBeDefined();
     const steps = deployJob?.steps ?? [];
-    const credIndex = steps.findIndex((step) => step.name === "Configure AWS credentials (GitHub OIDC)");
-    expect(credIndex, "the deploy job must carry a 'Configure AWS credentials (GitHub OIDC)' step").toBeGreaterThanOrEqual(0);
+    const credIndex = steps.findIndex(
+      (step) => step.name === "Configure AWS credentials (GitHub OIDC)",
+    );
+    expect(
+      credIndex,
+      "the deploy job must carry a 'Configure AWS credentials (GitHub OIDC)' step",
+    ).toBeGreaterThanOrEqual(0);
     const credStep = steps[credIndex];
     expect(credStep?.uses).toContain("aws-actions/configure-aws-credentials@");
     const withArgs = credStep?.with ?? {};
-    expect(withArgs["role-to-assume"]).toBe("arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/${{ secrets.MEMENTOS_PROD_GHA_ROLE }}");
+    expect(withArgs["role-to-assume"]).toBe(
+      "arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/${{ secrets.MEMENTOS_PROD_GHA_ROLE }}",
+    );
     expect(withArgs["aws-region"]).toBe("${{ env.AWS_REGION }}");
-    const ecrIndex = steps.findIndex((step) => step.name === "Login to Amazon ECR");
+    const ecrIndex = steps.findIndex(
+      (step) => step.name === "Login to Amazon ECR",
+    );
     expect(ecrIndex).toBeGreaterThan(credIndex);
+  });
+
+  test("runs an exact-image one-shot migration before updating the service", () => {
+    const script = readFileSync(deployScriptPath, "utf8");
+    const migrationCall = script.indexOf('run_migration_task "$migration_td"');
+    const serviceUpdate = script.indexOf("ecs update-service");
+
+    expect(migrationCall).toBeGreaterThanOrEqual(0);
+    expect(serviceUpdate).toBeGreaterThan(migrationCall);
+    expect(script).toContain('command: ["mementos", "storage", "migrate"]');
+    expect(script).toContain('--task-definition "$MIGRATION_FAMILY"');
+    expect(script).not.toContain('run_migration_task "$new_td"');
+    expect(script).toContain("ecs wait tasks-stopped");
+    expect(script).toContain(
+      "migration task did not prove an exact-image transactional migration with exit code 0",
+    );
+    expect(script).toContain("migration_exit_code=0");
+  });
+
+  test("arms a same-step rollback finalizer before service mutation", () => {
+    const script = readFileSync(deployScriptPath, "utf8");
+    const arm = script.indexOf("ROLLBACK_ARMED=true");
+    const serviceUpdate = script.indexOf("ecs update-service", arm);
+
+    expect(arm).toBeGreaterThanOrEqual(0);
+    expect(serviceUpdate).toBeGreaterThan(arm);
+    expect(script).toContain("cleanup_and_guard_rollback");
+    expect(script).toContain(
+      "unexpected failure after candidate update; finalizer is restoring",
+    );
+    expect(script).toContain(
+      "candidate deployment failed and rollback could not be proven",
+    );
+    expect(script).toContain("DEPLOYMENT_PROVEN=true");
   });
 
   test("the deploy job runs only behind the ci gate (needs gate, proceed condition)", () => {
     const deployJob = workflow.jobs?.deploy;
     expect(deployJob, "the workflow must declare a deploy job").toBeDefined();
-    const needs = Array.isArray(deployJob?.needs) ? deployJob?.needs : [deployJob?.needs];
+    const needs = Array.isArray(deployJob?.needs)
+      ? deployJob?.needs
+      : [deployJob?.needs];
     expect(needs).toContain("gate");
     expect(deployJob?.if).toContain("needs.gate.outputs.proceed == 'true'");
   });
@@ -195,7 +266,9 @@ describe("mementos deploy lane contract", () => {
 // stable deploy-managed baseline). The entrypoint must map the deploy-lane
 // marker to the web server exactly like mementos-serve.
 // ---------------------------------------------------------------------------
-const entrypointPath = fileURLToPath(new URL("../docker-entrypoint.sh", import.meta.url));
+const entrypointPath = fileURLToPath(
+  new URL("../docker-entrypoint.sh", import.meta.url),
+);
 const entrypointDirs: string[] = [];
 
 function fakeBunDir(): string {
@@ -245,7 +318,9 @@ describe("mementos image entrypoint command mapping", () => {
     const result = await runEntrypoint("mementos-deploy", ["--port", "8080"]);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout.trim()).toBe("FAKE-BUN /app/dist/server/index.js --port 8080");
+    expect(result.stdout.trim()).toBe(
+      "FAKE-BUN /app/dist/server/index.js --port 8080",
+    );
   });
 
   test("an unmapped command fails closed instead of silently running something else", async () => {

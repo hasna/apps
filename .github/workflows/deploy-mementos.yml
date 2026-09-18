@@ -55,6 +55,8 @@ env:
   SERVICE: mementos-prod
   WEB_FAMILY: mementos-prod
   WEB_CONTAINER: mementos
+  MIGRATION_FAMILY: mementos-prod-migrate
+  MIGRATION_CONTAINER: mementos-migrate
   ECR_REPOSITORY: mementos
   ECR_URL: "${{ secrets.MEMENTOS_PROD_AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com/mementos"
   # Host/Origin allowlist for state-changing requests. Must name the

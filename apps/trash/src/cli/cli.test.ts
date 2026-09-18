@@ -33,7 +33,7 @@ interface Run {
 async function run(...args: string[]): Promise<Run> {
   const proc = Bun.spawn({
     cmd: ["bun", CLI, "--spool", sandbox.path("spool"), ...args],
-    env: spawnEnv(sandbox),
+    env: spawnEnv(sandbox, { HASNA_TRASH_LOCAL: "1" }),
     cwd: sandbox.root,
     stdout: "pipe",
     stderr: "pipe",
@@ -110,11 +110,11 @@ describe("put", () => {
     expect(refusals.stdout).toContain("too_large");
   });
 
-  test("--force deletes a path whose capture was refused, and records that it did", async () => {
+  test("--allow-uncaptured is an explicit irreversible operator override", async () => {
     await run("config", "set", "capture.maxEntryBytes", "8");
     const big = sandbox.file("precious/big.bin", "this is more than eight bytes");
 
-    const put = await run("--json", "put", "--force", big);
+    const put = await run("--json", "put", "--allow-uncaptured", big);
 
     expect(put.code).toBe(0);
     const outcome = json<{ status: string; refusals: { deleted: boolean; forced: boolean }[] }[]>(put.stdout)[0]!;
@@ -123,19 +123,20 @@ describe("put", () => {
     expect(existsSync(big)).toBe(false);
   });
 
-  test("a refusal inside an exclude glob deletes and records, with exit 0", async () => {
+  test("a legacy exclusion cannot turn capture failure into permanent deletion", async () => {
     await run("config", "set", "capture.maxEntryBytes", "8");
+    await run("config", "set", "capture.excludeGlobs", '["**/node_modules/**"]');
     const build = sandbox.file("proj/node_modules/left-pad/index.js", "module.exports = () => 'more than eight bytes'");
 
     const put = await run("--json", "put", build);
 
-    expect(put.code).toBe(0);
+    expect(put.code).toBe(2);
     const outcome = json<{ status: string; refusals: { deleted: boolean; excluded: boolean; excludeGlob: string }[] }[]>(put.stdout)[0]!;
-    expect(outcome.status).toBe("deleted_without_capture");
-    expect(outcome.refusals[0]!.deleted).toBe(true);
+    expect(outcome.status).toBe("refused");
+    expect(outcome.refusals[0]!.deleted).toBe(false);
     expect(outcome.refusals[0]!.excluded).toBe(true);
     expect(outcome.refusals[0]!.excludeGlob).toBe("**/node_modules/**");
-    expect(existsSync(build)).toBe(false);
+    expect(existsSync(build)).toBe(true);
   });
 
   test("a protected path is refused even with --force", async () => {
@@ -278,11 +279,11 @@ describe("status / doctor / config", () => {
     const listed = json<{ retention: { retentionDays: number; dryRun: boolean }; cloud: { retentionDays: number } }>(
       (await run("config", "list")).stdout,
     );
-    expect(listed.retention.retentionDays).toBe(30);
+    expect(listed.retention.retentionDays).toBe(90);
     expect(listed.retention.dryRun).toBe(true);
     expect(listed.cloud.retentionDays).toBe(90);
 
-    expect((await run("config", "get", "retention.retentionDays")).stdout.trim()).toBe("30");
+    expect((await run("config", "get", "retention.retentionDays")).stdout.trim()).toBe("90");
 
     const set = await run("config", "set", "retention.retentionDays", "45");
     expect(set.code).toBe(0);
@@ -291,7 +292,7 @@ describe("status / doctor / config", () => {
     expect(json<{ retention: { retentionDays: number } }>((await run("config", "list")).stdout).retention.retentionDays).toBe(45);
 
     expect((await run("config", "unset", "retention.retentionDays")).code).toBe(0);
-    expect((await run("config", "get", "retention.retentionDays")).stdout.trim()).toBe("30");
+    expect((await run("config", "get", "retention.retentionDays")).stdout.trim()).toBe("90");
 
     expect((await run("config", "defaults")).stdout).toContain('"version": 1');
     expect((await run("config", "list")).stdout).toContain("maxTotalBytes");
@@ -339,11 +340,18 @@ describe("status / doctor / config", () => {
 
 describe("dispatch and exit codes", () => {
   test("--version and --help", async () => {
-    expect((await run("--version")).stdout.trim()).toBe("0.0.0");
+    const manifest = await Bun.file(new URL("../../package.json", import.meta.url)).json();
+    expect((await run("--version")).stdout.trim()).toBe(manifest.version);
     const help = await run("--help");
     expect(help.code).toBe(0);
     expect(help.stdout).toContain("usage: trash");
     expect(help.stdout).toContain("2 refused");
+  });
+
+  test("identity distinguishes the Hasna guard from the operating-system trash command", async () => {
+    const result = await run("--identity");
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({ name: "@hasna/trash", version: "0.1.1", guardProtocol: "hasna.trash.guard.v1" });
   });
 
   test("no verb at all is a usage error (exit 1)", async () => {
@@ -367,7 +375,7 @@ describe("dispatch and exit codes", () => {
     // never reclassify a hosted instance into it (§5).
     const proc = Bun.spawn({
       cmd: ["bun", CLI, "--spool", sandbox.path("spool"), "status"],
-      env: { ...spawnEnv(sandbox), HASNA_TRASH_API_URL: "https://trash.example.invalid", HASNA_TRASH_LOCAL: "1" },
+      env: { ...spawnEnv(sandbox, { HASNA_TRASH_LOCAL: "1" }), HASNA_TRASH_API_URL: "https://trash.example.invalid", HASNA_TRASH_LOCAL: "1" },
       cwd: sandbox.root,
       stdout: "pipe",
       stderr: "pipe",

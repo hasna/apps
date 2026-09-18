@@ -1,10 +1,13 @@
 services:
   trash:
     build: .
-    command: ["bun", "run", "dist/serve/index.js"]
+    command: ["bun", "dist/serve/index.js", "--host", "0.0.0.0"]
     environment:
-      - HASNA_TRASH_API_KEY=${HASNA_TRASH_API_KEY:-}
-    volumes:
-      - ~/.hasna/trash:/data
+      HASNA_TRASH_DATABASE_URL: ${HASNA_TRASH_DATABASE_URL:?set an application PostgreSQL URL}
+      HASNA_TRASH_API_SIGNING_KEY: ${HASNA_TRASH_API_SIGNING_KEY:?set a 32-byte or longer signing secret}
+      HASNA_TRASH_S3_BUCKET: ${HASNA_TRASH_S3_BUCKET:?set a versioned bucket with no object expiration lifecycle}
+      HASNA_TRASH_S3_REGION: ${HASNA_TRASH_S3_REGION:?set the bucket region}
+      AWS_REGION: ${HASNA_TRASH_S3_REGION}
     ports:
       - "8080:8080"
+    restart: unless-stopped

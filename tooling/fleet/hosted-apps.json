@@ -4,8 +4,8 @@
     "User-oauth entries use per-user identity, no shared client key. Daily checks",
     "observe public health and anonymous refusal only, never signed-in acceptance.",
     "",
-    "Every hosted Hasna service that gates /v1/* with an API key needs exactly one",
-    "CLIENT key in Secrets Manager at hasna/oss/<app>/api-key (AWS account",
+    "Hosted Hasna services that gate /v1/* with an API key need a registered",
+    "probe credential, by default hasna/oss/<app>/api-key (AWS account",
     "hasna-internal, us-east-1). Until this file existed there was no written list,",
     "so a service could ship, route and answer /health while nothing on any station",
     "could call it -- which is exactly what happened to messages, and before it to",
@@ -31,8 +31,9 @@
     "'source' says where the service is built. 'monorepo' entries are members of",
     "this repository and are provisioned by their own deploy lane; 'external'",
     "entries are built elsewhere and are covered by the daily drift check only.",
-    "Fleet-api-key entries use the same Secrets Manager namespace; user-oauth",
-    "entries instead declare issuer, healthPath and unauthenticatedPath.",
+    "Fleet-api-key entries may explicitly override keySecretId for an app-owned",
+    "deployment probe; that credential must not replace station-bound identities.",
+    "User-oauth entries declare issuer, healthPath and unauthenticatedPath.",
     "",
     "Adding a hosted app: add it here in the same change that routes it through the",
     "gateway. tooling/ci/tests/standard/fleet-key-provisioning.test.ts refuses an",
@@ -153,6 +154,14 @@
       "notes": "Stays on the origin hostname until hasna/apps#1512 puts it behind the gateway."
     },
     {
+      "app": "trash",
+      "source": "monorepo",
+      "keySecretId": "trash/prod/clients/deploy-probe",
+      "probePath": "/v1/status",
+      "probeAuth": "bearer",
+      "notes": "Deployment-only probe identity. Agent credentials are station-bound and individually provisioned; never distribute this probe key to stations. Independent gateway activation and live acceptance are required."
+    },
+    {
       "app": "identities",
       "source": "external",
       "notes": "Built in hasna-internal/internal-apps; routed by the gateway, key in the same namespace."
@@ -199,6 +208,12 @@
       "app": "testers",
       "source": "external",
       "notes": "Built in hasna-internal/internal-apps."
+    },
+    {
+      "app": "tickets",
+      "source": "external",
+      "probePath": "/v1/projects",
+      "notes": "Built in hasna-internal/internal-apps. This deployment-only probe credential checks the canonical gateway route; station clients use separately minted, revocable identities."
     }
   ]
 }

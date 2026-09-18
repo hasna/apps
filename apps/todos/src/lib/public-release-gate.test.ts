@@ -75,7 +75,7 @@ const rootPackage: PackageJson = {
   workspaces: ["ai"],
   publishConfig: { registry: "https://registry.npmjs.org", access: "public" },
   repository: { type: "git", url: "https://github.com/hasna/apps.git" },
-  homepage: "https://github.com/hasna/apps",
+  homepage: "https://github.com/hasna/apps/tree/main/apps/todos#readme",
   bugs: { url: "https://github.com/hasna/apps/issues" },
   dependencies: { chalk: "^5.4.1" },
   packageManager: "bun@1.3.14",

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   chmodSync,
+  existsSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -13,6 +14,21 @@ const root = resolve(import.meta.dir, "..");
 const fixtureDirs: string[] = [];
 const digest = `sha256:${"a".repeat(64)}`;
 type ReadbackMode = "complete" | "lag-then-complete" | "permanently-bad";
+type DeployFailureMode =
+  | "none"
+  | "migration-launch-fail"
+  | "migration-wait-fail"
+  | "migration-exit-fail"
+  | "migration-wrong-task-definition"
+  | "migration-wrong-digest"
+  | "migration-missing-digest"
+  | "missing-network"
+  | "missing-capacity"
+  | "update-fail"
+  | "wait-fail"
+  | "list-fail"
+  | "malformed-list"
+  | "detail-fail";
 
 function writeJson(path: string, value: unknown) {
   writeFileSync(path, `${JSON.stringify(value)}\n`);
@@ -28,6 +44,16 @@ function service(taskDefinition: string) {
         desiredCount: 1,
         runningCount: 1,
         pendingCount: 0,
+        capacityProviderStrategy: [
+          { capacityProvider: "FARGATE", weight: 1, base: 0 },
+        ],
+        networkConfiguration: {
+          awsvpcConfiguration: {
+            subnets: ["subnet-0123456789abcdef0"],
+            securityGroups: ["sg-0123456789abcdef0"],
+            assignPublicIp: "ENABLED",
+          },
+        },
         deployments: [
           {
             status: "PRIMARY",
@@ -52,7 +78,8 @@ function taskDefinition(
 ) {
   return {
     taskDefinition: {
-      taskDefinitionArn: "arn:aws:ecs:us-east-1:123456789012:task-definition/mementos-prod:16",
+      taskDefinitionArn:
+        "arn:aws:ecs:us-east-1:123456789012:task-definition/mementos-prod:16",
       family: "mementos-prod",
       revision: 16,
       status: "ACTIVE",
@@ -65,6 +92,34 @@ function taskDefinition(
           command,
           entryPoint: ["/entrypoint.sh"],
           ...(environment.length > 0 ? { environment } : {}),
+        },
+      ],
+    },
+  };
+}
+
+function migrationTaskDefinition() {
+  return {
+    taskDefinition: {
+      taskDefinitionArn:
+        "arn:aws:ecs:us-east-1:123456789012:task-definition/mementos-prod-migrate:8",
+      family: "mementos-prod-migrate",
+      revision: 8,
+      status: "ACTIVE",
+      requiresAttributes: [],
+      compatibilities: ["FARGATE"],
+      containerDefinitions: [
+        {
+          name: "mementos-migrate",
+          image: "example.invalid/mementos:previous-migration",
+          command: ["mementos", "storage", "migrate"],
+          secrets: [
+            {
+              name: "MIGRATION_DATABASE_URL",
+              valueFrom:
+                "arn:aws:secretsmanager:us-east-1:123456789012:secret:migration-owner",
+            },
+          ],
         },
       ],
     },
@@ -84,26 +139,74 @@ function makeFixture(
   const readbackCount = resolve(dir, "readback-count.txt");
   const githubOutput = resolve(dir, "github-output.txt");
   const registerInputCapture = resolve(dir, "register-input.json");
+  const migrationRegisterInputCapture = resolve(
+    dir,
+    "migration-register-input.json",
+  );
+  const migrationOverrideCapture = resolve(dir, "migration-overrides.json");
+  const migrationNetworkCapture = resolve(dir, "migration-network.json");
+  const migrationCapacityCapture = resolve(dir, "migration-capacity.json");
 
-  writeJson(resolve(dir, "service-before.json"), service("arn:aws:ecs:us-east-1:123456789012:task-definition/mementos-prod:16"));
-  writeJson(resolve(dir, "service-after.json"), service("arn:aws:ecs:us-east-1:123456789012:task-definition/mementos-prod:17"));
-  writeJson(resolve(dir, "service-lagging.json"), laggingService("arn:aws:ecs:us-east-1:123456789012:task-definition/mementos-prod:17"));
-  writeJson(resolve(dir, "service-rollback.json"), service("arn:aws:ecs:us-east-1:123456789012:task-definition/mementos-prod:16"));
-  writeJson(resolve(dir, "service-drift.json"), service("arn:aws:ecs:us-east-1:123456789012:task-definition/mementos-prod:18"));
+  writeJson(
+    resolve(dir, "service-before.json"),
+    service(
+      "arn:aws:ecs:us-east-1:123456789012:task-definition/mementos-prod:16",
+    ),
+  );
+  writeJson(
+    resolve(dir, "service-after.json"),
+    service(
+      "arn:aws:ecs:us-east-1:123456789012:task-definition/mementos-prod:17",
+    ),
+  );
+  writeJson(
+    resolve(dir, "service-lagging.json"),
+    laggingService(
+      "arn:aws:ecs:us-east-1:123456789012:task-definition/mementos-prod:17",
+    ),
+  );
+  writeJson(
+    resolve(dir, "service-rollback.json"),
+    service(
+      "arn:aws:ecs:us-east-1:123456789012:task-definition/mementos-prod:16",
+    ),
+  );
+  writeJson(
+    resolve(dir, "service-drift.json"),
+    service(
+      "arn:aws:ecs:us-east-1:123456789012:task-definition/mementos-prod:18",
+    ),
+  );
   writeJson(resolve(dir, "taskdef.json"), taskDefinition(command, liveEnv));
+  writeJson(resolve(dir, "migration-taskdef.json"), migrationTaskDefinition());
   writeJson(resolve(dir, "image.json"), {
     imageDetails: [{ imageDigest: digest, imageTags: ["b".repeat(40)] }],
   });
-  writeJson(resolve(dir, "register.json"), {
+  writeJson(resolve(dir, "register-service.json"), {
     taskDefinition: {
       ...taskDefinition(["mementos-deploy"]).taskDefinition,
-      taskDefinitionArn: "arn:aws:ecs:us-east-1:123456789012:task-definition/mementos-prod:17",
+      taskDefinitionArn:
+        "arn:aws:ecs:us-east-1:123456789012:task-definition/mementos-prod:17",
       revision: 17,
       containerDefinitions: [
         {
           name: "mementos",
           image: `123456789012.dkr.ecr.us-east-1.amazonaws.com/mementos@${digest}`,
           command: ["mementos-deploy"],
+        },
+      ],
+    },
+  });
+  writeJson(resolve(dir, "register-migration.json"), {
+    taskDefinition: {
+      ...migrationTaskDefinition().taskDefinition,
+      taskDefinitionArn:
+        "arn:aws:ecs:us-east-1:123456789012:task-definition/mementos-prod-migrate:9",
+      revision: 9,
+      containerDefinitions: [
+        {
+          ...migrationTaskDefinition().taskDefinition.containerDefinitions[0],
+          image: `123456789012.dkr.ecr.us-east-1.amazonaws.com/mementos@${digest}`,
         },
       ],
     },
@@ -116,9 +219,107 @@ function makeFixture(
     failures: [],
     tasks: [
       {
-        taskDefinitionArn: "arn:aws:ecs:us-east-1:123456789012:task-definition/mementos-prod:17",
+        taskDefinitionArn:
+          "arn:aws:ecs:us-east-1:123456789012:task-definition/mementos-prod:17",
         containers: [
           { name: "mementos", lastStatus: "RUNNING", imageDigest: digest },
+        ],
+      },
+    ],
+  });
+  writeJson(resolve(dir, "migration-run.json"), {
+    failures: [],
+    tasks: [
+      {
+        taskArn:
+          "arn:aws:ecs:us-east-1:123456789012:task/fixture-cluster/migration-fixture",
+      },
+    ],
+  });
+  writeJson(resolve(dir, "migration-task-success.json"), {
+    failures: [],
+    tasks: [
+      {
+        taskDefinitionArn:
+          "arn:aws:ecs:us-east-1:123456789012:task-definition/mementos-prod-migrate:9",
+        stopCode: "EssentialContainerExited",
+        stoppedReason: "Essential container in task exited",
+        containers: [
+          {
+            name: "mementos-migrate",
+            lastStatus: "STOPPED",
+            exitCode: 0,
+            imageDigest: digest,
+          },
+        ],
+      },
+    ],
+  });
+  writeJson(resolve(dir, "migration-task-failed.json"), {
+    failures: [],
+    tasks: [
+      {
+        taskDefinitionArn:
+          "arn:aws:ecs:us-east-1:123456789012:task-definition/mementos-prod-migrate:9",
+        stopCode: "EssentialContainerExited",
+        stoppedReason: "Essential container in task exited",
+        containers: [
+          {
+            name: "mementos-migrate",
+            lastStatus: "STOPPED",
+            exitCode: 1,
+            reason: "migration refused unsafe legacy row",
+            imageDigest: digest,
+          },
+        ],
+      },
+    ],
+  });
+  writeJson(resolve(dir, "migration-task-wrong-definition.json"), {
+    failures: [],
+    tasks: [
+      {
+        taskDefinitionArn:
+          "arn:aws:ecs:us-east-1:123456789012:task-definition/mementos-prod-migrate:10",
+        stopCode: "EssentialContainerExited",
+        containers: [
+          {
+            name: "mementos-migrate",
+            lastStatus: "STOPPED",
+            exitCode: 0,
+            imageDigest: digest,
+          },
+        ],
+      },
+    ],
+  });
+  writeJson(resolve(dir, "migration-task-wrong-digest.json"), {
+    failures: [],
+    tasks: [
+      {
+        taskDefinitionArn:
+          "arn:aws:ecs:us-east-1:123456789012:task-definition/mementos-prod-migrate:9",
+        stopCode: "EssentialContainerExited",
+        containers: [
+          {
+            name: "mementos-migrate",
+            lastStatus: "STOPPED",
+            exitCode: 0,
+            imageDigest: `sha256:${"b".repeat(64)}`,
+          },
+        ],
+      },
+    ],
+  });
+  writeJson(resolve(dir, "migration-task-missing-digest.json"), {
+    failures: [],
+    tasks: [
+      {
+        taskDefinitionArn:
+          "arn:aws:ecs:us-east-1:123456789012:task-definition/mementos-prod-migrate:9",
+        stopCode: "EssentialContainerExited",
+        containers: [
+          { name: "mementos-migrate", lastStatus: "STOPPED", exitCode: 0 },
         ],
       },
     ],
@@ -154,21 +355,59 @@ case " $* " in
       *) sed -n '1,999p' "$FIXTURE_DIR/service-before.json" ;;
     esac
     ;;
-  *" ecs describe-task-definition "*) sed -n '1,999p' "$FIXTURE_DIR/taskdef.json" ;;
+  *" ecs describe-task-definition "*)
+    case "$*" in
+      *"--task-definition mementos-prod-migrate"*) sed -n '1,999p' "$FIXTURE_DIR/migration-taskdef.json" ;;
+      *) sed -n '1,999p' "$FIXTURE_DIR/taskdef.json" ;;
+    esac
+    ;;
   *" ecr describe-images "*) sed -n '1,999p' "$FIXTURE_DIR/image.json" ;;
   *" ecs register-task-definition "*)
-    if [ -n "\${REGISTER_INPUT_CAPTURE_PATH:-}" ]; then
-      for a in "$@"; do
-        case "$a" in
-          file://*) cat "\${a#file://}" >> "$REGISTER_INPUT_CAPTURE_PATH" ;;
-        esac
-      done
+    for a in "$@"; do
+      case "$a" in
+        file://*)
+          input="\${a#file://}"
+          case "$(jq -r '.family' "$input")" in
+            mementos-prod-migrate)
+              cp "$input" "$MIGRATION_REGISTER_INPUT_CAPTURE_PATH"
+              sed -n '1,999p' "$FIXTURE_DIR/register-migration.json"
+              ;;
+            mementos-prod)
+              cp "$input" "$REGISTER_INPUT_CAPTURE_PATH"
+              sed -n '1,999p' "$FIXTURE_DIR/register-service.json"
+              ;;
+            *) printf 'unexpected registered family\\n' >&2; exit 96 ;;
+          esac
+          ;;
+      esac
+    done
+    ;;
+  *" ecs run-task "*)
+    if [ "\${DEPLOY_FAILURE_MODE:-none}" = "migration-launch-fail" ]; then
+      printf 'simulated migration launch failure\n' >&2
+      exit 71
     fi
-    sed -n '1,999p' "$FIXTURE_DIR/register.json"
+    for a in "$@"; do
+      case "$a" in
+        file://*)
+          f="\${a#file://}"
+          if jq -e '.containerOverrides' "$f" >/dev/null 2>&1; then cp "$f" "$MIGRATION_OVERRIDE_CAPTURE_PATH"; fi
+          if jq -e '.awsvpcConfiguration' "$f" >/dev/null 2>&1; then cp "$f" "$MIGRATION_NETWORK_CAPTURE_PATH"; fi
+          if jq -e 'type == "array" and .[0].capacityProvider' "$f" >/dev/null 2>&1; then cp "$f" "$MIGRATION_CAPACITY_CAPTURE_PATH"; fi
+          ;;
+      esac
+    done
+    sed -n '1,999p' "$FIXTURE_DIR/migration-run.json"
+    ;;
+  *" ecs wait tasks-stopped "*)
+    if [ "\${DEPLOY_FAILURE_MODE:-none}" = "migration-wait-fail" ]; then exit 72; fi
     ;;
   *" ecs update-service "*)
     case "$*" in
-      *"mementos-prod:17"*) printf 'new\n' > "$STATE_PATH" ;;
+      *"mementos-prod:17"*)
+        printf 'new\n' > "$STATE_PATH"
+        if [ "\${DEPLOY_FAILURE_MODE:-none}" = "update-fail" ]; then exit 73; fi
+        ;;
       *"mementos-prod:16"*)
         if [ "\${ROLLBACK_MODE:-restore}" = "drift" ]; then printf 'drift\n' > "$STATE_PATH"; else printf 'previous\n' > "$STATE_PATH"; fi
         ;;
@@ -176,9 +415,30 @@ case " $* " in
     esac
     sed -n '1,999p' "$FIXTURE_DIR/update.json"
     ;;
-  *" ecs wait services-stable "*) : ;;
-  *" ecs list-tasks "*) sed -n '1,999p' "$FIXTURE_DIR/task-list.json" ;;
-  *" ecs describe-tasks "*) sed -n '1,999p' "$FIXTURE_DIR/tasks.json" ;;
+  *" ecs wait services-stable "*)
+    if [ "$(cat "$STATE_PATH" 2>/dev/null || true)" = "new" ] && [ "\${DEPLOY_FAILURE_MODE:-none}" = "wait-fail" ]; then exit 74; fi
+    ;;
+  *" ecs list-tasks "*)
+    if [ "\${DEPLOY_FAILURE_MODE:-none}" = "list-fail" ]; then exit 75; fi
+    if [ "\${DEPLOY_FAILURE_MODE:-none}" = "malformed-list" ]; then printf 'not-json\n'; else sed -n '1,999p' "$FIXTURE_DIR/task-list.json"; fi
+    ;;
+  *" ecs describe-tasks "*)
+    case "$*" in
+      *"migration-fixture"*)
+        case "\${DEPLOY_FAILURE_MODE:-none}" in
+          migration-exit-fail) sed -n '1,999p' "$FIXTURE_DIR/migration-task-failed.json" ;;
+          migration-wrong-task-definition) sed -n '1,999p' "$FIXTURE_DIR/migration-task-wrong-definition.json" ;;
+          migration-wrong-digest) sed -n '1,999p' "$FIXTURE_DIR/migration-task-wrong-digest.json" ;;
+          migration-missing-digest) sed -n '1,999p' "$FIXTURE_DIR/migration-task-missing-digest.json" ;;
+          *) sed -n '1,999p' "$FIXTURE_DIR/migration-task-success.json" ;;
+        esac
+        ;;
+      *)
+        if [ "\${DEPLOY_FAILURE_MODE:-none}" = "detail-fail" ]; then exit 76; fi
+        sed -n '1,999p' "$FIXTURE_DIR/tasks.json"
+        ;;
+    esac
+    ;;
   *) printf 'unexpected aws call: %s\\n' "$*" >&2; exit 99 ;;
 esac
 `,
@@ -210,15 +470,43 @@ esac
   );
   chmodSync(fakeCurl, 0o755);
 
-  return { dir, fakeAws, fakeCurl, trace, state, readbackCount, githubOutput, registerInputCapture };
+  return {
+    dir,
+    fakeAws,
+    fakeCurl,
+    trace,
+    state,
+    readbackCount,
+    githubOutput,
+    registerInputCapture,
+    migrationRegisterInputCapture,
+    migrationOverrideCapture,
+    migrationNetworkCapture,
+    migrationCapacityCapture,
+  };
 }
 
 async function runDeploy(
   command: string[],
   readbackMode: ReadbackMode = "complete",
   liveEnv: Array<{ name: string; value: string }> = [],
+  deployFailureMode: DeployFailureMode = "none",
+  rollbackMode: "restore" | "drift" = "restore",
 ) {
   const fixture = makeFixture(command, liveEnv);
+  if (
+    deployFailureMode === "missing-network" ||
+    deployFailureMode === "missing-capacity"
+  ) {
+    const servicePath = resolve(fixture.dir, "service-before.json");
+    const serviceBody = JSON.parse(readFileSync(servicePath, "utf8"));
+    if (deployFailureMode === "missing-network") {
+      delete serviceBody.services[0].networkConfiguration;
+    } else {
+      delete serviceBody.services[0].capacityProviderStrategy;
+    }
+    writeJson(servicePath, serviceBody);
+  }
   const proc = Bun.spawn(
     ["bash", resolve(root, "scripts/production-deploy.sh"), "deploy"],
     {
@@ -233,12 +521,21 @@ async function runDeploy(
         FIXTURE_DIR: fixture.dir,
         GITHUB_OUTPUT: fixture.githubOutput,
         REGISTER_INPUT_CAPTURE_PATH: fixture.registerInputCapture,
+        MIGRATION_REGISTER_INPUT_CAPTURE_PATH:
+          fixture.migrationRegisterInputCapture,
+        MIGRATION_OVERRIDE_CAPTURE_PATH: fixture.migrationOverrideCapture,
+        MIGRATION_NETWORK_CAPTURE_PATH: fixture.migrationNetworkCapture,
+        MIGRATION_CAPACITY_CAPTURE_PATH: fixture.migrationCapacityCapture,
+        DEPLOY_FAILURE_MODE: deployFailureMode,
+        ROLLBACK_MODE: rollbackMode,
         MEMENTOS_CORS_ORIGIN: "https://mementos.hasna.xyz",
         AWS_REGION: "us-east-1",
         CLUSTER: "fixture-cluster",
         SERVICE: "mementos-prod",
         WEB_FAMILY: "mementos-prod",
         WEB_CONTAINER: "mementos",
+        MIGRATION_FAMILY: "mementos-prod-migrate",
+        MIGRATION_CONTAINER: "mementos-migrate",
         ECR_REPOSITORY: "mementos",
         ECR_URL: "123456789012.dkr.ecr.us-east-1.amazonaws.com/mementos",
         CANDIDATE_SHA: "b".repeat(40),
@@ -279,6 +576,8 @@ async function runVerify(
         SERVICE: "mementos-prod",
         WEB_FAMILY: "mementos-prod",
         WEB_CONTAINER: "mementos",
+        MIGRATION_FAMILY: "mementos-prod-migrate",
+        MIGRATION_CONTAINER: "mementos-migrate",
         APP_BASE_URL: "https://mementos.example.invalid",
         PREVIOUS_TASK_DEFINITION:
           "arn:aws:ecs:us-east-1:123456789012:task-definition/mementos-prod:16",
@@ -330,7 +629,9 @@ describe("production deploy orchestration", () => {
     // service into deploy-lane ownership.
     const result = await runDeploy(["mementos-serve"]);
     const trace = readFileSync(result.trace, "utf8");
-    const payload = JSON.parse(readFileSync(result.registerInputCapture, "utf8"));
+    const payload = JSON.parse(
+      readFileSync(result.registerInputCapture, "utf8"),
+    );
 
     expect(result.exitCode).toBe(0);
     expect(result.stderr).not.toContain("automated deploy prerequisite unmet");
@@ -338,7 +639,9 @@ describe("production deploy orchestration", () => {
     expect(trace).toContain("ecs register-task-definition");
     expect(trace).toContain("ecs update-service");
     expect(trace).toContain("ecs wait services-stable");
-    expect(payload.containerDefinitions[0].command).toEqual(["mementos-deploy"]);
+    expect(payload.containerDefinitions[0].command).toEqual([
+      "mementos-deploy",
+    ]);
   });
 
   test("a null-command live baseline (no command override) bootstraps the lane", async () => {
@@ -350,13 +653,17 @@ describe("production deploy orchestration", () => {
     // ["mementos-serve"] form.
     const result = await runDeploy([]);
     const trace = readFileSync(result.trace, "utf8");
-    const payload = JSON.parse(readFileSync(result.registerInputCapture, "utf8"));
+    const payload = JSON.parse(
+      readFileSync(result.registerInputCapture, "utf8"),
+    );
 
     expect(result.exitCode).toBe(0);
     expect(result.stderr).not.toContain("automated deploy prerequisite unmet");
     expect(trace).toContain("ecs register-task-definition");
     expect(trace).toContain("ecs update-service");
-    expect(payload.containerDefinitions[0].command).toEqual(["mementos-deploy"]);
+    expect(payload.containerDefinitions[0].command).toEqual([
+      "mementos-deploy",
+    ]);
   });
 
   test("a satisfied prerequisite preserves registration, rollout, and digest readback", async () => {
@@ -371,8 +678,177 @@ describe("production deploy orchestration", () => {
     expect(trace).toContain("ecs wait services-stable");
     expect(trace).toContain("ecs describe-tasks");
     expect(outputs).toContain(`candidate_digest=${digest}`);
-    expect(outputs).toContain(`candidate_image=123456789012.dkr.ecr.us-east-1.amazonaws.com/mementos@${digest}`);
-    expect(outputs).toContain("deployed_task_definition=arn:aws:ecs:us-east-1:123456789012:task-definition/mementos-prod:17");
+    expect(outputs).toContain(
+      `candidate_image=123456789012.dkr.ecr.us-east-1.amazonaws.com/mementos@${digest}`,
+    );
+    expect(outputs).toContain(
+      "deployed_task_definition=arn:aws:ecs:us-east-1:123456789012:task-definition/mementos-prod:17",
+    );
+  });
+
+  test("migration inherits the service network and capacity strategy and emits exact-image receipts before service update", async () => {
+    const result = await runDeploy(["mementos-deploy"]);
+    const trace = readFileSync(result.trace, "utf8");
+    const outputs = readFileSync(result.githubOutput, "utf8");
+    const migrationRegistration = JSON.parse(
+      readFileSync(result.migrationRegisterInputCapture, "utf8"),
+    );
+    const overrides = JSON.parse(
+      readFileSync(result.migrationOverrideCapture, "utf8"),
+    );
+    const network = JSON.parse(
+      readFileSync(result.migrationNetworkCapture, "utf8"),
+    );
+    const capacity = JSON.parse(
+      readFileSync(result.migrationCapacityCapture, "utf8"),
+    );
+    const runTask = trace.indexOf("ecs run-task");
+    const waitStopped = trace.indexOf("ecs wait tasks-stopped");
+    const serviceUpdate = trace.indexOf(
+      "ecs update-service --cluster fixture-cluster --service mementos-prod --task-definition arn:aws:ecs:us-east-1:123456789012:task-definition/mementos-prod:17",
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(migrationRegistration.family).toBe("mementos-prod-migrate");
+    expect(migrationRegistration.containerDefinitions[0]).toMatchObject({
+      name: "mementos-migrate",
+      image: `123456789012.dkr.ecr.us-east-1.amazonaws.com/mementos@${digest}`,
+      command: ["mementos", "storage", "migrate"],
+      secrets: [
+        {
+          name: "MIGRATION_DATABASE_URL",
+          valueFrom:
+            "arn:aws:secretsmanager:us-east-1:123456789012:secret:migration-owner",
+        },
+      ],
+    });
+    expect(overrides).toEqual({
+      containerOverrides: [
+        {
+          name: "mementos-migrate",
+          command: ["mementos", "storage", "migrate"],
+        },
+      ],
+    });
+    expect(network).toEqual({
+      awsvpcConfiguration: {
+        subnets: ["subnet-0123456789abcdef0"],
+        securityGroups: ["sg-0123456789abcdef0"],
+        assignPublicIp: "ENABLED",
+      },
+    });
+    expect(capacity).toEqual([
+      { capacityProvider: "FARGATE", weight: 1, base: 0 },
+    ]);
+    expect(trace).toContain(
+      "ecs run-task --cluster fixture-cluster --task-definition arn:aws:ecs:us-east-1:123456789012:task-definition/mementos-prod-migrate:9",
+    );
+    expect(runTask).toBeGreaterThanOrEqual(0);
+    expect(waitStopped).toBeGreaterThan(runTask);
+    expect(serviceUpdate).toBeGreaterThan(waitStopped);
+    expect(outputs).toContain(
+      "migration_task_definition=arn:aws:ecs:us-east-1:123456789012:task-definition/mementos-prod-migrate:9",
+    );
+    expect(outputs).toContain(
+      "migration_task=arn:aws:ecs:us-east-1:123456789012:task/fixture-cluster/migration-fixture",
+    );
+    expect(outputs).toContain("migration_exit_code=0");
+  });
+
+  for (const failureMode of [
+    "migration-launch-fail",
+    "migration-wait-fail",
+    "migration-exit-fail",
+    "migration-wrong-task-definition",
+    "migration-wrong-digest",
+    "migration-missing-digest",
+  ] as const) {
+    test(`migration failure ${failureMode} refuses before service update`, async () => {
+      const result = await runDeploy(
+        ["mementos-deploy"],
+        "complete",
+        [],
+        failureMode,
+      );
+      const trace = readFileSync(result.trace, "utf8");
+
+      expect(result.exitCode).not.toBe(0);
+      expect(trace).toContain("ecs run-task");
+      expect(trace).not.toContain("ecs update-service");
+      expect(existsSync(result.state)).toBe(false);
+    });
+  }
+
+  for (const failureMode of ["missing-network", "missing-capacity"] as const) {
+    test(`migration configuration ${failureMode} refuses before task launch or service update`, async () => {
+      const result = await runDeploy(
+        ["mementos-deploy"],
+        "complete",
+        [],
+        failureMode,
+      );
+      const trace = readFileSync(result.trace, "utf8");
+
+      expect(result.exitCode).not.toBe(0);
+      expect(trace).not.toContain("ecs run-task");
+      expect(trace).not.toContain("ecs update-service");
+      expect(existsSync(result.state)).toBe(false);
+      expect(result.stderr).toMatch(
+        /network configuration|capacity-provider strategy/,
+      );
+    });
+  }
+
+  for (const failureMode of [
+    "update-fail",
+    "wait-fail",
+    "list-fail",
+    "malformed-list",
+    "detail-fail",
+  ] as const) {
+    test(`post-update failure ${failureMode} restores the prior task definition in the same deploy step`, async () => {
+      const result = await runDeploy(
+        ["mementos-deploy"],
+        "complete",
+        [],
+        failureMode,
+      );
+      const trace = readFileSync(result.trace, "utf8");
+      const outputs = readFileSync(result.githubOutput, "utf8");
+      const candidateUpdate = trace.indexOf(
+        "ecs update-service --cluster fixture-cluster --service mementos-prod --task-definition arn:aws:ecs:us-east-1:123456789012:task-definition/mementos-prod:17",
+      );
+      const rollbackUpdate = trace.indexOf(
+        "ecs update-service --cluster fixture-cluster --service mementos-prod --task-definition arn:aws:ecs:us-east-1:123456789012:task-definition/mementos-prod:16",
+      );
+
+      expect(result.exitCode).toBe(1);
+      expect(candidateUpdate).toBeGreaterThanOrEqual(0);
+      expect(rollbackUpdate).toBeGreaterThan(candidateUpdate);
+      expect(readFileSync(result.state, "utf8").trim()).toBe("previous");
+      expect(outputs).toContain(
+        "rolled_back_task_definition=arn:aws:ecs:us-east-1:123456789012:task-definition/mementos-prod:16",
+      );
+      expect(result.stderr).toContain("rollback restored one stable PRIMARY");
+    });
+  }
+
+  test("a post-update failure that cannot prove rollback reports manual recovery and never claims restoration", async () => {
+    const result = await runDeploy(
+      ["mementos-deploy"],
+      "complete",
+      [],
+      "wait-fail",
+      "drift",
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(readFileSync(result.state, "utf8").trim()).toBe("drift");
+    expect(result.stderr).toContain(
+      "candidate deployment failed and rollback could not be proven",
+    );
+    expect(result.stderr).toContain("manual recovery required");
+    expect(result.stderr).not.toContain("candidate deployment rejected:");
   });
 
   test("a waiter-valid readback that lags once is reread until the strict deployment proof completes", async () => {
@@ -385,16 +861,23 @@ describe("production deploy orchestration", () => {
 
   test("a permanently bad readback remains bounded, evidence-rich, and fail closed", async () => {
     const result = await runDeploy(["mementos-deploy"], "permanently-bad");
-    const readbackCount = Number(readFileSync(result.readbackCount, "utf8").trim());
+    const readbackCount = Number(
+      readFileSync(result.readbackCount, "utf8").trim(),
+    );
     const trace = readFileSync(result.trace, "utf8");
 
     expect(result.exitCode).toBe(1);
     expect(readbackCount).toBeGreaterThan(1);
     expect(readbackCount).toBeLessThanOrEqual(6);
     expect(trace).not.toContain("ecs list-tasks");
+    expect(readFileSync(result.state, "utf8").trim()).toBe("previous");
+    expect(trace).toContain(
+      "ecs update-service --cluster fixture-cluster --service mementos-prod --task-definition arn:aws:ecs:us-east-1:123456789012:task-definition/mementos-prod:16",
+    );
     expect(result.stderr).toContain("primary_count=1");
     expect(result.stderr).toContain("primary_rollout_state=IN_PROGRESS");
     expect(result.stderr).toContain("desired/running/pending=1/1/0");
+    expect(result.stderr).toContain("rollback restored one stable PRIMARY");
   });
 
   test("successful endpoint verification preserves the deployed revision without rollback", async () => {
@@ -416,7 +899,9 @@ describe("production deploy orchestration", () => {
     const result = await runVerify("readiness-failure");
     const trace = readFileSync(result.trace, "utf8");
     const outputs = readFileSync(result.githubOutput, "utf8");
-    const readinessProbe = trace.indexOf("curl -sS -o /dev/null -w %{http_code} -m 15 https://mementos.example.invalid/ready");
+    const readinessProbe = trace.indexOf(
+      "curl -sS -o /dev/null -w %{http_code} -m 15 https://mementos.example.invalid/ready",
+    );
     const restore = trace.indexOf(
       "ecs update-service --cluster fixture-cluster --service mementos-prod --task-definition arn:aws:ecs:us-east-1:123456789012:task-definition/mementos-prod:16 --force-new-deployment",
     );
@@ -454,7 +939,9 @@ describe("production deploy orchestration", () => {
 
   test("deploy injects MEMENTOS_CORS_ORIGIN into the registered task definition when the live definition lacks it", async () => {
     const result = await runDeploy(["mementos-deploy"]);
-    const payload = JSON.parse(readFileSync(result.registerInputCapture, "utf8"));
+    const payload = JSON.parse(
+      readFileSync(result.registerInputCapture, "utf8"),
+    );
     const env = payload.containerDefinitions[0].environment;
 
     expect(result.exitCode).toBe(0);
@@ -467,7 +954,9 @@ describe("production deploy orchestration", () => {
     const result = await runDeploy(["mementos-deploy"], "complete", [
       { name: "MEMENTOS_CORS_ORIGIN", value: "https://mementos.hasna.xyz" },
     ]);
-    const payload = JSON.parse(readFileSync(result.registerInputCapture, "utf8"));
+    const payload = JSON.parse(
+      readFileSync(result.registerInputCapture, "utf8"),
+    );
     const env = payload.containerDefinitions[0].environment;
 
     expect(result.exitCode).toBe(0);

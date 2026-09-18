@@ -24,7 +24,7 @@ function freshDb(): Database {
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       last_seen_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
-    CREATE INDEX IF NOT EXISTS idx_machines_hostname ON machines(hostname);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_machines_hostname ON machines(hostname);
   `);
 
   return db;

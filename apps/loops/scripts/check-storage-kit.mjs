@@ -66,13 +66,13 @@ for (const token of forbidden) {
   }
 }
 if (backendCode.includes("resolveStorageMode")) {
-  fail("backend.ts contains resolveStorageMode (kit 1.0.2 carries no mode vocabulary)");
+  fail("backend.ts contains resolveStorageMode (kit 1.1.0 carries no mode vocabulary)");
 }
 if (backendCode.includes("STORAGE_MODE")) {
-  fail("backend.ts contains STORAGE_MODE (kit 1.0.2 carries no mode vocabulary)");
+  fail("backend.ts contains STORAGE_MODE (kit 1.1.0 carries no mode vocabulary)");
 }
 
-// Kit 1.0.2 declares PostgreSQL as the ONLY contract server backend
+// Kit 1.1.0 declares PostgreSQL as the ONLY contract server backend
 // (SERVER_DATA_BACKENDS = ["postgresql"]): the strict HealthResponseSchema and
 // the server-backend resolver both know exactly one backend, and
 // resolveServerDataBackend fails closed when HASNA_LOOPS_DATABASE_URL is
@@ -82,7 +82,7 @@ if (!backendCode.includes('SERVER_DATA_BACKENDS = ["postgresql"]')) {
   fail("backend.ts does not declare the postgresql-only contract backend enum");
 }
 if (backendCode.includes("sqlite")) {
-  fail("backend.ts names sqlite; the kit 1.0.2 contract backend is postgresql only");
+  fail("backend.ts names sqlite; the kit 1.1.0 contract backend is postgresql only");
 }
 
 // The retired HASNA_LOOPS_STORAGE_MODE rejection was removed with the app's own

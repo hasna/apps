@@ -145,7 +145,7 @@ export interface InspectResult {
  * that is the refusal, because a path that resolves THROUGH a symlink is not
  * the path the caller thinks they are deleting.
  */
-function inspectAncestors(absolute: string): CaptureRefusalDraft[] {
+export function inspectAncestors(absolute: string): CaptureRefusalDraft[] {
   const refusals: CaptureRefusalDraft[] = [];
   const parent = dirname(absolute);
   if (parent === absolute) return refusals;

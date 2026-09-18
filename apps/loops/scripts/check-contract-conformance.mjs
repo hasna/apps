@@ -7,7 +7,7 @@ import { contractHealthResponse } from "../src/api/index.ts";
 
 export const repoRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
 
-// Doctrine: there is no HASNA_LOOPS_STORAGE_MODE. @hasna/contracts 1.0.2 makes
+// Doctrine: there is no HASNA_LOOPS_STORAGE_MODE. @hasna/contracts 1.1.0 makes
 // PostgreSQL the only contract server backend (`server_backend_configuration`
 // expects the resolver to fail closed when HASNA_LOOPS_DATABASE_URL is absent;
 // `HealthResponseSchema.backend` is the literal "postgresql"). The env below

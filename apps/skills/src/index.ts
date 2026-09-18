@@ -203,6 +203,7 @@ export {
   type RemoteSkillSummary,
   type UpdatedSincePage,
 } from "./lib/remote-client.js";
+export { RemoteSkillsPermissionError, type RemoteSkillsAccess, type RemoteSkillsPermissions } from "./lib/remote-permissions.js";
 
 export {
   REMOTE_SKILL_RUN_CONTRACT_VERSION,
@@ -517,3 +518,6 @@ export { buildSkillContext } from "./lib/skill-context.js";
 export { syncSelectionProfile } from "./lib/selection-resolver.js";
 export { planAgentIntegration, applyAgentIntegration, inventoryNativeSkills, archiveNativeSkills } from "./lib/agent-integration.js";
 export { captureDiscoveryDirectories, captureDiscoveryByteSources, captureDiscoveryPathSources, type DiscoveryDirectory, type DiscoverySource } from "./lib/agent-discovery.js";
+export { buildPluginProjection, pluginTreeDigest, type PluginProjectionManifest, type PluginPayloadMapping, type PluginFileWitness } from "./lib/plugin-projection.js";
+export { planPluginAdmission, admitPlugin, resolveAdmittedPlugin, pluginResolverCommand, type PluginAdmissionTarget, type PluginAdmissionBinding, type PluginAdmissionPlan, type PluginAdmissionIdentity, type PluginBundleIdentity, type PluginAdmissionReceipt } from "./lib/plugin-admission.js";
+export { captureManagedPluginRegistry, type ManagedPluginRegistrationWitness } from "./lib/plugin-discovery.js";

@@ -1,7 +1,7 @@
 /**
  * The shared credential tiers, exercised through the loops resolver.
  *
- * `@hasna/contracts` 1.0.2 owns the ladder — the macOS Keychain
+ * `@hasna/contracts` 1.1.0 owns the ladder — the macOS Keychain
  * (`hasna.credentials.loops.api-key` / `.api-url`), the credential file
  * `~/.hasna/loops/config/credentials`, `HASNA_LOOPS_API_KEY` in the
  * environment, and the fleet gateway default — and the loops resolver is a

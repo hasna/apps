@@ -7,7 +7,7 @@ const root = resolve(import.meta.dir, "../../../..");
 test("Emails promotion executes bounded source, OCI, task, gate and refusal controls", () => {
   const result = Bun.spawnSync(["python3", "-I", "-B", "tooling/deploy/emails-search/promotion_test.py"], { cwd: root, timeout: 30_000 });
   expect(result.exitCode).toBe(0);
-  expect(result.stderr.toString()).toContain("Ran 30 tests");
+  expect(result.stderr.toString()).toContain("Ran 42 tests");
 });
 test("Emails AWS JSON transport verifies sealed descriptors and local CLI parsing", () => {
   const result = Bun.spawnSync(["python3", "-I", "-B", "tooling/deploy/emails-search/aws_transport_test.py"], { cwd: root, timeout: 30_000 });
@@ -35,4 +35,7 @@ test("Emails authority is only behind explicit main CI and production review", (
   expect(transport).toBeLessThan(aws);
   expect(steps.filter(s => s.uses).every(s => /@[0-9a-f]{40}$/.test(String(s.uses)))).toBe(true);
   expect(String(steps.find(s => String(s.run).includes("promotion.py"))?.run)).toContain("--prepared-sha256");
+  expect(asMap(asMap(caller.on).workflow_dispatch).inputs).toBeDefined();
+  expect(readFileSync(resolve(root, ".github/workflows/emails-search-promotion.yml"), "utf8")).toContain("options: [prepare, reconcile, promote, rollback]");
+  expect(readFileSync(resolve(root, ".github/workflows/emails-search-promotion-execute.yml"), "utf8")).toContain("emails-search-reconciled");
 });

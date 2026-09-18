@@ -1,25 +1,13 @@
 /**
- * Advisory file lock for the mutating sweeps — copied from
- * `apps/connectors/src/lib/lock.ts` (O_EXCL | O_CREAT, 5 s timeout, 100 ms
- * retry, 30 s stale takeover) with one difference that matters here.
- *
- * §12's risk row: "concurrent `trash empty` and `trash sweep` on the same
- * spool can interleave payload removal and metadata removal, so a sweep can
- * delete a metadata file for a payload `empty` already removed (or vice
- * versa) and leave an orphan." The mitigation is a lock — but an
- * UNCONDITIONAL release is not enough: a sweep that overruns 30 s is declared
- * stale, a second sweep takes the lock, and the first sweep's `finally` then
- * unlinks the SECOND sweep's lock file, which lets a third in. Release is
- * therefore ownership-validated: the token written into the lock must still be
- * the one this holder wrote.
- *
- * `put` deliberately does NOT take this lock. Captures are already safe
- * against each other (unique ids, `link()` no-replace publishes, per-entry
- * directories), and a lock on the write path is a lock on every `rm` — the one
- * thing that must never block. The lock is for SWEEPS.
+ * Exclusive local mutation locks. An elapsed lease is NOT a fencing token:
+ * a slow holder may still be deleting bytes. Never steal a lock by age.
+ * Crashed holders leave a visible lock requiring quiescent operator recovery;
+ * safety takes precedence over automatically resuming destructive work.
+ * Sweep network operations use a separate lock from short entry commits.
  */
 
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, statSync, unlinkSync, writeSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, unlinkSync, writeSync } from "node:fs";
+import { hostname } from "node:os";
 import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 
@@ -27,8 +15,6 @@ import { randomUUID } from "node:crypto";
 const LOCK_TIMEOUT_MS = 5_000;
 /** Retry interval (ms). */
 const LOCK_RETRY_MS = 100;
-/** Stale lock age (ms) — a lock older than this is abandoned (and a warning is reported). */
-const STALE_LOCK_MS = 30_000;
 
 export class LockTimeoutError extends Error {
   constructor(
@@ -36,8 +22,8 @@ export class LockTimeoutError extends Error {
     public readonly path: string,
   ) {
     super(
-      `could not acquire the ${name_} lock at ${path} within ${LOCK_TIMEOUT_MS}ms — ` +
-        "another sweep is running; the sweeper is an independent timer, so nothing is lost by waiting",
+      `could not acquire the ${name_} lock at ${path}; retry after the holder finishes. ` +
+        "An abandoned lock requires recovery with all Trash writers stopped; age never authorizes takeover.",
     );
     this.name = "LockTimeoutError";
   }
@@ -46,15 +32,8 @@ export class LockTimeoutError extends Error {
 interface LockFile {
   token: string;
   pid: number;
+  host: string;
   acquiredAt: string;
-}
-
-function isStale(path: string): boolean {
-  try {
-    return Date.now() - statSync(path).mtimeMs > STALE_LOCK_MS;
-  } catch {
-    return false;
-  }
 }
 
 function readLock(path: string): LockFile | null {
@@ -65,16 +44,7 @@ function readLock(path: string): LockFile | null {
   }
 }
 
-function tryAcquire(path: string, name: string): string | null {
-  if (existsSync(path) && isStale(path)) {
-    try {
-      unlinkSync(path);
-      process.stderr.write(`warn: trash.${name} lock at ${path} was older than ${STALE_LOCK_MS}ms — taking it over\n`);
-    } catch {
-      // Another holder cleaned it up first; the create below is still atomic.
-    }
-  }
-
+function tryAcquire(path: string): string | null {
   const token = randomUUID();
   let fd: number;
   try {
@@ -84,7 +54,7 @@ function tryAcquire(path: string, name: string): string | null {
     throw error;
   }
   try {
-    const body: LockFile = { token, pid: process.pid, acquiredAt: new Date().toISOString() };
+    const body: LockFile = { token, pid: process.pid, host: hostname(), acquiredAt: new Date().toISOString() };
     writeSync(fd, `${JSON.stringify(body)}\n`);
   } finally {
     closeSync(fd);
@@ -104,12 +74,12 @@ function release(path: string, token: string): boolean {
   }
 }
 
-export async function withFileLock<T>(name: string, lockPath: string, fn: () => T | Promise<T>): Promise<T> {
+export async function withFileLock<T>(name: string, lockPath: string, fn: () => T | Promise<T>, options: { timeoutMs?: number } = {}): Promise<T> {
   mkdirSync(dirname(lockPath), { recursive: true });
-  const deadline = Date.now() + LOCK_TIMEOUT_MS;
+  const deadline = Date.now() + (options.timeoutMs ?? LOCK_TIMEOUT_MS);
 
   while (Date.now() < deadline) {
-    const acquired = tryAcquire(lockPath, name);
+    const acquired = tryAcquire(lockPath);
     if (acquired) {
       try {
         return await fn();
@@ -117,13 +87,32 @@ export async function withFileLock<T>(name: string, lockPath: string, fn: () => 
         release(lockPath, acquired);
       }
     }
-    await new Promise<void>((resolve) => setTimeout(resolve, LOCK_RETRY_MS));
+    await new Promise<void>((resolve) => setTimeout(resolve, Math.min(LOCK_RETRY_MS, Math.max(1, deadline - Date.now()))));
   }
 
   throw new LockTimeoutError(name, lockPath);
 }
 
+/** Synchronous commits fail immediately unless an external-process wait is explicitly requested. */
+export function withFileLockSync<T>(name: string, lockPath: string, fn: () => T, options: { timeoutMs?: number } = {}): T {
+  mkdirSync(dirname(lockPath), { recursive: true, mode: 0o700 });
+  const deadline = Date.now() + (options.timeoutMs ?? 0);
+  const wait = new Int32Array(new SharedArrayBuffer(4));
+  for (;;) {
+    const token = tryAcquire(lockPath);
+    if (token) {
+      try { return fn(); }
+      finally { release(lockPath, token); }
+    }
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw new LockTimeoutError(name, lockPath);
+    // Capture is synchronous; only a sibling process can hold this source lock.
+    // Same-process reentrancy refuses after the bounded deadline, never steals.
+    Atomics.wait(wait, 0, 0, Math.min(LOCK_RETRY_MS, remaining));
+  }
+}
+
 /** Non-blocking probe, used by `doctor` and tests. */
 export function lockIsHeld(lockPath: string): boolean {
-  return existsSync(lockPath) && !isStale(lockPath);
+  return existsSync(lockPath);
 }

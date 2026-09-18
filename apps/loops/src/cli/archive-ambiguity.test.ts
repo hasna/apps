@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "bun:test";
+import { scrubLoopsClientEnv } from "../test-helpers.js";
 import { Store } from "../lib/store.js";
 
 const cliPath = join(dirname(fileURLToPath(import.meta.url)), "index.ts");
@@ -11,11 +12,11 @@ const cliPath = join(dirname(fileURLToPath(import.meta.url)), "index.ts");
 function runCli(dataDir: string, args: string[]) {
   return spawnSync(process.execPath, [cliPath, ...args], {
     env: {
-      ...process.env,
+      ...scrubLoopsClientEnv(),
       HASNA_LOOPS_API_URL: "",
       HASNA_LOOPS_API_KEY: "",
       // Local file store requires the explicit opt-in (fail-closed policy).
-      HASNA_LOOPS_CONNECTION: "file",
+      HASNA_LOOPS_LOCAL: "1",
       LOOPS_DATA_DIR: dataDir,
     },
     encoding: "utf8",

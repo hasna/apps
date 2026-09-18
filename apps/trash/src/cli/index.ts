@@ -1,3 +1,4 @@
+#!/usr/bin/env bun
 /**
  * `trash` — the CLI surface.
  *
@@ -32,57 +33,63 @@ import { resolve } from "node:path";
 import { getHomeDir, type TrashRootOverrides } from "../paths.js";
 import { guardPlanDocument, planGuardCommand } from "../guard/plan.js";
 import { runGuard } from "../guard/run.js";
+import { IDENTITY, VERSION } from "../version.js";
+import { runHostedCli } from "./hosted.js";
 
 const EXIT_OK = 0;
 const EXIT_ERROR = 1;
 const EXIT_REFUSED = 2;
 
-const HELP = `trash — reversible deletion
+const HELP = `trash — reversible deletion for agents
 
 usage: trash [global flags] <verb> [args]
 
-verbs
-  put <path...>            move paths into the trash store (rm grammar: -r, -f)
+hosted commands (compact JSON by default)
+  setup                    bind this detected station to its provisioned key
+  put <path...> [--retention 90|never] [--agent NAME]
+                           verify remote capture, then remove the source
   guard [-f|-i|-I|-v|-d|-r] <path...>
-                           THE REWRITE TARGET — what \`rm\` becomes. Reproduces
-                           rm's exit-code contract; captures instead of
-                           unlinking. \`--rmdir\` selects rmdir grammar,
-                           \`--plan <cmd>\` prints the rewrite decision as JSON.
-  list                     list staged entries
-  restore <id> [--to P]    move an entry back to its original path
-  purge <id...>            remove entries and their payloads (needs --apply)
-  empty                    purge everything (needs --apply)
-  status                   store usage, quota, mode
-  info <id>                the entry's metadata document
-  doctor                   environment and store checks
-  config [list|get|set|unset|path]
+                           rm-compatible hook target; failures preserve copies
+  guard --plan <command>   inspect a shell rewrite without changing files
+  list [--limit 20] [--cursor C] [--station NAME] [--path TEXT]
+                           compact metadata, maximum 100 rows; never payloads
+  info <id>                full metadata for one entry
+  restore <id> [--to PATH] restore without overwriting; --to on another station
+  restore-capsule <file> --to PATH
+                           recover a Backup capsule without hosted credentials
+  hold <id> | unhold <id>  set or release the independent user retention hold
+  retention <id> --days 90|never
+  backup <id>              request a verified, held Backup app handoff
+  pending [--limit 20]     unfinished operations on this station
+  recover <operation-id> [--to PATH]
+                           resume an interrupted capture or restore
+  status | doctor          authenticated service and station checks
 
 global flags
-  --spool <dir>            collapse every root under one directory (the guard
-                           embeds this absolute path in the rewritten command)
-  --files <dir>            payload directory only
-  --info <dir>             metadata directory only
-  --config <path>          config file
-  --json                   machine-readable output
-  --agent <name>           recorded on captures and refusals
+  --agent NAME             agent identity for captures and list filtering
+  --spool DIR              hosted filesystem transaction directory
+  --json                   compact JSON (already the hosted default)
+  --local                  explicitly use the legacy offline store
+  --files DIR | --info DIR | --config PATH
+                           legacy local-mode paths only
   -h, --help               this text
-  --version                print the version
+  --version | --identity   package version or machine-readable identity
 
-exit codes
-  0 done   1 error   2 refused (capture failed on a non-excluded path, so the
-                       delete was refused too — §11.7)
+Hosted credentials: ~/.hasna/trash/config/credentials, resolved through
+@hasna/contracts. Store base https://api.hasna.com/trash; the client adds /v1.
+Missing or rejected credentials never enable offline deletion.
+Station identity: HASNA_TRASH_STATION, HASNA_STATION, Tailscale, then hostname;
+the signed key must be issued to that station. Retention defaults to 90 days
+from committed removal. Holds and pending/failed Backup jobs prevent expiry.
+Hosted expiry runs on the server; no permanent-delete agent tool is exposed.
 
-\`trash guard\` is the rewrite target the phase-2 shell guard (\`hook-trash-guard\`,
-in @hasna/hooks) substitutes for the program token: \`rm -rf <path>\` becomes
-\`trash guard --spool <abs> -rf <path>\` — the spool travels in the COMMAND TEXT
-because a variable set in the hook child never reaches the process that runs
-the rewritten command. The guard owns rm's exit codes (0 done, 1 rm error,
-2 refused), so the user's \`&&\` chains behave exactly as rm's did. The
-retention sweeper runs on an independent timer in phase 3 — in phase 1 it is
-this verb: \`trash sweep\`.
+Exit codes: 0 done, 1 usage/API error, 2 refused (deletion preserved). Inspect pending
+operations after interruption. Offline-only legacy commands include config,
+purge, empty and sweep; they do not operate on the hosted index.
 `;
 
 interface GlobalFlags {
+  local: boolean;
   spool?: string;
   files?: string;
   info?: string;
@@ -91,6 +98,7 @@ interface GlobalFlags {
   agent?: string;
   help: boolean;
   version: boolean;
+  identity: boolean;
 }
 
 interface Parsed {
@@ -102,7 +110,7 @@ interface Parsed {
 class UsageError extends Error {}
 
 function parse(argv: string[]): Parsed {
-  const flags: GlobalFlags = { json: false, help: false, version: false };
+  const flags: GlobalFlags = { local: false, json: false, help: false, version: false, identity: false };
   let verb: string | null = null;
   const rest: string[] = [];
 
@@ -114,6 +122,9 @@ function parse(argv: string[]): Parsed {
     }
     if (verb === null) {
       switch (arg) {
+        case "--local":
+          flags.local = true;
+          continue;
         case "--spool":
         case "--files":
         case "--info":
@@ -139,6 +150,9 @@ function parse(argv: string[]): Parsed {
         case "--version":
           flags.version = true;
           continue;
+        case "--identity":
+          flags.identity = true;
+          continue;
         default:
           throw new UsageError(`unknown global flag ${arg}`);
       }
@@ -151,6 +165,7 @@ function parse(argv: string[]): Parsed {
 interface VerbFlags {
   json: boolean;
   force: boolean;
+  allowUncaptured: boolean;
   recursive: boolean;
   apply: boolean;
   overwrite: boolean;
@@ -164,6 +179,7 @@ function parseVerbFlags(rest: string[], globals: GlobalFlags): VerbFlags {
   const out: VerbFlags = {
     json: globals.json,
     force: false,
+    allowUncaptured: false,
     recursive: false,
     apply: false,
     overwrite: false,
@@ -189,6 +205,9 @@ function parseVerbFlags(rest: string[], globals: GlobalFlags): VerbFlags {
       switch (name) {
         case "--force":
           out.force = true;
+          break;
+        case "--allow-uncaptured":
+          out.allowUncaptured = true;
           break;
         case "--recursive":
           out.recursive = true;
@@ -332,6 +351,7 @@ function makeStore(globals: GlobalFlags, runtime: CliRuntime = {}): TrashStore {
   if (globals.info) roots.info = globals.info;
   if (globals.config) roots.config = globals.config;
   return new TrashStore({
+    ...(globals.local ? { env: { ...process.env, HASNA_TRASH_LOCAL: "1" } } : {}),
     roots,
     verifyRemote: runtime.verifyRemote,
     upload: runtime.upload,
@@ -367,7 +387,11 @@ async function main(argv: string[], runtime: CliRuntime = {}): Promise<number> {
   const { flags, verb, rest } = parse(argv);
 
   if (flags.version) {
-    process.stdout.write("0.0.0\n");
+    process.stdout.write(`${VERSION}\n`);
+    return EXIT_OK;
+  }
+  if (flags.identity) {
+    process.stdout.write(`${JSON.stringify(IDENTITY)}\n`);
     return EXIT_OK;
   }
   if (flags.help || verb === null) {
@@ -379,6 +403,15 @@ async function main(argv: string[], runtime: CliRuntime = {}): Promise<number> {
   // emits it), so it is parsed before the store is built from the same flags.
   let guardConfig: GuardVerbConfig | null = null;
   if (verb === "guard") guardConfig = takeGuardConfig(rest, flags);
+
+  if (guardConfig?.plan !== null && guardConfig?.plan !== undefined) {
+    const decision = planGuardCommand(guardConfig.plan, { spool: resolveSpoolForPlan(flags), trashBin: "trash", home: getHomeDir(process.env), cwd: process.cwd(),
+      extraProtectedRoots: [flags.spool, flags.files, flags.info, flags.config].filter((path): path is string => !!path).map((path) => resolve(path)) });
+    process.stdout.write(`${JSON.stringify(guardPlanDocument(decision))}\n`);
+    return decision.kind === "deny" ? EXIT_REFUSED : EXIT_OK;
+  }
+  const local = flags.local || ["1", "true"].includes(process.env.HASNA_TRASH_LOCAL ?? "");
+  if (!local) return runHostedCli({ verb, rest, flags, guard: guardConfig });
 
   const store = makeStore(flags, runtime);
 
@@ -432,6 +465,7 @@ async function main(argv: string[], runtime: CliRuntime = {}): Promise<number> {
       for (const target of verbFlags.positional) {
         const outcome = store.put(target, {
           force: verbFlags.force,
+          allowUncaptured: verbFlags.allowUncaptured,
           agent: flags.agent,
           retentionDays: verbFlags.retentionDays,
         })[0]!;

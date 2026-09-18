@@ -1,7 +1,7 @@
 {
   "name": "@hasna/statusline",
   "version": "0.0.7",
-  "description": "Tiny composable statusline CLI for AI coding agents \u2014 pre-built toggleable segments for Claude Code, with a provider model for others",
+  "description": "Tiny composable statusline CLI for AI coding agents — pre-built toggleable segments for Claude Code, with a provider model for others",
   "license": "Apache-2.0",
   "type": "module",
   "main": "./dist/index.js",
@@ -42,9 +42,9 @@
     "url": "https://github.com/hasna/apps.git",
     "directory": "apps/statusline"
   },
-  "homepage": "https://github.com/hasna/statusline#readme",
+  "homepage": "https://github.com/hasna/apps/tree/main/apps/statusline#readme",
   "bugs": {
-    "url": "https://github.com/hasna/statusline/issues"
+    "url": "https://github.com/hasna/apps/issues"
   },
   "keywords": [
     "statusline",

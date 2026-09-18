@@ -49,25 +49,21 @@ describe("getStore resolver", () => {
     );
     expect(() => isCloudStore({})).toThrow(/no loops client connection is configured/);
     // The failure happens before any store opens: no db is created anywhere.
-    expect(() => getStore({ HASNA_LOOPS_CONNECTION: "api" })).toThrow(/HASNA_LOOPS_CONNECTION=api is retired/);
-    expect(() => getStore({ HASNA_LOOPS_CONNECTION: "sqlite" })).toThrow(
-      "HASNA_LOOPS_CONNECTION must be 'file'; got \"sqlite\".",
-    );
   });
 
   test("opens the LocalStore only through the explicit file opt-in", () => {
     withTempDataDir(() => {
-      const store = getStore({ HASNA_LOOPS_CONNECTION: "file" });
+      const store = getStore({ HASNA_LOOPS_LOCAL: "1" });
       expect(store).toBeInstanceOf(LocalStore);
       expect(store.transport).toBe("file");
-      expect(isCloudStore({ HASNA_LOOPS_CONNECTION: "file" })).toBe(false);
+      expect(isCloudStore({ HASNA_LOOPS_LOCAL: "1" })).toBe(false);
       store.close();
     });
   });
 
   test("a configured environment outranks the file opt-in (no silent downgrade)", () => {
     const store = getStore({
-      HASNA_LOOPS_CONNECTION: "file",
+      HASNA_LOOPS_LOCAL: "1",
       HASNA_LOOPS_API_URL: "https://loops.example.test",
       HASNA_LOOPS_API_KEY: "k",
     });

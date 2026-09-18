@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.1
+
+- Verify the Hasna Trash guard identity before rewriting deletion; never execute an unrelated operating-system trash utility.
+- Allow hosted upload/verification time and refuse native patch file deletion until Trash captures it. Emit silent PreToolUse no-ops for Codex compatibility.
+- Reject unsafe hook temporary directories and isolate package test environment/database handles.
+
+
 ## 0.9.0
 
 ### Minor Changes

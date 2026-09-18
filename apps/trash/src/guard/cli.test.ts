@@ -40,7 +40,7 @@ interface Run {
 async function run(args: string[], stdin?: string): Promise<Run> {
   const proc = Bun.spawn({
     cmd: ["bun", CLI, "--spool", sandbox.path("spool"), ...args],
-    env: spawnEnv(sandbox),
+    env: spawnEnv(sandbox, { HASNA_TRASH_LOCAL: "1" }),
     cwd: sandbox.root,
     stdin: stdin === undefined ? "ignore" : "pipe",
     stdout: "pipe",
@@ -240,7 +240,7 @@ describe("the rewritten command actually runs", () => {
     const shellCommand = document.command.replace(/^trash /, `bun ${CLI} `);
     const proc = Bun.spawn({
       cmd: ["bash", "-c", shellCommand],
-      env: spawnEnv(sandbox),
+      env: spawnEnv(sandbox, { HASNA_TRASH_LOCAL: "1" }),
       cwd: sandbox.root,
       stdout: "pipe",
       stderr: "pipe",

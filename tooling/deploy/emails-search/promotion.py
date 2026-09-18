@@ -7,6 +7,7 @@ Unknown writes stop for reconciliation; ECS has a precheck, not an atomic CAS.
 """
 import argparse
 import copy
+from datetime import datetime, timedelta, timezone
 import fcntl
 import gzip
 import hashlib
@@ -49,6 +50,10 @@ def require(ok, reason):
 
 def encode(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+
+
+def same_json(left, right):
+    return encode(left) == encode(right)
 
 
 def digest(data):
@@ -404,6 +409,318 @@ def promote(source, out, prepared, expected_hash):
         raise
 
 
+
+def task_payload(task):
+    return {k: copy.deepcopy(v) for k, v in task.items() if k not in READ_ONLY_TASK_FIELDS}
+
+
+def task_image(payload):
+    rows = [c for c in payload.get("containerDefinitions", []) if c.get("name") == "emails"]
+    require(len(rows) == 1, "WEB_CONTAINER_IDENTITY")
+    image = rows[0].get("image")
+    prefix = REPOSITORY + "@"
+    require(isinstance(image, str) and image.startswith(prefix), "RECONCILE_IMAGE_REPOSITORY")
+    return sha(image[len(prefix):])
+
+
+
+def parsed_docker_timestamp_ns(value, code):
+    require(isinstance(value, str) and len(value) <= 64, code)
+    match = re.fullmatch(
+        r"([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})(?:[.]([0-9]{1,9}))?(Z|[+-][0-9]{2}:[0-9]{2})",
+        value,
+    )
+    require(match is not None, code)
+    year, month, day, hour, minute, second = map(int, match.groups()[:6])
+    # Go/Docker RFC3339Nano timestamps do not emit leap-second values. Refuse
+    # rather than widening this one historical normalization to generic RFC3339.
+    require(second <= 59, code)
+    fraction = match.group(7) or ""
+    zone = match.group(8)
+    require(zone != "-00:00", code)
+    if zone == "Z":
+        offset = timezone.utc
+    else:
+        offset_hours, offset_minutes = map(int, zone[1:].split(":"))
+        require(offset_hours <= 23 and offset_minutes <= 59, code)
+        offset_delta = timedelta(hours=offset_hours, minutes=offset_minutes)
+        offset = timezone(offset_delta if zone[0] == "+" else -offset_delta)
+    try:
+        parsed = datetime(year, month, day, hour, minute, second, tzinfo=offset)
+    except ValueError:
+        raise ValueError(code)
+    utc = parsed.astimezone(timezone.utc)
+    epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+    elapsed = utc - epoch
+    whole_seconds = elapsed.days * 86400 + elapsed.seconds
+    nanoseconds = int(fraction.ljust(9, "0")) if fraction else 0
+    return whole_seconds * 1_000_000_000 + nanoseconds
+
+
+def appended_history_entry(parent_history, child_history):
+    require(len(child_history) == len(parent_history) + 1, "RECONCILE_DESCENDANT_HISTORY")
+    appended = child_history[-1]
+    if same_json(child_history[:-1], parent_history):
+        return appended, False
+    require(parent_history and same_json(child_history[:-2], parent_history[:-1]), "RECONCILE_DESCENDANT_HISTORY")
+    parent_tail = parent_history[-1]
+    stamped_tail = child_history[-2]
+    require(isinstance(parent_tail, dict) and isinstance(stamped_tail, dict) and "created" not in parent_tail, "RECONCILE_DESCENDANT_HISTORY")
+    require(set(stamped_tail) == set(parent_tail) | {"created"} and same_json({key: stamped_tail[key] for key in parent_tail}, parent_tail), "RECONCILE_DESCENDANT_HISTORY")
+    stamped_at = parsed_docker_timestamp_ns(stamped_tail.get("created"), "RECONCILE_DESCENDANT_HISTORY_TIMESTAMP")
+    appended_at = parsed_docker_timestamp_ns(appended.get("created") if isinstance(appended, dict) else None, "RECONCILE_DESCENDANT_HISTORY_TIMESTAMP")
+    delta_ns = appended_at - stamped_at
+    require(0 <= delta_ns <= 5_000_000_000, "RECONCILE_DESCENDANT_HISTORY_TIMESTAMP")
+    return appended, True
+
+
+def descendant_overlay_lineage(parent_digest, child_digest):
+    require(parent_digest != child_digest, "RECONCILE_DESCENDANT_IMAGE_UNCHANGED")
+    parent_manifest = image_manifest(parent_digest)
+    child_manifest = image_manifest(child_digest)
+    require(len(child_manifest["layers"]) == len(parent_manifest["layers"]) + 1, "RECONCILE_DESCENDANT_LAYER_COUNT")
+    require(same_json(child_manifest["layers"][:-1], parent_manifest["layers"]), "RECONCILE_DESCENDANT_LAYER_PREFIX")
+    parent_config = json.loads(blob(parent_manifest["config"]))
+    child_config = json.loads(blob(child_manifest["config"]))
+    require(set(parent_config) == set(child_config) == {"architecture", "config", "created", "history", "os", "rootfs"}, "RECONCILE_DESCENDANT_CONFIG_FIELDS")
+    require(parent_config["architecture"] == child_config["architecture"] == "amd64" and parent_config["os"] == child_config["os"] == "linux", "RECONCILE_DESCENDANT_PLATFORM")
+    parent_diff_ids = parent_config.get("rootfs", {}).get("diff_ids", [])
+    child_diff_ids = child_config.get("rootfs", {}).get("diff_ids", [])
+    require(parent_config.get("rootfs", {}).get("type") == child_config.get("rootfs", {}).get("type") == "layers", "RECONCILE_DESCENDANT_ROOTFS")
+    require(len(child_diff_ids) == len(parent_diff_ids) + 1 and same_json(child_diff_ids[:-1], parent_diff_ids), "RECONCILE_DESCENDANT_DIFF_IDS")
+    parent_runtime = copy.deepcopy(parent_config["config"])
+    child_runtime = copy.deepcopy(child_config["config"])
+    parent_labels = parent_runtime.pop("Labels", {}) or {}
+    child_labels = child_runtime.pop("Labels", {}) or {}
+    require(same_json(parent_runtime, child_runtime), "RECONCILE_DESCENDANT_RUNTIME_DRIFT")
+    require(all(child_labels.get(key) == value for key, value in parent_labels.items()), "RECONCILE_DESCENDANT_LABEL_DRIFT")
+    added_labels = sorted(set(child_labels) - set(parent_labels))
+    require(1 <= len(added_labels) <= 8, "RECONCILE_DESCENDANT_LABEL_COUNT")
+    require(all(re.fullmatch(r"com[.]hasna[.][a-z0-9.-]{1,120}", key) and isinstance(child_labels[key], str) and 1 <= len(child_labels[key]) <= 256 and not re.search(r"[\x00-\x1f\x7f]", child_labels[key]) for key in added_labels), "RECONCILE_DESCENDANT_LABELS")
+    parent_history = parent_config.get("history", [])
+    child_history = child_config.get("history", [])
+    require(isinstance(parent_history, list) and isinstance(child_history, list), "RECONCILE_DESCENDANT_HISTORY")
+    appended_history, parent_history_stamped = appended_history_entry(parent_history, child_history)
+    layer = child_manifest["layers"][-1]
+    require(layer.get("mediaType") == OCI_LAYER and isinstance(layer.get("size"), int) and 0 < layer["size"] <= 8 * 1024 * 1024, "RECONCILE_DESCENDANT_LAYER")
+    compressed_layer = blob(layer)
+    with gzip.GzipFile(fileobj=io.BytesIO(compressed_layer)) as stream:
+        uncompressed_layer = stream.read(64 * 1024 * 1024 + 1)
+    require(0 < len(uncompressed_layer) <= 64 * 1024 * 1024, "RECONCILE_DESCENDANT_LAYER_EXPANSION")
+    require(digest(uncompressed_layer) == child_diff_ids[-1], "RECONCILE_DESCENDANT_DIFF_ID_BINDING")
+    require(isinstance(appended_history, dict) and appended_history.get("empty_layer") is not True and isinstance(appended_history.get("created_by"), str) and appended_history["created_by"].strip(), "RECONCILE_DESCENDANT_HISTORY_LAYER")
+    return {
+        "parentImageDigest": parent_digest,
+        "childImageDigest": child_digest,
+        "layerDigest": sha(layer["digest"]),
+        "layerSize": layer["size"],
+        "diffId": sha(child_diff_ids[-1]),
+        "addedLabelNames": added_labels,
+        "runtimeConfigurationPreserved": True,
+        "parentLayersPreserved": True,
+        "parentHistoryTimestampNormalized": parent_history_stamped,
+    }
+
+
+def historical_reviewed_plan(current_source, prepared, expected_hash):
+    raw = prepared.read_bytes()
+    require(re.fullmatch(r"[0-9a-f]{64}", expected_hash) and hashlib.sha256(raw).hexdigest() == expected_hash and len(raw) < 65536, "PREPARED_DIGEST")
+    plan = json.loads(raw)
+    prepared_source = plan.get("sourceCommit")
+    require(isinstance(prepared_source, str) and re.fullmatch(r"[0-9a-f]{40}", prepared_source), "PREPARED_SOURCE")
+    require(
+        subprocess.run(
+            ["git", "merge-base", "--is-ancestor", prepared_source, current_source],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            timeout=30,
+        ).returncode == 0,
+        "PREPARED_SOURCE_NOT_ANCESTOR",
+    )
+    verified, image_receipt = reviewed_plan(prepared_source, prepared, expected_hash)
+    return verified, image_receipt, prepared_source
+
+
+def running_task_snapshot(known_tasks):
+    task_arns = aws("ecs", "list-tasks", "--cluster", CLUSTER, "--service-name", SERVICE, "--desired-status", "RUNNING").get("taskArns", [])
+    require(isinstance(task_arns, list) and len(task_arns) <= 100 and all(isinstance(arn, str) and arn for arn in task_arns), "LIVE_TASK_COUNT")
+    task_arns = sorted(task_arns)
+    controlled = []
+    safe = []
+    if task_arns:
+        rows = aws("ecs", "describe-tasks", "--cluster", CLUSTER, "--tasks", *task_arns)
+        require(not rows.get("failures") and len(rows.get("tasks", [])) == len(task_arns), "LIVE_TASK_READ")
+        by_arn = {row.get("taskArn"): row for row in rows["tasks"]}
+        require(set(by_arn) == set(task_arns), "LIVE_TASK_IDENTITY")
+        for task_arn in task_arns:
+            task = by_arn[task_arn]
+            definition = task.get("taskDefinitionArn")
+            require(definition in known_tasks, "RECONCILE_FOREIGN_RUNNING_TASK")
+            web = [c for c in task.get("containers", []) if c.get("name") == "emails"]
+            require(len(web) == 1, "WEB_CONTAINER_IDENTITY")
+            row = {
+                "taskArn": task_arn,
+                "taskDefinition": definition,
+                "lastStatus": task.get("lastStatus"),
+                "healthStatus": task.get("healthStatus"),
+                "imageDigest": web[0].get("imageDigest"),
+            }
+            controlled.append(row)
+            safe.append({
+                "taskArnSha256": hashlib.sha256(task_arn.encode()).hexdigest(),
+                "taskDefinition": definition,
+                "lastStatus": row["lastStatus"],
+                "healthStatus": row["healthStatus"],
+                "imageDigest": row["imageDigest"],
+            })
+    return safe, digest(encode(controlled))
+
+
+def reconciliation_service_digest(service):
+    deployments = service.get("deployments", [])
+    controlled = {
+        "serviceName": service.get("serviceName"),
+        "status": service.get("status"),
+        "taskDefinition": service.get("taskDefinition"),
+        "desiredCount": service.get("desiredCount"),
+        "runningCount": service.get("runningCount"),
+        "pendingCount": service.get("pendingCount"),
+        "deployments": [
+            {
+                "taskDefinition": row.get("taskDefinition"),
+                "status": row.get("status"),
+                "rolloutState": row.get("rolloutState"),
+                "desiredCount": row.get("desiredCount"),
+                "runningCount": row.get("runningCount"),
+                "pendingCount": row.get("pendingCount"),
+            }
+            for row in deployments
+        ],
+    }
+    return digest(encode(controlled))
+
+
+def reconcile(source, out, prepared, expected_hash):
+    """Read-only reconciliation of the exact reviewed 88/89 promotion state.
+
+    The receipt deliberately excludes task environment and secret-reference values.
+    It binds only controlled identifiers, canonical task hashes, image digests and
+    service convergence facts. No AWS mutation API is called. Historical prepared
+    evidence is accepted only when its exact main source is an ancestor of the
+    current exact-main workflow source.
+    """
+    plan, image_receipt, prepared_source = historical_reviewed_plan(source, prepared, expected_hash)
+    expected_before = plan["taskDefinitionBefore"]
+    require(expected_before.endswith(":88"), "RECONCILE_EXPECTED_TASK_88")
+    expected_candidate = expected_before.rsplit(":", 1)[0] + ":89"
+
+    before = task_read(expected_before)
+    candidate = task_read(expected_candidate)
+    require(
+        before.get("taskDefinitionArn") == expected_before
+        and before.get("revision") == 88
+        and before.get("status") == "ACTIVE",
+        "RECONCILE_TASK_88_IDENTITY",
+    )
+    before_payload_digest = digest(encode(task_payload(before)))
+    expected_payload = task_candidate(before, image_receipt["imageDigest"])
+    require(digest(encode(expected_payload)) == plan["taskAfterDigest"], "RECONCILE_TASK_88_PAYLOAD_DRIFT")
+    candidate_payload = task_payload(candidate)
+    require(same_json(candidate_payload, expected_payload), "RECONCILE_TASK_89_DRIFT")
+
+    service = current_service()
+    service_digest = reconciliation_service_digest(service)
+    require(service.get("serviceName") == SERVICE and service.get("status") == "ACTIVE", "SERVICE_IDENTITY")
+    current = service.get("taskDefinition")
+    require(isinstance(current, str) and current.startswith(expected_before.rsplit(":", 1)[0] + ":"), "RECONCILE_FOREIGN_TASK")
+    current_revision = current.rsplit(":", 1)[-1]
+    require(current_revision.isdigit() and 88 <= int(current_revision) <= 10_000, "RECONCILE_TASK_REVISION")
+    known_tasks = {expected_before, expected_candidate}
+    descendant = None
+    current_image_digest = BASE if current == expected_before else image_receipt["imageDigest"]
+    if current not in known_tasks:
+        require(int(current_revision) > 89, "RECONCILE_FOREIGN_TASK")
+        current_task = task_read(current)
+        current_payload = task_payload(current_task)
+        current_image_digest = task_image(current_payload)
+        normalized_current = copy.deepcopy(current_payload)
+        normalized_web = next(c for c in normalized_current["containerDefinitions"] if c.get("name") == "emails")
+        normalized_web["image"] = REPOSITORY + "@" + image_receipt["imageDigest"]
+        require(same_json(normalized_current, candidate_payload), "RECONCILE_DESCENDANT_TASK_DRIFT")
+        descendant = {
+            "taskDefinition": current,
+            "digest": digest(encode(current_payload)),
+            "imageDigest": current_image_digest,
+            "lineage": descendant_overlay_lineage(image_receipt["imageDigest"], current_image_digest),
+        }
+        known_tasks.add(current)
+    deployments = service.get("deployments", [])
+    require(isinstance(deployments, list) and 1 <= len(deployments) <= 3, "RECONCILE_DEPLOYMENTS")
+    safe_deployments = []
+    for row in deployments:
+        arn = row.get("taskDefinition")
+        require(arn in known_tasks, "RECONCILE_FOREIGN_DEPLOYMENT")
+        safe_deployments.append({
+            "taskDefinition": arn,
+            "status": row.get("status"),
+            "rolloutState": row.get("rolloutState"),
+            "desiredCount": row.get("desiredCount"),
+            "runningCount": row.get("runningCount"),
+            "pendingCount": row.get("pendingCount"),
+        })
+
+    observed, running_digest = running_task_snapshot(known_tasks)
+
+    stable = service_binding(service) == current
+    expected_live_digest = current_image_digest
+    healthy = len(observed) == service.get("desiredCount") and all(
+        row["taskDefinition"] == current
+        and row["lastStatus"] == "RUNNING"
+        and row["healthStatus"] == "HEALTHY"
+        and row["imageDigest"] == expected_live_digest
+        for row in observed
+    )
+    require(healthy, "RECONCILE_RUNNING_TASKS")
+    require(reconciliation_service_digest(current_service()) == service_digest, "RECONCILE_SERVICE_RACE")
+    observed_again, running_digest_again = running_task_snapshot(known_tasks)
+    require(running_digest_again == running_digest and same_json(observed_again, observed), "RECONCILE_RUNNING_TASK_RACE")
+    require(reconciliation_service_digest(current_service()) == service_digest, "RECONCILE_SERVICE_RACE")
+    state = "descendant_overlay_live_stable" if descendant else "candidate_live_stable" if current == expected_candidate else "base_live_stable"
+    receipt = {
+        "schema": "emails.promotion-reconciliation.v1",
+        "sourceCommit": source,
+        "preparedSourceCommit": prepared_source,
+        "preparedSha256": expected_hash,
+        "task88": {
+            "taskDefinition": expected_before,
+            "historicalReadDigest": plan["taskBeforeDigest"],
+            "currentPayloadDigest": before_payload_digest,
+            "readOnlyRepresentationMayDiffer": True,
+            "imageDigest": BASE,
+        },
+        "task89": {"taskDefinition": expected_candidate, "digest": plan["taskAfterDigest"], "imageDigest": image_receipt["imageDigest"]},
+        "descendant": descendant,
+        "service": {
+            "taskDefinition": current,
+            "desiredCount": service.get("desiredCount"),
+            "runningCount": service.get("runningCount"),
+            "pendingCount": service.get("pendingCount"),
+            "stable": stable,
+            "healthy": healthy,
+            "deployments": safe_deployments,
+            "runningTasks": observed,
+        },
+        "state": state,
+        "rollback": {
+            "automatic": False,
+            "preMigrationAnchor": current,
+            "tasks88And89AreHistoricalOnly": current not in {expected_before, expected_candidate},
+            "validAfterForwardMigration": False,
+            "requiresSeparateReview": True,
+        },
+    }
+    save(out / "reconciled.json", receipt)
+
 def rollback(source, out, prepared, expected_hash):
     plan, image_receipt = reviewed_plan(source, prepared, expected_hash)
     before_arn = plan["taskDefinitionBefore"]
@@ -428,7 +745,7 @@ def rollback(source, out, prepared, expected_hash):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("phase", choices=["prepare", "promote", "rollback"])
+    p.add_argument("phase", choices=["prepare", "reconcile", "promote", "rollback"])
     p.add_argument("--source", required=True)
     p.add_argument("--out", type=Path, required=True)
     p.add_argument("--prepared", type=Path)
@@ -442,7 +759,7 @@ def main():
         prepare(args.source, args.out)
     else:
         require(args.prepared is not None and args.prepared_sha256 is not None, "REVIEWED_PREPARED_REQUIRED")
-        operation = promote if args.phase == "promote" else rollback
+        operation = reconcile if args.phase == "reconcile" else promote if args.phase == "promote" else rollback
         operation(args.source, args.out, args.prepared, args.prepared_sha256)
 
 
@@ -451,5 +768,5 @@ if __name__ == "__main__":
         main()
     except Exception as error:
         # Controlled identifiers only. Never stringify raw cloud/JSON errors.
-        message = str(error) if type(error) is ValueError and re.fullmatch(r"[A-Z_]+(?::[a-z/-]+)?", str(error)) else type(error).__name__
+        message = str(error) if type(error) is ValueError and re.fullmatch(r"[A-Z0-9_]+(?::[a-z0-9/-]+)?", str(error)) else type(error).__name__
         raise SystemExit("Emails promotion stopped: " + message + "; inspect retained metadata before retry or rollback")

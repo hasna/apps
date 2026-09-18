@@ -20,12 +20,13 @@ useDefaultTestTimeout();
 // the docs/requires/info paths that need those shapes are exercised against
 // fixtures in a throwaway corpus the CLI resolves via $HASNA_SKILLS_DIR.
 const FIXTURE_HOME = mkdtempSync(join(tmpdir(), "cli-docs-fixtures-"));
-function writeFixture(name: string, files: { pkg?: unknown; skillMd?: string; claudeMd?: string }): void {
+function writeFixture(name: string, files: { pkg?: unknown; skillMd?: string; readme?: string; claudeMd?: string }): void {
   const dir = join(FIXTURE_HOME, "installed", name);
   mkdirSync(dir, { recursive: true });
   if (files.pkg !== undefined) writeFileSync(join(dir, "package.json"), JSON.stringify(files.pkg, null, 2));
   if (files.skillMd !== undefined) writeFileSync(join(dir, "SKILL.md"), files.skillMd);
   if (files.claudeMd !== undefined) writeFileSync(join(dir, "CLAUDE.md"), files.claudeMd);
+  if (files.readme !== undefined) writeFileSync(join(dir, "README.md"), files.readme);
 }
 writeFixture("byo-fixture", {
   pkg: { name: "byo-fixture", version: "0.1.0" },
@@ -40,6 +41,9 @@ writeFixture("claude-only-fixture", {
   claudeMd: "# claude-only-fixture\n\nGuidance body with no SKILL.md.\n",
 });
 const FIXTURE_ENV = { HASNA_SKILLS_DIR: FIXTURE_HOME };
+writeFixture("exact-docs-fixture", {
+  skillMd: "# Skill document\n", readme: "# Readme document\n", claudeMd: "# Claude document\n",
+});
 
 afterAll(() => {
   rmSync(FIXTURE_HOME, { recursive: true, force: true });
@@ -47,6 +51,38 @@ afterAll(() => {
 
 describe("CLI docs and validation", () => {
   describe("docs", () => {
+    test("explicit aliases return the same exact document in text and JSON", async () => {
+      for (const [file, body] of [["skill", "# Skill document"], ["readme", "# Readme document"], ["claude", "# Claude document"]]) {
+        for (const json of [false, true]) {
+          const result = await runCli(["docs", "exact-docs-fixture", "--file", file!, ...(json ? ["--json"] : [])], FIXTURE_ENV);
+          expect(result.exitCode).toBe(0);
+          expect(json ? JSON.parse(result.stdout).content.trim() : result.stdout.trim()).toBe(body);
+        }
+      }
+    });
+
+    test("unknown files refuse before local or hosted reads and never emit another document", async () => {
+      for (const hosted of [false, true]) {
+        for (const json of [false, true]) {
+          const result = await runCli(["docs", "exact-docs-fixture", "--file", "unknown-file", ...(json ? ["--json"] : [])], {
+            ...FIXTURE_ENV,
+            ...(hosted ? { HASNA_SKILLS_LOCAL: "0", HASNA_SKILLS_API_URL: "http://127.0.0.1:9", HASNA_SKILLS_API_KEY: "owned-docs-fixture" } : {}),
+          });
+          expect(result.exitCode).not.toBe(0);
+          expect(result.stdout).toBe("");
+          expect(result.stderr).toContain("Unsupported documentation file");
+        }
+      }
+    });
+
+    test("missing explicit docs refuse in both formats instead of falling back", async () => {
+      for (const json of [false, true]) {
+        const result = await runCli(["docs", "claude-only-fixture", "--file", "skill", ...(json ? ["--json"] : [])], FIXTURE_ENV);
+        expect(result.exitCode).not.toBe(0); expect(result.stdout).toBe("");
+        expect(result.stderr).toContain("Documentation file SKILL.md was not found");
+      }
+    });
+
     test("shows documentation for a skill with SKILL.md", async () => {
       const { stdout } = await runCli(["docs", "brand-kit"]);
       expect(stdout).toContain("Brand Kit");

@@ -73,9 +73,9 @@
     "url": "https://github.com/hasna/apps.git",
     "directory": "apps/telephony"
   },
-  "homepage": "https://github.com/hasna/telephony",
+  "homepage": "https://github.com/hasna/apps/tree/main/apps/telephony#readme",
   "bugs": {
-    "url": "https://github.com/hasna/telephony/issues"
+    "url": "https://github.com/hasna/apps/issues"
   },
   "engines": {
     "bun": ">=1.0.0"

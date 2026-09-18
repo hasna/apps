@@ -56,6 +56,7 @@ registered by `@hasna/events`.
 | `repos clone <org>/<name>` | Clone one repository to `~/.hasna/repos/clones/<org>/<name>` and register it |
 | `repos archive <repo>` | Archive on GitHub, reversible with `--restore`; there is no delete verb |
 | `repos registry prune` | Retire registry rows whose path no longer exists (dry run unless explicitly confirmed) |
+| `repos registry register <path>` | Register one existing checkout against a reviewed remote, HEAD, branch and registry plan |
 | `repos registry health` | Report how many registry rows point at a usable git checkout |
 | `repos registry relocate-primary` | Losslessly absorb a registered canonical target into a preserved legacy repo ID |
 | `repos registry adjudicate-branches` | Dry-run/apply exact audited branch-row reclassification specs |
@@ -303,6 +304,38 @@ express (standing archive-don't-delete rule), so no delete-capable token ever ne
 exist behind these verbs. `clone` refuses an occupied destination with
 its contents intact, register the checkout, and fail loudly if registration does not land
 — acquire-and-register is one contract, not a clone plus a hope.
+
+### Register an existing checkout
+
+Use `repos registry register` when a standalone checkout already exists but has
+no catalog row. The default is a read-only plan against the normally resolved
+Repos registry. The registry must already exist with the current tables; this
+command does not initialize or migrate a database.
+
+```bash
+repos registry register /home/you/.hasna/repos/clones/example/project \
+  --expected-remote github.com/example/project \
+  --expected-head <full-head-sha> --expected-branch main --json
+```
+
+Review the returned `plan.database` and `plan.plan_hash`, then repeat the exact
+command with `--apply --expected-database <path> --expected-plan-hash <sha256>`.
+The database option confirms normal provider resolution; it does not redirect
+the operation to another store. An identical existing row is returned unchanged.
+Conflicting rows, path aliases, active relevant leases, and changed checkout or
+registry identities refuse the operation.
+
+Registration inserts only the selected catalog row, with its normal SQLite FTS
+index updates. It preserves other catalog rows and lease records. It does not
+scan history, install Git hooks, sync a remote catalog, or merge duplicate rows.
+Git HEAD, symbolic branch and raw index are rechecked before completion. It
+does not establish checkout inactivity or claim that an uncommitted worktree is
+clean; operations that require those properties must verify them separately.
+SQLite may use its normal WAL/shared-memory coordination while reading or
+writing an existing registry.
+
+The same contract is exported as `registerRepository(request)` from
+`@hasna/repos`, with `RegistryRegisterRequest` and `RegistryRegisterResult` types.
 
 ### Registry prune
 

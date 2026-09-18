@@ -1,0 +1,73 @@
+{
+  "schemaVersion": 1,
+  "kind": "hasna.notes.native-sdk",
+  "package": {
+    "name": "@hasna/notes",
+    "version": "0.6.2"
+  },
+  "source": {
+    "repository": "https://github.com/hasna/apps",
+    "revision": "5068873fc53412454c0a73698e4ea18ccec85c08"
+  },
+  "distribution": {
+    "status": "published",
+    "registry": "https://registry.npmjs.org/",
+    "verifiedAt": "2026-09-17T15:27:36.293672+00:00"
+  },
+  "archive": {
+    "url": "https://registry.npmjs.org/@hasna/notes/-/notes-0.6.2.tgz",
+    "bytes": 111194,
+    "sha256": "f68c6abe7baf7b2ae4ec66c5d4f56a004b10abe332fbe8755cfefb44187fe522",
+    "integrity": "sha512-PGkq0DHNCq6BQDQxtZpv2Fcm7u2+Nsl4R7Gres4/AsMDGNIxxXTP3f9oQ1sRtCQETbsnlSmNkW7ES1rL3c6dFg=="
+  },
+  "license": {
+    "path": "LICENSE",
+    "bytes": 1062,
+    "sha256": "7d5aee9c66df0ead882224103722ea4900b49d191adc281bceb86059baeeeee6"
+  },
+  "native": {
+    "packagePath": "swift",
+    "product": "NotesLib",
+    "swiftToolsVersion": "6.0",
+    "minimumMacOS": "13.0",
+    "treeSHA256": "bac0779764111b16605b8910f662536a392ee50c59d39fb734129552b725a73a",
+    "files": [
+      {
+        "path": "Package.swift",
+        "sha256": "c984145f35969b1011072894c5ef722e81d388141eea2240ef88cc989e13c819",
+        "bytes": 412,
+        "mode": 420
+      },
+      {
+        "path": "Sources/NotesLib/HTTPTransport.swift",
+        "sha256": "4f982c9f3b68395d03615c8e65d47c08e186097b542bede89fd25e37a402346f",
+        "bytes": 5207,
+        "mode": 420
+      },
+      {
+        "path": "Sources/NotesLib/Models.swift",
+        "sha256": "4139a869570442e9680616d3ef7a3f8f748c224b1e43b75c140e9504a8b751cb",
+        "bytes": 4700,
+        "mode": 420
+      },
+      {
+        "path": "Sources/NotesLib/NotesClient.swift",
+        "sha256": "ec9465f129dc41c30728417990999a7b40a1e9799bd9682d1ea718eee12b28fb",
+        "bytes": 8366,
+        "mode": 420
+      },
+      {
+        "path": "Tests/NotesLibTests/Fixtures/wire-v1.json",
+        "sha256": "23d6f77b9a3c9ce44f8253148c139b24f8aa6850176ea4d7c731a76e808d6a64",
+        "bytes": 1351,
+        "mode": 420
+      },
+      {
+        "path": "Tests/NotesLibTests/NotesLibTests.swift",
+        "sha256": "9c15fc83fc5917058409f6281f0cf5bab3e585d361b0edadbef27b2eb7d0d090",
+        "bytes": 8260,
+        "mode": 420
+      }
+    ]
+  }
+}

@@ -1,6 +1,6 @@
 {
   "name": "@hasna/hooks",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "description": "Open source hooks library for AI coding agents - Install safety, quality, and automation hooks with a single command",
   "type": "module",
   "bin": {
@@ -89,12 +89,13 @@
     "!hooks/**/*.test.ts",
     "!hooks/**/tsconfig.json"
   ],
-  "homepage": "https://github.com/hasna/hooks#readme",
+  "homepage": "https://github.com/hasna/apps/tree/main/apps/hooks#readme",
   "bugs": {
-    "url": "https://github.com/hasna/hooks/issues"
+    "url": "https://github.com/hasna/apps/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/hasna/hooks.git"
+    "url": "https://github.com/hasna/apps.git",
+    "directory": "apps/hooks"
   }
 }

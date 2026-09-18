@@ -1,6 +1,6 @@
 {
   "name": "@hasna/instructions",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "AI coding agent instruction and configuration manager with fail-closed hosted clients, explicit local SQLite, native S3 backups, CLI, MCP, HTTP API, and generated SDK.",
   "type": "module",
   "main": "dist/index.js",
@@ -75,10 +75,10 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/hasna/apps.git",
+    "url": "https://github.com/hasna/apps.git",
     "directory": "apps/instructions"
   },
-  "homepage": "https://github.com/hasna/apps/tree/main/apps/instructions",
+  "homepage": "https://github.com/hasna/apps/tree/main/apps/instructions#readme",
   "bugs": {
     "url": "https://github.com/hasna/apps/issues"
   },

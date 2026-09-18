@@ -24,6 +24,7 @@ import { closeDb } from "../db/index.js";
 const TEST_DIR = mkdtempSync(join(tmpdir(), "hooks-store-test-"));
 
 beforeAll(() => {
+  closeDb();
   process.env.HASNA_HOOKS_DATA_DIR = TEST_DIR;
   process.env.HASNA_HOOKS_DB_PATH = ":memory:";
 });

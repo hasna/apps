@@ -7,7 +7,7 @@ import { delimiter, join } from "node:path";
  *
  * The machine-wide client configuration the runner's spawned CLIs used to
  * inherit from `~/.hasna/cloud/*.env` is retired: every hosted Hasna CLI now
- * resolves its own credentials through the shared `@hasna/contracts` 1.0.2
+ * resolves its own credentials through the shared `@hasna/contracts` 1.1.0
  * resolver (Keychain -> disk -> env) per call, so no loader and no injected
  * env prefix is needed on a station (owner ruling 2026-09-04, hasna/apps#1720).
  */

@@ -92,6 +92,13 @@ before synchronization or context loading. Review the hook installation and
 restart the native client to load its current commands. Explicit `skills load`,
 `skills context`, and `skills sync` commands can still select other profiles.
 
+Reinstalling hooks without `--command` or `--selection-profile` preserves each
+agent's existing executable and profile independently, including when using
+`--agent all`. New agents use `skills` and `default`. Either explicit flag
+overrides that choice for the requested agents. The policy's shared default
+profile changes only when `--selection-profile` is supplied; older managed
+agents without a per-agent profile retain that shared default.
+
 The hook install `--include-vendor` option is retained for compatibility with
 older scripts. Hook planning always inventories and disables discovered vendor
 system skills; use `migrate native --include-vendor` when retiring their
@@ -102,6 +109,24 @@ trust to the installed hook definitions before starting a new session. Then
 request a selected skill in a prompt, for example `Use $pdf-generate to create
 a PDF`. The hooks supply instructions; executing the skill remains a separate
 explicit action.
+
+For Codex 0.153.0, 0.154.0, and 0.155.0, the normal installed Skills CLI can
+plan native trust for its three exact managed hook definitions:
+
+```bash
+skills hook trust --agent codex --json
+skills hook trust --agent codex --apply --plan-digest <reviewed-plan-digest> --json
+```
+
+Review the commands, current hashes, and existing trust/enable state in the
+plan. Apply refuses if the plan, package, declarations, or configuration changed.
+It enrolls the current exact definitions, including reviewed modified hooks,
+and preserves unrelated trust, settings, and comments. A private journal keeps
+the pre-write configuration; a failed write or verification requires journal
+reconciliation before retry. Unsupported versions or configuration layouts
+refuse without a configuration write. Enrollment uses a short-lived native
+app-server and makes hooks eligible for new Codex processes. Existing sessions
+retain their own configuration; use their native hook controls to refresh them.
 
 Each supported agent gets one small `skills-cli` native skill containing CLI
 instructions, without a copied catalogue. Claude's native Skill tool admits
@@ -194,9 +219,22 @@ Reviewed Hermes installations need fresh source and directory coverage in their
 reviewed bindings without changing existing source-only reviews.
 
 Hook installation preserves unrelated configuration, hooks, and plugin assets.
-It disables discovered Codex native skills; exact system-skill trees can remain
-only with their hash-bound disabled paths; migration preserves these package files. A client that restores or changes
-packaged skills requires a fresh inventory and disable plan. Native exports are
+For Codex it sets `skills.bundled.enabled = false` in user configuration, preserving
+the `skills-cli` bridge and disabling discovered native skill paths. This prevents
+supported Codex clients from installing or loading their bundled `.system` skills.
+The setting and its discovery witness are enrolled in the same configuration
+transaction; existing installations must rerun `skills hook install`. Missing or
+re-enabled bundled protection fails `skills hook check` before context loads.
+Ordinary `[skills.bundled]` and legacy `[[skills.config]]` tables are supported;
+inline or dotted target definitions that require rewriting refuse before changes.
+Convert those definitions to ordinary tables while preserving their values, then
+rerun installation. The control has been verified with Codex 0.153.0, 0.153.4 and
+0.154.0; this is not a claim that every older build supports it. Use a client that
+supports `skills.bundled.enabled`; Skills does not infer support from version text
+or silently substitute path-only protection. Existing exact system-skill trees can
+remain only with their hash-bound disabled paths; migration preserves these package
+files. A client that restores or changes packaged skills requires a fresh inventory
+and disable plan. Native exports are
 refused while managed CLI loading is active. Migration preserves ordinary skill
 directories in private archives; `--include-unmanaged` includes user-authored
 copies, and `--include-vendor` retires vendor `SKILL.md` discovery files while
@@ -250,6 +288,14 @@ unknown native file format or make unreviewed plugin behavior safe. Managed
 system configuration, process-specific overrides, and alternate agent home
 directories are outside automatic coverage and require their own integration
 review before declaring a station migrated.
+
+For reviewed Claude plugins, `skills integration plugin plan`, `admit` and
+`resolve` provide a command-source admission boundary before native discovery.
+Original packages and migrated skill/command prompts remain in private versioned
+Skills storage. Native projections retain ordinary components, and a typed
+receipt permits only verified registry/cache transitions. See
+[plugin admission](docs/plugin-admission.md) for the package, review and runtime
+contracts; these commands do not change live agent registrations or settings.
 
 If your home `.claude` or `.codex` directory intentionally links to another
 directory within your home, add `--allow-root-aliases` to hook installation and
@@ -335,6 +381,24 @@ user and stable station ID, so rotating a key does not create a new station.
 Consumers need `skills:read` and `stations:write`; profile publishers need
 `skills:write`. Key scopes apply even to workspace owners.
 
+`skills auth whoami --json` reports the current credential's effective
+`permissions.publish` and `permissions.profilesWrite`, alongside its account
+role and advertised scopes. Human output labels each permission `allowed`,
+`denied`, or `unknown`; JSON uses `null` for unknown access. An owner role alone
+does not grant either permission. `skills capabilities --json` and the SDK's
+`getCapabilities()` also retain the server's typed permission and scope fields.
+
+Before sending a bundle, `push` and `RemoteSkillsClient.publishSkill()` read
+fresh capabilities and stop on an explicit publication denial. `profiles set`
+similarly stops before a profile write. The refusal reports
+`SKILLS_PERMISSION_DENIED` with the affected permission and guidance to obtain
+an authorized credential; it never changes credentials or their scopes.
+Servers that omit permissions (or predate the capabilities route) retain their
+existing server-authorized write behavior, with access displayed as unknown.
+Authentication failures and malformed permission responses do not bypass the
+preflight. `push --dry-run` remains a local packing check and does not check
+hosted publication access.
+
 `--selection-profile` chooses the shared skill selection. The top-level
 `--profile` option chooses an isolated credential file; these are separate
 settings. `HASNA_SKILLS_SELECTION_PROFILE` overrides the installed selection
@@ -380,6 +444,18 @@ skills run --target local --selection-profile default \
 skills grants set default --file ./reviewed-policy.json --if-match <policy-revision>
 skills grants show default --revision <prior-policy-revision> --json
 ```
+
+For executable arguments, use `--` after the skill and Skills options:
+
+```bash
+skills run --target local --selection-profile default --json \
+  your-skill@1.0.0 -- prepare --input child-input.json --json
+```
+
+Everything after that separator belongs to the executable, including flags such
+as `--input`, `--json` and any further `--`. Cloud execution accepts structured
+Skills `--input` only and rejects executable arguments. Existing calls without a
+separator retain their option parsing behavior.
 
 Updating a policy appends a revision and atomically changes its current pointer.
 An empty `grants` array revokes shared execution access. Historical policies remain
@@ -619,7 +695,7 @@ of app folders, and `XDG_CONFIG_HOME` is not consulted at all.
 | `skills search <query>` | `s` | Search by name, description, or tags |
 | `skills info <name>` | | Show metadata, env vars, and system dependencies |
 | `skills show <name>` | | Show account or owned portable skill details |
-| `skills docs <name>` | | Show documentation (SKILL.md > README.md > CLAUDE.md) |
+| `skills docs <name>` | `--file skill\|readme\|claude` | Show preferred documentation; an explicit file must exist and unknown aliases fail |
 | `skills requires <name>` | | Show env vars, system deps, and npm dependencies |
 | `skills profiles show <id>` / `skills profiles set <id> --file <json>` | | Read an exact shared selection or update it with writer authorization |
 | `skills install [name@version] --selection-profile <id>` | | Cache selected immutable bundles; without names, sync the profile |
