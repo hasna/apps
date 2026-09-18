@@ -19,7 +19,9 @@ services:
       retries: 10
 
   calendar-migrate:
-    build: .
+    build:
+      context: ../..
+      dockerfile: apps/calendar/Dockerfile
     command: ["bun", "dist/server/index.js", "migrate"]
     environment:
       HASNA_CALENDAR_DATABASE_URL: postgres://calendar:calendar@postgres:5432/calendar?sslmode=disable
@@ -29,7 +31,9 @@ services:
         condition: service_healthy
 
   calendar-serve:
-    build: .
+    build:
+      context: ../..
+      dockerfile: apps/calendar/Dockerfile
     ports:
       - "19428:19428"
     environment:

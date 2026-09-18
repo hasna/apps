@@ -1,0 +1,16 @@
+# Allow only the Calendar build inputs into the monorepo-root context.
+**
+!apps/
+!apps/calendar/
+!apps/calendar/package.json
+!apps/calendar/bun.lock
+!apps/calendar/tsconfig.json
+!apps/calendar/src/
+!apps/calendar/src/**
+!apps/calendar/migrations/
+!apps/calendar/migrations/**
+!apps/calendar/docker/
+!apps/calendar/docker/rds-global-bundle.pem
+!apps/calendar/docker/runner-bunfig.toml
+**/*.test.ts
+apps/calendar/src/test/
