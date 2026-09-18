@@ -2,6 +2,8 @@
 
 ### Patch Changes
 
+- Add atomic expected-version updates across CLI, MCP, API and SDK. Conditional writes use a dedicated route so older servers refuse before mutation; conflicts preserve content, version and snapshots.
+
 - Render scoped instructions into Sumi's native AGENTS.md, reject settings and retired sources in prompt profiles, and refresh managed profiles from their hosted authority. Add exact preimage adoption and reconciliation with snapshots so existing prompt files can be migrated without blanket overwrites. Preserve retired standard sources during initialization and require explicit adoption of local files in hosted mode.
 
 

@@ -11,7 +11,7 @@ import type {
   CreateConfigInput,
   UpdateConfigInput,
 } from "../types/index.js";
-import { ConfigNotFoundError } from "../types/index.js";
+import { ConfigNotFoundError, ConfigVersionConflictError, validateExpectedConfigVersion } from "../types/index.js";
 import { getDatabase, now, slugify, uuid } from "./database.js";
 import { createSnapshot } from "./snapshots.js";
 import { boundedReadPage, normalizeBoundedReadOptions } from "../lib/bounded-read.js";
@@ -276,6 +276,7 @@ export function updateConfig(
   input: UpdateConfigInput,
   db?: Database
 ): Config {
+  validateExpectedConfigVersion(input.expected_version);
   const d = db || getDatabase();
   const existing = getConfig(idOrSlug, d);
   const ts = now();
@@ -301,7 +302,13 @@ export function updateConfig(
 
   return d.transaction(() => {
     params.push(existing.id);
-    d.run(`UPDATE configs SET ${updates.join(", ")} WHERE id = ?`, params);
+    const condition = input.expected_version === undefined ? "" : " AND version = ?";
+    if (input.expected_version !== undefined) params.push(input.expected_version);
+    const result = d.run(`UPDATE configs SET ${updates.join(", ")} WHERE id = ?${condition}`, params);
+    if (result.changes !== 1) {
+      if (input.expected_version !== undefined) throw new ConfigVersionConflictError(existing.id, input.expected_version);
+      throw new ConfigNotFoundError(existing.id);
+    }
     const updated = getConfigById(existing.id, d);
     createSnapshot(updated.id, updated.content, updated.version, d);
     return updated;

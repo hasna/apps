@@ -63,6 +63,7 @@ import {
 } from "../lib/provider-context.js";
 import { DEFAULT_LIST_LIMIT, paginate, parseLimit, truncateMiddle, truncateText } from "../lib/compact-output.js";
 import type { BoundedReadPage, Config, ConfigAgent, ConfigCategory, ConfigFormat, ConfigIdentity, ConfigKind, ConfigSummary, Profile, ProfileSelector, ProfileVariables } from "../types/index.js";
+import { validateExpectedConfigVersion } from "../types/index.js";
 
 import { createRequire } from "node:module";
 const pkg = createRequire(import.meta.url)("../../package.json") as { version: string };
@@ -915,7 +916,13 @@ program
   .option("-k, --kind <kind>", "kind: file|reference", "file")
   .option("--template", "mark as template (has {{VAR}} placeholders)")
   .option("--update", "if a config already owns this path, update that row in place instead of refusing")
+  .option("--expected-version <version>", "with --update, require the stored version to match atomically")
   .action(async (filePath, opts) => {
+    const expectedVersion = opts.expectedVersion === undefined ? undefined : Number(opts.expectedVersion);
+    validateExpectedConfigVersion(expectedVersion);
+    if (expectedVersion !== undefined && !opts.update) {
+      throw new Error("--expected-version requires --update");
+    }
     const abs = resolve(filePath);
     if (!existsSync(abs)) {
       console.error(chalk.red(`File not found: ${abs}`));
@@ -1010,10 +1017,13 @@ program
       // instead, so a content edit via `add --update` is recoverable via
       // `instructions snapshot list/restore` even before anything is ever
       // applied or rendered again.
-      if (content !== target!.content) {
+      // Conditional updates must not create a snapshot before the atomic predicate
+      // succeeds. The store writes the accepted version's snapshot in that operation.
+      if (content !== target!.content && expectedVersion === undefined) {
         await store.createSnapshot(target!.id, target!.content, target!.version);
       }
       config = await store.updateConfig(target!.id, {
+        expected_version: expectedVersion,
         content,
         format: storedFmt,
         is_template: (opts.template ?? false) || isTemplate,
@@ -1031,6 +1041,9 @@ program
       return;
     }
 
+    if (expectedVersion !== undefined) {
+      throw new Error("--expected-version requires an existing config; no config was created");
+    }
     config = await store.createConfig({
       name,
       kind: (opts.kind as ConfigKind) ?? "file",

@@ -3,6 +3,7 @@ import { getDatabase, resetDatabase } from "./database";
 import { createConfig, getConfig, listConfigIdentitiesPage, listConfigSummariesPage, listConfigs, listConfigsPage, updateConfig, deleteConfig, getConfigStats } from "./configs";
 import { listSnapshots } from "./snapshots";
 import type { Database } from "bun:sqlite";
+import { ConfigVersionConflictError, InvalidExpectedVersionError } from "../types/index.js";
 
 let db: Database;
 
@@ -160,6 +161,31 @@ describe("bounded config collection projections", () => {
 });
 
 describe("updateConfig", () => {
+  test("only one writer using the same observed version succeeds; rejection leaves the entire row and history unchanged", () => {
+    const c = base();
+    const firstRead = getConfig(c.id, db);
+    const secondRead = getConfig(c.slug, db);
+    const winner = updateConfig(c.id, { content: "winner", expected_version: firstRead.version }, db);
+    const snapshots = listSnapshots(c.id, db);
+    expect(winner.version).toBe(c.version + 1);
+    expect(snapshots).toHaveLength(2);
+    expect(() => updateConfig(c.slug, {
+      content: "loser", name: "Unaccepted name", tags: ["unaccepted"], expected_version: secondRead.version,
+    }, db)).toThrow(ConfigVersionConflictError);
+    expect(getConfig(c.id, db)).toEqual(winner);
+    expect(listSnapshots(c.id, db)).toEqual(snapshots);
+  });
+
+  test.each([0, -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1, "1", null])(
+    "rejects invalid expected version %p before any mutation", (version) => {
+      const c = base();
+      const snapshots = listSnapshots(c.id, db);
+      expect(() => updateConfig(c.id, { content: "invalid", expected_version: version as number }, db)).toThrow(InvalidExpectedVersionError);
+      expect(getConfig(c.id, db)).toEqual(c);
+      expect(listSnapshots(c.id, db)).toEqual(snapshots);
+    },
+  );
+
   test("updates content and increments version", () => {
     const c = base();
     const updated = updateConfig(c.id, { content: "updated" }, db);

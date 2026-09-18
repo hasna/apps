@@ -159,6 +159,8 @@ export interface CreateConfigInput {
 }
 
 export interface UpdateConfigInput {
+  /** Apply only if the current version matches; omitted preserves unconditional updates. */
+  expected_version?: number;
   name?: string;
   kind?: ConfigKind;
   category?: ConfigCategory;
@@ -504,6 +506,29 @@ export interface InstructionsDomainArchiveV2 {
 export type ExportManifest = ExportManifestV1 | InstructionsDomainArchiveManifestV2;
 
 // Error types
+export class InvalidExpectedVersionError extends Error {
+  readonly code = "INVALID_EXPECTED_VERSION" as const;
+  constructor() {
+    super("expected_version must be a positive safe integer");
+    this.name = "InvalidExpectedVersionError";
+  }
+}
+
+export function validateExpectedConfigVersion(value: unknown): asserts value is number | undefined {
+  if (value !== undefined && (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1)) {
+    throw new InvalidExpectedVersionError();
+  }
+}
+
+export class ConfigVersionConflictError extends Error {
+  readonly code = "CONFIG_VERSION_CONFLICT" as const;
+  readonly status = 409;
+  constructor(readonly config_id: string, readonly expected_version: number) {
+    super(`Config version conflict: ${config_id} no longer has expected version ${expected_version}`);
+    this.name = "ConfigVersionConflictError";
+  }
+}
+
 export class ConfigNotFoundError extends Error {
   constructor(id: string) {
     super(`Config not found: ${id}`);

@@ -9,7 +9,7 @@
  * 404 and unimplemented operations throw a clear error.
  */
 import type { ApiKeyPrincipal } from "@hasna/contracts/auth";
-import { ConfigNotFoundError, ProfileNotFoundError } from "../types/index.js";
+import { ConfigNotFoundError, ConfigVersionConflictError, InvalidExpectedVersionError, validateExpectedConfigVersion, ProfileNotFoundError } from "../types/index.js";
 import { getCloudClient, ensureCloudSchema } from "./cloud.js";
 import * as store from "../storage/cloud-store.js";
 
@@ -259,6 +259,15 @@ export async function handleV1Request(
         }
         return errorResponse(405, `method ${method} not allowed on /v1/configs/:id/snapshots`);
       }
+      if (action === "conditional-update") {
+        if (method !== "POST") return errorResponse(405, `method ${method} not allowed on /v1/configs/:id/conditional-update`);
+        const body = await readJson<Parameters<typeof store.updateConfig>[2]>(req);
+        if (!body) return errorResponse(400, "invalid JSON body");
+        if (body.expected_version === undefined) throw new InvalidExpectedVersionError();
+        validateExpectedConfigVersion(body.expected_version);
+        const config = await store.updateConfig(client, id, body);
+        return json({ config });
+      }
       if (action) return errorResponse(404, `unknown config action: ${action}`);
       if (method === "GET") {
         const config = await store.getConfig(client, id);
@@ -496,6 +505,10 @@ export async function handleV1Request(
     return errorResponse(404, `unknown /v1 resource: ${resource ?? "(root)"}`);
   } catch (e) {
     if (e instanceof HttpInputError) return errorResponse(e.status, e.message, { code: e.code });
+    if (e instanceof InvalidExpectedVersionError) return errorResponse(400, e.message, { code: e.code });
+    if (e instanceof ConfigVersionConflictError) {
+      return errorResponse(409, e.message, { code: e.code, config_id: e.config_id, expected_version: e.expected_version });
+    }
     if (e instanceof store.StoreValidationError) return errorResponse(400, e.message, { code: e.code });
     if (e instanceof store.IdempotencyConflictError) return errorResponse(409, e.message, { code: e.code });
     if (e instanceof ConfigNotFoundError || e instanceof ProfileNotFoundError) {

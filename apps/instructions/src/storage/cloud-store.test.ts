@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { TypedQueryClient } from "../generated/storage-kit/index.js";
+import { ConfigVersionConflictError, InvalidExpectedVersionError } from "../types/index.js";
 import { IdempotencyConflictError, addAssetToProfile, createConfig, executeIdempotentRequest, getProfileAssetBindingsPage, getProfileConfigBindingsPage, listConfigIdentitiesPage, listConfigSummariesPage, listConfigsPage, listMachinesPage, listProfilesPage, listSnapshotsPage, resolveProfileForMachineRead, setProfileAssetBinding, setProfileConfigBinding, updateConfig } from "./cloud-store.js";
 
 interface ExecutedStatement {
@@ -27,15 +28,19 @@ const CONFIG_ROW = {
   synced_at: null,
 };
 
-function recordingClient(configRows: Array<typeof CONFIG_ROW>): {
+function recordingClient(configRows: Array<typeof CONFIG_ROW | null>): {
   client: TypedQueryClient;
   executed: ExecutedStatement[];
 } {
   const executed: ExecutedStatement[] = [];
   let configRead = 0;
   const client = {
-    async get(sql: string) {
+    async get(sql: string, params: readonly unknown[] = []) {
       if (sql.includes("SELECT id FROM configs WHERE slug")) return null;
+      if (sql.includes("WITH updated_config AS")) {
+        executed.push({ sql, params });
+        return configRows[Math.min(configRead++, configRows.length - 1)] ?? null;
+      }
       if (sql.includes("SELECT * FROM configs")) {
         return configRows[Math.min(configRead++, configRows.length - 1)] ?? null;
       }
@@ -317,7 +322,22 @@ describe("cloud config snapshots", () => {
     expect(executed).toHaveLength(1);
     expect(executed[0]!.sql).toContain("WITH updated_config AS");
     expect(executed[0]!.sql).toContain("INSERT INTO config_snapshots");
-    expect(executed[0]!.sql).toContain("RETURNING id, content, version");
+    expect(executed[0]!.sql).toContain("RETURNING *");
+    expect(executed[0]!.sql).toContain("SELECT updated_config.* FROM updated_config");
+  });
+
+  test("version comparison is in the update statement and a miss produces a conflict without a separate snapshot write", async () => {
+    const { client, executed } = recordingClient([CONFIG_ROW, null]);
+    await expect(updateConfig(client, CONFIG_ROW.id, { content: "loser", expected_version: 1 })).rejects.toThrow(ConfigVersionConflictError);
+    expect(executed).toHaveLength(1);
+    expect(executed[0]!.sql).toContain("WHERE id = $2 AND version::bigint = $4::bigint");
+    expect(executed[0]!.params[3]).toBe(1);
+    expect(executed[0]!.sql).toContain("FROM updated_config");
+  });
+
+  test("invalid expected version is refused before any SQL", async () => {
+    const client = { get: () => { throw new Error("SQL must not run"); } } as unknown as TypedQueryClient;
+    await expect(updateConfig(client, CONFIG_ROW.id, { expected_version: 0 })).rejects.toThrow(InvalidExpectedVersionError);
   });
 });
 

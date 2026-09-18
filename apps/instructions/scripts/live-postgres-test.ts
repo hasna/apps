@@ -3,6 +3,7 @@ import { Client } from "pg";
 import { instructionsSchemaSql } from "../src/storage/schema.js";
 import * as store from "../src/storage/cloud-store.js";
 import type { TypedQueryClient } from "../src/generated/storage-kit/index.js";
+import { ConfigVersionConflictError } from "../src/types/index.js";
 
 export function assertSafePostgresTestUrl(value: string): URL {
   let url: URL;
@@ -80,6 +81,40 @@ export async function runLivePostgresTest(env: NodeJS.ProcessEnv = process.env):
     const snapshots = await store.listSnapshots(db, created.id);
     if (snapshots.length !== 2) throw new Error(`expected 2 snapshots, received ${snapshots.length}`);
 
+    // Separate PostgreSQL connections exercise the database predicate, not a
+    // client-side pre-read. Exactly one writer may consume observed version 2.
+    const peer = new Client({ connectionString: raw });
+    await peer.connect();
+    try {
+      await peer.query(`SET search_path TO ${schema}, public`);
+      const writes = await Promise.allSettled([
+        store.updateConfig(db, created.id, { content: "writer-a", expected_version: 2 }),
+        store.updateConfig(adapter(peer), created.id, { content: "writer-b", expected_version: 2 }),
+      ]);
+      const accepted = writes.filter((result) => result.status === "fulfilled");
+      const refused = writes.filter((result) => result.status === "rejected");
+      if (accepted.length !== 1 || refused.length !== 1 || !(refused[0]!.reason instanceof ConfigVersionConflictError)) {
+        throw new Error("competing conditional updates did not produce exactly one success and one version conflict");
+      }
+      const current = await store.getConfig(db, created.id);
+      const history = await store.listSnapshots(db, created.id);
+      if (accepted[0]!.value.version !== 3 || current.version !== 3 || history.length !== 3 || current.content !== accepted[0]!.value.content) {
+        throw new Error("conditional update did not preserve the exact winning config and snapshot");
+      }
+      try {
+        await store.updateConfig(db, created.id, { content: "stale", expected_version: Number.MAX_SAFE_INTEGER });
+        throw new Error("stale update unexpectedly succeeded");
+      } catch (error) {
+        if (!(error instanceof ConfigVersionConflictError)) throw error;
+      }
+      if (JSON.stringify(await store.getConfig(db, created.id)) !== JSON.stringify(current)
+        || JSON.stringify(await store.listSnapshots(db, created.id)) !== JSON.stringify(history)) {
+        throw new Error("rejected update changed the config or snapshots");
+      }
+    } finally {
+      await peer.end();
+    }
+
     const profile = await store.createProfile(db, { name: "Live Gate Profile" });
     await store.addConfigToProfile(db, profile.id, created.id);
     const members = await store.getProfileConfigs(db, profile.id);
@@ -88,7 +123,7 @@ export async function runLivePostgresTest(env: NodeJS.ProcessEnv = process.env):
     }
     const stats = await store.getConfigStats(db);
     if (stats.total !== 1 || stats.rules !== 1) throw new Error("PostgreSQL stats did not match the inserted fixture");
-    console.log("[instructions-pg-test-gate] PASS: migration, config CRUD, snapshots, profiles, and stats");
+    console.log("[instructions-pg-test-gate] PASS: migration, config CRUD, atomic competing version writes, unchanged conflict snapshots, profiles, and stats");
   } finally {
     await client.query("RESET search_path").catch(() => undefined);
     await client.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`).catch(() => undefined);

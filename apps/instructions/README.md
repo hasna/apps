@@ -83,6 +83,24 @@ envelope. Its top-level fields are `configs`, `profiles`, `drift`, `secrets`,
 `secrets.policy` is `redacted_on_ingest`. Run `instructions report` without
 `--json` for the human-readable report.
 
+### Conditional config updates
+
+Read the current config version before preparing an edit, then pass that
+`expected_version` to `updateConfig` (store/public SDK), `update_config` (MCP), or:
+
+```bash
+instructions add ./rule.md --kind reference --name example-rule --update --expected-version 7
+```
+
+Guarded clients use `POST /v1/configs/:id/conditional-update`, which requires
+`expected_version`. The generated SDK also exposes `conditionalUpdateConfig` for
+this operation. An older server returns 404 without mutation; clients never fall
+back to an unconditional update. A version mismatch returns HTTP 409 with code
+`CONFIG_VERSION_CONFLICT`, changing neither the config nor its snapshots. Refresh
+and review the newer version before trying again. Calls without a precondition
+retain their existing behavior. New servers also accept `expected_version` on
+PATCH/PUT; use the dedicated conditional route when server capabilities are unknown.
+
 ## Package-Manager Secret Guard
 
 `instructions package-manager-scan` blocks package-manager credential ingress without

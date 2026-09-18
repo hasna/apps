@@ -38,7 +38,7 @@
 import { randomUUID } from "node:crypto";
 import type { Database } from "bun:sqlite";
 import type { FeedbackInput } from "../db/database.js";
-import { ConfigNotFoundError, ProfileNotFoundError } from "../types/index.js";
+import { ConfigNotFoundError, ProfileNotFoundError, validateExpectedConfigVersion } from "../types/index.js";
 import type {
   Config,
   ConfigFilter,
@@ -696,9 +696,11 @@ export class CloudConfigStore implements ConfigStore {
   }
 
   async updateConfig(idOrSlug: string, input: UpdateConfigInput): Promise<Config> {
+    validateExpectedConfigVersion(input.expected_version);
+    const conditional = input.expected_version !== undefined;
     const { data } = await this.request<{ config: Config }>(
-      "PATCH",
-      `/configs/${encodeURIComponent(idOrSlug)}`,
+      conditional ? "POST" : "PATCH",
+      `/configs/${encodeURIComponent(idOrSlug)}${conditional ? "/conditional-update" : ""}`,
       input,
     );
     return (data as { config: Config }).config;
