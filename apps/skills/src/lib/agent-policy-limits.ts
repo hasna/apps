@@ -1,3 +1,4 @@
+import { basename, isAbsolute, resolve } from "node:path";
 /** Shared bounds for stored policy, discovery, and pre-activation validation. */
 export const AGENT_POLICY_LIMITS = Object.freeze({ bytes: 1024 * 1024, agents: 16, discoverySources: 2048, discoveryRawSourceBytes: 64 * 1024 * 1024, discoveryRawTotalBytes: 256 * 1024 * 1024, discoveryPathLinks: 40, discoveryPathSteps: 256, discoveryPathSourceMetadataBytes: 64 * 1024, discoveryPathTotalMetadataBytes: 8 * 1024 * 1024, discoveryRoots: 512, discoveryDirectories: 64, discoveryDirectoryEntries: 20000, discoveryDirectoryBytes: 8 * 1024 * 1024, builtinNames: 2048, rootAliases: 2, fields: 64, pathCharacters: 4096 });
 function object(value: unknown): value is Record<string, any> { return Boolean(value && typeof value === "object" && !Array.isArray(value)); }
@@ -29,7 +30,8 @@ export function assertAgentPolicyCollections(policy: Record<string, any>): void 
     for (const source of array(value.sources, AGENT_POLICY_LIMITS.discoverySources)) {
       requireBound(object(source)); text(source.path);
       requireBound(source.sha256 === null || typeof source.sha256 === "string" && /^[a-f0-9]{64}$/.test(source.sha256));
-      if (source.hashMode !== undefined) requireBound(["bytes", "path-bytes", "claude-plugin-registry"].includes(source.hashMode) && source.format === undefined && source.fields === undefined && (source.hashMode === "bytes" || source.sha256 !== null));
+      if (source.hashMode !== undefined) requireBound(["bytes", "path-bytes", "claude-plugin-registry", "claude-marketplace-registry"].includes(source.hashMode) && source.format === undefined && source.fields === undefined && (source.hashMode === "bytes" || source.sha256 !== null));
+      if (source.hashMode === "claude-marketplace-registry") requireBound(agent === "claude" && value.agent === "claude" && value.method === "reviewed" && !/[\x00-\x1f\x7f]/.test(source.path) && isAbsolute(source.path) && resolve(source.path) === source.path && basename(source.path) === "known_marketplaces.json");
       if (source.hashMode === "claude-plugin-registry") {
         requireBound(agent === "claude");
         const managed = array(source.managedPlugins, 64); requireBound(managed.length > 0);
