@@ -51,6 +51,28 @@ Memory scopes are `global`, `shared`, `private`, and `working`. `working` is
 transient session scratch space and defaults to a one-hour lifetime. Categories
 are `preference`, `fact`, `knowledge`, `history`, `procedural`, and `resource`.
 
+For CLI `context` and `inject`, an explicit `--project` must resolve to a registered
+project and restricts every included scope to that exact project. SDK
+`getContext({ project_id })` uses the same exact-project rule. Unknown explicit
+projects fail before memories are selected or touched; omitting the project keeps
+the existing scope selection.
+
+The library and MCP injection strategies retain unassigned agent-private context
+alongside the selected project's private memories. They exclude private memories
+assigned to another project. Their existing global/shared policies remain:
+library strategies include global memories across projects and project-scoped
+shared memories; direct MCP injection also scopes global memories to the project,
+while its full smart pipeline uses the library policy.
+
+Injection project references may be a stable project ID, registered name, or
+registered path. Library, MCP, and HTTP/SDK injection resolve that reference once
+and use the stable project ID for every downstream profile, search, filter, hook,
+and touch path.
+
+The list API and SDK expose `include_unassigned_project: true` with `project_id`
+for this union. The filter applies before pagination and also governs `total`;
+without a project it has no effect. Omitting it keeps an exact project match.
+
 ## CLI
 
 ```bash

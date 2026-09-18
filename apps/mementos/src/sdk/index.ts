@@ -564,6 +564,8 @@ export interface ListMemoriesFilter {
   pinned?: boolean;
   agent_id?: string;
   project_id?: string;
+  /** Include project-unassigned rows alongside project_id, before pagination. */
+  include_unassigned_project?: boolean;
   session_id?: string;
   namespace?: string;
   status?: MemoryStatus;
@@ -1603,6 +1605,7 @@ export class MementosClient {
       if (filter.pinned !== undefined) q["pinned"] = filter.pinned;
       if (filter.agent_id) q["agent_id"] = filter.agent_id;
       if (filter.project_id) q["project_id"] = filter.project_id;
+      if (filter.project_id && filter.include_unassigned_project) q["include_unassigned_project"] = true;
       if (filter.session_id) q["session_id"] = filter.session_id;
       if (filter.namespace) q["namespace"] = filter.namespace;
       if (filter.status) q["status"] = filter.status;
