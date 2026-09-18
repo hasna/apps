@@ -119,7 +119,7 @@ type ListParams = {
 };
 
 const listControls = {
-  limit: z.number().int().nonnegative().optional().describe("Maximum number of items to return in compact output."),
+  limit: z.number().int().positive().max(200).optional().describe("Maximum number of items to return in compact output (default 20, max 200)."),
   offset: z.number().int().nonnegative().optional().describe("Number of matching items to skip."),
   all: z.boolean().optional().describe("Return all matching items instead of the compact default page."),
   verbose: z.boolean().optional().describe("Return full records instead of compact summaries."),

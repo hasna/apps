@@ -27,8 +27,8 @@ export function parseLimit(
 ): number {
   if (value === undefined || value === null || value === "") return fallback;
   const parsed = typeof value === "number" ? value : Number(value);
-  if (!Number.isInteger(parsed) || parsed < 0) {
-    throw new Error("--limit must be a non-negative integer");
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error("--limit must be a positive integer");
   }
   return Math.min(parsed, maxLimit);
 }
