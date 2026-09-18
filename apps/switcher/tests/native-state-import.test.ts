@@ -1,4 +1,5 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
+import * as fs from "node:fs/promises";
 import { link, mkdtemp, mkdir, readFile, readdir, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -117,3 +118,50 @@ test("divergent session IDs at different paths refuse import; identical IDs dedu
   await file(source,"sessions/other/rollout.jsonl",rollout("divergent source duplicate"));
   await expect(planNativeStateImport(state,source)).rejects.toMatchObject({code:"native_state_import_conflict"});
 }));
+
+
+test("exclusive staging collision preserves the competing temporary file", () => fixture(async root => {
+  const source=join(root,"legacy"),state=await resolveNativeState("codex",{HOME:root});
+  await file(source,"sessions/fixture.jsonl","original fixture\n");
+  const plan=await planNativeStateImport(state,source,["sessions"]),originalOpen=fs.open;
+  let collision="";
+  const open=spyOn(fs,"open").mockImplementation(async (path:any,flags:any,mode:any)=>{
+    if(String(path).includes(".switcher-import-")&&flags==="wx") {
+      collision=String(path);await writeFile(collision,"competing writer",{mode:0o600,flag:"wx"});
+    }
+    return originalOpen(path,flags,mode);
+  });
+  try {await expect(applyNativeStateImport(plan)).rejects.toMatchObject({code:"EEXIST"});}
+  finally {open.mockRestore();}
+  expect(collision).not.toBe("");expect(await readFile(collision,"utf8")).toBe("competing writer");
+  expect(await readFile(join(source,"sessions/fixture.jsonl"),"utf8")).toBe("original fixture\n");
+  expect(await Bun.file(join(state.home,"sessions/fixture.jsonl")).exists()).toBe(false);
+}));
+
+for(const replacement of ["during-copy","after-copy"] as const)
+  test(`staging cleanup preserves a replaced temporary inode ${replacement}`, () => fixture(async root => {
+    const source=join(root,"legacy"),state=await resolveNativeState("codex",{HOME:root});
+    await file(source,"sessions/a.jsonl","original a\n");await file(source,"sessions/b.jsonl","original b\n");
+    const plan=await planNativeStateImport(state,source,["sessions"]),originalOpen=fs.open;
+    let first="",replaced=false;let competing:Awaited<ReturnType<typeof stat>>|undefined;
+    const open=spyOn(fs,"open").mockImplementation(async (path:any,flags:any,mode:any)=>{
+      const handle=await originalOpen(path,flags,mode);
+      if(String(path).includes(".switcher-import-")&&flags==="wx") {
+        first ||= String(path);
+        if(!replaced&&(replacement==="during-copy"||String(path)!==first)) {
+          replaced=true;await fs.rename(first,join(root,"owned-temp-moved-by-fixture"));
+          await writeFile(first,"replacement writer",{mode:0o600,flag:"wx"});competing=await stat(first);
+        }
+      }
+      return handle;
+    });
+    try {await expect(applyNativeStateImport(plan)).rejects.toBeDefined();}
+    finally {open.mockRestore();}
+    expect(replaced).toBe(true);expect(await readFile(first,"utf8")).toBe("replacement writer");
+    const after=await stat(first);expect(after.ino).toBe(competing!.ino);expect(after.mtimeMs).toBe(competing!.mtimeMs);
+    expect(await Bun.file(join(state.home,"sessions/a.jsonl")).exists()).toBe(false);
+    expect(await Bun.file(join(state.home,"sessions/b.jsonl")).exists()).toBe(false);
+    expect(await readFile(join(source,"sessions/a.jsonl"),"utf8")).toBe("original a\n");
+    expect(await readFile(join(source,"sessions/b.jsonl"),"utf8")).toBe("original b\n");
+    expect(await readdir(join(state.home,"sessions"))).toEqual([first.slice(first.lastIndexOf("/")+1)]);
+  }));

@@ -7,6 +7,7 @@ import { assertNativeStateDirectory, ensureNativeStateDirectory, NATIVE_STATE_EN
 
 const MAX_FILES = 100_000, MAX_BYTES = 2 * 1024 * 1024 * 1024;
 type Identity = { dev: number; ino: number; size: number; mtimeMs: number; ctimeMs: number };
+type OwnedTemporary = { path: string; dev: number; ino: number };
 type File = { path: string; bytes: number; sha256: string; source: Identity; existing: boolean; sessionId?: string };
 export type NativeStateImport = { state: NativeState; source: string; entries: string[]; directories: string[]; files: File[]; bytes: number };
 const refused = () => new Fault(409, "native_state_import_conflict", "Native state import found changed, unsafe or divergent data. No existing file will be replaced. Keep the original directory and resolve the conflict explicitly.");
@@ -15,6 +16,19 @@ const identity = (s: Identity): Identity => ({ dev: s.dev, ino: s.ino, size: s.s
 const same = (a: Identity, b: Identity) => JSON.stringify(identity(a)) === JSON.stringify(identity(b));
 const inside = (parent: string, child: string) => { const path = relative(parent, child);return path !== ".." && !path.startsWith("../") && !isAbsolute(path); };
 const SESSION_ID = /^[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/i;
+
+/** A temporary pathname is owned only after exclusive creation. A replacement
+ * belongs to its writer, including when copying or publication failed. */
+async function assertOwnedTemporary(temporary: OwnedTemporary): Promise<void> {
+  const named = await info(temporary.path);
+  if (!named?.isFile() || named.isSymbolicLink() || named.dev !== temporary.dev || named.ino !== temporary.ino) throw refused();
+}
+async function removeOwnedTemporary(temporary: OwnedTemporary): Promise<void> {
+  const named = await info(temporary.path);
+  if (!named) return;
+  if (!named.isFile() || named.isSymbolicLink() || named.dev !== temporary.dev || named.ino !== temporary.ino) throw refused();
+  await unlink(temporary.path);
+}
 
 /** Read only the bounded first native metadata row; never rewrite rollouts. */
 async function sessionId(path: string, expected?: Identity): Promise<string | undefined> {
@@ -68,13 +82,18 @@ async function checkSessionIdentities(plan: NativeStateImport): Promise<void> {
   await scan(join(plan.state.home, "sessions"));await scan(join(plan.state.home, "archived_sessions"));
 }
 
-async function fingerprint(path: string, copyTo?: string): Promise<{ bytes: number; sha256: string; source: Identity }> {
+async function fingerprint(path: string, copyTo?: string): Promise<{ bytes: number; sha256: string; source: Identity; temporary?: OwnedTemporary }> {
   const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
-  let output: Awaited<ReturnType<typeof open>> | undefined, complete = false;
+  let output: Awaited<ReturnType<typeof open>> | undefined, temporary: OwnedTemporary | undefined, complete = false;
   try {
     const before = await handle.stat();
     if (!before.isFile() || before.nlink !== 1 || before.uid !== process.getuid?.() || (before.mode & 0o022) || before.size > MAX_BYTES) throw refused();
-    if (copyTo) output = await open(copyTo, "wx", 0o600);
+    if (copyTo) {
+      output = await open(copyTo, "wx", 0o600);
+      const created = await output.stat();
+      temporary = { path: copyTo, dev: created.dev, ino: created.ino };
+      if (!created.isFile() || created.nlink !== 1) throw refused();
+    }
     const hash = createHash("sha256"), buffer = Buffer.alloc(64 * 1024);let bytes = 0;
     for (;;) {
       const read = await handle.read(buffer, 0, buffer.length, null);if (!read.bytesRead) break;
@@ -84,11 +103,16 @@ async function fingerprint(path: string, copyTo?: string): Promise<{ bytes: numb
     }
     const after = await handle.stat(), named = await lstat(path);
     if (named.isSymbolicLink() || after.nlink !== 1 || named.nlink !== 1 || bytes !== before.size || !same(before, after) || !same(after, named)) throw refused();
-    await output?.sync();complete = true;
-    return { bytes, sha256: hash.digest("hex"), source: identity(before) };
+    await output?.sync();
+    if (temporary) await assertOwnedTemporary(temporary);
+    complete = true;
+    return { bytes, sha256: hash.digest("hex"), source: identity(before), ...(temporary ? { temporary } : {}) };
   } finally {
-    await output?.close();await handle.close();
-    if (copyTo && !complete) await unlink(copyTo).catch(() => undefined);
+    try { await output?.close(); }
+    finally {
+      try { await handle.close(); }
+      finally { if (temporary && !complete) await removeOwnedTemporary(temporary); }
+    }
   }
 }
 
@@ -159,7 +183,7 @@ async function applyNativeStateImportUnlocked(plan: NativeStateImport): Promise<
     }
   }
   const directories = [...requiredDirectories].sort((a,b)=>a.length-b.length), createdDirectories: string[] = [];
-  const staged: Array<{ temporary: string; target: string }> = [];let published = 0;
+  const staged: Array<{ temporary: OwnedTemporary; target: string }> = [];let published = 0;
   let committed = false, cleanupFailed = false;
   try {
     for (const directory of directories) {
@@ -171,14 +195,18 @@ async function applyNativeStateImportUnlocked(plan: NativeStateImport): Promise<
     for (const file of plan.files) {
       if (file.existing) continue;
       const target = join(plan.state.home, file.path), temporary = join(dirname(target), `.switcher-import-${crypto.randomUUID()}`);
-      staged.push({ temporary, target });
       const copied = await fingerprint(join(plan.source, file.path), temporary);
+      if (!copied.temporary) throw refused();
+      staged.push({ temporary: copied.temporary, target });
       if (copied.bytes !== file.bytes || copied.sha256 !== file.sha256 || !same(copied.source, file.source)) throw refused();
     }
     // Each link is no-replace. Once visible, a file is never deleted by
     // rollback because a native writer may have already appended to it.
     for (const item of staged) {
-      try { await link(item.temporary, item.target);published++; }
+      try {
+        await assertOwnedTemporary(item.temporary);
+        await link(item.temporary.path, item.target);published++;
+      }
       catch(error) {
         if(published)throw new Fault(409,"native_state_import_partial",`Native state import published ${published} reviewed file(s) before a racing destination appeared. Existing and published data was preserved. Run a new dry-run to reconcile the remainder.`);
         throw error;
@@ -187,7 +215,7 @@ async function applyNativeStateImportUnlocked(plan: NativeStateImport): Promise<
     committed = true;
   } finally {
     for (const item of staged) {
-      try { await unlink(item.temporary); }
+      try { await removeOwnedTemporary(item.temporary); }
       catch(error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") cleanupFailed = true; }
     }
     if (!committed && published===0) {
