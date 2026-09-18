@@ -65,14 +65,13 @@ async function ensureManagedProfile(
   standardId: string,
 ) {
   const platformProfiles = await ensurePlatformProfiles(store);
-  if (profileSlug !== "my-setup") {
-    return platformProfiles.find((candidate) => candidate.slug === profileSlug);
-  }
-  const profile = await store.createProfile({
-    name: "my-setup",
-    description: "Default profile with all known configs",
-  });
-  await store.addConfigToProfile(profile.id, standardId);
+  const profile = profileSlug !== "my-setup"
+    ? platformProfiles.find((candidate) => candidate.slug === profileSlug)
+    : await store.createProfile({
+      name: "my-setup",
+      description: "Explicitly bound instruction profile fixture",
+    });
+  if (profile) await store.addConfigToProfile(profile.id, standardId);
   return profile;
 }
 

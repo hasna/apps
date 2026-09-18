@@ -25,12 +25,12 @@ const selector: SessionHostedProfileSelector = {
 };
 function fixture() {
   const targetHome = makeTempRoot("instructions-refresh-"); roots.push(targetHome);
-  const state = { configs: [{ ...config }], calls: [] as string[], failStatus: 0, missingBindings: false, missingAssets: false, onRead: undefined as (() => void) | undefined };
+  const state = { configs: [{ ...config }], calls: [] as string[], failStatus: 0, missingBindings: false, missingAssets: false, incompleteBindings: false, bindingPayload: binding.binding as unknown, onRead: undefined as (() => void) | undefined };
   const request = async <T>(_method: string, path: string): Promise<T> => {
     state.calls.push(path); state.onRead?.();
     const error = (status: number) => Object.assign(new Error(`Synthetic HTTP ${status}`), { status, name: "HasnaHttpError" });
     if (state.failStatus) throw error(state.failStatus);
-    if (path.includes("/bindings")) { if (state.missingBindings) throw error(404); return { bindings: [binding] } as T; }
+    if (path.includes("/bindings")) { if (state.missingBindings) throw error(404); return { bindings: state.incompleteBindings ? [] : [{ ...binding, binding: state.bindingPayload }] } as T; }
     if (path.includes("/assets")) { if (state.missingAssets) throw error(404); return { assets: [] } as T; }
     if (path.startsWith("/profiles?")) return { profiles: [profile] } as T;
     if (path.startsWith("/profiles/profile-1")) return { profile: { ...profile, configs: state.configs } } as T;
@@ -80,6 +80,30 @@ describe("hosted session refresh", () => {
     state.missingBindings = false; state.missingAssets = true; await expect(refreshSessionRender({ targetHome, store })).rejects.toThrow("HOSTED_ASSETS_REQUIRED");
     expect(readFileSync(agentsPath, "utf8")).toBe(original); expect(readFileSync(manifestPath, "utf8")).toBe(manifest);
   });
+  test("rejects a successful but incomplete hosted binding response before any write", async () => {
+    const { targetHome, store, state, manifestPath, agentsPath } = fixture();
+    const original = readFileSync(agentsPath, "utf8"), manifest = readFileSync(manifestPath, "utf8");
+    state.incompleteBindings = true;
+    await expect(refreshSessionRender({ targetHome, store })).rejects.toThrow("HOSTED_PROFILE_BINDINGS_INCOMPLETE");
+    expect(readFileSync(agentsPath, "utf8")).toBe(original);
+    expect(readFileSync(manifestPath, "utf8")).toBe(manifest);
+  });
+  test("rejects complete hosted IDs with missing, null or incomplete binding metadata", async () => {
+    const { targetHome, store, state, manifestPath, agentsPath } = fixture();
+    const original = readFileSync(agentsPath, "utf8"), manifest = readFileSync(manifestPath, "utf8");
+    const { required: _required, ...withoutRequired } = binding.binding;
+    for (const payload of [undefined, null, "", JSON.stringify(binding.binding), {}, withoutRequired,
+      { ...binding.binding, schema: "unknown" }, { ...binding.binding, required: "true" },
+      { ...binding.binding, activation: null }, { ...binding.binding, activation: { mode: "glob" } },
+      { ...binding.binding, fallback: "unknown" }]) {
+      state.bindingPayload = payload;
+      await expect(refreshSessionRender({ targetHome, store })).rejects.toThrow("HOSTED_PROFILE_BINDINGS_INVALID");
+      expect(readFileSync(agentsPath, "utf8")).toBe(original);
+      expect(readFileSync(manifestPath, "utf8")).toBe(manifest);
+    }
+    state.bindingPayload = binding.binding;
+    expect((await refreshSessionRender({ targetHome, store })).status).toBe("unchanged");
+  });
   test("rejects local stores and changed hosted authority before reading sources", async () => {
     const { targetHome, store, state } = fixture();
     await expect(refreshSessionRender({ targetHome, store: new LocalConfigStore() })).rejects.toThrow("HOSTED_REQUIRED");
@@ -96,6 +120,6 @@ describe("hosted session refresh", () => {
   });
   test("rejects a removed hosted instruction binding instead of silently emptying the target", async () => {
     const { targetHome, store, state, agentsPath } = fixture(); const original = readFileSync(agentsPath, "utf8"); state.configs = [];
-    await expect(refreshSessionRender({ targetHome, store })).rejects.toThrow("missing config"); expect(readFileSync(agentsPath, "utf8")).toBe(original);
+    await expect(refreshSessionRender({ targetHome, store })).rejects.toThrow("HOSTED_PROFILE_BINDINGS_INCOMPLETE"); expect(readFileSync(agentsPath, "utf8")).toBe(original);
   });
 });

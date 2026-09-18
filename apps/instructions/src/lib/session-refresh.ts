@@ -3,8 +3,9 @@ import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync } fr
 import { dirname, join, parse, resolve } from "node:path";
 import { z } from "zod";
 import type { ConfigStore } from "../data/config-store.js";
+import type { Config, ProfileConfigBinding } from "../types/index.js";
 import { accountedGlobalSourceSlugs, computeGlobalSourceCoverage } from "./global-source-coverage.js";
-import { planProfileSessionRender } from "./instruction-graph.js";
+import { normalizeProfileConfigBinding, planProfileSessionRender } from "./instruction-graph.js";
 import { SESSION_MANAGED_INPUT_MAX_BYTES } from "./project-context.js";
 import { applySessionRender, checkSessionRenderDrift, type SessionApplyResult } from "./session-apply.js";
 import type { ClaudeOwnedAuthority } from "./session-authority.js";
@@ -62,6 +63,32 @@ export function normalizeSessionHostedProfileSelector(value: unknown): SessionHo
   return { ...parsed, authority: authority(parsed.authority) };
 }
 
+/** A successful hosted bindings response must cover the exact membership set.
+ * Legacy compiler defaults are for explicit local callers, never a repair for
+ * an incomplete remote response that would silently broaden activation. */
+export function assertHostedProfileBindings(
+  profileId: string,
+  configs: readonly Pick<Config, "id">[],
+  bindings: readonly (Pick<ProfileConfigBinding, "profile_id" | "config_id"> & { binding?: unknown })[],
+): void {
+  const configIds = new Set(configs.map((config) => config.id));
+  const bindingIds = new Set(bindings.map((binding) => binding.config_id));
+  if (configIds.size !== configs.length || bindingIds.size !== bindings.length
+    || bindings.some((binding) => binding.profile_id !== profileId || !configIds.has(binding.config_id))
+    || [...configIds].some((id) => !bindingIds.has(id))) {
+    throw new Error("HOSTED_PROFILE_BINDINGS_INCOMPLETE: exact one-to-one config membership and explicit profile bindings are required; refusing legacy activation fallback.");
+  }
+  for (const row of bindings) {
+    const raw = row.binding;
+    const invalid = () => new Error("HOSTED_PROFILE_BINDINGS_INVALID: each hosted binding must contain a complete explicit schema, activation, required flag and fallback; refusing legacy activation defaults.");
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw invalid();
+    const record = raw as Record<string, unknown>;
+    if (!["schema", "activation", "required", "fallback"].every((key) => Object.hasOwn(record, key))
+      || typeof record["required"] !== "boolean") throw invalid();
+    try { normalizeProfileConfigBinding(record); } catch { throw invalid(); }
+  }
+}
+
 function readManagedManifest(targetHome: string): { manifest: SessionRenderManifest; sha256: string } {
   const path = join(targetHome, SESSION_RENDER_MANIFEST_RELATIVE_PATH);
   let ancestor = dirname(path);
@@ -113,6 +140,7 @@ export async function refreshSessionRender(input: {
   const [configs, bindings, assetBindings] = await Promise.all([
     store.getProfileConfigs(profile.id), store.getProfileConfigBindings(profile.id, { requireExplicit: true }), store.getProfileAssetBindings(profile.id, { requireExplicit: true }),
   ]);
+  assertHostedProfileBindings(profile.id, configs, bindings);
   if (configs.length > 2048 || bindings.length > 8192 || assetBindings.length > 1024) throw new Error("SESSION_REFRESH_INPUT_LIMIT: hosted profile exceeds refresh bounds.");
   const totalBytes = configs.reduce((sum, config) => sum + Buffer.byteLength(config.content), 0);
   if (totalBytes > SESSION_MANAGED_INPUT_MAX_BYTES) throw new Error("SESSION_REFRESH_INPUT_LIMIT: hosted instruction payload exceeds refresh byte bounds.");

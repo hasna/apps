@@ -5,7 +5,7 @@ export function isRetiredInstructionSource(config: Pick<Config, "tags">): boolea
 }
 
 /** A stored application config is not necessarily prose suitable for a prompt. */
-export function instructionSourceRejection(config: Config): string | null {
+export function instructionSourceRejection(config: Pick<Config, "category" | "tags" | "format" | "is_template" | "content" | "target_path">): string | null {
   if (isRetiredInstructionSource(config) || config.tags.includes("config-only")) {
     return "source is retired or explicitly configuration-only";
   }

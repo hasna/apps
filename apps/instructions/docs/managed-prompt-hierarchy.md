@@ -101,8 +101,8 @@ The managed global prompt must include these rules:
 ## Dangerous Operation Guard
 
 `instructions init` and `bun run seed` also seed
-`dangerous-operation-guard-standard`, the managed rollout source for risky
-operation policy on sustained station01 coding agents.
+`dangerous-operation-guard-standard`, the reusable managed source for risky
+operation policy on explicitly selected supported coding-agent profiles.
 
 The guard covers Codewith, Codex, Claude Code, Qwen Code, OpenCode, Cursor, and
 Google Antigravity. Gemini CLI remains excluded. Codewith and Codex must use
@@ -122,8 +122,8 @@ explicitly managed wrapper/plugin fallback before hard enforcement is claimed.
   is rejected.
 - Codewith remains flattened unless the
   `HASNA_CONFIGS_CODEWITH_NATIVE_IMPORTS` gate or matching CLI flag is active.
-- `global-agent-rules-standard` and `dangerous-operation-guard-standard` are
-  seeded reference configs.
+- Reusable standard records are seeded without being implicitly bound to prompt
+  profiles; profile membership remains an explicit scope decision.
 - Tests cover layer ordering, provider output paths, Antigravity's
   12,000-character file limit, target coverage, and seeded policy content.
 

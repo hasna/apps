@@ -402,10 +402,13 @@ exits. See [MCP reference](mcp.md).
 
 ## Setup, diagnostics, and maintenance
 
-- `init [--force] [--import-local]` seeds reference configs, creates `my-setup`,
-  and ensures platform profiles. Hosted initialization imports known disk files
-  only with `--import-local`; explicit local mode continues to sync known configs. `--force` wipes the local
-  SQLite DB and is refused in API mode.
+- `init [--force] [--import-local]` seeds reusable reference records and creates
+  empty `my-setup`, `linux-arm64`, and `macos-arm64` profiles. Source membership
+  is never inferred from the registry: bind each reviewed provider/project/role
+  source explicitly. Public platform presets select only OS and architecture and
+  contain no fleet hostnames or workspace paths. Hosted initialization imports
+  known disk files only with `--import-local`; explicit local mode continues to
+  sync known configs. `--force` wipes the local SQLite DB and is refused in API mode.
 - `status [--json] [--deep]` reports the metadata-only status contract,
   including drift, missing targets, unredacted findings, retired-agent rows,
   and counts. `counts.profileLinks` and `counts.snapshots` need one API read

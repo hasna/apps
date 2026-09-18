@@ -561,14 +561,16 @@ and prior on-box-only evidence must be explicitly reconciled before use.
 
 ## Machine-aware Profiles
 
-`instructions init` seeds two platform profiles:
+`instructions init` seeds two empty platform profiles:
 
-- `linux-arm64` for `linux-node-a` / `linux-node-b`
-- `macos-arm64` for `macos-node-a` / `macos-node-b`
+- `linux-arm64` for Linux arm64
+- `macos-arm64` for macOS arm64
 
-These profiles resolve machine variables like `{{WORKSPACE_ROOT}}`,
-`{{BUN_BIN_DIR}}`, `{{BUN_PATH}}`, and `{{PATH_PREFIX}}`, so synced configs can be
-portable across Linux and macOS arm64 machines.
+The public presets contain no fleet hostnames or workspace paths. They resolve
+portable tool variables such as `{{BUN_BIN_DIR}}`, `{{BUN_PATH}}`, and
+`{{PATH_PREFIX}}`. Instruction membership is never bulk-copied from the config
+registry; bind reviewed provider/project/role sources explicitly before compiling
+a prompt profile.
 
 They also include the project channel variable used by agent-managed project
 workflows:

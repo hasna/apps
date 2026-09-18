@@ -90,10 +90,8 @@ export async function ensureCodewithSharedTodosStorageStandardConfig(
     config = await store.createConfig(input);
   }
 
-  // Unlike optional references, this policy must follow every operational profile.
-  // Provider filtering keeps it out of non-Codewith renders after profile selection.
-  for (const profile of await store.listProfiles()) {
-    await store.addConfigToProfile(profile.id, config.id);
-  }
+  // Profile membership is a separate authorization decision. Seeding or
+  // refreshing a reusable source must not silently broaden it into every
+  // Codewith profile. Callers bind the reviewed source explicitly.
   return config;
 }

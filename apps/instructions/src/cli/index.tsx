@@ -15,11 +15,12 @@ import { importConfigs } from "../lib/import.js";
 import { extractTemplateVars } from "../lib/template.js";
 import { detectMachineContext, resolveProfileVariables } from "../lib/machine.js";
 import { applySessionRender, restoreSessionRenderSnapshot } from "../lib/session-apply.js";
-import { normalizeSessionHostedProfileSelector, refreshSessionRender } from "../lib/session-refresh.js";
+import { assertHostedProfileBindings, normalizeSessionHostedProfileSelector, refreshSessionRender } from "../lib/session-refresh.js";
 import type { ClaudeOwnedAuthority } from "../lib/session-authority.js";
 import { normalizeSessionInstructionSourceId, planSessionRender, resolveSessionPath, sourceFromConfig, sourceFromFilePath, sourcesFromIdentityExport, CODEWITH_NATIVE_IMPORTS_ENV, SESSION_INSTRUCTION_LAYERS, SESSION_RENDER_TOOLS, type SessionInstructionLayer, type SessionInstructionSource, type SessionRenderFile, type SessionRenderPlan, type SessionRenderTool } from "../lib/session-render.js";
 import { getRawStoreRoot } from "../lib/raw-store-root.js";
 import { assertInstructionSource } from "../lib/instruction-source-policy.js";
+import { ConfigNotFoundError, ProfileNotFoundError } from "../types/index.js";
 import { selectsInstructionsLocalStore } from "../lib/local-opt-in.js";
 import { normalizeProfileAssetBinding } from "../lib/asset-plan.js";
 import { normalizeProfileConfigBinding, planProfileSessionRender, type InstructionGraphRenderPlan } from "../lib/instruction-graph.js";
@@ -381,6 +382,7 @@ async function buildSessionRenderPlan(
   const profile = await store.getProfile(opts.compileProfile);
   const configs = await store.getProfileConfigs(profile.id);
   const bindings = await store.getProfileConfigBindings(profile.id, { requireExplicit: store.mode === "api" });
+  if (store.mode === "api") assertHostedProfileBindings(profile.id, configs, bindings);
   const assetBindings = await store.getProfileAssetBindings(profile.id, { requireExplicit: store.mode === "api" });
   const assetConfigs = await Promise.all(
     [...new Set(assetBindings.map((binding) => binding.source_config_id))].map((id) => store.getConfigById(id)),
@@ -2825,7 +2827,8 @@ program
       { slug: "secrets-schema", name: "Secrets Schema", category: "secrets_schema" as const, content: "# Credential References\n\nStore credential values in the configured Secrets authority. Application configuration records contain credential names and supported resolver references only. Resolve values through the approved consuming application at execution time; never embed values in instruction content, generated prompts, or shell profiles.", desc: "Secret reference and runtime resolution conventions; no credential values" },
     ];
     for (const ref of refs) {
-      try { await store.getConfig(ref.slug); } catch {
+      try { await store.getConfig(ref.slug); } catch (error) {
+        if (!(error instanceof ConfigNotFoundError)) throw error;
         await store.createConfig({ name: ref.name, category: ref.category, agent: "global", format: "markdown", content: ref.content, kind: "reference", description: ref.desc });
       }
     }
@@ -2835,11 +2838,10 @@ program
     await ensureProjectDashboardStandardConfig(store);
 
     // Create default profile
-    try { await store.getProfile("my-setup"); } catch {
-      const p = await store.createProfile({ name: "my-setup", description: "Default profile with all known configs" });
-      const allConfigs = await store.listConfigs();
-      for (const c of allConfigs) await store.addConfigToProfile(p.id, c.id);
-      console.log(chalk.green("✓") + ` Created profile "my-setup" with ${allConfigs.length} configs`);
+    try { await store.getProfile("my-setup"); } catch (error) {
+      if (!(error instanceof ProfileNotFoundError)) throw error;
+      await store.createProfile({ name: "my-setup", description: "Instruction profile; add explicitly reviewed and scoped source bindings" });
+      console.log(chalk.green("✓") + ' Created empty profile "my-setup"; bind reviewed instruction sources explicitly.');
     }
 
     const machineProfiles = await ensurePlatformProfiles(store);

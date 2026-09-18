@@ -29,11 +29,13 @@ describe("hosted session refresh CLI", () => {
     const profile = { id: "profile-1", name: "Reviewed", slug: "reviewed", description: null, selectors: {}, variables: {}, created_at: "2026-09-18", updated_at: "2026-09-18" };
     let config: Config = { id: "rule-1", name: "Rule", slug: "rule", kind: "file", category: "rules", agent: "global", target_path: null, outputs: [], format: "markdown", content: "HOSTED_CURRENT_RULE_V1", description: null, tags: [], is_template: false, version: 1, created_at: "2026-09-18", updated_at: "2026-09-18", synced_at: null };
     let failAuth = false;
+    let incompleteBindings = false;
+    let bindingPayload: unknown = legacyProfileConfigBinding();
     const calls: string[] = [];
     const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
       const url = new URL(request.url); calls.push(url.pathname);
       if (failAuth || !request.headers.has("x-api-key")) return Response.json({ error: "unauthorized" }, { status: 403 });
-      if (url.pathname.endsWith("/bindings")) return Response.json({ bindings: [{ profile_id: profile.id, config_id: config.id, sort_order: 0, binding: legacyProfileConfigBinding() }] });
+      if (url.pathname.endsWith("/bindings")) return Response.json({ bindings: incompleteBindings ? [] : [{ profile_id: profile.id, config_id: config.id, sort_order: 0, binding: bindingPayload }] });
       if (url.pathname.endsWith("/assets")) return Response.json({ assets: [] });
       if (url.pathname.endsWith("/profiles/profile-1")) return Response.json({ profile: { ...profile, configs: [config] } });
       return Response.json({ error: "not found" }, { status: 404 });
@@ -42,6 +44,20 @@ describe("hosted session refresh CLI", () => {
       const credentialsDir = join(root, ".hasna/instructions/config"); mkdirSync(credentialsDir, { recursive: true, mode: 0o700 });
       writeFileSync(join(credentialsDir, "credentials"), `HASNA_INSTRUCTIONS_API_URL=http://127.0.0.1:${server.port}/instructions\nHASNA_INSTRUCTIONS_API_KEY=synthetic-refresh-test\n`, { mode: 0o600 });
       const applyOptions = ["--tool", "sumi", "--profile", "knowledge", "--compile-profile", profile.id, "--provider-version", "0.2.22", "--target-home", targetHome, "--no-station-profile", "--json"];
+      incompleteBindings = true;
+      const incomplete = await cli(root, ["session", "apply", ...applyOptions, "--adopt-file", `AGENTS.md=${sha256(readFileSync(agentsPath, "utf8"))}`]);
+      expect(incomplete.status).toBe(1);
+      expect(incomplete.stderr).toContain("HOSTED_PROFILE_BINDINGS_INCOMPLETE");
+      expect(readFileSync(agentsPath, "utf8")).toBe("Original operator instruction.\n");
+      incompleteBindings = false;
+      for (const invalidPayload of [undefined, null, { schema: "hasna.instructions.profile-config-binding/v1", activation: { mode: "always" }, fallback: "fail" }]) {
+        bindingPayload = invalidPayload;
+        const invalid = await cli(root, ["session", "apply", ...applyOptions, "--adopt-file", `AGENTS.md=${sha256(readFileSync(agentsPath, "utf8"))}`]);
+        expect(invalid.status).toBe(1);
+        expect(invalid.stderr).toContain("HOSTED_PROFILE_BINDINGS_INVALID");
+        expect(readFileSync(agentsPath, "utf8")).toBe("Original operator instruction.\n");
+      }
+      bindingPayload = legacyProfileConfigBinding();
       const wrong = await cli(root, ["session", "apply", ...applyOptions, "--adopt-file", `AGENTS.md=${"0".repeat(64)}`]);
       expect(wrong.status).toBe(1); expect(readFileSync(agentsPath, "utf8")).toBe("Original operator instruction.\n");
       const adopted = await cli(root, ["session", "apply", ...applyOptions, "--adopt-file", `AGENTS.md=${sha256(readFileSync(agentsPath, "utf8"))}`]);
