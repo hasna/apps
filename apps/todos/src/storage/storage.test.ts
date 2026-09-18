@@ -967,6 +967,26 @@ describe("storage adapter contracts", () => {
     expect(createTodosStorageAdapter({ config, remoteAdapter: fakeRemoteAdapter() }).kind).toBe("postgres");
   });
 
+  test("Postgres generic updates persist material-field audit entries without a live database", async () => {
+    const postgres = createMemoryPostgresClient();
+    const adapter = createPostgresTodosStorageAdapter({ client: postgres.client });
+    const task = await adapter.tasks.create({ title: "Before", assigned_to: "original-agent" });
+    const updated = await adapter.tasks.update(task.id, {
+      version: task.version, title: "After", priority: "high", status: "in_progress",
+      assigned_to: "next-agent", archived_at: "2026-09-18T00:00:00.000Z", working_dir: "/fixture/work",
+      approved_by: "review-agent",
+    });
+    const history = (await adapter.audit.getTaskHistory(task.id)).filter(row => row.action !== "created");
+    expect(history.map(row => row.field).sort()).toEqual([
+      "approved_by", "archived_at", "assigned_to", "priority", "status", "title", "working_dir",
+    ]);
+    expect(history.every(row => row.agent_id === "original-agent")).toBe(true);
+    expect(history.find(row => row.field === "priority")).toMatchObject({ old_value: "medium", new_value: "high" });
+    expect(history.find(row => row.field === "approved_by")).toMatchObject({ action: "approve", old_value: null, new_value: "review-agent" });
+    await adapter.tasks.update(task.id, { version: updated.version, priority: "high", assigned_to: null });
+    expect((await adapter.audit.getTaskHistory(task.id)).filter(row => row.action !== "created")).toHaveLength(8);
+  });
+
   test("builds a pure remote Postgres adapter from native config and caller-provided client", async () => {
     const postgres = createMemoryPostgresClient();
     const config = loadTodosStorageConfig({
