@@ -28,3 +28,10 @@ installed SDK and verifies explicit 503/409 recovery and connection-loss recover
 with exactly one checkout POST per call. It intercepts every HTTP request with
 synthetic responses and performs no provider operation. This does not replace
 the standalone producer graph or live server acceptance checks.
+
+Run `bun scripts/checkout-surface-consumer.ts /absolute/consumer/directory`
+against the same installed archive. It starts the archive's actual CLI and stdio
+MCP binaries under a synthetic fetch preload, verifies caller-key recovery across
+503, 409, success and transport loss, and requires exactly five explicit checkout
+POSTs per surface. No automatic retry or provider request is permitted. Use OS
+network denial for both checkout fixture commands when the host supports it.
