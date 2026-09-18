@@ -10,7 +10,7 @@ describe("machine helpers", () => {
       home_dir: "/home/example",
     });
     expect(machine.os_family).toBe("linux");
-    expect(machine.workspace_root).toBe("/home/example/workspace");
+    expect(machine.workspace_root).toBe("");
     expect(machine.bun_bin_dir).toBe("/home/example/.bun/bin");
     expect(machine.bun_path).toBe("/home/example/.bun/bin/bun");
     expect(machine.path_prefix).toBe("/home/example/.bun/bin");
@@ -44,6 +44,7 @@ describe("machine helpers", () => {
       os: "Linux",
       arch: "arm64",
       home_dir: "/home/example",
+      workspace_root: "/home/example/repositories",
     });
     const input = `command = "${machine.bun_bin_dir}/configs-mcp"\nworkspace = "${machine.workspace_root}/repo"`;
     const result = templateizeMachineContent(input, machine);

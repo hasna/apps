@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { CloudConfigStore, LocalConfigStore } from "../data/config-store.js";
 import type { Config, ProfileConfigBinding } from "../types/index.js";
 import type { InstructionsStorageClient } from "./client-types.js";
@@ -45,13 +46,73 @@ function fixture() {
   return { targetHome, state, store, manifestPath: join(targetHome, ".hasna/session-render-manifest.json"), agentsPath: join(targetHome, "AGENTS.md") };
 }
 describe("hosted session refresh", () => {
+  test("retains the active OpenCode project root used to canonicalize preserved references", async () => {
+    const targetHome = makeTempRoot("instructions-opencode-refresh-"); roots.push(targetHome);
+    const projectRoot = join(targetHome, "../other-profile/.hasna/active-project");
+    const openCodeSelector: SessionHostedProfileSelector = {
+      ...selector,
+      providerVersion: "1.18.18",
+    };
+    const state = { configs: [{ ...config }] };
+    const request = async <T>(_method: string, path: string): Promise<T> => {
+      if (path.includes("/bindings")) return { bindings: [binding] } as T;
+      if (path.includes("/assets")) return { assets: [] } as T;
+      if (path.startsWith("/profiles?")) return { profiles: [profile] } as T;
+      if (path.startsWith("/profiles/profile-1")) return { profile: { ...profile, configs: state.configs } } as T;
+      throw new Error(`Unexpected fixture request: ${path}`);
+    };
+    const store = new CloudConfigStore({
+      name: "instructions",
+      baseUrl: AUTHORITY,
+      transport: { baseUrl: AUTHORITY, request },
+    } as InstructionsStorageClient);
+    const existingConfig = JSON.stringify({
+      instructions: ["../instructions/private.md", "../shared/review.md"],
+    });
+    writeFileSync(join(targetHome, "opencode.json"), existingConfig);
+    const initialPlan = planProfileSessionRender({
+      tool: "opencode",
+      profile: "knowledge",
+      profile_id: profile.id,
+      provider_version: openCodeSelector.providerVersion,
+      targetHome,
+      projectRoot,
+      configs: state.configs,
+      bindings: [binding],
+      asset_plan_mode: "apply",
+      refreshSelector: openCodeSelector,
+    });
+    const initialConfig = JSON.parse(initialPlan.files.find((file) => file.relativePath === "opencode.json")!.content);
+    expect(initialConfig.instructions).toEqual([
+      "../shared/review.md",
+      initialPlan.files.find((file) => file.role === "fragment")!.path,
+    ]);
+    expect(initialPlan.targetOwner.projectRoot).toBe(resolve(projectRoot));
+    expect(applySessionRender(initialPlan, {
+      adoptFiles: [{
+        relativePath: "opencode.json",
+        sha256: createHash("sha256").update(existingConfig).digest("hex"),
+      }],
+    }).applied).toBe(true);
+
+    state.configs = [{ ...config, version: 2, content: "UPDATED_HOSTED_RULE" }];
+    expect((await refreshSessionRender({ targetHome, store })).status).toBe("updated");
+    const manifest = JSON.parse(readFileSync(join(targetHome, ".hasna/session-render-manifest.json"), "utf8"));
+    expect(manifest.targetOwner.projectRoot).toBe(resolve(projectRoot));
+    expect(JSON.parse(readFileSync(join(targetHome, "opencode.json"), "utf8")).instructions).toEqual([
+      "../shared/review.md",
+      join(targetHome, ".hasna/instructions/01-rule.md"),
+    ]);
+  });
+
   test("queries hosted profile on every unchanged refresh and writes no files", async () => {
     const { targetHome, store, state, manifestPath, agentsPath } = fixture();
     const manifest = readFileSync(manifestPath, "utf8"), mtime = statSync(manifestPath).mtimeMs, original = readFileSync(agentsPath, "utf8");
     for (let invocation = 0; invocation < 2; invocation++) {
       state.calls.length = 0;
-      const result = await refreshSessionRender({ targetHome, store });
+      const result = await refreshSessionRender({ targetHome, store, dryRun: invocation === 0 });
       expect(result.status).toBe("unchanged"); expect(result.apply.applied).toBe(false); expect(result.apply.snapshotPath).toBeNull();
+      expect(result.sourceHash).toBe(JSON.parse(manifest).sourceHash);
       expect(result.apply.files.every((file) => file.action === "unchanged")).toBe(true);
       expect(state.calls.some((path) => path.includes("/bindings"))).toBe(true);
       expect(state.calls.some((path) => path.includes("/assets"))).toBe(true);

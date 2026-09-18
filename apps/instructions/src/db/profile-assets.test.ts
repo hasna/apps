@@ -72,6 +72,31 @@ describe("persisted profile asset bindings", () => {
     expect(getProfileAssetBindings(profile.id, db)).toEqual([]);
   });
 
+  test("round-trips native custom-agent metadata through runtime normalization", () => {
+    const profile = createProfile({ name: "Native agents" }, db);
+    const source = createConfig({ name: "Auditor role", category: "rules", content: "Canonical role prose.\n" }, db);
+    const binding: ProfileAssetBindingSpec = {
+      ...spec(source.id, source.version, source.content),
+      assetKey: "auditor",
+      kind: "custom-agent",
+      selector: { provider: "claude", versionRange: ">=2.1.276 <3.0.0", surface: "code", scope: "global" },
+      source: {
+        ...spec(source.id, source.version, source.content).source,
+        kind: "custom-agent",
+      },
+      destination: { strategy: "emit-file", root: "target-home", relativePath: "agents/auditor.md" },
+      nativeAgent: {
+        name: "auditor",
+        description: "Synthetic scoped reviewer",
+        frontmatter: '---\nname: auditor\ndescription: "Synthetic scoped reviewer"\ntools: Read, Bash\n---\n',
+      },
+    };
+
+    const created = addAssetToProfile(profile.id, source.id, binding, db);
+    expect(created.binding.nativeAgent).toEqual(binding.nativeAgent);
+    expect(getProfileAssetBindings(profile.id, db)[0]?.binding.nativeAgent).toEqual(binding.nativeAgent);
+  });
+
   test("rejects duplicate profile asset identities and route/body key mismatches", () => {
     const profile = createProfile({ name: "Assets" }, db);
     const source = createConfig({ name: "Review skill", category: "rules", content: "# Review\n" }, db);
