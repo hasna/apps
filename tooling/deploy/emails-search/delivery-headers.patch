@@ -1,0 +1,125 @@
+--- a/app/src/lib/email-address.ts
++++ b/app/src/lib/email-address.ts
+@@ -63,3 +63,33 @@
+   const escaped = displayName.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+   return `"${escaped}" <${address}>`;
+ }
++
++/**
++ * Return the RFC 5322 display-name phrase of a sender value, or null when the
++ * value carries none worth rendering.
++ *
++ * Mirrors `canonicalSender`'s single-addr-spec rules: only the
++ * `Display Name <addr>` angle-addr form has a display name, so a bare
++ * addr-spec, an empty phrase, or a value with more than one angle-addr yields
++ * null. A quoted phrase is returned UNQUOTED (with `\"` and `\\` escapes
++ * undone) so callers can re-render it with `formatSenderDisplayName`. Control
++ * characters and other unsafe bytes are deliberately NOT filtered here —
++ * exactly like the address-record `display_name` field, the caller applies its
++ * header-safety check before the phrase may reach a provider call.
++ */
++export function senderDisplayName(from: string): string | null {
++  if (typeof from !== "string") return null;
++  const value = from.trim();
++  if (!value) return null;
++  const lt = (value.match(/</g) ?? []).length;
++  const gt = (value.match(/>/g) ?? []).length;
++  if (lt !== 1 || gt !== 1) return null;
++  const m = value.match(/^([^<>]*?)<([^<>]+)>$/);
++  if (!m) return null;
++  let phrase = m[1]!.trim();
++  if (!phrase) return null;
++  if (phrase.length >= 2 && phrase.startsWith('"') && phrase.endsWith('"')) {
++    phrase = phrase.slice(1, -1).replace(/\\(.)/g, "$1").trim();
++  }
++  return phrase.length ? phrase : null;
++}
+--- a/app/src/server/self-hosted/service.ts
++++ b/app/src/server/self-hosted/service.ts
+@@ -1,5 +1,5 @@
+ import { messageSearchErrorResponse } from "./search-admission.js";
+-import { deriveReplyHeaders, ReplyHeaderError } from "../../lib/reply-headers.js";
++import { deriveReplyHeaders, ReplyHeaderError, replyMailboxes } from "../../lib/reply-headers.js";
+ // HTTP request handler for the Emails self-hosted service.
+ //
+ // Surfaces operational probes (/health, /ready, /version)
+@@ -87,7 +87,7 @@
+ import type { RateLimiter } from "./auth/rate-limit.js";
+ import type { AuthMailerConfig } from "./auth/mailer.js";
+ import type { SelfHostedKeyStore } from "./keys.js";
+-import { canonicalSender, formatSenderDisplayName } from "../../lib/email-address.js";
++import { canonicalSender, formatSenderDisplayName, senderDisplayName } from "../../lib/email-address.js";
+ import { normalizeAttachmentByteLimit } from "../../lib/attachment-download.js";
+ import { canonicalizeSelfHostedPathname } from "../../lib/self-hosted-paths.js";
+ 
+@@ -1367,6 +1367,7 @@
+       }
+       // Backport the upstream typed reply contract without accepting arbitrary
+       // transport headers or adding provider-identity discovery.
++      if (body.reply_to !== undefined && !replyMailboxes(body.reply_to)) return json(400, { error: "reply_to must contain valid mailbox addresses", reason: "invalid_reply_to" });
+       let replyParentId: string | undefined;
+       let replyHeaders: Record<string, string> | undefined;
+       if (body.reply_to_message_id !== undefined) {
+@@ -1565,21 +1566,21 @@
+ 
+       let messageId: string;
+       try {
+-        // The provider call is the ONLY surface that may carry the address
+-        // record's display name (bug e2578a8a). Authorization, the ledger
+-        // (`from_addr`), the idempotency hash and the policy gate all keep the
+-        // bare canonical address; a display name is presentational and must not
+-        // change what the send is attributed to.
++        // Display names decorate only the provider From. Authorization,
++        // policy, ledger and idempotency retain the bare canonical address.
++        // A safe configured name wins, followed by a safe inline name.
+         const fromRecord = await auth.store.getAddressByEmail(from);
+-        // The display name is an unvalidated address-record field, so it must
+-        // not be allowed to carry control characters into the provider call
+-        // (the raw-MIME path writes `From:` verbatim; CR/LF would be header
+-        // injection). A hostile name falls back to the canonical address —
+-        // the send still succeeds, attributed to the bare sender.
+-        const fromForProvider =
++        const recordName =
+           fromRecord?.display_name && isSafeFromDisplayName(fromRecord.display_name)
+-            ? formatSenderDisplayName(fromRecord.display_name, from)
+-            : from;
++            ? fromRecord.display_name
++            : null;
++        const inlineName = senderDisplayName(rawFrom);
++        const displayName =
++          recordName ??
++          (inlineName && isSafeFromDisplayName(inlineName) ? inlineName : null);
++        const fromForProvider = displayName
++          ? formatSenderDisplayName(displayName, from)
++          : from;
+         messageId = await deps.sender.send({
+           provider_id: `self-hosted-${deps.sender.provider}`,
+           ...(replyHeaders ? { headers: replyHeaders } : {}),
+--- a/app/src/providers/ses.ts
++++ b/app/src/providers/ses.ts
+@@ -16,6 +16,7 @@
+ import type { DnsRecord, DnsStatus, Provider, SendEmailOptions, Stats } from "../types/index.js";
+ import { ProviderConfigError } from "../types/index.js";
+ import type { ProviderAdapter, RemoteAddress, RemoteDomain, RemoteEvent } from "./interface.js";
++import { replyMailboxes } from "../lib/reply-headers.js";
+ 
+ export interface SesStaticCredentials {
+   accessKeyId: string;
+@@ -350,6 +351,8 @@
+ 
+   async sendEmail(opts: SendEmailOptions): Promise<string> {
+     assertSafeEmailHeaders(opts);
++    const replyTo = opts.reply_to === undefined ? undefined : replyMailboxes(opts.reply_to);
++    if (replyTo === null) throw new Error("Invalid Reply-To mailbox list");
+     const toArr = Array.isArray(opts.to) ? opts.to : [opts.to];
+     const ccArr = opts.cc ? (Array.isArray(opts.cc) ? opts.cc : [opts.cc]) : [];
+     const bccArr = opts.bcc ? (Array.isArray(opts.bcc) ? opts.bcc : [opts.bcc]) : [];
+@@ -392,7 +395,7 @@
+           CcAddresses: ccArr.length > 0 ? ccArr : undefined,
+           BccAddresses: bccArr.length > 0 ? bccArr : undefined,
+         },
+-        ReplyToAddresses: opts.reply_to ? [opts.reply_to] : undefined,
++        ReplyToAddresses: replyTo,
+         Content: {
+           Simple: {
+             Subject: { Data: opts.subject, Charset: "UTF-8" },
