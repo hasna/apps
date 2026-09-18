@@ -1,0 +1,132 @@
+name: calendar-promotion-execute
+on:
+  workflow_call:
+    inputs:
+      phase: {type: string, required: true}
+      source: {type: string, required: true}
+      candidate_run_id: {type: string, required: true}
+      candidate_sha256: {type: string, required: true}
+permissions:
+  contents: read
+jobs:
+  execute:
+    if: ${{ github.repository == 'hasna/apps' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    environment: production
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    env:
+      AWS_REGION: us-east-1
+      SOURCE: ${{ inputs.source }}
+      PHASE: ${{ inputs.phase }}
+      CANDIDATE_RUN: ${{ inputs.candidate_run_id }}
+      CANDIDATE_SHA: ${{ inputs.candidate_sha256 }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ inputs.source }}
+          persist-credentials: false
+      - name: Recheck admission in the production-scoped executor
+        run: >-
+          python3 -I -B tooling/deploy/calendar/gate.py
+          --source "$SOURCE" --phase "$PHASE"
+          --candidate-run "$CANDIDATE_RUN" --candidate-sha256 "$CANDIDATE_SHA"
+          --download "$RUNNER_TEMP/calendar-reviewed-candidate"
+      - name: Exercise inert authority and mutation refusal tests
+        run: |
+          python3 -I -B tooling/deploy/calendar/control_test.py
+          python3 -I -B tooling/deploy/calendar/gate_test.py
+          python3 -I -B tooling/deploy/calendar/operations_test.py
+      - name: Build exact native ARM64 candidate from the monorepo root
+        if: ${{ inputs.phase == 'prepare' }}
+        run: |
+          set -Eeuo pipefail
+          test "$(uname -m)" = aarch64
+          docker build --platform linux/arm64 --provenance=false \
+            --label "org.opencontainers.image.revision=$SOURCE" \
+            -f apps/calendar/Dockerfile -t "calendar-candidate:$SOURCE" .
+          docker build --platform linux/arm64 --provenance=false --target deps \
+            -f apps/calendar/Dockerfile -t "calendar-candidate-deps:$SOURCE" .
+          python3 -I -B tooling/deploy/calendar/container_smoke.py \
+            --image "calendar-candidate:$SOURCE" --deps-image "calendar-candidate-deps:$SOURCE" \
+            --out "$RUNNER_TEMP/calendar-smoke.json"
+      - name: Scan the exact local candidate before AWS credential configuration
+        if: ${{ inputs.phase == 'prepare' }}
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
+        with:
+          image-ref: calendar-candidate:${{ inputs.source }}
+          format: json
+          output: ${{ runner.temp }}/calendar-trivy.json
+          scanners: vuln
+          vuln-type: os,library
+          ignore-unfixed: false
+          exit-code: "1"
+          severity: CRITICAL,HIGH,UNKNOWN
+      - name: Validate complete scanner output before AWS credential configuration
+        if: ${{ inputs.phase == 'prepare' }}
+        run: |
+          python3 -I -B tooling/deploy/calendar/operations.py scan \
+            --source "$SOURCE" --image "calendar-candidate:$SOURCE" \
+            --scan "$RUNNER_TEMP/calendar-trivy.json" --out "$RUNNER_TEMP/calendar-receipts"
+      # The private trust policy binds this exact reusable workflow path at main
+      # and the production environment. No caller role/target input is accepted.
+      - name: Assume only the manifest-scoped Calendar producer role
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a
+        with:
+          role-to-assume: ${{ vars.CALENDAR_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+          role-session-name: calendar-${{ github.run_id }}
+          mask-aws-account-id: true
+      - name: Login to the candidate repository
+        if: ${{ inputs.phase == 'prepare' }}
+        uses: aws-actions/amazon-ecr-login@d539f0932e70871a027e9d5a9d8fc38589180a64
+        with:
+          mask-password: true
+      - name: Push scanned candidate and record immutable source and config digests
+        if: ${{ inputs.phase == 'prepare' }}
+        run: >-
+          python3 -I -B tooling/deploy/calendar/operations.py prepare
+          --source "$SOURCE" --image "calendar-candidate:$SOURCE"
+          --scan "$RUNNER_TEMP/calendar-trivy.json" --smoke "$RUNNER_TEMP/calendar-smoke.json"
+          --out "$RUNNER_TEMP/calendar-receipts"
+      - name: Read current task and service configuration without enrollment claims
+        if: ${{ inputs.phase == 'reconcile' }}
+        run: >-
+          python3 -I -B tooling/deploy/calendar/operations.py reconcile
+          --source "$SOURCE" --out "$RUNNER_TEMP/calendar-receipts"
+      - name: Promote only an exact candidate admitted by the private SSM receipt
+        if: ${{ inputs.phase == 'promote' }}
+        run: >-
+          python3 -I -B tooling/deploy/calendar/operations.py promote
+          --source "$SOURCE" --candidate "$RUNNER_TEMP/calendar-reviewed-candidate/candidate.json"
+          --candidate-sha256 "$CANDIDATE_SHA" --out "$RUNNER_TEMP/calendar-receipts"
+      - name: Retain the immutable candidate receipt
+        if: ${{ success() && inputs.phase == 'prepare' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: calendar-candidate
+          path: ${{ runner.temp }}/calendar-receipts/candidate/candidate.json
+          if-no-files-found: error
+          retention-days: 30
+      - name: Retain the candidate's synthetic smoke and scanner evidence
+        if: ${{ success() && inputs.phase == 'prepare' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: calendar-candidate-evidence
+          path: |
+            ${{ runner.temp }}/calendar-smoke.json
+            ${{ runner.temp }}/calendar-trivy.json
+          if-no-files-found: error
+          retention-days: 30
+      - name: Retain metadata-only operation and uncertainty receipts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: calendar-${{ inputs.phase }}-receipts
+          path: ${{ runner.temp }}/calendar-receipts/*.json
+          if-no-files-found: ignore
+          retention-days: 30
