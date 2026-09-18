@@ -1,9 +1,8 @@
 # @hasna/mementos
 
 Persistent memory for AI agents, available as a CLI, MCP server, REST service,
-and TypeScript library. Mementos stores memories in local SQLite by default and
-can route clients to a self-hosted PostgreSQL-backed service over an authenticated
-HTTP API.
+and TypeScript library. Hosted clients use the authenticated Mementos HTTP API;
+local SQLite is available only through an explicit local-mode opt-in.
 
 [![npm](https://img.shields.io/npm/v/@hasna/mementos)](https://www.npmjs.com/package/@hasna/mementos)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
@@ -28,10 +27,11 @@ The package installs three binaries:
 
 ## Quick start
 
-Local mode needs no service or database configuration. The first command creates
+Local mode must be selected explicitly. The first command after the opt-in creates
 and migrates `~/.hasna/mementos/mementos.db`.
 
 ```bash
+export HASNA_MEMENTOS_LOCAL=1
 mementos save project-stack "Bun, TypeScript, SQLite" \
   --scope shared --category fact
 mementos recall project-stack
@@ -82,13 +82,28 @@ mementos <command> --help
 
 Human-readable list and search commands are compact and paginated by default.
 Use `--limit` with `--cursor` or `--offset`, `--verbose` for wider snippets, and
-`mementos show <id>` for a full record. Use global `--json` or a supported
-`--format json|csv|yaml` option for structured output.
+`mementos show <id>` for a full record.
+
+Historical `--json` and `--format json` collection reads remain compatible:
+they emit full bare arrays and, without `--limit`, traverse the complete result.
+Use explicit `--agent-json` when a token-bounded page receipt is wanted. Agent
+JSON defaults to 20 compact list rows or 10 compact history rows, includes
+`_meta.next_cursor`, and has a 32 KiB byte budget. `--full`, `--all`, and
+`--max-bytes` are receipt-mode controls and require `--agent-json`; exhaustive
+mode fails closed above 5,000 rows or 1 MiB.
+
+Agent JSON uses offset pagination. Stable ID tie-breakers prevent overlap for
+equal timestamps and importance while the result set is unchanged; writes
+between page requests can shift offsets, so restart traversal when a stable
+snapshot is required.
 
 ```bash
-mementos list --limit 20 --cursor 20
+mementos list --json                         # compatible full bare array
+mementos list --agent-json                   # bounded receipt page
+mementos list --agent-json --cursor 20
+mementos list --agent-json --full --limit 5
+mementos history --agent-json --all
 mementos search "deploy" --verbose
-mementos --json list
 mementos storage mode --json
 ```
 
@@ -153,17 +168,26 @@ API routes use bearer/API-key authentication when configured. See the
 
 ## Storage
 
-### Local clients
+### Client storage selection
 
-SQLite is authoritative by default. Database selection order is:
+The hosted Mementos API is the ordinary client default. The CLI, MCP server,
+and SDK resolve the hosted credential and authority chain described below; if
+no hosted credential resolves, client data commands fail closed rather than
+opening or creating SQLite automatically.
 
-1. `HASNA_MEMENTOS_DB_PATH` or `MEMENTOS_DB_PATH`.
-2. The nearest existing `.mementos/mementos.db` walking up from the current directory.
-3. Git-root `.mementos/mementos.db` when `MEMENTOS_DB_SCOPE=project`.
-4. `~/.hasna/mementos/mementos.db`.
+SQLite is available only through an explicit local opt-in:
 
-Legacy `~/.mementos` data is copied to `~/.hasna/mementos` when the new directory
-does not yet exist.
+```bash
+# Use the standard local data root (~/.hasna/mementos/mementos.db).
+export HASNA_MEMENTOS_LOCAL=1
+
+# Or select one exact SQLite file explicitly.
+export HASNA_MEMENTOS_DB_PATH=/absolute/path/to/mementos.db
+```
+
+`MEMENTOS_LOCAL=1` and `MEMENTOS_DB_PATH` are compatibility aliases. Legacy
+`~/.mementos` data is considered for migration only after local mode has been
+selected explicitly; it is never an automatic client fallback.
 
 ### Server backend and HTTP clients
 

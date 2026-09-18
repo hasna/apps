@@ -1,9 +1,22 @@
+import type { PureExecutionContract } from "../sdk/execution/types.js";
 import pkg from "../../package.json";
 import { readBoundedResponse } from "./remote-files.js";
 import {
   resolveSkillsConnection,
   skillsApiRequestUrl,
 } from "./fleet-credentials.js";
+export interface CloudEligibility {
+  contractVersion: 1;
+  eligible: boolean;
+  skill: string;
+  version: string;
+  bundleDigest: string;
+  reason?: string;
+  runtimeImageDigest?: string;
+  executionContract?: PureExecutionContract | { id: "pdf.v1" };
+  secrets?: "none";
+  egress?: "deny";
+}
 export interface CloudExecution {
   contractVersion: 1;
   id: string;
@@ -13,6 +26,7 @@ export interface CloudExecution {
   bundleDigest: string;
   inputDigest: string;
   runtimeImageDigest: string;
+  executionContract?: PureExecutionContract | { id: "pdf.v1" };
   status:
     | "admitted"
     | "leased"
@@ -67,6 +81,19 @@ export class CloudExecutionClient {
       throw Error(`Skills cloud execution refused: HTTP ${response.status}`);
     }
     return response;
+  }
+  /** Metadata only: never creates, starts or reconciles a task. */
+  async eligibility(slug: string, version: string, bundleDigest?: string): Promise<CloudEligibility> {
+    if (!/^[a-z0-9-]+$/.test(slug) || !/^\d+\.\d+\.\d+$/.test(version) ||
+        (bundleDigest !== undefined && !/^(sha256:)?[a-f0-9]{64}$/.test(bundleDigest)))
+      throw Error("Cloud eligibility requires an exact skill version and valid digest");
+    const query = new URLSearchParams({ version, ...(bundleDigest ? { bundleDigest } : {}) });
+    const v = await jsonBody(await this.request(`${slug}/eligibility?${query}`)) as CloudEligibility;
+    if (!v || v.contractVersion !== 1 || typeof v.eligible !== "boolean" || v.skill !== slug || v.version !== version ||
+        !/^[a-f0-9]{64}$/.test(v.bundleDigest) || (bundleDigest && bundleDigest.replace(/^sha256:/, "") !== v.bundleDigest) ||
+        (v.eligible && (!v.executionContract || !["pdf.v1", "regex-test.v1"].includes(v.executionContract.id))))
+      throw Error("Invalid cloud eligibility receipt");
+    return v;
   }
   async submit(
     slug: string,

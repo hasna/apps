@@ -30,7 +30,8 @@ export function assertAgentPolicyCollections(policy: Record<string, any>): void 
     for (const source of array(value.sources, AGENT_POLICY_LIMITS.discoverySources)) {
       requireBound(object(source)); text(source.path);
       requireBound(source.sha256 === null || typeof source.sha256 === "string" && /^[a-f0-9]{64}$/.test(source.sha256));
-      if (source.hashMode !== undefined) requireBound(["bytes", "path-bytes", "claude-plugin-registry", "claude-marketplace-registry"].includes(source.hashMode) && source.format === undefined && source.fields === undefined && (source.hashMode === "bytes" || source.sha256 !== null));
+      if (source.hashMode !== undefined) requireBound(["bytes", "path-bytes", "claude-plugin-registry", "claude-marketplace-registry", "claude-settings-v1"].includes(source.hashMode) && source.format === undefined && source.fields === undefined && (source.hashMode === "bytes" || source.sha256 !== null));
+      if (source.hashMode === "claude-settings-v1") requireBound(agent === "claude" && value.agent === "claude" && value.method === "reviewed" && !/[\x00-\x1f\x7f]/.test(source.path) && isAbsolute(source.path) && resolve(source.path) === source.path && basename(source.path) === "settings.json");
       if (source.hashMode === "claude-marketplace-registry") requireBound(agent === "claude" && value.agent === "claude" && value.method === "reviewed" && !/[\x00-\x1f\x7f]/.test(source.path) && isAbsolute(source.path) && resolve(source.path) === source.path && basename(source.path) === "known_marketplaces.json");
       if (source.hashMode === "claude-plugin-registry") {
         requireBound(agent === "claude");

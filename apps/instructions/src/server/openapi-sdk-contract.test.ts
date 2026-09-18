@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { getPackageVersion } from "../lib/package-version.js";
 import { buildV1OpenApiDocument } from "./openapi.js";
 
 describe("Instructions complete OpenAPI and generated SDK contract", () => {
@@ -80,6 +81,7 @@ describe("Instructions complete OpenAPI and generated SDK contract", () => {
   test("tracked generated client exposes the complete implemented route contract", () => {
     const generated = readFileSync(join(import.meta.dir, "../sdk/v1.generated.ts"), "utf8");
 
+    expect(generated).toContain(`// Source: Instructions V1 API ${getPackageVersion()}`);
     expect(generated).toContain("export interface UpdateProfileInput");
     expect(generated).toContain("export interface FeedbackInput");
     expect(generated).toContain("export interface MachineAppliedInput");

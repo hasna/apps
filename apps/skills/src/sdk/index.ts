@@ -15,6 +15,7 @@
  * — the shared @hasna/contracts ladder — instead of reading an environment
  * variable of its own. See lib/fleet-credentials.ts.
  */
+export { CloudExecutionClient, type CloudExecution, type CloudEligibility } from "../lib/cloud-executions.js";
 export { readExecutionGrantPolicy, saveExecutionGrantPolicy, resolveExecutionGrant } from "../lib/execution-grant-client.js";
 export type { ExecutionGrant, ExecutionGrantPolicy, ExecutionGrantRequest, ResolvedExecutionGrant } from "../lib/execution-grants.js";
 export { HttpProfileClient, createProfileClient, type ProfileClient, type AuthenticatedProfilePrincipal, type AuthenticatedProfileRole } from "../lib/profile-client.js";
@@ -61,7 +62,7 @@ export * from "./events.js";
 export * from "./spend.js";
 export * from "./offline.js";
 export * from "./execution/index.js";
-export { RemoteSkillsClient, createRemoteSkillsClient, RemoteRequestError, RemoteRouteUnsupportedError, RemoteCapabilityUnavailableError, RemoteQuoteUnavailableError, RemoteWorkspaceMemberError } from "../lib/remote-client.js";
+export { RemoteSkillsClient, createRemoteSkillsClient, RemoteRequestError, RemoteCreditCheckoutError, RemoteRouteUnsupportedError, RemoteCapabilityUnavailableError, RemoteQuoteUnavailableError, RemoteWorkspaceMemberError } from "../lib/remote-client.js";
 export { RemoteSkillsPermissionError, type RemoteSkillsAccess, type RemoteSkillsPermissions } from "../lib/remote-permissions.js";
 export * from "../lib/remote-recurring-contract.js";
 export { RecurringInputError, RemoteRecurringError, RemoteRecurringUnavailableError, RemoteRecurringReadError, RemoteRecurringUnconfirmedError } from "../lib/remote-recurring.js";
@@ -100,3 +101,5 @@ export { preparePrivatePublication, readPrivatePublicationRecovery, continuePriv
 export { createSkillOperationClient, SkillOperationClientError, SKILL_OPERATION_LIMITS,
   type SkillOperationClient, type SkillOperationTransport, type SkillOperationRequest, type SkillOperationResult,
   type SkillOperationJson, type SkillOperationRefusal, type SkillOperationClientErrorCode } from "./operations.js";
+
+export type { RemoteCreditCheckoutOptions, RemoteCreditCheckout, RemoteCreditCheckoutErrorCode } from "../lib/remote-credit-checkout.js";

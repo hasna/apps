@@ -79,6 +79,37 @@ for (const [label, makeStore] of stores) {
       expect(run.dependencyLayerTag).toBeNull();
     });
 
+    test("owns contract identity across awaited lookup and returned receipt mutation", async () => {
+      const store = makeStore();
+      const original = store.getRunByKey.bind(store);
+      let release!: () => void;
+      const waiting = new Promise<void>(resolve => { release = resolve; });
+      store.getRunByKey = async (...args) => { await waiting; return original(...args); };
+      const service = createSubmitRunService({ store, imageProfiles: TEST_IMAGE_PROFILES });
+      const contract = { id: "regex-test.v1" as const, descriptorDigest: "e".repeat(64), entrypoint: "src/index.ts", entrypointDigest: "f".repeat(64) };
+      const expected = { ...contract };
+      const pending = service.submit({ ...BASE_INPUT, executionContract: contract, idempotencyKey: "owned-contract" });
+      contract.entrypoint = "src/changed.ts";
+      release();
+      const first = await pending;
+      expect(first.run.executionContract).toEqual(expected);
+      first.run.executionContract!.descriptorDigest = "0".repeat(64);
+      const replay = await service.submit({ ...BASE_INPUT, executionContract: contract, idempotencyKey: "owned-contract" });
+      expect(replay.run.executionContract).toEqual(expected);
+      expect(replay.run.runId).toBe(first.run.runId);
+    });
+
+    test("pure input can be deliberately repeated under a new key and reviewed image", async () => {
+      const store = makeStore();
+      const contract = { id: "regex-test.v1" as const, descriptorDigest: "e".repeat(64), entrypoint: "src/index.ts", entrypointDigest: "f".repeat(64) };
+      const first = await createSubmitRunService({ store, imageProfiles: TEST_IMAGE_PROFILES }).submit({ ...BASE_INPUT, executionContract: contract, idempotencyKey: "pure-old-image" });
+      const profiles = createImageProfileRegistry({ runtimes: [{ runtime: "bun", version: "1.3.14", imageDigest: "sha256:" + "0".repeat(64) }], dependencyLayers: {} });
+      const second = await createSubmitRunService({ store, imageProfiles: profiles }).submit({ ...BASE_INPUT, executionContract: contract, idempotencyKey: "pure-new-image" });
+      expect(second.run.runId).not.toBe(first.run.runId);
+      expect(second.run.runtimeImageDigest).toBe("sha256:" + "0".repeat(64));
+      expect((await store.getRun(first.run.runId))!.admission.runtimeImageDigest).toBe(first.run.runtimeImageDigest);
+    });
+
     test("allowlisted system_deps resolve a prebuilt dependency layer into the admission", async () => {
       const service = createSubmitRunService({ store: makeStore(), imageProfiles: TEST_IMAGE_PROFILES });
       const { run } = await service.submit({

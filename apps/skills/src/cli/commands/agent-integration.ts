@@ -4,37 +4,63 @@ import { readFileSync } from "node:fs";
 import { isAbsolute } from "node:path";
 import { type ReviewedDiscoveryInputs } from "../../lib/agent-discovery.js";
 import { normalizeHermesHookInput, assertHermesTool } from "../../lib/agent-hermes.js";
-import { selectedProfileId } from "./context.js";
+import { parseSkillContextInput, selectedProfileId } from "./context.js";
 import { AGENT_ADAPTERS, INTEGRATION_AGENTS, normalizeAgentHookEvent } from "../../lib/agent-adapters.js";
 import { planAgentIntegration, applyAgentIntegration, inventoryNativeSkills, archiveNativeSkills, assertManagedAgentBridge, hookContextOutput, normalizeAgentHookPrompt, type IntegrationAgent } from "../../lib/agent-integration.js";
 import { enrollCodexNativeHooks } from "../../lib/agent-codex-trust.js";
+import { HookDiagnosticError, hookChildError, hookFailureReason } from "../../lib/hook-diagnostics.js";
+import { readSkillSessionSnapshotIfExists, SkillSelectionError } from "../../lib/selection-cache.js";
 
 const RECOVERABLE_CONTEXT_CACHE_ERRORS = new Set(["CACHED_PROFILE_EXPIRED", "CACHED_PROFILE_MISSING", "CACHED_BUNDLE_MISSING"]);
 
+/** Called only after the configured native bridge has been verified. */
+function pinnedHookProfile(input: unknown, configuredProfile: string): string {
+  try {
+    const parsed = parseSkillContextInput(JSON.stringify(input));
+    if (!parsed.sessionId) return configuredProfile;
+    // Match buildSkillContext's native identity and parent derivation exactly.
+    const sessionId = parsed.agentId ? `${parsed.sessionId}:${parsed.agentId}` : parsed.sessionId;
+    const session = readSkillSessionSnapshotIfExists(sessionId);
+    const parent = !session && parsed.agentId ? readSkillSessionSnapshotIfExists(parsed.sessionId) : null;
+    // This selects the profile, not the payload. The context subprocess rereads
+    // and validates the receipt, project conflicts, authority and generation.
+    // A named missing parent still fails in the ordinary context resolver.
+    return session?.receipt.profile.profileId ?? parent?.receipt.profile.profileId ?? configuredProfile;
+  } catch (error) {
+    if (error instanceof SkillSelectionError) throw new HookDiagnosticError(error.code, "context");
+    throw error;
+  }
+}
+
 async function contextForHook(input: unknown, profileId: string, cached: boolean, deadline: number): Promise<any> {
   const remaining = deadline - Date.now();
-  if (remaining <= 0) throw new Error("Skills hook deadline exceeded");
+  if (remaining <= 0) throw new HookDiagnosticError("SKILLS_HOOK_TIMEOUT", "context");
   const args = [process.execPath, process.argv[1]!, "context", "--stdin", "--json", "--selection-profile", profileId];
   if (cached) args.push("--cached");
   const child = Bun.spawn(args, { stdin: new Blob([JSON.stringify(input)]), stdout: "pipe", stderr: "pipe", env: { ...process.env, NO_COLOR: "1" } });
-  const timer = setTimeout(() => child.kill("SIGKILL"), Math.min(6500, remaining));
+  let timedOut = false;
+  const timer = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, Math.min(6500, remaining));
   let result: any;
   let status: number;
+  let output: string;
   try {
     const [stdout, , exitCode] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    if (timedOut) throw new HookDiagnosticError("SKILLS_HOOK_TIMEOUT", "context");
     status = exitCode;
-    result = JSON.parse(stdout);
+    output = stdout;
   } finally { clearTimeout(timer); }
   if (status !== 0) {
+    const failure = hookChildError(output, "context");
     // An expired pin overrides a newly synced profile. Reauthorize this exact
     // session through the API; do not reset its versions or forge a fresh cache
     // timestamp. Authentication/integrity failures never fall back to a cache.
-    if (cached && RECOVERABLE_CONTEXT_CACHE_ERRORS.has(result?.error?.code)) {
+    if (cached && RECOVERABLE_CONTEXT_CACHE_ERRORS.has(failure.code)) {
       return contextForHook(input, profileId, false, deadline);
     }
-    throw new Error("Skills context could not be resolved");
+    throw failure;
   }
-  if (typeof result?.context !== "string") throw new Error("Invalid Skills context response");
+  try { result = JSON.parse(output); } catch { throw new HookDiagnosticError("SKILLS_HOOK_INVALID_RESPONSE", "context"); }
+  if (typeof result?.context !== "string") throw new HookDiagnosticError("SKILLS_HOOK_INVALID_RESPONSE", "context");
   return result;
 }
 
@@ -98,6 +124,7 @@ export function registerAgentIntegration(parent: Command): void {
       const deadline = Date.now() + 12_000;
       // The installed blocking event must survive malformed JSON/input too.
       let event = options.agent === "hermes" && options.event === "pre_tool_call" ? "pre_tool_call" : "UserPromptSubmit";
+      let selectionProfile: string | undefined;
       try {
         if (agents(options.agent).length !== 1) throw new Error("A hook invocation requires one agent");
         const inputText = readFileSync(0, "utf8");
@@ -119,7 +146,7 @@ export function registerAgentIntegration(parent: Command): void {
           input.cwd ??= input.workspace_roots[0] ?? process.cwd();
           input.session_id ??= input.conversation_id;
         }
-        const selectionProfile = selectedProfileId(options.selectionProfile);
+        selectionProfile = selectedProfileId(options.selectionProfile);
         if (options.agent === "hermes" && event === "pre_tool_call") {
           assertManagedAgentBridge("hermes", { projectDirs: projects, profileId: selectionProfile });
           assertHermesTool(input);
@@ -139,16 +166,21 @@ export function registerAgentIntegration(parent: Command): void {
         if (typeof input.prompt === "string") input.prompt = normalizeAgentHookPrompt(options.agent, nativeEvent, input.prompt);
         if (event === "SessionStart") {
           const remaining = deadline - Date.now();
-          if (remaining <= 0) throw new Error("Skills hook deadline exceeded");
+          if (remaining <= 0) throw new HookDiagnosticError("SKILLS_HOOK_TIMEOUT", "sync");
           const refresh = Bun.spawn([process.execPath, process.argv[1]!, "sync", "--selection-profile", selectionProfile, "--json"], { stdin: "ignore", stdout: "pipe", stderr: "pipe", env: { ...process.env, NO_COLOR: "1" } });
-          const timer = setTimeout(() => refresh.kill("SIGKILL"), Math.min(6500, remaining));
+          let timedOut = false;
+          const timer = setTimeout(() => { timedOut = true; refresh.kill("SIGKILL"); }, Math.min(6500, remaining));
           try {
-            const [, , status] = await Promise.all([new Response(refresh.stdout).text(), new Response(refresh.stderr).text(), refresh.exited]);
-            if (status !== 0) throw new Error("Session profile refresh failed");
+            const [stdout, , status] = await Promise.all([new Response(refresh.stdout).text(), new Response(refresh.stderr).text(), refresh.exited]);
+            if (timedOut) throw new HookDiagnosticError("SKILLS_HOOK_TIMEOUT", "sync");
+            if (status !== 0) throw hookChildError(stdout, "sync");
           } finally { clearTimeout(timer); }
         }
-        // Fresh cached context stays local. An expired session can override the
-        // profile refreshed above, so resolve it once through the API if needed.
+        // Existing sessions retain their profile when the managed default changes.
+        // SessionStart refresh and the bridge guard above still use the configured
+        // profile; explicit context CLI requests keep their strict mismatch rules.
+        selectionProfile = pinnedHookProfile(input, selectionProfile);
+        // An expired pinned snapshot is reauthorized through its own profile API.
         const result = await contextForHook(input, selectionProfile, true, deadline);
         const output = hookContextOutput(event, result) as { hookSpecificOutput?: { hookEventName: string; additionalContext: string } };
         if (options.agent === "hermes") {
@@ -162,7 +194,7 @@ export function registerAgentIntegration(parent: Command): void {
       } catch (error) {
         const reason = error instanceof Error && error.message.startsWith("NATIVE_SKILL_DRIFT:")
           ? error.message
-          : "Skills context is unavailable. Run skills sync --selection-profile <id> and skills context --stdin --json to diagnose the selected profile.";
+          : hookFailureReason(error, selectionProfile);
         if (options.agent === "hermes") {
           // pre_llm_call is non-blocking in Hermes. Make the refusal visible;
           // pre_tool_call has native fail_closed and uses the blocking shape.

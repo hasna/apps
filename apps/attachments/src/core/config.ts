@@ -83,7 +83,7 @@ const DEFAULT_CONFIG: AttachmentsConfig = {
   server: {
     port: 3459,
     host: "localhost",
-    baseUrl: "http://localhost:3459",
+    baseUrl: "https://api.hasna.com/attachments",
     publicPath: "/a",
   },
   defaults: {

@@ -40,3 +40,6 @@ One door into local storage, and no sqlite engine in the client bundles
 - `shortlinks-mcp` still decides its authority before the transport connects and
   exits non-zero with no credential and no opt-in — now verified with the async
   gate.
+- Collection output is bounded by default: CLI JSON and MCP link/domain lists
+  return at most 20 rows unless callers request an explicit positive limit, and
+  MCP limits are capped at 100 rows per call.

@@ -242,6 +242,22 @@ describe("registry: the written inventory of hosted apps", () => {
     expect(missing).toEqual([]);
   });
 
+  test("Shortlinks and Attachments remain public producer members", () => {
+    for (const name of ["attachments", "shortlinks"] as const) {
+      const packagePath = path.join(ROOT, "apps", name, "package.json");
+      expect(fs.existsSync(packagePath)).toBe(true);
+      const manifest = JSON.parse(fs.readFileSync(packagePath, "utf8")) as { name?: string };
+      expect(manifest.name).toBe(`@hasna/${name}`);
+
+      const app = registry.find((entry) => entry.app === name);
+      expect(app).toBeDefined();
+      expect(app!.source).toBe("monorepo");
+      expect(app!.baseUrl).toBe(`https://api.hasna.com/${name}`);
+      expect(String(app!.notes ?? "")).not.toContain("hasna-internal");
+    }
+    expect(fs.existsSync(path.join(ROOT, "docs", "shortlinks-attachments-internal-migration.md"))).toBe(false);
+  });
+
   test("messages — the app the issue was filed for — is registered", () => {
     const messages = registry.find((a) => a.app === "messages");
     expect(messages).toBeDefined();
@@ -1288,6 +1304,21 @@ describe("the lanes actually call the checker", () => {
       expect(wf).toContain("needs: [gate, deploy]");
       expect(wf).toContain("needs.gate.outputs.proceed == 'true'");
     }
+  });
+
+  test("Knowledge's existing-key proof cannot enter the mint path", () => {
+    const caller = read("deploy-knowledge.yml");
+    expect(caller).toContain("verify_only: true");
+    const workflow = read("fleet-key-provision.yml");
+    expect(workflow).toMatch(/verify_only:\n\s+description:[^\n]+\n\s+required: false\n\s+type: boolean\n\s+default: false/);
+    const steps = workflow.split(/\n\s+- name: /);
+    const mint = steps.find((step) => step.includes("args=(provision"));
+    expect(mint).toContain("!inputs.verify_only && vars.FLEET_KEY_PROVISION_ENABLED == 'true'");
+    const verify = steps.find((step) => step.includes("fleet-key.ts drift --apps"));
+    expect(verify).toContain("if: ${{ inputs.verify_only }}");
+    expect(verify).toContain('--region "$REGION" --strict');
+    expect(verify).not.toContain("--allow-rotate");
+    expect(verify).not.toContain("args=(provision");
   });
 
   test("the daily drift workflow is scheduled, self-tests, and posts to #incidents", () => {

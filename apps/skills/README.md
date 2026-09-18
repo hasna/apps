@@ -190,6 +190,16 @@ contract and 16 MiB file limit; they are not silently converted into byte hashes
 Directory membership and file bytes are separate witnesses. Neither substitutes
 for reviewing the actual executable, import paths or loader behavior.
 
+For reviewed Claude user settings, `captureClaudeSettings(canonicalSettingsPath)`
+emits an opt-in `claude-settings-v1` witness. It permits a fixed set of typed
+terminal display preferences and recognized built-in model selections to change
+while binding hooks, permissions, native skill protections, plugins,
+marketplaces, environment and every unknown field. Provider mappings, custom
+model values and instruction settings remain bound. Replace the settings source
+in an explicitly reviewed discovery input, then use the normal `skills hook install
+--discovery-inputs <file>` plan/apply flow; existing raw witnesses are never
+automatically converted or refreshed. See [settings witness scope and migration](docs/plugin-admission.md#claude-settings-preferences).
+
 For an explicitly reviewed launcher or interpreter reached through symlinks,
 use `captureDiscoveryPathSources(paths)` and retain `hashMode: "path-bytes"`.
 Its digest binds the canonical input, directory identities, each link's identity
@@ -582,13 +592,20 @@ before submitting again. The selected profile must include this exact version,
 and the consumer needs `runs:write` as well as `skills:read`.
 
 Cloud execution is enabled only when the deployment configures a reviewed image
-and exact bundle allowlist. The first supported lane is `pdf-generate`; arbitrary
-uploaded code is not admitted. Runs capture version, bundle digest, input digest,
+and exact bundle allowlist; arbitrary
+uploaded code is not admitted. The PDF lane accepts reviewed `pdf-generate` versions.
+The optional `regex-test.v1` pure contract accepts only a tenant-specific, reviewed
+self-contained Bun bundle, with no secrets, dependencies or network. Uploading or
+selecting a bundle never admits it to cloud execution. Check an exact version with
+`skills executions eligibility <skill> --skill-version <version> --json`; this
+reads metadata without creating a run. Runs capture version, bundle digest, input digest,
 runtime image digest, limits and policy. The cloud worker runs in a separate
 Fargate task; the skill process has no API/provider credentials, no network, a
 read-only root and bounded temporary storage, execution time and output.
 `GET /skills/v1/capabilities` reports whether this deployment has cloud execution
-configured. Authorization and runtime availability are checked separately.
+configured and lists supported `cloudExecutionContracts`. Each exact bundle needs
+its own review and admission; the flag does not promise arbitrary executable
+support. Authorization and runtime availability are checked separately.
 
 On a managed station, local execution also resolves the selected immutable
 bundle. Self-contained local executables run with explicit environment references
@@ -1145,7 +1162,7 @@ skills --profile customer billing status --json
 skills --profile customer billing usage --json
 skills --profile customer billing invoices --json
 skills --profile customer credits packs --json
-skills --profile customer credits buy <pack-id> --json
+skills --profile customer credits buy <pack-id> --idempotency-key checkout-001 --json
 skills --profile customer billing portal --json
 skills --profile customer auth keys list --email you@example.com --code <FRESH-CODE> --json
 # Request a fresh OTP, then create a separately scoped key (shown once).
@@ -1153,6 +1170,19 @@ skills --profile customer auth signup --email you@example.com --json
 skills --profile customer auth keys create automation --email you@example.com --code <CODE> --scope runs:read --json
 skills --profile customer auth logout --json
 ```
+
+For credit checkouts, generate and retain a unique request key **before** calling.
+The SDK accepts `createCreditCheckout(packId, { idempotencyKey })`; MCP
+`create_credit_checkout` accepts `idempotency_key`. Success and bounded checkout
+errors retain `requestIdempotencyKey`. An omitted key is generated before the
+single POST, but an explicit saved key is needed if the client process exits
+before returning any result. Recover only on the same server, account and pack.
+No surface retries a checkout automatically. For unresolved or in-progress
+outcomes, inspect billing and explicitly reuse the same key after any indicated
+wait. Expired or fulfilled outcomes need a deliberate decision, not a fresh key
+on an automatic retry. The provider's derived `idempotencyKey` is not the request
+key. This protocol requires the configured server to honor checkout idempotency;
+older servers can return a link without proving durable recovery semantics.
 
 An origin, a full `/api/v1` base and a base with a path prefix normalize to the
 same routes. `HASNA_PROFILE=customer` selects the same profile as `--profile`.
@@ -1410,7 +1440,7 @@ src/
 |---|---|---|
 | Catalog skills | 0 | `SKILLS.length` (`src/lib/registry-data/`) |
 | Categories | 17 | `CATEGORIES` (`src/lib/registry-types.ts`) |
-| MCP tools | 81 | `tools/list` against a live `buildServer()` |
+| MCP tools | 82 | `tools/list` against a live `buildServer()` |
 
 Every number in this table is re-derived from the source tree on each test run by
 `src/lib/readme-derived-counts.test.ts`, so a drifted figure fails a test rather

@@ -213,7 +213,7 @@ export function resolveStationProfileMachine(
   const record = findLocalManifestMachine(readMachinesManifest(getMachinesManifestPath(env)), hostname);
   const home = homeDir(env);
   const platform = stringField(record, "platform") ?? osPlatform();
-  const workspacePath = stringField(record, "workspacePath") ?? join(home, platform === "darwin" ? "Workspace" : "workspace");
+  const workspacePath = stringField(record, "workspacePath");
   const machine: StationProfileMachine = {
     id: stringField(record, "id") ?? hostname,
     hostname: stringField(record, "hostname") ?? hostname,

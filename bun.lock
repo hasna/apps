@@ -212,7 +212,7 @@
     },
     "apps/contracts": {
       "name": "@hasna/contracts",
-      "version": "1.2.0",
+      "version": "1.2.1",
       "bin": {
         "contracts": "dist/cli/index.js",
         "contracts-cli": "dist/cli/contracts-cli.js",
@@ -532,7 +532,7 @@
     },
     "apps/instructions": {
       "name": "@hasna/instructions",
-      "version": "0.7.2",
+      "version": "0.7.5",
       "bin": {
         "instructions": "dist/cli/index.js",
         "configs": "dist/cli/index.js",
@@ -562,7 +562,7 @@
     },
     "apps/knowledge": {
       "name": "@hasna/knowledge",
-      "version": "0.3.2",
+      "version": "0.4.0",
       "bin": {
         "knowledge": "bin/knowledge.js",
         "knowledge-mcp": "bin/knowledge-mcp.js",
@@ -946,6 +946,7 @@
       "dependencies": {
         "@aws-sdk/client-kms": "3.1127.0",
         "@aws-sdk/client-secrets-manager": "^3.1008.0",
+        "@aws-sdk/client-sts": "3.1127.0",
         "@aws-sdk/credential-providers": "^3.1008.0",
         "@hasna/events": "^0.1.16",
         "@modelcontextprotocol/sdk": "^1.27.1",
@@ -1010,7 +1011,7 @@
     },
     "apps/skills": {
       "name": "@hasna/skills",
-      "version": "0.8.10",
+      "version": "0.8.12",
       "bin": {
         "skills": "bin/index.js",
         "skills-mcp": "bin/mcp.js",

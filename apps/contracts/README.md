@@ -570,6 +570,14 @@ lost is recognized without creating another credential. `--agent` remains a
 claim inside the signed token, not authentication for the caller; the consuming
 service must keep its authenticated-principal authorization checks.
 
+Secrets delivery accepts an HTTPS origin or gateway prefix in
+`HASNA_SECRETS_API_URL`, such as `https://api.hasna.com/secrets`, paired with
+`HASNA_SECRETS_API_KEY`. An optional trailing `/v1` identifies the same service;
+the SDK preserves the prefix and appends `/v1` once. Canonical and legacy
+`SECRETS_API_URL` / `SECRETS_API_KEY` aliases must resolve to the same authority
+and credential. Invalid authorities fail before minting or persistence. HTTP
+is accepted only for an exact loopback development/test authority.
+
 ### Signing secrets are trimmed on read
 
 A string signing secret is **whitespace-normalized before it keys the HMAC**:

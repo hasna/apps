@@ -1,3 +1,23 @@
+## 0.7.5
+
+### Patch Changes
+
+- Refuse Win32 drive-relative OpenCode references before URI classification and remove case, encoded, mixed-separator, drive-root-relative, UNC, `file://`, and trailing-dot/space aliases into any Instructions-managed namespace while preserving truly unmanaged paths.
+- Retire automatic native Inbox skill repair from profile application and bootstrap (#2443). Legacy `managed-skills` reports preserve native files, never invoke Conversations, and direct operators to manage versioned skill content through the Skills CLI.
+
+## 0.7.4
+
+### Patch Changes
+
+- Add read-only native harness discovery with explicit path precedence, installation and symlink evidence, and portable template inputs. Stop inventing a Workspace directory when no workspace is configured.
+
+## 0.7.3
+
+### Patch Changes
+
+- Anchor OpenCode instruction references to their owning home, support scoped Claude and Sumi custom-agent assets with explicitly validated native metadata, and preserve exact snapshots when explicitly retiring obsolete managed files. Reject ambiguous role headers and unmanaged asset changes before writes. Compile identical asset semantics for dry-run and applied refreshes so unchanged hosted profiles stay idempotent.
+- Render provider- and project-scoped Sumi instructions, refresh managed prompts from exact hosted profile bindings, and guard adoption, reconciliation, and config updates with atomic version/hash preconditions. Hosted initialization no longer imports local files or broadens private, retired, provider, project, role, or configuration records into default profiles.
+
 ## 0.7.2
 
 ### Patch Changes
@@ -5,7 +25,6 @@
 - Add atomic expected-version updates across CLI, MCP, API and SDK. Conditional writes use a dedicated route so older servers refuse before mutation; conflicts preserve content, version and snapshots.
 
 - Render scoped instructions into Sumi's native AGENTS.md, reject settings and retired sources in prompt profiles, and refresh managed profiles from their hosted authority. Add exact preimage adoption and reconciliation with snapshots so existing prompt files can be migrated without blanket overwrites. Preserve retired standard sources during initialization, require explicit adoption of local files in hosted mode, and keep default/profile membership empty until reviewed sources are bound explicitly. Public platform presets no longer carry fleet hostnames or workspace paths.
-
 
 ## 0.7.1
 

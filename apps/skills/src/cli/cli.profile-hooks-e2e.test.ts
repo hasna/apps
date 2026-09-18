@@ -234,11 +234,102 @@ test("built CLI refuses revoked HTTP access without silent cache fallback and bl
     const refused = await f.a.run(["load", "review-code@1.0.0", "--json"], { env: invalid }); expect(refused.exitCode).toBe(1); expect(refused.stdout).not.toContain("Published 1.0.0"); expect(refused.stdout).toContain("SKILLS_CONTEXT_FAILED");
     const context = await f.a.run(["context", "review this patch", "--json"], { env: invalid }); expect(context.exitCode).toBe(1); expect(context.stdout).not.toContain("Published 1.0.0");
     const denied = await f.a.hook("claude", "SessionStart", { source: "startup" }, invalid); expect(denied.continue).toBe(false); expect(denied.stopReason).toContain("unavailable");
+    expect(denied.stopReason).toContain("[SKILLS_CONTEXT_FAILED]");
+    expect(denied.stopReason).toContain("profile=engineering");
+    expect(denied.stopReason).not.toContain(invalid.HASNA_SKILLS_API_KEY);
     // Prompt hooks explicitly request verified cached mode; auth is checked at session refresh.
     const cached = await f.a.hook("claude", "UserPromptSubmit", { prompt: "review this patch" }, invalid); expect(cached.hookSpecificOutput.additionalContext).toContain("Published 1.0.0");
     expect(objectHashes(join(f.a.data, "selection-cache"))).toEqual(before);
   } finally { await f.close(); }
 });
+
+test("native hooks explain a project/session profile conflict without changing its pin or fetching a replacement", async () => {
+  const f = await fixture();
+  try {
+    await f.a.install();
+    await f.a.ok(["profiles", "set", "engineering", "--file", f.versions[0]!.file, "--json"]);
+    await f.a.ok(["sync", "--json"]);
+    await f.a.hook("claude", "UserPromptSubmit", { prompt: "review this patch" });
+    const sessions = join(f.a.data, "selection-cache", "sessions");
+    const receiptPath = join(sessions, readdirSync(sessions)[0]!);
+    const before = readFileSync(receiptPath, "utf8");
+    await f.a.ok(["profiles", "set", "default", "--file", f.versions[1]!.file, "--json"]);
+    await f.a.ok(["sync", "--selection-profile", "default", "--project", "--json"]);
+    await f.a.ok(["hook", "install", "--agent", "claude", "--selection-profile", "default", "--command", executable, "--apply", "--json"]);
+    const requests = f.requests.length;
+    const denied = await f.a.hook("claude", "UserPromptSubmit", { prompt: "continue" });
+    expect(denied.decision).toBe("block");
+    expect(denied.reason).toContain("[PROFILE_LOCK_MISMATCH]");
+    expect(denied.reason).toContain("profile=engineering");
+    expect(denied.reason).toContain("skills sessions show <session-id> --json");
+    expect(denied.reason).toContain("Sync alone does not change that pin");
+    expect(denied.reason).not.toContain(f.a.project);
+    expect(denied.reason).not.toContain("parent-session");
+    expect(f.requests).toHaveLength(requests);
+    expect(readFileSync(receiptPath, "utf8")).toBe(before);
+  } finally { await f.close(); }
+});
+
+for (const [savedProfile, configuredProfile] of [["fleet", "default"], ["default", "fleet"]] as const) {
+  test(`managed hooks retain ${savedProfile} sessions while new sessions use ${configuredProfile}`, async () => {
+    const f = await fixture();
+    try {
+      await f.a.install();
+      await f.a.ok(["profiles", "set", savedProfile, "--file", f.versions[0]!.file, "--json"]);
+      await f.a.ok(["profiles", "set", configuredProfile, "--file", f.versions[1]!.file, "--json"]);
+      await f.a.ok(["sync", "--selection-profile", savedProfile, "--json"]);
+      const install = (profile: string) => f.a.ok(["hook", "install", "--agent", "claude", "--selection-profile", profile, "--command", executable, "--apply", "--json"]);
+      await install(savedProfile);
+      await f.a.hook("claude", "UserPromptSubmit", { prompt: "review this patch" });
+      const sessions = join(f.a.data, "selection-cache", "sessions");
+      const receiptPath = join(sessions, readdirSync(sessions)[0]!);
+      const before = readFileSync(receiptPath, "utf8");
+      const { generation: originalGeneration, ...originalPin } = JSON.parse(before);
+      const expectSamePin = () => {
+        const { generation, ...currentPin } = json(receiptPath);
+        expect(currentPin).toEqual(originalPin);
+        expect(generation).toBeGreaterThan(originalGeneration);
+      };
+      await install(configuredProfile);
+      const requests = f.requests.length;
+      expect(await f.a.hook("claude", "UserPromptSubmit", { prompt: "continue" })).toEqual({});
+      expect(f.requests).toHaveLength(requests);
+      expectSamePin();
+      const restored = await f.a.hook("claude", "SessionStart", { source: "resume" });
+      expect(restored.hookSpecificOutput.additionalContext).toContain(f.versions[0]!.skillMd);
+      expect(restored.hookSpecificOutput.additionalContext).not.toContain(f.versions[1]!.skillMd);
+      const child = await f.a.hook("claude", "SubagentStart", { agent_id: "mixed-child" });
+      expect(child.hookSpecificOutput.additionalContext).toContain(f.versions[0]!.skillMd);
+      expectSamePin();
+      const fresh = await f.a.hook("claude", "UserPromptSubmit", { session_id: "new-session", prompt: "review this patch" });
+      expect(fresh.hookSpecificOutput.additionalContext).toContain(f.versions[1]!.skillMd);
+      const explicit = await f.a.run(["context", "review this patch", "--session", "parent-session", "--selection-profile", configuredProfile, "--cached", "--json"]);
+      expect(explicit.exitCode).toBe(1);
+      expect(JSON.parse(explicit.stdout).error.code).toBe("PROFILE_LOCK_MISMATCH");
+      const missing = await f.a.hook("claude", "SubagentStart", { session_id: "absent-parent", agent_id: "child" });
+      expect(missing.systemMessage).toContain("[SESSION_PARENT_NOT_FOUND]");
+      // Model an already reconciled parent using the separately resolved fresh
+      // session snapshot. An existing child owns its original independent pin.
+      const parentBeforeChange = readFileSync(receiptPath, "utf8");
+      const freshReceipt = readdirSync(sessions).map(name => json(join(sessions, name))).find(receipt => receipt.sessionId === "new-session");
+      put(receiptPath, JSON.stringify({ ...freshReceipt, sessionId: "parent-session", generation: json(receiptPath).generation + 1 }));
+      const retainedChild = await f.a.hook("claude", "SubagentStart", { agent_id: "mixed-child", restore: true });
+      expect(retainedChild.hookSpecificOutput.additionalContext).toContain(f.versions[0]!.skillMd);
+      expect(retainedChild.hookSpecificOutput.additionalContext).not.toContain(f.versions[1]!.skillMd);
+      put(receiptPath, parentBeforeChange);
+      // Expiry must authorize the old pinned profile, never silently adopt the
+      // newly configured one or use its already warm cache on authentication failure.
+      const expired = json(receiptPath); expired.verifiedAt = new Date(0).toISOString();
+      put(receiptPath, JSON.stringify(expired));
+      const expiredBytes = readFileSync(receiptPath, "utf8");
+      const denied = await f.a.hook("claude", "UserPromptSubmit", { prompt: "$review-code" }, { HASNA_SKILLS_API_KEY: "revoked-fixture-credential" });
+      expect(denied.decision).toBe("block");
+      expect(denied.reason).toContain("[SKILLS_CONTEXT_FAILED]");
+      expect(denied.reason).toContain(`profile=${savedProfile}`);
+      expect(readFileSync(receiptPath, "utf8")).toBe(expiredBytes);
+    } finally { await f.close(); }
+  });
+}
 
 test("expired native sessions reauthorize online while preserving their exact versions and expiry", async () => {
   const f = await fixture();
@@ -289,6 +380,9 @@ test("expired hook sessions still block when hosted authentication fails", async
     const before = readFileSync(receiptPath, "utf8"), requests = f.requests.length;
     const denied = await f.a.hook("claude", "UserPromptSubmit", { prompt: "$review-code" }, { HASNA_SKILLS_API_KEY: "revoked-fixture-credential" });
     expect(denied.decision).toBe("block");
+    expect(denied.reason).toContain("[SKILLS_CONTEXT_FAILED]");
+    expect(denied.reason).toContain("profile=engineering");
+    expect(denied.reason).not.toContain("revoked-fixture-credential");
     expect(JSON.stringify(denied)).not.toContain("Published 1.0.0");
     expect(f.requests.length).toBeGreaterThan(requests);
     expect(readFileSync(receiptPath, "utf8")).toBe(before);
@@ -308,6 +402,7 @@ test("missing hook cache resolves from the API but malformed receipts never trig
     const before = f.requests.length;
     const refused = await f.a.hook("claude", "UserPromptSubmit", { prompt: "$review-code" });
     expect(refused.decision).toBe("block");
+    expect(refused.reason).toContain("[INVALID_RECEIPT]");
     expect(f.requests).toHaveLength(before);
     expect(readFileSync(receiptPath, "utf8")).toBe("{invalid");
   } finally { await f.close(); }

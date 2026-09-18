@@ -166,7 +166,13 @@ export function createServer(port: number = 19451) {
           const phone = decodeURIComponent(path.slice("/api/conversation/".length));
           return json(await getStore().getConversation(phone));
         }
-        if (path === "/api/calls") return json(await getStore().listCalls());
+        if (path === "/api/calls") {
+          const rawLimit = Number(url.searchParams.get("limit") ?? 50);
+          const rawOffset = Number(url.searchParams.get("offset") ?? 0);
+          const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(Math.trunc(rawLimit), 1), 100) : 50;
+          const offset = Number.isFinite(rawOffset) ? Math.max(Math.trunc(rawOffset), 0) : 0;
+          return json(await getStore().listCalls({ limit, offset }));
+        }
         if (path === "/api/voicemails") return json(await getStore().listVoicemails());
         if (path === "/api/numbers") return json(await getStore().listPhoneNumbers());
         if (path === "/api/numbers/search" && req.method === "POST") {

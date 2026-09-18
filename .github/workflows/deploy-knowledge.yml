@@ -1,0 +1,207 @@
+name: deploy-knowledge
+
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: deploy-knowledge-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  AWS_ACCOUNT_ID: "789877399345"
+  DEPLOY_PATH_SCOPE: "apps/knowledge/**"
+
+jobs:
+  gate:
+    name: gate (successful ci for the exact ci-approved main commit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main') }}
+    outputs:
+      proceed: ${{ steps.resolve.outputs.proceed }}
+      source_sha: ${{ steps.resolve.outputs.source_sha }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Bind the main source to its successful ci push run
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_SHA: ${{ github.event.workflow_run.head_sha }}
+          CI_NAME: ${{ github.event.workflow_run.name }}
+        run: |
+          set -Eeuo pipefail
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          source_sha="$(git rev-parse origin/main)"
+          [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]]
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
+            test "$GITHUB_REF" = refs/heads/main
+          else
+            test "$CI_NAME" = ci
+            source_sha="$CI_SHA"
+            [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]]
+            git merge-base --is-ancestor "$source_sha" origin/main
+            if [[ -n "$(git rev-list -1 "$source_sha..origin/main" -- apps/knowledge tooling/deploy/knowledge .github/workflows/deploy-knowledge.yml .github/workflows/fleet-key-provision.yml tooling/fleet)" ]]; then
+              echo 'proceed=false' >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            if ! git diff --name-only "$source_sha^1" "$source_sha" -- apps/knowledge tooling/deploy/knowledge .github/workflows/deploy-knowledge.yml .github/workflows/fleet-key-provision.yml tooling/fleet | grep -q .; then
+              echo 'proceed=false' >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+          printf 'source_sha=%s\n' "$source_sha" >> "$GITHUB_OUTPUT"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?branch=main&event=push&status=completed&head_sha=${source_sha}&per_page=100" > "$RUNNER_TEMP/knowledge-ci.json"
+          jq -e --arg sha "$source_sha" '[.workflow_runs[] | select(.name == "ci" and .path == ".github/workflows/ci.yml" and .head_sha == $sha and .head_branch == "main" and .event == "push" and .status == "completed" and .conclusion == "success")] | length > 0' "$RUNNER_TEMP/knowledge-ci.json" >/dev/null
+          echo 'proceed=true' >> "$GITHUB_OUTPUT"
+
+  deploy:
+    needs: gate
+    if: ${{ needs.gate.outputs.proceed == 'true' }}
+    runs-on: ubuntu-24.04-arm
+    environment: production
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      SOURCE_SHA: ${{ needs.gate.outputs.source_sha }}
+      LOCAL_IMAGE_REF: knowledge-deploy:${{ needs.gate.outputs.source_sha }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.gate.outputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify exact source and deployment guard tests
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          git merge-base --is-ancestor "$SOURCE_SHA" origin/main
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
+            test "$(git rev-parse origin/main)" = "$SOURCE_SHA"
+          else
+            test -z "$(git rev-list -1 "$SOURCE_SHA..origin/main" -- apps/knowledge tooling/deploy/knowledge .github/workflows/deploy-knowledge.yml .github/workflows/fleet-key-provision.yml tooling/fleet)"
+          fi
+          python3 -m unittest discover -s tooling/deploy/knowledge -p 'test_*.py'
+          printf 'PACKAGE_VERSION=%s\n' "$(node -p 'require("./apps/knowledge/package.json").version')" >> "$GITHUB_ENV"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.3.14
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Build exact locked source without untracked workspace inputs
+        run: |
+          set -Eeuo pipefail
+          build_context="$RUNNER_TEMP/knowledge-source"
+          mkdir -p "$build_context"
+          git archive "$SOURCE_SHA" apps/knowledge tooling/deploy/knowledge | tar -x -C "$build_context"
+          docker build --platform linux/arm64 --tag knowledge-app:"$SOURCE_SHA" "$build_context/apps/knowledge"
+          docker build --platform linux/arm64 --build-arg APP_IMAGE=knowledge-app:"$SOURCE_SHA" \
+            --label "org.opencontainers.image.revision=$SOURCE_SHA" \
+            --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
+            --tag "$LOCAL_IMAGE_REF" --file "$build_context/tooling/deploy/knowledge/Dockerfile" "$build_context"
+          test "$(docker run --rm --entrypoint bun "$LOCAL_IMAGE_REF" --version)" = 1.3.14
+          test "$(docker run --rm --entrypoint bun "$LOCAL_IMAGE_REF" bin/knowledge.js --version)" = "@hasna/knowledge $PACKAGE_VERSION"
+          docker run --rm --entrypoint bun "$LOCAL_IMAGE_REF" -e 'const m=await import("./dist/index.js");if(typeof m.createKnowledgePrivateReviewDescriptor!=="function")process.exit(1);await import("./deployment/database-phase.mjs")'
+          docker run --rm --entrypoint pg_dump "$LOCAL_IMAGE_REF" --version
+          test "$(docker inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$LOCAL_IMAGE_REF")" = "$SOURCE_SHA"
+      - name: Exercise isolated PostgreSQL backup and recovery guards
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y postgresql-16 postgresql-client-16
+          cd "$RUNNER_TEMP/knowledge-source/apps/knowledge"
+          bun install --frozen-lockfile --ignore-scripts
+          cd "$RUNNER_TEMP/knowledge-source"
+          bun test tooling/deploy/knowledge/database-phase.integration.test.ts
+      - name: Scan exact candidate before AWS authentication
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.LOCAL_IMAGE_REF }}
+          format: json
+          output: trivy-knowledge.json
+          scanners: vuln
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+          ignore-unfixed: false
+          exit-code: "1"
+      - uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
+        with:
+          role-to-assume: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/knowledge-prod-gha-deploy
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: gha-deploy-knowledge-${{ github.run_id }}
+          role-duration-seconds: 3600
+          mask-aws-account-id: true
+          unset-current-credentials: true
+      - name: Verify immutable repository and push scanned candidate
+        run: |
+          set -Eeuo pipefail
+          test "$(aws sts get-caller-identity --query Account --output text)" = "$AWS_ACCOUNT_ID"
+          aws ecr describe-repositories --repository-names knowledge > "$RUNNER_TEMP/knowledge-ecr.json"
+          jq -e '.repositories | length == 1 and .[0].imageTagMutability == "IMMUTABLE" and .[0].imageScanningConfiguration.scanOnPush == true' "$RUNNER_TEMP/knowledge-ecr.json" >/dev/null
+          registry="$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
+          image_tag="deploy-$SOURCE_SHA-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          aws ecr get-login-password | docker login --username AWS --password-stdin "$registry"
+          docker tag "$LOCAL_IMAGE_REF" "$registry/knowledge:$image_tag"
+          docker push "$registry/knowledge:$image_tag"
+          image_digest="$(aws ecr describe-images --repository-name knowledge --image-ids imageTag="$image_tag" --query 'imageDetails[0].imageDigest' --output text)"
+          [[ "$image_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          docker pull "$registry/knowledge@$image_digest"
+          test "$(docker inspect --format '{{.Id}}' "$LOCAL_IMAGE_REF")" = "$(docker inspect --format '{{.Id}}' "$registry/knowledge@$image_digest")"
+          printf 'IMAGE_DIGEST=%s\n' "$image_digest" >> "$GITHUB_ENV"
+          aws ecr wait image-scan-complete --repository-name knowledge --image-id imageDigest="$image_digest"
+          aws ecr describe-image-scan-findings --repository-name knowledge --image-id imageDigest="$image_digest" > "$RUNNER_TEMP/knowledge-ecr-scan.json"
+          jq -e '.imageScanStatus.status == "COMPLETE" and (.imageScanFindings.findingSeverityCounts.CRITICAL // 0) == 0 and (.imageScanFindings.findingSeverityCounts.HIGH // 0) == 0' "$RUNNER_TEMP/knowledge-ecr-scan.json" >/dev/null
+      - name: Recheck main before any production service mutation
+        run: |
+          set -Eeuo pipefail
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          git merge-base --is-ancestor "$SOURCE_SHA" origin/main
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
+            test "$(git rev-parse origin/main)" = "$SOURCE_SHA"
+          else
+            test -z "$(git rev-list -1 "$SOURCE_SHA..origin/main" -- apps/knowledge tooling/deploy/knowledge .github/workflows/deploy-knowledge.yml .github/workflows/fleet-key-provision.yml tooling/fleet)"
+          fi
+      - name: Back up, verify no-op migration, deploy, and prove
+        run: python3 tooling/deploy/knowledge/deploy.py
+      - name: Retain value-free deployment and recovery evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: knowledge-deploy-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            trivy-knowledge.json
+            ${{ runner.temp }}/knowledge-deploy/deploy-evidence.json
+            ${{ runner.temp }}/knowledge-deploy/recovery-receipt.json
+            ${{ runner.temp }}/knowledge-deploy/phase-evidence.json
+          if-no-files-found: ignore
+          retention-days: 30
+
+  verify_key:
+    name: verify the existing fleet client API key
+    needs: [gate, deploy]
+    if: ${{ needs.gate.outputs.proceed == 'true' }}
+    uses: ./.github/workflows/fleet-key-provision.yml
+    with:
+      app: knowledge
+      source_sha: ${{ needs.gate.outputs.source_sha }}
+      verify_only: true
+    secrets: inherit
+    permissions:
+      contents: read
+      id-token: write

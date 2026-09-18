@@ -25,6 +25,17 @@ import { handleEarlyArgs, readPackageVersion } from "../early-args.js";
 import { isHttpMode, resolveMcpHttpPort, startMcpHttpServer } from "./http.js";
 import { assertMcpBackend, mcpUsage } from "./startup.js";
 
+const DEFAULT_LIST_LIMIT = 20;
+const MAX_LIST_LIMIT = 100;
+
+function listLimit(value: unknown): number {
+  if (value === undefined) return DEFAULT_LIST_LIMIT;
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+    throw new Error("limit must be a positive integer.");
+  }
+  return Math.min(value, MAX_LIST_LIMIT);
+}
+
 const TOOLS = [
   {
     name: "create_link",
@@ -50,7 +61,7 @@ const TOOLS = [
       properties: {
         domain: { type: "string" },
         active: { type: "boolean" },
-        limit: { type: "number" },
+        limit: { type: "number", minimum: 1, maximum: MAX_LIST_LIMIT, description: `Maximum rows (default ${DEFAULT_LIST_LIMIT}).` },
       },
     },
   },
@@ -111,7 +122,12 @@ const TOOLS = [
   {
     name: "list_domains",
     description: "List configured shortlink domains.",
-    inputSchema: { type: "object", properties: {} },
+    inputSchema: {
+      type: "object",
+      properties: {
+        limit: { type: "number", minimum: 1, maximum: MAX_LIST_LIMIT, description: `Maximum rows (default ${DEFAULT_LIST_LIMIT}).` },
+      },
+    },
   },
   {
     name: "add_domain",
@@ -158,7 +174,7 @@ async function dispatch(name: string, args: Record<string, any>): Promise<unknow
         }),
       );
     case "list_links":
-      return withStore((s) => s.listLinks({ domain: args.domain, activeOnly: args.active, limit: args.limit ?? 100 }));
+      return withStore((s) => s.listLinks({ domain: args.domain, activeOnly: args.active, limit: listLimit(args.limit) }));
     case "get_link":
       return withStore((s) => (args.domain ? s.getLink(args.domain, args.slug) : s.getLink(args.slug)));
     case "resolve_link":
@@ -172,7 +188,7 @@ async function dispatch(name: string, args: Record<string, any>): Promise<unknow
     case "link_stats":
       return withStore((s) => (args.domain ? s.getStats(args.domain, args.slug) : s.getStats(args.slug)));
     case "list_domains":
-      return withStore((s) => s.listDomains());
+      return withStore(async (s) => (await s.listDomains()).slice(0, listLimit(args.limit)));
     case "add_domain":
       return withStore((s) =>
         s.addDomain({

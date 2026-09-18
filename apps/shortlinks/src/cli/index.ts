@@ -85,7 +85,7 @@ function commandExists(command: string): boolean {
 }
 
 const DEFAULT_HUMAN_LIMIT = 20;
-const DEFAULT_JSON_LIMIT = 100;
+const DEFAULT_JSON_LIMIT = 20;
 const TEXT_LIMIT = 88;
 const EXTERNAL_OUTPUT_LIMIT = 20;
 const EXTERNAL_OUTPUT_WIDTH = 120;
@@ -101,8 +101,8 @@ function humanLimit(opts: { limit?: string | number }): number {
   return parseLimit(opts.limit, DEFAULT_HUMAN_LIMIT);
 }
 
-function jsonLimit(opts: { limit?: string | number }): number | undefined {
-  return opts.limit === undefined ? undefined : parseLimit(opts.limit, DEFAULT_JSON_LIMIT);
+function jsonLimit(opts: { limit?: string | number }): number {
+  return parseLimit(opts.limit, DEFAULT_JSON_LIMIT);
 }
 
 function truncateText(value: string | null | undefined, max = TEXT_LIMIT): string {
@@ -660,7 +660,7 @@ domainCmd
   .action(async (opts) => {
     try {
       const allDomains = await withRuntimeStore((store) => store.listDomains());
-      const outputDomains = useJson(opts) && opts.limit === undefined ? allDomains : allDomains.slice(0, useJson(opts) ? parseLimit(opts.limit, allDomains.length) : humanLimit(opts));
+      const outputDomains = allDomains.slice(0, useJson(opts) ? jsonLimit(opts) : humanLimit(opts));
       print(outputDomains, opts, () => {
         const domains = outputDomains;
         if (domains.length === 0) {

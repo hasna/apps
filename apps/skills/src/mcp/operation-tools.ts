@@ -53,6 +53,15 @@ import { selectedProfileId } from "../cli/commands/context.js";
 import { SkillSelectionError } from "../lib/selection-cache.js";
 
 export function registerOperationTools(server: McpServer): void {
+  server.registerTool("cloud_skill_eligibility", {
+    title: "Cloud Skill Eligibility",
+    description: "Inspect the authenticated workspace's exact reviewed cloud contract. Does not execute or admit a skill.",
+    inputSchema: { name: z.string(), version: z.string(), bundleDigest: z.string().optional() },
+  }, async ({ name, version, bundleDigest }) => {
+    try { const { CloudExecutionClient } = await import("../lib/cloud-executions.js");
+      return mcpJson(await (await CloudExecutionClient.configured()).eligibility(name, version, bundleDigest));
+    } catch (error) { return mcpError("CLOUD_ELIGIBILITY_FAILED", (error as Error).message); }
+  });
   server.registerTool("scaffold_skill", {
     title: "Scaffold Skill",
     description: "Create a portable skill folder under ~/.hasna/skills/installed/<name> with SKILL.md, skill.json, AGENTS.md, package.json, and src/index.ts.",

@@ -29,7 +29,7 @@ import { isRetiredOrUnsupportedConfigAgent } from "./config-agents.js";
 import { instructionSourceRejection } from "./instruction-source-policy.js";
 import { applyTransform } from "./transforms.js";
 import { providerVersionSatisfies } from "./provider-version.js";
-import { configAssetDigest, resolveAssetDestination, type AssetPlan } from "./asset-plan.js";
+import { configAssetDigest, renderNativeAgentContent, resolveAssetDestination, type AssetPlan } from "./asset-plan.js";
 import {
   detectCursorAuthorityConflicts,
   observeCursorGlobalAuthority,
@@ -336,6 +336,12 @@ export interface SessionRenderManifest {
     previousManagedSha256: string;
     sourceIds: string[];
   }>;
+  retirements?: Array<{
+    relativePath: string;
+    preimageSha256: string;
+    previousManagedSha256: string;
+    sourceIds: string[];
+  }>;
   targetHome: string;
   targetKind: SessionRenderTargetKind;
   targetOwner: SessionTargetOwner;
@@ -439,6 +445,7 @@ export interface SessionRenderManifest {
       mutationMode: string;
       destination: AssetPlan["assets"][number]["destination"];
       digest: string;
+      nativeAgent?: AssetPlan["assets"][number]["nativeAgent"];
       exactOnceKey: string;
     }>;
   };
@@ -1732,6 +1739,7 @@ function buildOpenCodeFiles(
   profile: string,
   sources: OrderedSessionInstructionSource[],
   providerConfig?: SessionProviderConfig,
+  projectRoot?: string,
 ): SessionRenderFile[] {
   const surface = adapter.providerSurface ?? "legacy-dual";
   const fragments = sources.flatMap((source, index) => [
@@ -1763,7 +1771,7 @@ function buildOpenCodeFiles(
       ? readOpenCodeConfig(providerConfig.content, providerConfig.sourceId)
       : {};
   const preservedInstructions = normalizeOpenCodeInstructions(selectedConfig["instructions"])
-    .filter((path) => !pathIsManagedOpenCodeInstruction(path, adapter.managedDir));
+    .filter((path) => !pathIsManagedOpenCodeInstruction(path, adapter.managedDir, targetHome, projectRoot));
   const config = {
     ...selectedConfig,
     $schema: typeof selectedConfig["$schema"] === "string"
@@ -1771,7 +1779,10 @@ function buildOpenCodeFiles(
       : "https://opencode.ai/config.json",
     instructions: [
       ...preservedInstructions,
-      ...fragments.map((file) => file.relativePath),
+      // OpenCode resolves instruction entries from the active project, even
+      // when their config came from a global provider home. Anchor generated
+      // references to their owning files so changing cwd cannot drop them.
+      ...fragments.map((file) => file.path),
     ],
   };
   const configSourceIds = [
@@ -1825,9 +1836,126 @@ function normalizeOpenCodeInstructions(value: unknown): string[] {
   return value as string[];
 }
 
-function pathIsManagedOpenCodeInstruction(path: string, managedDir: string): boolean {
-  const normalized = posix.normalize(path.replaceAll("\\", "/")).replace(/^\.\//, "");
-  return normalized === managedDir || normalized.startsWith(`${managedDir}/`);
+function pathIsManagedOpenCodeInstruction(
+  reference: string,
+  managedDir: string,
+  targetHome: string,
+  projectRoot?: string,
+): boolean {
+  const normalizedManagedDir = posix.normalize(managedDir.replaceAll("\\", "/"));
+  const candidates = canonicalOpenCodeInstructionPaths(reference, targetHome, projectRoot);
+  return candidates.some((candidate) => {
+    const path = candidate.caseInsensitive ? candidate.path.toLowerCase() : candidate.path;
+    const namespace = candidate.caseInsensitive ? normalizedManagedDir.toLowerCase() : normalizedManagedDir;
+    return path === namespace
+      || path.endsWith(`/${namespace}`)
+      || path.includes(`/${namespace}/`);
+  });
+}
+
+interface CanonicalOpenCodeInstructionPath {
+  path: string;
+  caseInsensitive: boolean;
+}
+
+function canonicalOpenCodeInstructionPaths(
+  reference: string,
+  targetHome: string,
+  projectRoot?: string,
+): CanonicalOpenCodeInstructionPath[] {
+  const decodedReference = decodeOpenCodePathEscapes(reference);
+  const portable = decodedReference.replaceAll("\\", "/");
+  if (portable.includes("\0")) {
+    throw new Error("OpenCode config instruction references cannot contain NUL bytes.");
+  }
+  if (/^[A-Za-z]:(?!\/)/.test(portable)) {
+    throw new Error("OpenCode config instruction references cannot use Win32 drive-relative paths.");
+  }
+  const windowsAbsolute = /^[A-Za-z]:\//.test(portable);
+  const uncAbsolute = portable.startsWith("//");
+  const windowsRootRelative = /^\\(?![\\/])/.test(decodedReference);
+  const uriScheme = windowsAbsolute || uncAbsolute || windowsRootRelative
+    ? null
+    : /^([A-Za-z][A-Za-z0-9+.-]*):/.exec(portable)?.[1]?.toLowerCase();
+  if (uriScheme && uriScheme !== "file") return [];
+
+  if (uriScheme === "file") {
+    const fileReference = reference.replaceAll("\\", "/");
+    if (!/^file:\/\//i.test(fileReference)) {
+      throw new Error("OpenCode config contains an invalid file URL instruction reference.");
+    }
+    let url: URL;
+    try {
+      url = new URL(fileReference);
+    } catch {
+      throw new Error("OpenCode config contains an invalid file URL instruction reference.");
+    }
+    if (url.protocol !== "file:" || url.username || url.password || url.port || url.search || url.hash) {
+      throw new Error("OpenCode config contains an invalid file URL instruction reference.");
+    }
+    const pathname = decodeOpenCodePathEscapes(url.pathname).replaceAll("\\", "/");
+    if (pathname.includes("\0")) {
+      throw new Error("OpenCode config instruction references cannot contain NUL bytes.");
+    }
+    if (/^\/[A-Za-z]:(?!\/)/.test(pathname)) {
+      throw new Error("OpenCode config instruction references cannot use Win32 drive-relative paths.");
+    }
+    const host = url.hostname && url.hostname !== "localhost" ? `//${url.hostname}` : "";
+    return [{
+      path: normalizePortableOpenCodePath(`${host}${pathname}`, true),
+      // A file URL can name a Windows drive or UNC path, and the planner may
+      // inspect it on a different host. Match the reserved namespace
+      // conservatively without relying on the current platform's case rules.
+      caseInsensitive: true,
+    }];
+  }
+
+  if (posix.isAbsolute(portable) || windowsAbsolute || uncAbsolute || windowsRootRelative) {
+    const windowsPathSemantics = windowsAbsolute || uncAbsolute || windowsRootRelative;
+    return [{
+      path: normalizePortableOpenCodePath(portable, windowsPathSemantics),
+      caseInsensitive: windowsPathSemantics,
+    }];
+  }
+
+  const roots = [
+    ...(projectRoot ? [resolveSessionPath(projectRoot)] : []),
+    resolveSessionPath(targetHome),
+  ];
+  const candidates = new Map<string, CanonicalOpenCodeInstructionPath>();
+  for (const root of roots) {
+    const portableRoot = root.replaceAll("\\", "/");
+    const caseInsensitive = /^[A-Za-z]:\//.test(portableRoot) || portableRoot.startsWith("//");
+    const path = normalizePortableOpenCodePath(posix.join(portableRoot, portable));
+    candidates.set(`${caseInsensitive ? "i" : "s"}:${path}`, { path, caseInsensitive });
+  }
+  return [...candidates.values()];
+}
+
+function decodeOpenCodePathEscapes(value: string): string {
+  return value.replace(/(?:%[a-fA-F0-9]{2})+/g, (encoded) => {
+    try {
+      return decodeURIComponent(encoded);
+    } catch {
+      return encoded;
+    }
+  });
+}
+
+function normalizePortableOpenCodePath(value: string, windowsPathSemantics = false): string {
+  const portable = value.replaceAll("\\", "/");
+  const componentNormalized = windowsPathSemantics
+    ? portable.split("/").map(normalizeWin32PathComponent).join("/")
+    : portable;
+  const normalized = posix.normalize(componentNormalized);
+  return normalized.startsWith("//") ? `/${normalized.replace(/^\/+/u, "")}` : normalized;
+}
+
+function normalizeWin32PathComponent(component: string): string {
+  if (!component || /^[A-Za-z]:$/.test(component)) return component;
+  const withoutTrailingSpaces = component.replace(/ +$/u, "");
+  if (withoutTrailingSpaces === "." || withoutTrailingSpaces === "..") return withoutTrailingSpaces;
+  return component.replace(/[ .]+$/u, "");
 }
 
 function buildAntigravityRuleFiles(
@@ -1917,6 +2045,7 @@ function buildFiles(
   sources: OrderedSessionInstructionSource[],
   providerConfig?: SessionProviderConfig,
   providerVersion?: string,
+  projectRoot?: string,
 ): SessionRenderFile[] {
   switch (adapter.mode) {
     case "native-imports":
@@ -1926,7 +2055,7 @@ function buildFiles(
     case "cursor-mdc":
       return buildCursorRuleFiles(targetHome, adapter, sources);
     case "opencode-instructions":
-      return buildOpenCodeFiles(targetHome, adapter, profile, sources, providerConfig);
+      return buildOpenCodeFiles(targetHome, adapter, profile, sources, providerConfig, projectRoot);
     case "antigravity-rules":
       return buildAntigravityRuleFiles(targetHome, adapter, sources);
     case "provider-rules":
@@ -1951,12 +2080,13 @@ function buildAssetFiles(input: SessionRenderInput, targetHome: string, blocked:
     if (!relativePath || relativePath === ".." || relativePath.startsWith("../") || isAbsolute(relativePath)) {
       throw new Error(`Asset ${item.assetKey} is outside the session snapshot root; use a project-scoped session plan for atomic application.`);
     }
+    const renderedContent = renderNativeAgentContent(content, item.nativeAgent);
     return {
       path,
       relativePath: assertSafeRelativePath(relativePath),
       role: "asset" as const,
-      content,
-      sha256: sha256(content),
+      content: renderedContent,
+      sha256: sha256(renderedContent),
       sourceIds: [item.sourceConfigId, item.assetId],
     };
   });
@@ -2164,7 +2294,7 @@ export function resolveSessionTargetOwnership(input: Pick<SessionRenderInput, "t
     tool: input.tool,
     profile: input.profile,
     targetHome: target.targetHome,
-    projectRoot: null,
+    projectRoot: input.tool === "opencode" && input.projectRoot ? resolveSessionPath(input.projectRoot) : null,
     ownedBy: "open-configs",
     canonicalOwner: "instructions",
     writer: {
@@ -2237,7 +2367,15 @@ export function planSessionRender(input: SessionRenderInput): SessionRenderPlan 
   if (input.providerConfig && input.tool !== "opencode") {
     throw new Error("Provider base config is supported only for OpenCode session renders.");
   }
-  const baseFiles = blocked ? [] : buildFiles(targetHome, adapter, input.profile, orderedSources, input.providerConfig, input.provider_version);
+  const baseFiles = blocked ? [] : buildFiles(
+    targetHome,
+    adapter,
+    input.profile,
+    orderedSources,
+    input.providerConfig,
+    input.provider_version,
+    input.projectRoot,
+  );
   const projectContext = blocked
     ? null
     : composeProjectContextSessionRender({
@@ -2350,6 +2488,7 @@ export function planSessionRender(input: SessionRenderInput): SessionRenderPlan 
             mutationMode: item.mutationMode,
             destination: item.destination,
             digest: item.source.digest,
+            ...(item.nativeAgent ? { nativeAgent: item.nativeAgent } : {}),
             exactOnceKey: item.exactOnceKey,
           })),
         },

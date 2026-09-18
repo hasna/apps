@@ -436,6 +436,37 @@ describe("ATTACHMENTS_PROFILE — getToolsForProfile()", () => {
   });
 });
 
+describe("MCP Server — list_agents", () => {
+  it("returns a bounded page with truthful continuation metadata", async () => {
+    const server = createServer();
+    for (let index = 0; index < 25; index += 1) {
+      await callTool(server, "register_agent", { name: `paged-agent-${index}` });
+    }
+
+    const first = (await callTool(server, "list_agents")) as { content: Array<{ text: string }> };
+    const firstPage = JSON.parse(first.content[0]!.text);
+    expect(firstPage.items).toHaveLength(20);
+    expect(firstPage.count).toBe(20);
+    expect(firstPage.total).toBeGreaterThanOrEqual(25);
+    expect(firstPage.next_offset).toBe(20);
+    expect(firstPage.has_more).toBe(true);
+
+    const second = (await callTool(server, "list_agents", { offset: firstPage.next_offset, limit: 20 })) as { content: Array<{ text: string }> };
+    const secondPage = JSON.parse(second.content[0]!.text);
+    expect(secondPage.items.length).toBeGreaterThanOrEqual(5);
+    expect(secondPage.items.map((agent: { id: string }) => agent.id)).not.toContain(firstPage.items[0]!.id);
+    expect(secondPage.next_offset).toBeNull();
+    expect(secondPage.has_more).toBe(false);
+  });
+
+  it("rejects invalid limits before returning registry data", async () => {
+    const server = createServer();
+    const result = (await callTool(server, "list_agents", { limit: 101 })) as { content: Array<{ text: string }>; isError?: boolean };
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain("limit must be an integer from 1 to 100");
+  });
+});
+
 describe("MCP Server — upload_attachment", () => {
   beforeEach(() => mockUploadFile.mockClear());
 

@@ -234,11 +234,12 @@ Use these flags to disclose more detail:
 
 - `--limit <n>` changes the number of rows in the current page (max 100).
 - `--cursor <n>` starts from a later zero-based row offset.
-- `--verbose` adds secondary fields such as descriptions, locations, IDs, and
-  timestamps without switching to JSON.
-- `--json` keeps machine-readable output as the existing full JSON record array
-  unless paging is explicitly requested with `--limit` or `--cursor`.
-- `--json --limit` or `--json --cursor` returns a pagination envelope:
+- `--verbose` shows an expanded preview with secondary fields such as
+  descriptions, locations, IDs, and timestamps.
+- `--json` returns a compact machine-readable page by default.
+- `--json --verbose` returns expanded records within the selected page.
+- `--json --full` returns the legacy complete JSON record array explicitly.
+- Paged JSON uses an envelope such as:
   `{ "items": [...], "total": 42, "limit": 20, "cursor": 0, "next_cursor": 20 }`.
 - Detail commands such as `calendar show <id>` and `calendar org-show <id>`
   return a focused record when you know the ID.
@@ -253,7 +254,7 @@ calendar list --calendar cal_123 --json
 
 MCP list/search tools use the same gradual disclosure model. They return compact
 summary envelopes by default and accept `limit`, `cursor`, and `verbose` fields
-where applicable.
+where applicable; `verbose` requests an expanded preview for the selected page.
 
 ## Common CLI Workflow
 
