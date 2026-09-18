@@ -54,6 +54,43 @@ const MACHINE = {
   last_seen_at: "2026-09-11T00:00:00.000Z",
 };
 
+const AUDIT_ENTRY = {
+  id: "audit-1",
+  memory_id: "mem-1",
+  memory_key: "key",
+  operation: "update",
+  agent_id: "agent-1",
+  old_value_hash: "9e3669d19b675bd57058fd4664205d2a",
+  new_value_hash: "6654c734ccab8f440ff0825eb443dc7f",
+  changes: { version_from: 1, version_to: 2 },
+  created_at: "2026-09-18T07:00:00.000Z",
+};
+
+function auditPage(contract: string, requestUrl: URL, memoryId: string | null, operation: string | null = null) {
+  const limit = Number(requestUrl.searchParams.get("limit") ?? 10);
+  return {
+    contract,
+    entries: [{ ...AUDIT_ENTRY, ...(memoryId ? { memory_id: memoryId } : {}) }],
+    count: 1,
+    total: 1,
+    limit,
+    cursor: requestUrl.searchParams.get("cursor"),
+    next_cursor: null,
+    consumed: 1,
+    has_more: false,
+    complete: requestUrl.searchParams.get("cursor") === null,
+    snapshot_at: "2026-09-18T07:00:01.000Z",
+    filters: {
+      memory_id: memoryId,
+      since: requestUrl.searchParams.get("since"),
+      until: requestUrl.searchParams.get("until"),
+      operation,
+      agent_id: requestUrl.searchParams.get("agent_id"),
+    },
+    sort: { field: "created_at", direction: "desc", tie_breaker: "id" },
+  };
+}
+
 const JOB = {
   id: "job-1",
   session_id: "session-1",
@@ -83,6 +120,44 @@ function respond(method: string, path: string, mode: string, requestUrl: URL, re
   if (mode === "malformed-session-list" && method === "GET" && path === "/v1/sessions/jobs") return { jobs: null, count: 0 };
   if (mode === "old-session-list" && method === "GET" && path === "/v1/sessions/jobs") return { jobs: [JOB], count: 1 };
   if (mode === "malformed-session-stats" && method === "GET" && path === "/v1/sessions/queue/stats") return { pending: 2 };
+  if (mode === "malformed-audit-trail" && method === "GET" && path.endsWith("/audit-trail")) return {};
+  if (mode === "false-empty-audit-trail" && method === "GET" && path.endsWith("/audit-trail")) {
+    return {
+      ...auditPage("mementos.audit.trail.v1", requestUrl, decodeURIComponent(path.split("/").at(-2) ?? "")),
+      entries: [],
+      count: 0,
+      total: 1,
+      consumed: 0,
+      has_more: true,
+      next_cursor: "next",
+      complete: false,
+    };
+  }
+  if (mode === "malformed-audit-export" && method === "GET" && path === "/v1/audit/export") return { entries: [] };
+  if (mode === "limit-mismatch-audit-export" && method === "GET" && path === "/v1/audit/export") {
+    return { ...auditPage("mementos.audit.export.v1", requestUrl, null, requestUrl.searchParams.get("operation")), limit: 999 };
+  }
+  if (mode === "filter-mismatch-audit-export" && method === "GET" && path === "/v1/audit/export") {
+    const page = auditPage("mementos.audit.export.v1", requestUrl, null, requestUrl.searchParams.get("operation"));
+    return { ...page, filters: { ...page.filters, operation: "read" } };
+  }
+  if (mode === "malformed-audit-stats" && method === "GET" && path === "/v1/audit/stats") return {};
+  if (method === "GET" && path.endsWith("/audit-trail")) {
+    const memoryId = decodeURIComponent(path.split("/").at(-2) ?? "");
+    return auditPage("mementos.audit.trail.v1", requestUrl, memoryId);
+  }
+  if (method === "GET" && path === "/v1/audit/export") {
+    return auditPage("mementos.audit.export.v1", requestUrl, null, requestUrl.searchParams.get("operation"));
+  }
+  if (method === "GET" && path === "/v1/audit/stats") {
+    return {
+      contract: "mementos.audit.stats.v1",
+      total_entries: 1,
+      by_operation: { create: 0, update: 1, delete: 0, archive: 0, restore: 0, read: 0 },
+      recent_24h: 1,
+      snapshot_at: "2026-09-18T07:00:01.000Z",
+    };
+  }
   if (mode === "malformed-profile" && method === "POST" && path === "/v1/profile/synthesize") {
     return { profile: "incomplete", memory_count: 1 };
   }

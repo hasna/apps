@@ -28,8 +28,10 @@ import { PG_MIGRATIONS } from "../src/db/pg-migrations.js";
 import { closeDatabase, resetDatabase } from "../src/db/database.js";
 import { matchRoute } from "../src/server/router.js";
 import "../src/server/routes/agents.js";
+import "../src/server/routes/audit.js";
 import { MachineRegistryError, registerMachineRecord } from "../src/db/machines.js";
 import { acquireLock, checkLock, releaseLock } from "../src/db/locks.js";
+import { exportAuditLogPage, getAuditStats, getMemoryAuditTrailPage } from "../src/db/audit.js";
 import {
   getMementosProjectResourceExact,
   readAllMementosProjectResources,
@@ -268,7 +270,42 @@ try {
   }
   checks++;
 
-  // 5. The public producer population must use the same storage-neutral SQL
+  // 5. Immutable audit pages and stats use the exact PostgreSQL runtime path.
+  // Stable keyset cursors must preserve created_at+id order and every response
+  // must be a versioned, self-consistent receipt rather than an empty default.
+  const auditPg = new PgAdapter(connectionString);
+  try {
+    const firstAudit = getMemoryAuditTrailPage(memoryId, { limit: 1 }, auditPg as any);
+    if (
+      firstAudit.contract !== "mementos.audit.trail.v1" ||
+      firstAudit.count !== 1 || firstAudit.total < 2 || !firstAudit.has_more ||
+      !firstAudit.next_cursor || firstAudit.complete
+    ) {
+      fail("PostgreSQL audit trail did not return a bounded versioned first page");
+    }
+    const secondAudit = getMemoryAuditTrailPage(memoryId, { limit: 1, cursor: firstAudit.next_cursor }, auditPg as any);
+    if (
+      secondAudit.count !== 1 || secondAudit.consumed !== 2 ||
+      secondAudit.entries[0]?.id === firstAudit.entries[0]?.id ||
+      secondAudit.entries[0]!.created_at > firstAudit.entries[0]!.created_at
+    ) {
+      fail("PostgreSQL audit cursor did not preserve stable descending order");
+    }
+    const createExport = exportAuditLogPage({ operation: "create", limit: 2 }, auditPg as any);
+    if (createExport.entries.some((entry) => entry.operation !== "create")) {
+      fail("PostgreSQL audit export did not preserve the operation filter");
+    }
+    const auditStats = getAuditStats(auditPg as any);
+    const operationTotal = Object.values(auditStats.by_operation).reduce((sum, value) => sum + value, 0);
+    if (operationTotal !== auditStats.total_entries || auditStats.recent_24h > auditStats.total_entries) {
+      fail("PostgreSQL audit stats are not snapshot-consistent");
+    }
+  } finally {
+    auditPg.close();
+  }
+  checks++;
+
+  // 6. The public producer population must use the same storage-neutral SQL
   //    path on PostgreSQL as SQLite: project + disjoint knowledge/memory
   //    partitions + session job, exact readback, later-child inclusion, and a
   //    revision-bound cursor that refuses a changed collection.
@@ -400,7 +437,7 @@ try {
   }
   checks++;
 
-  // 6. The PgSyncPool stale-response race against a real server (todos
+  // 7. The PgSyncPool stale-response race against a real server (todos
   //    027d17e9): a query that outlives the (env-shortened) query timeout is
   //    abandoned, and the worker's LATE response for it must never be consumed
   //    by the next query. The sleep's response lands while the victim query is
@@ -443,7 +480,7 @@ try {
     racePool.close();
   }
 
-  // 7. Real cross-process concurrency through registerMachineRecord. Every
+  // 8. Real cross-process concurrency through registerMachineRecord. Every
   // worker executes the synchronous server code path against its own Postgres
   // connection. The database unique hostname invariant must collapse all
   // simultaneous inserts to one stable id without a SELECT-before-INSERT race.
@@ -526,7 +563,7 @@ try {
   checks++;
 
   console.log(
-    `[pg-test-gate] PASS: ${checks} live PostgreSQL checks (schema, canonical machine constraint, migration refusal/rollback, empty lock read/round-trip, memory round-trip, delete, audit-value-hash, project-resources, stale-response race, concurrent machine identity)`
+    `[pg-test-gate] PASS: ${checks} live PostgreSQL checks (schema, canonical machine constraint, migration refusal/rollback, empty lock read/round-trip, memory round-trip, delete, audit-value-hash, audit pages/stats, project-resources, stale-response race, concurrent machine identity)`
   );
 } catch (error) {
   fail(error instanceof Error ? error.message : String(error));

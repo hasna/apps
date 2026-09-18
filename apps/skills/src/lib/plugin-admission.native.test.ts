@@ -53,6 +53,10 @@ nativeTest.each([false, true])("Claude command sources install and update freshl
     if (request.headers.get("Authorization") !== `Bearer ${credential}`) return respond(null, 401);
     if (fixture.state.offline) return respond(null, 503);
     if (fixture.state.revoked) return respond(null, 403);
+    if (path === "/skills/api/auth/whoami") return respond(JSON.stringify({
+      user: { id: fixture.state.principal.userId, email: "owner@synthetic.test", role: fixture.state.principal.role },
+      organization: { id: fixture.state.principal.accountId, slug: "synthetic-workspace", name: "Synthetic workspace" },
+    }));
     if (path === "/skills/api/v1/profiles/synthetic-profile/resolve") {
       const profile = fixture.profile();
       if (unrelatedSelection) profile.selections.push({ ...profile.selections[1]!, slug: "unrelated-skill" });
@@ -91,7 +95,7 @@ nativeTest.each([false, true])("Claude command sources install and update freshl
   const lastJson = (stdout: string): Record<string, any> => JSON.parse(stdout.trim().split("\n").at(-1)!);
   const admit = async (): Promise<PluginAdmissionReceipt> => {
     const plan = await planPluginAdmission("synthetic-integration", "synthetic-profile", fixture.target, options);
-    return admitPlugin("synthetic-integration", "synthetic-profile", fixture.target, plan.planDigest, options);
+    return admitPlugin("synthetic-integration", "synthetic-profile", fixture.target, plan.planDigest, plan.evidenceDigest, options);
   };
   try {
     const version = await run("certified-version", ["--version"]);
@@ -125,12 +129,12 @@ nativeTest.each([false, true])("Claude command sources install and update freshl
     const receiptPath = join(options.storeRoot, "receipts", first.plan.bindingId, `${first.plan.planDigest.slice(7)}.json`), firstReceiptBytes = readFileSync(receiptPath);
     fixture.state.revision = "unrelated-r2"; unrelatedSelection = true;
     const beforeUnrelated = calls.length;
-    expect((await run("unrelated-profile-update", ["plugin", "update", "fixture@synthetic", "--json"])).exitCode).toBe(0);
+    expect((await run("unrelated-profile-update-refused", ["plugin", "update", "fixture@synthetic", "--json"])).exitCode).not.toBe(0);
     expect(registration()).toEqual(initial); expect(registration().sourceProducerPath).toBe(first.materializedPath);
-    expect(calls.slice(beforeUnrelated).map(call => call.path)).toEqual(["/skills/api/v1/profiles/synthetic-profile/resolve", "/skills/api/v1/skills/synthetic-integration/versions/1.0.0/bundle", "/skills/api/v1/skills/synthetic-payload/versions/1.0.0/bundle"]);
+    expect(calls.slice(beforeUnrelated).map(call => call.path)).toEqual(["/skills/api/auth/whoami", "/skills/api/v1/profiles/synthetic-profile/resolve", "/skills/api/v1/skills/synthetic-integration/versions/1.0.0/bundle", "/skills/api/v1/skills/synthetic-payload/versions/1.0.0/bundle", "/skills/api/v1/profiles/synthetic-profile/resolve", "/skills/api/auth/whoami"]);
     expect(readFileSync(receiptPath)).toEqual(firstReceiptBytes); expect(() => verifyAgentDiscovery(witness)).not.toThrow();
     const freshPlan = await planPluginAdmission("synthetic-integration", "synthetic-profile", fixture.target, options);
-    expect(freshPlan.planDigest).toBe(first.plan.planDigest); expect(freshPlan.evidenceDigest).not.toBe(first.plan.evidenceDigest);
+    expect(freshPlan.planDigest).not.toBe(first.plan.planDigest); expect(freshPlan.evidenceDigest).not.toBe(first.plan.evidenceDigest);
     expect(freshPlan.observation.profileRevision).toBe("unrelated-r2");
     fixture.state.revision = "relevant-r3"; fixture.update("1.0.1");
     const unapproved = await run("unapproved-update", ["plugin", "update", "fixture@synthetic", "--json"]);
@@ -163,6 +167,6 @@ nativeTest.each([false, true])("Claude command sources install and update freshl
     expect(mutated.exitCode).toBe(0); expect(mutated.stdout).toContain("reseeded"); expect(registration()).toEqual(updated);
     expect(existsSync(first.materializedPath) && existsSync(second.materializedPath)).toBe(true);
     expect(calls.some(call => call.status === 403) && calls.some(call => call.status === 503)).toBe(true);
-    console.info(JSON.stringify({ nativePluginProof: "passed", certifiedNative: nativeVersion, versionless, nativeDigest: fixture.target.native.digest, resolverDigest: fixture.target.resolver.digest, isolatedNetwork: true, ownerFileCredential: true, originalPrompts: 2, projectedPrompts: 0, preservedComponents: ["agent", "hook", "mcp", "lsp", "asset"], unrelatedProfileUpdatePreservesAdmission: true, approvedUpdateAcceptedByDiscovery: true, cacheMutationRejectedByDiscovery: true, apiReads: calls.length, steps }));
+    console.info(JSON.stringify({ nativePluginProof: "passed", certifiedNative: nativeVersion, versionless, nativeDigest: fixture.target.native.digest, resolverDigest: fixture.target.resolver.digest, isolatedNetwork: true, ownerFileCredential: true, originalPrompts: 2, projectedPrompts: 0, preservedComponents: ["agent", "hook", "mcp", "lsp", "asset"], unrelatedProfileUpdateRequiresApproval: true, approvedUpdateAcceptedByDiscovery: true, cacheMutationRejectedByDiscovery: true, apiReads: calls.length, steps }));
   } finally { server.stop(true); rmSync(root, { recursive: true, force: true }); }
 });

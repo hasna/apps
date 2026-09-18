@@ -4,7 +4,7 @@ import { packSkillBundle, type SkillBundleEntry } from "./skill-bundle.js";
 import { pluginTreeDigest, type PluginProjectionManifest } from "./plugin-projection.js";
 import { pluginExecutableDigest } from "./plugin-projection-store.js";
 import type { PluginAdmissionTarget } from "./plugin-admission.js";
-import type { ProfileClient } from "./profile-client.js";
+import type { AuthenticatedProfilePrincipal, ProfileClient } from "./profile-client.js";
 import type { ResolvedSkillProfile } from "../types/skill-selection.js";
 
 export const syntheticEntry = (path: string, text: string, mode = 0o644): SkillBundleEntry => ({ path, bytes: new TextEncoder().encode(text), mode });
@@ -17,7 +17,7 @@ export function pluginFixture(root: string, options: { versionless?: boolean } =
   const executable = join(root, "synthetic-executable"); putSynthetic(executable, "#!/bin/sh\nexit 91\n", 0o755);
   const target: PluginAdmissionTarget = { schemaVersion: 1, pluginId: "fixture@synthetic", registrations: [{ scope: "user", projectPath: null }], native: { version: "2.1.274", executable, digest: pluginExecutableDigest(executable) }, resolver: { executable, digest: pluginExecutableDigest(executable) } };
   const payload = packSynthetic(join(root, "payload"), [syntheticEntry("SKILL.md", "---\nname: synthetic-payload\ndescription: Synthetic test payload\nkind: instruction\n---\nSynthetic hosted fixture.\n"), syntheticEntry("package.json", '{"name":"synthetic-payload","version":"1.0.0","skills":{"kind":"instruction"}}')]);
-  const state = { revision: "r1", version: "1.0.0", authority: "https://example.com/skills/v1", workspace: "synthetic-workspace", offline: false, revoked: false, corrupt: false, bundleCalls: 0, profileCalls: 0 };
+  const state = { revision: "r1", version: "1.0.0", authority: "https://example.com/skills/v1", workspace: "synthetic-workspace", principal: { userId: "synthetic-owner", accountId: "synthetic-workspace", role: "owner" } as AuthenticatedProfilePrincipal, offline: false, revoked: false, corrupt: false, bundleCalls: 0, profileCalls: 0, principalCalls: 0 };
   const bundles = new Map<string, Uint8Array<ArrayBuffer>>([["synthetic-payload@1.0.0", payload.bytes]]);
   let projectionDigest = "";
   const update = (version: string, upstreamVersion: string | null = options.versionless ? null : version) => {
@@ -33,6 +33,6 @@ export function pluginFixture(root: string, options: { versionless?: boolean } =
   };
   update(state.version);
   const profile = (): ResolvedSkillProfile => ({ profileId: "synthetic-profile", authority: state.authority, workspaceId: state.workspace, profileRevision: state.revision, selections: [{ slug: "synthetic-integration", version: state.version, bundleDigest: projectionDigest }, { slug: "synthetic-payload", version: "1.0.0", bundleDigest: `sha256:${payload.sha256}` }].map(item => ({ ...item, authority: state.authority, workspaceId: state.workspace, profileRevision: state.revision })) });
-  const client: ProfileClient = { get authority() { return state.authority; }, async resolveProfile() { state.profileCalls++; if (state.offline) throw new Error("Synthetic API refusal"); return profile(); }, async recordStation() { throw new Error("No writes allowed in plugin fixture"); }, async getBundle(slug, version) { state.bundleCalls++; if (state.offline) throw new Error("Synthetic API refusal"); if (state.revoked) return new Response("", { status: 403 }); const bytes = bundles.get(`${slug}@${version}`); return bytes ? new Response(state.corrupt ? new Uint8Array([0]) : bytes) : null; } };
+  const client: ProfileClient = { get authority() { return state.authority; }, async resolvePrincipal() { state.principalCalls++; if (state.offline) throw new Error("Synthetic API refusal"); return { ...state.principal }; }, async resolveProfile() { state.profileCalls++; if (state.offline) throw new Error("Synthetic API refusal"); return profile(); }, async recordStation() { throw new Error("No writes allowed in plugin fixture"); }, async getBundle(slug, version) { state.bundleCalls++; if (state.offline) throw new Error("Synthetic API refusal"); if (state.revoked) return new Response("", { status: 403 }); const bytes = bundles.get(`${slug}@${version}`); return bytes ? new Response(state.corrupt ? new Uint8Array([0]) : bytes) : null; } };
   return { target, state, client, profile, bundles, update, options: { client, storeRoot: join(root, "admissions") } };
 }

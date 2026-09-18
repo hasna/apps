@@ -59,6 +59,7 @@ const SEARCH_TOOLS = [
   "memory_report",
   "memory_audit_trail",
   "memory_audit_export",
+  "memory_audit_stats",
 ] as const;
 
 const GRAPH_TOOLS = [

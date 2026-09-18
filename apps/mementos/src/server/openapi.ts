@@ -13,6 +13,41 @@ function toV1Path(path: string): string {
   return path.replace(/^\/api/, "/v1").replace(/:(\w+)/g, "{$1}");
 }
 
+function auditPageSchema(contract: string): Record<string, unknown> {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: [
+      "contract", "entries", "count", "total", "limit", "cursor", "next_cursor",
+      "consumed", "has_more", "complete", "snapshot_at", "filters", "sort",
+    ],
+    properties: {
+      contract: { const: contract },
+      entries: { type: "array", items: { $ref: "#/components/schemas/MementosAuditEntry" } },
+      count: { type: "integer", minimum: 0 },
+      total: { type: "integer", minimum: 0 },
+      limit: { type: "integer", minimum: 1, maximum: 1000 },
+      cursor: { type: ["string", "null"] },
+      next_cursor: { type: ["string", "null"] },
+      consumed: { type: "integer", minimum: 0 },
+      has_more: { type: "boolean" },
+      complete: { type: "boolean" },
+      snapshot_at: { type: "string", format: "date-time" },
+      filters: { $ref: "#/components/schemas/MementosAuditFilters" },
+      sort: {
+        type: "object",
+        additionalProperties: false,
+        required: ["field", "direction", "tie_breaker"],
+        properties: {
+          field: { const: "created_at" },
+          direction: { const: "desc" },
+          tie_breaker: { const: "id" },
+        },
+      },
+    },
+  };
+}
+
 export function buildOpenApiDocument(version: string): Record<string, unknown> {
   const paths: Record<string, Record<string, unknown>> = {};
 
@@ -75,7 +110,29 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
         },
       );
     }
-    const successSchema = route.method === "GET"
+    if (route.method === "GET" && route.path === "/api/memories/:id/audit-trail") {
+      params.push(
+        { name: "limit", in: "query", required: false, schema: { type: "integer", minimum: 1, maximum: 1000, default: 50 } },
+        { name: "cursor", in: "query", required: false, schema: { type: "string", maxLength: 4096 } },
+      );
+    }
+    if (route.method === "GET" && route.path === "/api/audit/export") {
+      params.push(
+        { name: "since", in: "query", required: false, schema: { type: "string", format: "date-time" } },
+        { name: "until", in: "query", required: false, schema: { type: "string", format: "date-time" } },
+        { name: "operation", in: "query", required: false, schema: { type: "string", enum: ["create", "update", "delete", "archive", "restore", "read"] } },
+        { name: "agent_id", in: "query", required: false, schema: { type: "string", minLength: 1, maxLength: 512 } },
+        { name: "limit", in: "query", required: false, schema: { type: "integer", minimum: 1, maximum: 1000, default: 50 } },
+        { name: "cursor", in: "query", required: false, schema: { type: "string", maxLength: 4096 } },
+      );
+    }
+    const successSchema = route.method === "GET" && route.path === "/api/memories/:id/audit-trail"
+      ? { $ref: "#/components/schemas/MementosAuditTrailPage" }
+      : route.method === "GET" && route.path === "/api/audit/export"
+        ? { $ref: "#/components/schemas/MementosAuditExportPage" }
+        : route.method === "GET" && route.path === "/api/audit/stats"
+          ? { $ref: "#/components/schemas/MementosAuditStats" }
+          : route.method === "GET"
       && route.path === "/api/projects/:id/resources"
       ? { $ref: "#/components/schemas/MementosProjectResourcePage" }
       : route.method === "GET"
@@ -126,6 +183,9 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
       "POST /api/machines/:id/primary": "setPrimaryMachine",
       "POST /api/machines/:id/touch": "touchMachine",
       "DELETE /api/machines/:id": "deleteMachine",
+      "GET /api/memories/:id/audit-trail": "getMemoryAuditTrail",
+      "GET /api/audit/export": "exportAuditLog",
+      "GET /api/audit/stats": "getAuditStats",
     };
     const operationKey = `${route.method} ${route.path}`;
     paths[p] = paths[p] ?? {};
@@ -159,6 +219,53 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
         apiKeyAuth: { type: "apiKey", in: "header", name: "x-api-key" },
       },
       schemas: {
+        MementosAuditEntry: {
+          type: "object",
+          additionalProperties: false,
+          required: ["id", "memory_id", "memory_key", "operation", "agent_id", "old_value_hash", "new_value_hash", "changes", "created_at"],
+          properties: {
+            id: { type: "string", minLength: 1, maxLength: 512 },
+            memory_id: { type: "string", minLength: 1, maxLength: 512 },
+            memory_key: { type: ["string", "null"], maxLength: 4096 },
+            operation: { type: "string", enum: ["create", "update", "delete", "archive", "restore", "read"] },
+            agent_id: { type: ["string", "null"], maxLength: 512 },
+            old_value_hash: { type: ["string", "null"], pattern: "^[0-9a-f]{32}$" },
+            new_value_hash: { type: ["string", "null"], pattern: "^[0-9a-f]{32}$" },
+            changes: { type: "object", additionalProperties: true },
+            created_at: { type: "string", format: "date-time" },
+          },
+        },
+        MementosAuditFilters: {
+          type: "object",
+          additionalProperties: false,
+          required: ["memory_id", "since", "until", "operation", "agent_id"],
+          properties: {
+            memory_id: { type: ["string", "null"], maxLength: 512 },
+            since: { type: ["string", "null"], format: "date-time" },
+            until: { type: ["string", "null"], format: "date-time" },
+            operation: { type: ["string", "null"], enum: ["create", "update", "delete", "archive", "restore", "read", null] },
+            agent_id: { type: ["string", "null"], maxLength: 512 },
+          },
+        },
+        MementosAuditTrailPage: auditPageSchema("mementos.audit.trail.v1"),
+        MementosAuditExportPage: auditPageSchema("mementos.audit.export.v1"),
+        MementosAuditStats: {
+          type: "object",
+          additionalProperties: false,
+          required: ["contract", "total_entries", "by_operation", "recent_24h", "snapshot_at"],
+          properties: {
+            contract: { const: "mementos.audit.stats.v1" },
+            total_entries: { type: "integer", minimum: 0 },
+            by_operation: {
+              type: "object",
+              additionalProperties: false,
+              required: ["create", "update", "delete", "archive", "restore", "read"],
+              properties: Object.fromEntries(["create", "update", "delete", "archive", "restore", "read"].map((name) => [name, { type: "integer", minimum: 0 }])),
+            },
+            recent_24h: { type: "integer", minimum: 0 },
+            snapshot_at: { type: "string", format: "date-time" },
+          },
+        },
         MementosMachine: {
           type: "object",
           additionalProperties: false,
