@@ -95,6 +95,23 @@ logs --help
 - `logs scan`
 - `logs diagnose`
 
+`logs list` defaults to a bounded compact identity preview: 25 rows, message and
+service previews, exact log IDs for `logs get <id>`, and a 32 KiB output
+ceiling. When more rows remain, the footer reports a resumable `next_offset`;
+pass it back with `--offset`. Use `--limit` and `--max-bytes` to tune the compact
+page, `--format table` for the legacy terminal columns, or `--format json` for
+explicit full records.
+
+Examples:
+
+```bash
+logs list
+logs list --text timeout --limit 25
+logs list --offset 25 --max-bytes 32768
+logs get <id>
+logs list --format json --limit 25
+```
+
 ## MCP Server
 
 ```bash
