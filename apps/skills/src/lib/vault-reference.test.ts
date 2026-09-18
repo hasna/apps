@@ -68,7 +68,14 @@ test("the unmocked built CLI loads the installed ESM SDK and refuses missing dep
       try { [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]); }
       finally { clearTimeout(timer); }
       expect(correctCredential, current).toBe(true);
-      for (const secret of ["dummy-bootstrap-key", "dummy-vault-key", "dummy-stale-key"]) {
+      for (const secret of [
+        "dummy-bootstrap-key",
+        "dummy-vault-key",
+        "dummy-stale-key",
+        "fixture/skills/live/api_key",
+        "changed/skills/live/api_key",
+        "recursive/secrets/live/api_key",
+      ]) {
         expect(stdout).not.toContain(secret); expect(stderr).not.toContain(secret);
       }
       const result = JSON.parse(stdout);
