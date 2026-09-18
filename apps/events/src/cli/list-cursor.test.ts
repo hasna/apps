@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { applyFullEventLimit, eventListSnapshotPage } from "./list-cursor.js";
+import {
+  COMPACT_EVENT_FIELD_MAX_BYTES,
+  DEFAULT_COMPACT_EVENT_LIST_MAX_BYTES,
+  applyFullEventLimit,
+  compactEventListOutput,
+  eventListSnapshotPage,
+} from "./list-cursor.js";
 
 const event = (id: string, occurrence: string | number = id) => ({
   id,
@@ -57,6 +63,60 @@ describe("event list snapshot cursor", () => {
     expect(() => eventListSnapshotPage([event("1"), event("2")], { limit: 1, cursor: first.next_cursor!, type: "other" })).toThrow(/filter mismatch/);
     expect(() => eventListSnapshotPage([event("1")], { limit: 1, cursor: first.next_cursor!, type: "item" })).toThrow(/snapshot/);
     expect(() => eventListSnapshotPage([event("1"), event("different")], { limit: 1, cursor: first.next_cursor!, type: "item" })).toThrow(/snapshot/);
+  });
+
+
+  test("enforces an exact byte ceiling while bounding every compact string field", () => {
+    const hostile = "\0".repeat(2_000);
+    const rows = Array.from({ length: 25 }, (_, index) => ({
+      id: `event-${String(index).padStart(2, "0")}-${hostile}`,
+      time: `time-${index}-${hostile}`,
+      source: `source-${index}-${hostile}`,
+      type: `type-${index}-${hostile}`,
+      severity: `severity-${index}-${hostile}`,
+      subject: `subject-${index}-${hostile}`,
+      message: `message ${index} ${hostile}`,
+      schemaVersion: `schema-${index}-${hostile}`,
+      data: {},
+    })) as any[];
+
+    const page = compactEventListOutput(rows, { limit: 20 });
+    const serialized = `${JSON.stringify(page, null, 2)}\n`;
+
+    expect(Buffer.byteLength(serialized, "utf8")).toBeLessThanOrEqual(DEFAULT_COMPACT_EVENT_LIST_MAX_BYTES);
+    expect(page.max_bytes).toBe(DEFAULT_COMPACT_EVENT_LIST_MAX_BYTES);
+    expect(page.fields_truncated).toBe(true);
+    expect(page.byte_limited).toBe(true);
+    expect(page.count).toBeGreaterThan(0);
+    expect(page.count).toBeLessThan(20);
+    for (const row of page.events) {
+      for (const [field, maxBytes] of Object.entries(COMPACT_EVENT_FIELD_MAX_BYTES)) {
+        const value = row[field as keyof typeof row];
+        if (value !== null) expect(Buffer.byteLength(value, "utf8")).toBeLessThanOrEqual(maxBytes);
+      }
+    }
+    expect(Buffer.byteLength(page.snapshot_id!, "utf8")).toBeLessThanOrEqual(COMPACT_EVENT_FIELD_MAX_BYTES.id);
+  });
+
+  test("byte-limited compact pages walk every append occurrence without overlap", () => {
+    const hostile = "\0".repeat(2_000);
+    const rows = Array.from({ length: 25 }, (_, index) => ({
+      ...event("duplicate", index),
+      id: `duplicate-${String(index).padStart(2, "0")}-${hostile}`,
+      subject: hostile,
+      message: hostile,
+    })) as any[];
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    do {
+      const page = compactEventListOutput(rows, { limit: 20, cursor, source: "test" });
+      expect(Buffer.byteLength(`${JSON.stringify(page, null, 2)}\n`, "utf8")).toBeLessThanOrEqual(DEFAULT_COMPACT_EVENT_LIST_MAX_BYTES);
+      seen.push(...page.events.map((row) => row.id.slice(0, "duplicate-00".length)));
+      cursor = page.next_cursor ?? undefined;
+    } while (cursor);
+
+    expect([...seen].sort()).toEqual(Array.from({ length: 25 }, (_, index) => `duplicate-${String(index).padStart(2, "0")}`));
+    expect(new Set(seen).size).toBe(25);
   });
 
   test("full output preserves explicit limits above the compact cap", () => {

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { COMPACT_EVENT_FIELD_MAX_BYTES, DEFAULT_COMPACT_EVENT_LIST_MAX_BYTES } from "./list-cursor.js";
 
 let dataDir = "";
 
@@ -225,6 +226,55 @@ describe("CLI smoke behavior", () => {
       if (previousAllowlist === undefined) delete process.env.HASNA_EVENTS_ALLOW_PRIVATE_WEBHOOK_TARGETS;
       else process.env.HASNA_EVENTS_ALLOW_PRIVATE_WEBHOOK_TARGETS = previousAllowlist;
     }
+  });
+
+  test("default compact event lists enforce a response-byte ceiling and --full remains exact", async () => {
+    const hostile = "\0".repeat(2_000);
+    const events = Array.from({ length: 25 }, (_, index) => ({
+      id: `event-${String(index).padStart(2, "0")}-${hostile}`,
+      source: `source-${index}-${hostile}`,
+      type: `type-${index}-${hostile}`,
+      time: `time-${index}-${hostile}`,
+      severity: `severity-${index}-${hostile}`,
+      subject: `subject-${index}-${hostile}`,
+      message: `message-${index}-${hostile}`,
+      schemaVersion: `schema-${index}-${hostile}`,
+      data: { exact: hostile.repeat(4) },
+      metadata: {},
+    }));
+    writeFileSync(join(dataDir, "events.json"), JSON.stringify(events));
+
+    const compact = await runCli(["events", "list"]);
+    expect(compact.exitCode).toBe(0);
+    expect(Buffer.byteLength(compact.stdout, "utf8")).toBeLessThanOrEqual(DEFAULT_COMPACT_EVENT_LIST_MAX_BYTES);
+    const page = JSON.parse(compact.stdout) as {
+      events: Array<Record<string, string | null>>;
+      count: number;
+      max_bytes: number;
+      fields_truncated: boolean;
+      byte_limited: boolean;
+      next_cursor: string;
+    };
+    expect(page.max_bytes).toBe(DEFAULT_COMPACT_EVENT_LIST_MAX_BYTES);
+    expect(page.fields_truncated).toBe(true);
+    expect(page.byte_limited).toBe(true);
+    expect(page.count).toBeGreaterThan(0);
+    expect(page.next_cursor).toBeString();
+    for (const row of page.events) {
+      for (const [field, maxBytes] of Object.entries(COMPACT_EVENT_FIELD_MAX_BYTES)) {
+        const value = row[field];
+        if (value !== null) expect(Buffer.byteLength(value, "utf8")).toBeLessThanOrEqual(maxBytes);
+      }
+    }
+
+    const human = await runCliText(["events", "list"]);
+    expect(human.exitCode).toBe(0);
+    expect(Buffer.byteLength(human.stdout, "utf8")).toBeLessThanOrEqual(DEFAULT_COMPACT_EVENT_LIST_MAX_BYTES);
+
+    const full = await runCli(["events", "list", "--limit", "1", "--full"]);
+    expect(full.exitCode).toBe(0);
+    expect(Buffer.byteLength(full.stdout, "utf8")).toBeGreaterThan(DEFAULT_COMPACT_EVENT_LIST_MAX_BYTES);
+    expect(JSON.parse(full.stdout)[0].data.exact).toBe(hostile.repeat(4));
   });
 
   test("status reports metadata only without event payloads or webhook secrets", async () => {
