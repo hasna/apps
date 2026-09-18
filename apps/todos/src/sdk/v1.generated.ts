@@ -4,7 +4,7 @@
 import { assertTodosPriorRegistrationAdoptionValidationEnvelope } from "../project-registration/adoption-validation.js";
 
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
-// Source: Todos V1 API 0.16.1
+// Source: Todos V1 API 0.17.0
 
 export interface MachineAuthority { "tenant_id": string; "kid": string }
 
