@@ -47,6 +47,11 @@ describe("native custom-agent asset refresh", () => {
     expect(nativeRoot).not.toContain("REVIEWED_ROLE_V1");
     const store = { mode: "api", v1BaseUrl: selector.authority, getProfile: async () => profile, getProfileConfigs: async () => [rule], getProfileConfigBindings: async () => bindings,
       getProfileAssetBindings: async () => [assetBinding], getConfigById: async () => role, listConfigs: async () => [] } as unknown as ConfigStore;
+    const originalManifest = readFileSync(initial.manifestPath);
+    const dryRefresh = await refreshSessionRender({ targetHome, store, dryRun: true });
+    expect(dryRefresh.status).toBe("unchanged"); expect(dryRefresh.apply.applied).toBe(false); expect(dryRefresh.apply.snapshotPath).toBeNull();
+    expect(readFileSync(initial.manifestPath)).toEqual(originalManifest);
+    expect(readFileSync(rolePath, "utf8")).toBe(nativeAgent.frontmatter + role.content);
     expect((await refreshSessionRender({ targetHome, store })).status).toBe("unchanged");
     role = { ...role, version: 2, content: role.content.replace("V1", "V2") };
     await expect(refreshSessionRender({ targetHome, store })).rejects.toThrow();

@@ -50,8 +50,9 @@ describe("hosted session refresh", () => {
     const manifest = readFileSync(manifestPath, "utf8"), mtime = statSync(manifestPath).mtimeMs, original = readFileSync(agentsPath, "utf8");
     for (let invocation = 0; invocation < 2; invocation++) {
       state.calls.length = 0;
-      const result = await refreshSessionRender({ targetHome, store });
+      const result = await refreshSessionRender({ targetHome, store, dryRun: invocation === 0 });
       expect(result.status).toBe("unchanged"); expect(result.apply.applied).toBe(false); expect(result.apply.snapshotPath).toBeNull();
+      expect(result.sourceHash).toBe(JSON.parse(manifest).sourceHash);
       expect(result.apply.files.every((file) => file.action === "unchanged")).toBe(true);
       expect(state.calls.some((path) => path.includes("/bindings"))).toBe(true);
       expect(state.calls.some((path) => path.includes("/assets"))).toBe(true);

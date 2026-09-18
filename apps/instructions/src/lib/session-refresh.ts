@@ -166,7 +166,10 @@ export async function refreshSessionRender(input: {
     allowEmptySources: selector.allowEmptySources,
     configs, bindings,
     asset_configs: assetConfigs, asset_bindings: assetBindings,
-    asset_plan_mode: input.dryRun ? "dry-run" : "apply",
+    // The write intent is the same for preview and apply. Including a preview
+    // mode in the asset digest falsely changes sourceHash even for zero assets.
+    // applySessionRender's dryRun flag controls whether files are written.
+    asset_plan_mode: "apply",
     asset_scope: selector.assetScope,
     asset_surface: selector.assetSurface,
     extra_sources: station ? [station] : undefined,
