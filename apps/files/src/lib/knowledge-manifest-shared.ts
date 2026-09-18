@@ -134,14 +134,14 @@ export function parseHostedManifestChangeRow(value: Record<string, unknown>): Ho
       if (required) throw new Error("Hosted knowledge manifest store returned a malformed change snapshot.");
       return undefined;
     }
-    if (typeof candidate !== "string" || (required && candidate.length === 0)) {
+    if (!isNonBlankString(candidate)) {
       throw new Error("Hosted knowledge manifest store returned a malformed change snapshot.");
     }
     return candidate;
   };
-  const stringArray = (key: string): string[] => {
+  const stringArray = (key: string, requireNonBlank = false): string[] => {
     const candidate = snapshot[key];
-    if (!Array.isArray(candidate) || candidate.some((entry) => typeof entry !== "string")) {
+    if (!Array.isArray(candidate) || candidate.some((entry) => typeof entry !== "string" || (requireNonBlank && !isNonBlankString(entry)))) {
       throw new Error("Hosted knowledge manifest store returned a malformed change snapshot.");
     }
     return [...candidate] as string[];
@@ -160,14 +160,19 @@ export function parseHostedManifestChangeRow(value: Record<string, unknown>): Ho
   if (rawRevision !== undefined && rawRevision !== null) {
     if (typeof rawRevision !== "object" || Array.isArray(rawRevision)) throw new Error("Hosted knowledge manifest store returned a malformed change snapshot.");
     const revisionRecord = rawRevision as Record<string, unknown>;
-    if (typeof revisionRecord.id !== "string" || !revisionRecord.id || typeof revisionRecord.source_ref !== "string" || !revisionRecord.source_ref) {
+    if (!isNonBlankString(revisionRecord.id) || !isNonBlankString(revisionRecord.source_ref)) {
       throw new Error("Hosted knowledge manifest store returned a malformed change snapshot.");
+    }
+    for (const key of ["content_hash_algorithm", "content_hash"] as const) {
+      if (revisionRecord[key] !== undefined && !isNonBlankString(revisionRecord[key])) {
+        throw new Error("Hosted knowledge manifest store returned a malformed change snapshot.");
+      }
     }
     revision = {
       id: revisionRecord.id,
       source_ref: revisionRecord.source_ref,
-      content_hash_algorithm: typeof revisionRecord.content_hash_algorithm === "string" ? revisionRecord.content_hash_algorithm : undefined,
-      content_hash: typeof revisionRecord.content_hash === "string" ? revisionRecord.content_hash : undefined,
+      content_hash_algorithm: revisionRecord.content_hash_algorithm as string | undefined,
+      content_hash: revisionRecord.content_hash as string | undefined,
     };
   }
   const rawExtraction = snapshot.extraction;
@@ -180,7 +185,15 @@ export function parseHostedManifestChangeRow(value: Record<string, unknown>): Ho
     throw new Error("Hosted knowledge manifest store returned a malformed change snapshot.");
   }
   const snapshotFileId = stringValue("file_id")!;
+  const indexedAt = stringValue("indexed_at")!;
+  const modifiedAt = stringValue("modified_at", false);
   if (snapshotFileId !== fileId) throw new Error("Hosted knowledge manifest store returned a mismatched change snapshot.");
+  if (!isValidIsoDateTime(indexedAt) || (modifiedAt !== undefined && !isValidIsoDateTime(modifiedAt))) {
+    throw new Error("Hosted knowledge manifest store returned a malformed change snapshot.");
+  }
+  if (extractionRecord.revision_id !== undefined && !isNonBlankString(extractionRecord.revision_id)) {
+    throw new Error("Hosted knowledge manifest store returned a malformed change snapshot.");
+  }
   return {
     cursor,
     file_id: fileId,
@@ -194,15 +207,15 @@ export function parseHostedManifestChangeRow(value: Record<string, unknown>): Ho
       size,
       hash: stringValue("hash", false),
       status: status as HostedManifestSnapshot["status"],
-      indexed_at: stringValue("indexed_at")!,
-      modified_at: stringValue("modified_at", false),
+      indexed_at: indexedAt,
+      modified_at: modifiedAt,
       tags: stringArray("tags"),
-      project_ids: stringArray("project_ids"),
-      collection_ids: stringArray("collection_ids"),
+      project_ids: stringArray("project_ids", true),
+      collection_ids: stringArray("collection_ids", true),
       revision,
       extraction: {
         status: extractionStatus as HostedManifestSnapshot["extraction"]["status"],
-        revision_id: typeof extractionRecord.revision_id === "string" ? extractionRecord.revision_id : undefined,
+        revision_id: extractionRecord.revision_id as string | undefined,
       },
     },
   };
@@ -588,7 +601,7 @@ export function validateHostedKnowledgeManifest(
   if (
     manifest.filter_contract !== "files.knowledge.manifest.v1"
     || manifest.cursor_contract !== "files.knowledge.manifest.change.v1"
-    || typeof manifest.manifest_id !== "string" || manifest.manifest_id.trim().length === 0
+    || !isNonBlankString(manifest.manifest_id)
     || typeof manifest.generated_at !== "string" || !isValidIsoDateTime(manifest.generated_at)
     || (manifest.format !== "json" && manifest.format !== "jsonl")
     || !manifest.filters || typeof manifest.filters !== "object" || Array.isArray(manifest.filters)
@@ -597,7 +610,7 @@ export function validateHostedKnowledgeManifest(
     || typeof manifest.complete !== "boolean"
     || typeof manifest.delta !== "boolean"
     || (typeof manifest.high_watermark !== "string" || !/^(0|[1-9][0-9]*)$/.test(manifest.high_watermark))
-    || typeof manifest.delta_cursor !== "string" || !manifest.delta_cursor
+    || !isNonBlankString(manifest.delta_cursor)
     || !Number.isSafeInteger(manifest.tombstone_count) || (manifest.tombstone_count as number) < 0
     || !Array.isArray(manifest.items)
   ) throw new Error("Hosted knowledge manifest response is incompatible.");
@@ -609,7 +622,7 @@ export function validateHostedKnowledgeManifest(
   }
   if (manifest.items.length !== manifest.item_count) throw new Error("Hosted knowledge manifest response is incompatible.");
   if (manifest.complete && manifest.has_more) throw new Error("Hosted knowledge manifest response is incompatible.");
-  if (manifest.cursor !== undefined && (typeof manifest.cursor !== "string" || manifest.cursor.length === 0)) {
+  if (manifest.cursor !== undefined && !isNonBlankString(manifest.cursor)) {
     throw new Error("Hosted knowledge manifest response is incompatible.");
   }
   if (requestedOptions.cursor === undefined) {
@@ -617,10 +630,10 @@ export function validateHostedKnowledgeManifest(
   } else if (manifest.cursor !== requestedOptions.cursor) {
     throw new Error("Hosted knowledge manifest response is incompatible.");
   }
-  if (manifest.next_cursor !== undefined && (typeof manifest.next_cursor !== "string" || manifest.next_cursor.length === 0)) {
+  if (manifest.next_cursor !== undefined && !isNonBlankString(manifest.next_cursor)) {
     throw new Error("Hosted knowledge manifest response is incompatible.");
   }
-  if (manifest.has_more !== (typeof manifest.next_cursor === "string" && manifest.next_cursor.length > 0)) {
+  if (manifest.has_more !== isNonBlankString(manifest.next_cursor)) {
     throw new Error("Hosted knowledge manifest response is incompatible.");
   }
 
@@ -638,9 +651,9 @@ export function validateHostedKnowledgeManifest(
     const item = raw as Record<string, unknown>;
     if (
       item.kind !== "file"
-      || typeof item.file_id !== "string" || !item.file_id
-      || typeof item.source_id !== "string" || !item.source_id
-      || typeof item.source_ref !== "string" || !item.source_ref
+      || !isNonBlankString(item.file_id)
+      || !isNonBlankString(item.source_id)
+      || !isNonBlankString(item.source_ref)
       || typeof item.change_cursor !== "string" || !/^(0|[1-9][0-9]*)$/.test(item.change_cursor)
       || BigInt(item.change_cursor) > BigInt(manifest.high_watermark as string)
       || BigInt(item.change_cursor) <= previousCursor
@@ -674,7 +687,7 @@ export function validateHostedKnowledgeManifest(
     if (typeof item.source_revision_hash !== "string" || !/^sha256:[a-f0-9]{64}$/.test(item.source_revision_hash)) {
       throw new Error("Hosted knowledge manifest response is incompatible.");
     }
-    if (item.hash !== undefined && (typeof item.hash !== "string" || item.hash.length === 0)) {
+    if (item.hash !== undefined && !isNonBlankString(item.hash)) {
       throw new Error("Hosted knowledge manifest response is incompatible.");
     }
 
@@ -701,7 +714,7 @@ export function validateHostedKnowledgeManifest(
       || typeof extraction.text_available !== "boolean"
       || typeof extraction.status !== "string"
       || !["available", "partial", "unavailable", "unsupported", "error", "stale"].includes(extraction.status)
-      || (extraction.status_reason !== undefined && (typeof extraction.status_reason !== "string" || extraction.status_reason.length === 0))
+      || (extraction.status_reason !== undefined && !isNonBlankString(extraction.status_reason))
     ) {
       throw new Error("Hosted knowledge manifest response is incompatible.");
     }
@@ -715,7 +728,7 @@ export function validateHostedKnowledgeManifest(
     if (
       (!available && Object.prototype.hasOwnProperty.call(extraction, "extracted_text_ref"))
       || (available && Object.prototype.hasOwnProperty.call(extraction, "status_reason"))
-      || (!available && (typeof extraction.status_reason !== "string" || extraction.status_reason.length === 0))
+      || (!available && !isNonBlankString(extraction.status_reason))
     ) {
       throw new Error("Hosted knowledge manifest response is incompatible.");
     }
@@ -731,7 +744,7 @@ export function validateHostedKnowledgeManifest(
     ) throw new Error("Hosted knowledge manifest response is incompatible.");
     if (item.revision_id !== undefined || item.revision_ref !== undefined) {
       if (
-        typeof item.revision_id !== "string" || !item.revision_id
+        !isNonBlankString(item.revision_id)
         || item.revision_ref !== `open-files://file/${encodeURIComponent(item.file_id as string)}/revision/${encodeURIComponent(item.revision_id)}`
       ) throw new Error("Hosted knowledge manifest response is incompatible.");
     }
@@ -760,8 +773,10 @@ function isValidHostedManifestFilters(filters: Record<string, unknown>): boolean
   if (!isOneOfString(filters.status, ["active", "deleted", "moved", "all"]) || typeof filters.delta !== "boolean") return false;
   for (const key of ["source_id", "collection_id", "project_id", "tag", "after", "before"] as const) {
     const value = filters[key];
-    if (value !== undefined && (typeof value !== "string" || value.length === 0)) return false;
+    if (value !== undefined && !isNonBlankString(value)) return false;
   }
+  if ((filters.after !== undefined && !isValidManifestBoundary(filters.after as string))
+    || (filters.before !== undefined && !isValidManifestBoundary(filters.before as string))) return false;
   return filters.tag === undefined || filters.tag === (filters.tag as string).trim().toLowerCase();
 }
 
@@ -773,12 +788,24 @@ function isOneOfString<const T extends string>(value: unknown, allowed: readonly
   return typeof value === "string" && allowed.includes(value as T);
 }
 
+function isNonBlankString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+export function isValidManifestBoundary(value: string): boolean {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    const date = new Date(`${value}T00:00:00.000Z`);
+    return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+  }
+  return isValidIsoDateTime(value);
+}
+
 function isValidIsoDateTime(value: string): boolean {
-  const date = /^(\d{4})-(\d{2})-(\d{2})T/.exec(value);
-  if (!date || !/(?:Z|[+-]\d{2}:\d{2})$/.test(value) || !Number.isFinite(Date.parse(value))) return false;
-  const year = Number(date[1]);
-  const month = Number(date[2]);
-  const day = Number(date[3]);
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/.exec(value);
+  if (!match || !Number.isFinite(Date.parse(value))) return false;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
   const calendar = new Date(Date.UTC(year, month - 1, day));
   return calendar.getUTCFullYear() === year
     && calendar.getUTCMonth() === month - 1

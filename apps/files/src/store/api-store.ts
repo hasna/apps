@@ -412,6 +412,7 @@ export class ApiStore implements FilesStore {
    * modelled there, and evidence assets have their own route.
    */
   async exportKnowledgeManifest(opts: KnowledgeSourceManifestOptions = {}): Promise<KnowledgeSourceManifest> {
+    const requestedOptions = { ...opts };
     const response = await this.http.get<unknown>("/knowledge/manifest", {
       query: {
         source_id: opts.source_id,
@@ -432,7 +433,7 @@ export class ApiStore implements FilesStore {
         include_evidence_assets: opts.include_evidence_assets,
       },
     });
-    return validateHostedKnowledgeManifest(response, opts);
+    return validateHostedKnowledgeManifest(response, requestedOptions);
   }
 
   // ── tags ─────────────────────────────────────────────────────────────────

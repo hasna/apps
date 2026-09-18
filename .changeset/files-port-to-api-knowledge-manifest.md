@@ -33,8 +33,9 @@ schemas, and the generated SDK returns the typed manifest contract. CLI and MCP
 clients reject malformed or unattested 2xx responses. Hosted filter evidence is
 a closed typed object and must exactly attest the requested source, project,
 collection, tag, status, time, and delta selection on every page. Runtime
-validation also enforces required timestamps, closed source/status enums,
-typed hashes, and rejects unknown or sensitive response fields. Existing local
+validation also enforces every required field, closed source/status enums,
+nonblank identifiers and cursors, typed nonblank hashes, strict RFC 3339
+timestamps, and rejects unknown or sensitive response fields. Existing local
 manifest behavior, compact Files output, MCP profiles, canonical Files home, fresh
 credential resolution, and `https://api.hasna.com/files` plus one
 client-appended `/v1` remain unchanged.

@@ -1,8 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { mintApiKey, verifyApiKey } from "@hasna/contracts/auth";
 import type { TypedQueryClient } from "../generated/storage-kit/query.js";
-import type { KnowledgeSourceManifest, KnowledgeSourceManifestFileItem } from "../types/index.js";
+import type { KnowledgeSourceManifest, KnowledgeSourceManifestFileItem, KnowledgeSourceManifestOptions } from "../types/index.js";
+import type { FilesStorageClient } from "../store/client-types.js";
+import { ApiStore } from "../store/api-store.js";
 import { validateHostedKnowledgeManifest } from "../lib/knowledge-manifest-shared.js";
+import { openApiDocument } from "./openapi.js";
 import { createV1Handler } from "./v1.js";
 
 const SIGNING_SECRET = "test-only-knowledge-manifest-signing-secret-32b";
@@ -233,6 +236,124 @@ describe("GET /v1/knowledge/manifest", () => {
     }
   });
 
+  test("rejects omission of every OpenAPI-required manifest and file field", async () => {
+    const manifest = await (await get(handler().h)).json() as KnowledgeSourceManifest;
+    const schemas = openApiDocument.components.schemas as Record<string, any>;
+    for (const key of schemas.KnowledgeManifest.required as string[]) {
+      const candidate = structuredClone(manifest) as unknown as Record<string, unknown>;
+      delete candidate[key];
+      expect(() => validateHostedKnowledgeManifest(candidate)).toThrow("Hosted knowledge manifest response is incompatible");
+    }
+    for (const key of schemas.KnowledgeManifestFile.required as string[]) {
+      const candidate = structuredClone(manifest) as KnowledgeSourceManifest & { items: Array<Record<string, unknown>> };
+      delete candidate.items[0]![key];
+      expect(() => validateHostedKnowledgeManifest(candidate)).toThrow("Hosted knowledge manifest response is incompatible");
+    }
+  });
+
+  test("rejects blank identifiers, blank hashes/cursors, and non-RFC3339 timestamps", async () => {
+    const manifest = await (await get(handler().h)).json() as KnowledgeSourceManifest;
+    const invalid: KnowledgeSourceManifest[] = [];
+
+    const blankFileId = structuredClone(manifest) as KnowledgeSourceManifest & { items: Array<Record<string, unknown>> };
+    blankFileId.items[0]!.file_id = "   ";
+    blankFileId.items[0]!.source_ref = "open-files://file/%20%20%20";
+    invalid.push(blankFileId as KnowledgeSourceManifest);
+
+    const blankSourceId = structuredClone(manifest) as KnowledgeSourceManifest & { items: Array<Record<string, unknown>> };
+    blankSourceId.items[0]!.source_id = "   ";
+    (blankSourceId.items[0]!.open_files_root as Record<string, unknown>).source_id = "   ";
+    (blankSourceId.items[0]!.open_files_root as Record<string, unknown>).open_files_root = "open-files://source/%20%20%20";
+    (blankSourceId.items[0]!.storage as Record<string, unknown>).source_id = "   ";
+    invalid.push(blankSourceId as KnowledgeSourceManifest);
+
+    const blankRevisionId = structuredClone(manifest) as KnowledgeSourceManifest & { items: Array<Record<string, unknown>> };
+    blankRevisionId.items[0]!.revision_id = "   ";
+    blankRevisionId.items[0]!.revision_ref = "open-files://file/f_1/revision/%20%20%20";
+    invalid.push(blankRevisionId as KnowledgeSourceManifest);
+
+    const blankHash = structuredClone(manifest) as KnowledgeSourceManifest & { items: Array<Record<string, unknown>> };
+    blankHash.items[0]!.hash = "   ";
+    invalid.push(blankHash as KnowledgeSourceManifest);
+
+    const blankDeltaCursor = structuredClone(manifest);
+    blankDeltaCursor.delta_cursor = "   ";
+    invalid.push(blankDeltaCursor);
+
+    const abbreviatedGeneratedAt = structuredClone(manifest);
+    abbreviatedGeneratedAt.generated_at = "2026-09-18T00:00Z";
+    invalid.push(abbreviatedGeneratedAt);
+
+    const rolledGeneratedAt = structuredClone(manifest);
+    rolledGeneratedAt.generated_at = "2026-09-18T24:00:00Z";
+    invalid.push(rolledGeneratedAt);
+
+    const abbreviatedUpdatedAt = structuredClone(manifest) as KnowledgeSourceManifest & { items: Array<Record<string, unknown>> };
+    abbreviatedUpdatedAt.items[0]!.updated_at = "2026-09-18T00:00Z";
+    invalid.push(abbreviatedUpdatedAt as KnowledgeSourceManifest);
+
+    for (const candidate of invalid) {
+      expect(() => validateHostedKnowledgeManifest(candidate)).toThrow("Hosted knowledge manifest response is incompatible");
+    }
+  });
+
+  test("OpenAPI closes manifest identifiers, cursors, hashes, timestamps, filters, and enums", () => {
+    const schemas = openApiDocument.components.schemas as Record<string, any>;
+    const file = schemas.KnowledgeManifestFile;
+    for (const key of ["source_ref", "revision_ref", "revision_id", "file_id", "source_id"] as const) {
+      expect(file.properties[key]).toMatchObject({ minLength: 1, pattern: "\\S" });
+    }
+    expect(file.properties.hash.minLength).toBe(1);
+    expect(file.properties.source_type.enum).toEqual(["local", "s3", "google_drive"]);
+    expect(file.properties.status.enum).toEqual(["active", "deleted", "moved"]);
+    expect(file.properties.updated_at.format).toBe("date-time");
+
+    const manifestSchema = schemas.KnowledgeManifest;
+    for (const key of ["manifest_id", "cursor", "next_cursor", "delta_cursor"] as const) {
+      expect(manifestSchema.properties[key]).toMatchObject({ minLength: 1, pattern: "\\S" });
+    }
+    expect(manifestSchema.properties.generated_at.format).toBe("date-time");
+
+    const filters = schemas.KnowledgeManifestFilters;
+    expect(filters.additionalProperties).toBe(false);
+    expect(filters.required).toEqual(["status", "delta"]);
+    expect(filters.properties.status.enum).toEqual(["active", "deleted", "moved", "all"]);
+    for (const key of ["source_id", "collection_id", "project_id", "tag"] as const) {
+      expect(filters.properties[key]).toMatchObject({ minLength: 1, pattern: "\\S" });
+    }
+    for (const key of ["after", "before"] as const) {
+      expect(filters.properties[key]).toMatchObject({ type: "string" });
+      expect(filters.properties[key].pattern).toContain("T(?:[01]\\d|2[0-3])");
+    }
+  });
+
+  test("attests against the exact request snapshot even if the caller mutates its options in flight", async () => {
+    const manifest = await (await get(handler().h, "?tag=Handbook")).json() as KnowledgeSourceManifest;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let requestedQuery: Record<string, unknown> | undefined;
+    const transport = {
+      baseUrl: "https://files.example.test/v1",
+      async get(_path: string, options?: { query?: Record<string, unknown> }) {
+        requestedQuery = options?.query;
+        await gate;
+        return manifest;
+      },
+    };
+    const store = new ApiStore({
+      name: "files",
+      baseUrl: transport.baseUrl,
+      transport,
+    } as unknown as FilesStorageClient);
+    const opts: KnowledgeSourceManifestOptions = { tag: "Handbook" };
+    const pending = store.exportKnowledgeManifest(opts);
+    while (requestedQuery === undefined) await Bun.sleep(0);
+    expect(requestedQuery.tag).toBe("Handbook");
+    opts.tag = "changed-after-request";
+    release();
+    expect(await pending).toBe(manifest);
+  });
+
   test("returns deleted snapshots as tombstones", async () => {
     const h = handler({ rows: [change(10, "f_1", { status: "deleted" })] }).h;
     const manifest = await (await get(h, "?status=deleted")).json() as KnowledgeSourceManifest;
@@ -292,15 +413,29 @@ describe("GET /v1/knowledge/manifest", () => {
     });
     expect(validateHostedKnowledgeManifest(manifest, requested)).toBe(manifest);
     for (const [key, replacement] of [
+      ["source_id", "src_other"],
       ["collection_id", "col_other"],
       ["project_id", "prj_other"],
       ["tag", "other"],
       ["status", "active"],
+      ["after", "2026-02-01"],
+      ["before", "2026-11-30"],
+      ["delta", true],
     ] as const) {
       const ignored = structuredClone(manifest) as KnowledgeSourceManifest & { filters: Record<string, unknown> };
       ignored.filters[key] = replacement;
       expect(() => validateHostedKnowledgeManifest(ignored, requested)).toThrow("Hosted knowledge manifest response is incompatible");
     }
+    for (const [filters, opts] of [
+      [{ status: "active", delta: false, source_id: "   " }, { source_id: "   " }],
+      [{ status: "active", delta: false, after: "not-a-date" }, { after: "not-a-date" }],
+      [{ status: "active", delta: false, before: "2026-09-18T24:00:00Z" }, { before: "2026-09-18T24:00:00Z" }],
+    ] as const) {
+      const malformed = structuredClone(manifest) as KnowledgeSourceManifest & { filters: Record<string, unknown> };
+      malformed.filters = { ...filters };
+      expect(() => validateHostedKnowledgeManifest(malformed, opts)).toThrow("Hosted knowledge manifest response is incompatible");
+    }
+
     const index = fixture.sql.findIndex((text) => text.includes("WITH latest AS"));
     expect(index).toBeGreaterThanOrEqual(0);
     const text = fixture.sql[index]!;
@@ -336,6 +471,8 @@ describe("GET /v1/knowledge/manifest", () => {
       "?status=unknown",
       "?format=yaml",
       "?after=2026-02-30",
+      "?after=2026-09-18T00:00Z",
+      "?before=2026-09-18T24:00:00Z",
       "?tag=one&tag=two",
       "?cursor=one&since_cursor=two",
     ]) {
@@ -371,6 +508,10 @@ describe("GET /v1/knowledge/manifest", () => {
     for (const row of [
       { cursor: 1, file_id: "f_1", snapshot: {} },
       { cursor: 1, file_id: "f_1", snapshot: snapshot({ file_id: "f_other" }) },
+      { cursor: 1, file_id: "f_1", snapshot: snapshot({ source_id: "   " }) },
+      { cursor: 1, file_id: "f_1", snapshot: snapshot({ indexed_at: "2026-09-18T00:00Z" }) },
+      { cursor: 1, file_id: "f_1", snapshot: snapshot({ hash: 7 }) },
+      { cursor: 1, file_id: "f_1", snapshot: snapshot({ project_ids: [""] }) },
     ]) {
       const response = await get(handler({ rows: [row] }).h);
       expect(response.status).toBe(500);

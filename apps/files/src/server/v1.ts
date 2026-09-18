@@ -25,6 +25,7 @@ import {
   buildHostedManifestFileItem,
   buildManifestEnvelope,
   hostedManifestFilters,
+  isValidManifestBoundary,
   normalizeManifestLimit,
 } from "../lib/knowledge-manifest-shared.js";
 import {
@@ -644,14 +645,7 @@ export function createV1Handler(options: V1HandlerOptions = {}): V1Handler {
               return err(`${key} must be non-empty and at most 2048 bytes`, 400, { reason: "invalid_manifest_query" });
             }
           }
-          const validBoundary = (value: string | undefined): boolean => {
-            if (value === undefined) return true;
-            if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-              const date = new Date(`${value}T00:00:00.000Z`);
-              return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
-            }
-            return /^\d{4}-\d{2}-\d{2}T/.test(value) && Number.isFinite(Date.parse(value)) && /(?:Z|[+-]\d{2}:\d{2})$/.test(value);
-          };
+          const validBoundary = (value: string | undefined): boolean => value === undefined || isValidManifestBoundary(value);
           if (!validBoundary(q("after")) || !validBoundary(q("before"))) {
             return err("after and before must be valid ISO dates or timezone-qualified timestamps", 400, { reason: "invalid_manifest_query" });
           }

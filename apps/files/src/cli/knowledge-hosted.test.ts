@@ -162,6 +162,21 @@ function adversarialHostedManifest(query: URLSearchParams): HostedManifestFixtur
   }
   if (tag === "missing-updated-at") delete item.updated_at;
   if (tag === "non-string-hash") item.hash = { bucket: "private-bucket" };
+  if (tag === "blank-hash") item.hash = "   ";
+  if (tag === "invalid-generated-at") manifest.generated_at = "2026-09-18T00:00Z";
+  if (tag === "invalid-updated-at") item.updated_at = "2026-09-18T24:00:00Z";
+  if (tag === "blank-file-id") {
+    item.file_id = "   ";
+    item.source_ref = "open-files://file/%20%20%20";
+    if (typeof item.revision_id === "string") item.revision_ref = `open-files://file/%20%20%20/revision/${encodeURIComponent(item.revision_id)}`;
+    (item.extraction as Record<string, unknown>).extracted_text_ref = "open-files://file/%20%20%20/text";
+  }
+  if (tag === "blank-source-id") {
+    item.source_id = "   ";
+    (item.open_files_root as Record<string, unknown>).source_id = "   ";
+    (item.open_files_root as Record<string, unknown>).open_files_root = "open-files://source/%20%20%20";
+    (item.storage as Record<string, unknown>).source_id = "   ";
+  }
   return manifest;
 }
 
@@ -482,6 +497,11 @@ describe("files knowledge manifest on the hosted transport", () => {
       ["--tag", "unknown-source-type"],
       ["--tag", "missing-updated-at"],
       ["--tag", "non-string-hash"],
+      ["--tag", "blank-hash"],
+      ["--tag", "invalid-generated-at"],
+      ["--tag", "invalid-updated-at"],
+      ["--tag", "blank-file-id"],
+      ["--tag", "blank-source-id"],
     ];
     for (const args of cases) {
       const result = await runCli(["knowledge", "manifest", "--json", ...args]);
