@@ -1,6 +1,5 @@
 ---
 "@hasna/events": patch
-"@hasna/secrets": patch
 ---
 
 Track Contracts 1.1.0 explicitly so clean registry installs retain the credential
