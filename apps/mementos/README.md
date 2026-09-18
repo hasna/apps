@@ -64,6 +64,11 @@ library strategies include global memories across projects and project-scoped
 shared memories; direct MCP injection also scopes global memories to the project,
 while its full smart pipeline uses the library policy.
 
+Injection project references may be a stable project ID, registered name, or
+registered path. Library, MCP, and HTTP/SDK injection resolve that reference once
+and use the stable project ID for every downstream profile, search, filter, hook,
+and touch path.
+
 The list API and SDK expose `include_unassigned_project: true` with `project_id`
 for this union. The filter applies before pagination and also governs `total`;
 without a project it has no effect. Omitting it keeps an exact project match.

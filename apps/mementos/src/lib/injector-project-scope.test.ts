@@ -30,6 +30,10 @@ beforeEach(() => {
   for (const id of ["project-a", "project-b"]) {
     db.run("INSERT INTO projects (id, name, path, created_at, updated_at) VALUES (?, ?, ?, datetime('now'), datetime('now'))", [id, id, `/fixture/${id}`]);
   }
+  db.run(
+    "INSERT INTO projects (id, name, path, created_at, updated_at) VALUES (?, ?, ?, datetime('now'), datetime('now'))",
+    ["project-alias-stable-id", "friendly-project-alias", "/fixture/friendly-project-alias"],
+  );
   for (const id of ["owner", "other-agent"]) {
     db.run("INSERT INTO agents (id, name, created_at, last_seen_at) VALUES (?, ?, datetime('now'), datetime('now'))", [id, id]);
   }
@@ -44,6 +48,19 @@ beforeEach(() => {
     }
   }
   ids["different-owner"] = createMemory({ key: "different-owner", value: "synthetic different owner", scope: "private", category: "fact", importance: 8, project_id: "project-a", agent_id: "other-agent" }, db).id;
+  for (const scope of ["shared", "private", "working"] as const) {
+    const key = `${scope}-alias-selected`;
+    ids[key] = createMemory({
+      key,
+      value: `synthetic ${key}`,
+      scope,
+      category: "fact",
+      importance: 9,
+      project_id: "project-alias-stable-id",
+      agent_id: scope === "private" || scope === "working" ? "owner" : undefined,
+      session_id: scope === "working" ? "fixture-session" : undefined,
+    }, db).id;
+  }
 });
 
 afterEach(() => {
@@ -75,13 +92,19 @@ async function invokeMcp(args: Record<string, unknown>): Promise<ToolResult> {
   return server._registeredTools["memory_inject"]!.handler(args);
 }
 
+const aliasProjectRefs = ["friendly-project-alias", "/fixture/friendly-project-alias"] as const;
 const libraryStrategies = ["default", "smart-no-query", "smart-no-embeddings", "smart-embeddings", "smart-pipeline"] as const;
 async function invokeLibrary(strategy: typeof libraryStrategies[number], project_id?: string): Promise<string> {
   const options = { project_id, agent_id: "owner", session_id: "fixture-session", machine_id: null, max_tokens: 12000, min_importance: 1, categories: ["fact" as const], db };
   const injector = new MemoryInjector(DEFAULT_CONFIG);
   if (strategy === "default") return injector.getInjectionContext(options);
   if (strategy === "smart-pipeline") return (await smartInject({ ...options, task_context: "synthetic scope fixture" })).output;
-  if (strategy === "smart-embeddings") await indexMemoryEmbedding(ids["private-selected"]!, "synthetic scope fixture", db);
+  if (strategy === "smart-embeddings") {
+    const memoryId = project_id && aliasProjectRefs.includes(project_id as typeof aliasProjectRefs[number])
+      ? ids["private-alias-selected"]!
+      : ids["private-selected"]!;
+    await indexMemoryEmbedding(memoryId, "synthetic scope fixture", db);
+  }
   return injector.getSmartInjectionContext({ ...options, query: strategy === "smart-no-query" ? undefined : "synthetic scope fixture" });
 }
 
@@ -116,6 +139,35 @@ describe("library injector explicit project visibility", () => {
       const output = await invokeLibrary(strategy);
       for (const key of ["private-selected", "private-elsewhere", "private-unassigned"]) expect(output).toContain(key);
       expect(output).not.toContain("different-owner");
+    });
+
+    test(`${strategy} canonicalizes project names and paths to the stable id exactly once`, async () => {
+      for (const projectRef of aliasProjectRefs) {
+        if (strategy === "smart-pipeline") {
+          await indexMemoryEmbedding(ids["private-alias-selected"]!, "synthetic scope fixture", db);
+        }
+        const queries = spyOn(db, "query");
+        try {
+          const output = await invokeLibrary(strategy, projectRef);
+          for (const key of ["shared-alias-selected", "private-alias-selected", "working-alias-selected"]) {
+            expect(output).toContain(key);
+            expect(accessCount(key)).toBeGreaterThan(0);
+          }
+          for (const key of ["shared-selected", "private-selected", "working-selected", "private-elsewhere"]) {
+            expect(output).not.toContain(key);
+          }
+          const projectLookups = queries.mock.calls.filter(([statement]) =>
+            /^SELECT \* FROM projects WHERE (?:id|path|LOWER\(name\)) = \?/.test(String(statement))
+          );
+          expect(projectLookups).toHaveLength(projectRef.startsWith("/") ? 2 : 3);
+          if (strategy === "smart-pipeline") {
+            expect(db.query("SELECT project_id FROM memories WHERE key = ?").get("_profile_project_project-alias-stable-id")).toMatchObject({ project_id: "project-alias-stable-id" });
+            expect(db.query("SELECT id FROM memories WHERE key = ?").get(`_profile_project_${projectRef}`)).toBeNull();
+          }
+        } finally {
+          queries.mockRestore();
+        }
+      }
     });
 
     test(`${strategy} rejects unknown projects before reading or touching memories`, async () => {
@@ -189,13 +241,53 @@ describe("MCP injector explicit project visibility", () => {
       expect(result.isError).not.toBe(true);
       const output = result.content[0]!.text;
       if (name === "hints") {
-        expect(output).toContain("Facts (9)");
+        expect(output).toContain("Facts (11)");
         expect(output).toContain("elsewhere");
         expect(output).toContain("unassigned");
       } else {
         for (const key of ["private-selected", "private-elsewhere", "private-unassigned"]) expect(output).toContain(key);
         expect(output).not.toContain("different-owner");
         expect(output).not.toContain("shared-selected");
+      }
+    });
+
+    test(`${name} canonicalizes project names and paths to the stable id exactly once`, async () => {
+      for (const projectRef of aliasProjectRefs) {
+        if (name === "smart-query" || name === "activation" || name === "smart-pipeline") {
+          await indexMemoryEmbedding(ids["private-alias-selected"]!, "synthetic scope fixture", db);
+        }
+        const queries = spyOn(db, "query");
+        try {
+          const result = await invokeMcp({
+            ...strategy,
+            project_id: projectRef,
+            agent_id: "owner",
+            session_id: "fixture-session",
+            machine_id: "fixture-machine",
+            max_tokens: 12000,
+            min_importance: 1,
+            categories: ["fact"],
+            format: "compact",
+          });
+          expect(result.isError).not.toBe(true);
+          const output = result.content[0]!.text;
+          if (name === "hints") {
+            expect(output).toContain("alias");
+          } else {
+            for (const key of ["shared-alias-selected", "private-alias-selected", "working-alias-selected"]) {
+              expect(output).toContain(key);
+            }
+            expect(output).not.toContain("private-selected");
+            expect(output).not.toContain("private-elsewhere");
+            expect(accessCount("private-alias-selected")).toBeGreaterThan(0);
+          }
+          const projectLookups = queries.mock.calls.filter(([statement]) =>
+            /^SELECT \* FROM projects WHERE (?:id|path|LOWER\(name\)) = \?/.test(String(statement))
+          );
+          expect(projectLookups).toHaveLength(projectRef.startsWith("/") ? 2 : 3);
+        } finally {
+          queries.mockRestore();
+        }
       }
     });
 
@@ -228,5 +320,5 @@ test("null-or-project list eligibility is opt-in and applied before pagination",
   expect(listMemoriesPage({ ...base, include_unassigned_project: true, offset: 2 }, db).rows).toEqual([]);
   expect(countMemories(base, db)).toBe(1);
   expect(countMemories({ ...base, include_unassigned_project: true }, db)).toBe(2);
-  expect(listMemoriesPage({ scope: "private", agent_id: "owner", include_unassigned_project: true, limit: 200 }, db).rows).toHaveLength(108);
+  expect(listMemoriesPage({ scope: "private", agent_id: "owner", include_unassigned_project: true, limit: 200 }, db).rows).toHaveLength(109);
 });

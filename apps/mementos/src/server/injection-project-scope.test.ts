@@ -1,6 +1,6 @@
 import { mintApiKey } from "@hasna/contracts/auth";
 import { randomBytes } from "node:crypto";
-import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
+import { afterAll, beforeAll, beforeEach, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -27,6 +27,11 @@ let server: ReturnType<typeof Bun.serve>;
 let client: MementosClient;
 let db: ReturnType<typeof getDatabase>;
 const projectPath = join(home, "alpha");
+const aliasProject = {
+  id: "gamma-stable-project-id",
+  name: "friendly-gamma-project",
+  path: join(home, "friendly-gamma-project"),
+};
 const ids: Record<string, string> = {};
 beforeAll(() => {
   process.env.MEMENTOS_DB_PATH = ":memory:";
@@ -36,12 +41,18 @@ beforeAll(() => {
   resetDatabase();
   db = getDatabase(":memory:");
   for (const id of ["alpha", "beta"]) db.run("INSERT INTO projects (id, name, path, created_at, updated_at) VALUES (?, ?, ?, datetime('now'), datetime('now'))", [id, id, join(home, id)]);
+  db.run(
+    "INSERT INTO projects (id, name, path, created_at, updated_at) VALUES (?, ?, ?, datetime('now'), datetime('now'))",
+    [aliasProject.id, aliasProject.name, aliasProject.path],
+  );
   for (const id of ["owner", "other-owner"]) db.run("INSERT INTO agents (id, name, created_at, last_seen_at) VALUES (?, ?, datetime('now'), datetime('now'))", [id, id]);
   for (const scope of ["global", "shared", "private"] as const) {
     for (const project of ["alpha", "beta", undefined]) {
       const key = `${scope}-${project ?? "unassigned"}`;
       ids[key] = createMemory({ key, value: "scopeprobe", scope, category: "fact", importance: 8, agent_id: "owner", project_id: project }, db).id;
     }
+    const key = `${scope}-gamma`;
+    ids[key] = createMemory({ key, value: "scopeprobe", scope, category: "fact", importance: 9, agent_id: "owner", project_id: aliasProject.id }, db).id;
   }
   for (const id of ["fixture-machine", "other-machine"]) db.run("INSERT INTO machines (id, name, hostname) VALUES (?, ?, ?)", [id, id, id]);
   ids.otherOwner = createMemory({ key: "private-other-owner", value: "scopeprobe", scope: "private", category: "fact", importance: 8, agent_id: "other-owner", project_id: "alpha" }, db).id;
@@ -136,6 +147,31 @@ test("SDK project query reaches the real inject route; only selected rows are to
   expect(touched("private-unassigned")).toBe(0);
   expectExactProject((await client.getContext({ project_id: "beta", agent_id: "owner", max_tokens: 10000 })).context, "beta");
 });
+test("SDK/HTTP injection canonicalizes project names and paths to the stable id exactly once", async () => {
+  for (const [projectRef, expectedLookups] of [[aliasProject.id, 1], [aliasProject.name, 3], [aliasProject.path, 2]] as const) {
+    db.run("UPDATE memories SET access_count = 0, accessed_at = NULL");
+    const queries = spyOn(db, "query");
+    try {
+      const result = await client.getContext({ project_id: projectRef, agent_id: "owner", max_tokens: 10000 });
+      for (const scope of ["global", "shared", "private"]) {
+        expect(result.context).toContain(`${scope}-gamma`);
+        expect(result.context).not.toContain(`${scope}-alpha`);
+        expect(result.context).not.toContain(`${scope}-beta`);
+        expect(result.context).not.toContain(`${scope}-unassigned`);
+      }
+      expect(result.memories_count).toBe(3);
+      expect(touched("private-gamma")).toBe(1);
+      expect(touched("private-alpha")).toBe(0);
+      const projectLookups = queries.mock.calls.filter(([statement]) =>
+        /^SELECT \* FROM projects WHERE (?:id|path|LOWER\(name\)) = \?/.test(String(statement))
+      );
+      expect(projectLookups).toHaveLength(expectedLookups);
+    } finally {
+      queries.mockRestore();
+    }
+  }
+});
+
 test("SDK unknown explicit project errors without touching owner memories", async () => {
   await expect(client.getContext({ project_id: "missing", agent_id: "owner" })).rejects.toThrow("Project not found");
   expect(touched("private-alpha")).toBe(0);

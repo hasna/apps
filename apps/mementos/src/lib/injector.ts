@@ -1,7 +1,7 @@
 import { SqliteAdapter as Database } from "../storage.js";
 import type { Memory, MemoryCategory, MementosConfig } from "../types/index.js";
 import { listMemories, touchMemory, semanticSearch } from "../db/memories.js";
-import { getProject } from "../db/projects.js";
+import { resolveInjectionProjectId } from "./injection-project.js";
 import { loadConfig } from "./config.js";
 import { generateEmbedding, cosineSimilarity, deserializeEmbedding } from "./embeddings.js";
 import { computeDecayScore } from "./decay.js";
@@ -85,12 +85,6 @@ export interface SmartInjectionResult {
   detected_tools: string[];
 }
 
-function validateInjectionProject(projectId: string | undefined, db?: Database): void {
-  if (projectId !== undefined && !getProject(projectId, db)) {
-    throw new Error(`Project not found: ${projectId}`);
-  }
-}
-
 export class MemoryInjector {
   private config: MementosConfig;
   private injectedIds: Set<string> = new Set();
@@ -105,7 +99,14 @@ export class MemoryInjector {
    * Token-budget aware.
    */
   getInjectionContext(options: InjectionOptions = {}): string {
-    validateInjectionProject(options.project_id, options.db);
+    const projectId = resolveInjectionProjectId(options.project_id, options.db);
+    return this.getInjectionContextForProject(options, projectId);
+  }
+
+  private getInjectionContextForProject(
+    options: InjectionOptions,
+    projectId: string | undefined,
+  ): string {
     const maxTokens = options.max_tokens || this.config.injection.max_tokens;
     const minImportance =
       options.min_importance || this.config.injection.min_importance;
@@ -131,14 +132,14 @@ export class MemoryInjector {
     allMemories.push(...globalMems);
 
     // Shared memories — project-scoped
-    if (options.project_id) {
+    if (projectId) {
       const sharedMems = listMemories(
         {
           scope: "shared",
           category: categories,
           min_importance: minImportance,
           status: "active",
-          project_id: options.project_id,
+          project_id: projectId,
           ...visibleToMachineFilter(visibleMachineId),
           limit: 100,
         },
@@ -157,7 +158,7 @@ export class MemoryInjector {
           min_importance: minImportance,
           status: "active",
           agent_id: options.agent_id,
-          project_id: options.project_id,
+          project_id: projectId,
           include_unassigned_project: true,
           ...visibleToMachineFilter(visibleMachineId),
           limit: 100,
@@ -175,7 +176,7 @@ export class MemoryInjector {
           status: "active",
           ...(options.session_id ? { session_id: options.session_id } : {}),
           ...(options.agent_id ? { agent_id: options.agent_id } : {}),
-          ...(options.project_id ? { project_id: options.project_id } : {}),
+          ...(projectId ? { project_id: projectId } : {}),
           ...visibleToMachineFilter(visibleMachineId),
           limit: 100,
         },
@@ -304,11 +305,12 @@ export class MemoryInjector {
    * Falls back to default strategy if no embeddings exist or no query is provided.
    */
   async getSmartInjectionContext(options: InjectionOptions = {}): Promise<string> {
-    validateInjectionProject(options.project_id, options.db);
-    // Fall back to default if no query provided
+    // The default path owns its one project resolution. Query-driven paths
+    // resolve here and reuse the stable id even when embeddings are absent.
     if (!options.query) {
       return this.getInjectionContext(options);
     }
+    const projectId = resolveInjectionProjectId(options.project_id, options.db);
 
     const maxTokens = options.max_tokens || this.config.injection.max_tokens;
     const minImportance =
@@ -333,14 +335,14 @@ export class MemoryInjector {
     );
     allMemories.push(...globalMems);
 
-    if (options.project_id) {
+    if (projectId) {
       const sharedMems = listMemories(
         {
           scope: "shared",
           category: categories,
           min_importance: minImportance,
           status: "active",
-          project_id: options.project_id,
+          project_id: projectId,
           ...visibleToMachineFilter(visibleMachineId),
           limit: 100,
         },
@@ -357,7 +359,7 @@ export class MemoryInjector {
           min_importance: minImportance,
           status: "active",
           agent_id: options.agent_id,
-          project_id: options.project_id,
+          project_id: projectId,
           include_unassigned_project: true,
           ...visibleToMachineFilter(visibleMachineId),
           limit: 100,
@@ -375,7 +377,7 @@ export class MemoryInjector {
           status: "active",
           ...(options.session_id ? { session_id: options.session_id } : {}),
           ...(options.agent_id ? { agent_id: options.agent_id } : {}),
-          ...(options.project_id ? { project_id: options.project_id } : {}),
+          ...(projectId ? { project_id: projectId } : {}),
           ...visibleToMachineFilter(visibleMachineId),
           limit: 100,
         },
@@ -418,7 +420,7 @@ export class MemoryInjector {
 
     // If no embeddings exist at all, fall back to default strategy
     if (embeddingMap.size === 0) {
-      return this.getInjectionContext(options);
+      return this.getInjectionContextForProject(options, projectId);
     }
 
     // Compute recency reference: newest updated_at among candidates
@@ -688,8 +690,9 @@ function formatMemoryLine(m: Memory): string {
  * no tool mentions -> skip tool guides.
  */
 export async function smartInject(options: SmartInjectionOptions): Promise<SmartInjectionResult> {
-  // Validate before profile synthesis, which can read and cache memories.
-  validateInjectionProject(options.project_id, options.db);
+  // Resolve before profile synthesis, which can read and cache memories, and
+  // keep the stable id for every downstream profile/search/filter path.
+  const projectId = resolveInjectionProjectId(options.project_id, options.db);
   const config = loadConfig();
   const maxTokens = options.max_tokens || config.injection.max_tokens;
   const minImportance = options.min_importance ?? config.injection.min_importance;
@@ -705,9 +708,9 @@ export async function smartInject(options: SmartInjectionOptions): Promise<Smart
 
   try {
     const profileResult = await synthesizeProfile({
-      project_id: options.project_id,
+      project_id: projectId,
       agent_id: options.agent_id,
-      scope: options.project_id ? "project" : options.agent_id ? "agent" : "global",
+      scope: projectId ? "project" : options.agent_id ? "agent" : "global",
       force_refresh: options.force_profile_refresh,
     });
     if (profileResult) {
@@ -721,7 +724,7 @@ export async function smartInject(options: SmartInjectionOptions): Promise<Smart
   // ── Stage 2: Collect candidate memories ───────────────────────────────
   const candidates = collectVisibleMemories(
     {
-      project_id: options.project_id,
+      project_id: projectId,
       agent_id: options.agent_id,
       session_id: options.session_id,
       min_importance: minImportance,
@@ -739,7 +742,7 @@ export async function smartInject(options: SmartInjectionOptions): Promise<Smart
       {
         threshold: 0.25, // Lower threshold to cast a wider net for ranking
         limit: 50,
-        project_id: options.project_id,
+        project_id: projectId,
         agent_id: options.agent_id,
       },
       db
@@ -766,8 +769,8 @@ export async function smartInject(options: SmartInjectionOptions): Promise<Smart
   if (includeToolGuides) {
     for (const toolName of detectedTools.slice(0, 5)) { // Cap at 5 tools
       try {
-        const stats = getToolStats(toolName, options.project_id, db);
-        const lessons = getToolLessons(toolName, options.project_id, 5, db);
+        const stats = getToolStats(toolName, projectId, db);
+        const lessons = getToolLessons(toolName, projectId, 5, db);
 
         if (stats.total_calls > 0 || lessons.length > 0) {
           const statsLine = stats.total_calls > 0
