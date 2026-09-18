@@ -54,3 +54,15 @@ test("Calendar authority follows main CI, approved source, native smoke and scan
   expect(steps.filter(s => s.uses).every(s => /@[0-9a-f]{40}$/.test(String(s.uses)))).toBe(true);
   expect(asMap(asMap(asMap(asMap(caller.on).workflow_dispatch).inputs).phase).options).toEqual(["prepare", "reconcile", "promote"]);
 });
+
+
+test("Calendar retains available smoke and scanner diagnostics after prepare refusal", () => {
+  const execute = asMap(parseYaml(readFileSync(resolve(root, ".github/workflows/calendar-promotion-execute.yml"), "utf8")));
+  const steps = asMap(asMap(execute.jobs).execute).steps as Array<Record<string, unknown>>;
+  const evidence = steps.find(s => asMap(s.with).name === "calendar-candidate-evidence")!;
+  expect(evidence.if).toBe("${{ always() && inputs.phase == 'prepare' }}");
+  expect(asMap(evidence.with)["if-no-files-found"]).toBe("ignore");
+  const candidate = steps.find(s => asMap(s.with).name === "calendar-candidate")!;
+  expect(candidate.if).toBe("${{ success() && inputs.phase == 'prepare' }}");
+  expect(asMap(candidate.with)["if-no-files-found"]).toBe("error");
+});

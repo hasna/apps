@@ -23,7 +23,7 @@
 // configFileModeAllowed / configFileReadsCoherent.
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -191,7 +191,9 @@ describe("credential files enforce owner-only regular-file no-symlink safety", (
     const home = makeHome();
     const path = appConfigPath(home, "demo");
     mkdirSync(join(path, ".."), { recursive: true });
-    writeFileSync(path, "HASNA_DEMO_API_KEY=diskA\n"); // default mode -> 0644
+    writeFileSync(path, "HASNA_DEMO_API_KEY=diskA\n");
+    systemChmod(path, "644"); // Set the unsafe fixture mode regardless of the process umask.
+    expect(statSync(path).mode & 0o7777).toBe(0o644);
     expect(() => resolveCredential("demo", { HOME: home })).toThrow(/not safe|mode/i);
   });
 

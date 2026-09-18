@@ -24,7 +24,16 @@ package install. Trivy must produce a complete report with no high, critical
 or unknown severity findings.
 
 The producer then reads the fixed String SSM parameter `/hasna/deploy/calendar`
-and checks the account, task, stable service and running image. It pushes a
+and checks the account, task, stable service and running image. The service must
+use direct Fargate launch or a valid strategy containing only Fargate and
+Fargate Spot, with matching primary deployment configuration. Every running
+task must report Fargate and, for a strategy, a provider in that strategy. A task
+definition without the optional `requiresCompatibilities` declaration is accepted
+only when AWS's computed `compatibilities` includes Fargate and contains known,
+unique launch types. An explicit declaration must remain exactly `["FARGATE"]`.
+The registration clone preserves an omitted declaration; computed metadata is
+never forwarded as registration input. See the [AWS task definition contract](https://docs.aws.amazon.com/AmazonECS/latest/APIReference/API_TaskDefinition.html).
+It pushes a
 unique `candidate-<source>-<run>-<attempt>` tag to the manifest's Calendar ECR
 repository. It refuses an existing tag. A valid OCI index is resolved to exactly
 one Linux ARM64 child; the child manifest digest and config digest are verified
@@ -33,7 +42,9 @@ findings is also required. A metadata-only `calendar-candidate` artifact contain
 one `candidate.json`, including source, run/attempt, image/config digests,
 manifest configuration hash, migration 0003 hash and smoke/scanner report hashes.
 The corresponding synthetic smoke metadata and public-image scanner report are
-retained in `calendar-candidate-evidence`.
+retained in `calendar-candidate-evidence`, including after downstream prepare
+failures when those files exist. A failed prepare does not create an admitted
+candidate receipt.
 
 This phase does not start tasks or alter the running service. The separate
 operator issuer image is a required follow-up: it must pin a reviewed published

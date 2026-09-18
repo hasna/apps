@@ -43,6 +43,59 @@ class Boundaries(unittest.TestCase):
                    'taskDefinitionArn': 'metadata', 'revision': 42, 'futureReadOnlyMetadata': 'not an input'}
         self.assertEqual(control.task_payload(current), {'family': 'calendar-prod', 'containerDefinitions': [], 'cpu': '256', 'memory': '512'})
 
+    def test_omitted_declaration_requires_computed_fargate_eligibility(self):
+        cfg, _, service, task = fixture()
+        del task['requiresCompatibilities']
+        task['compatibilities'] = ['EC2', 'FARGATE', 'MANAGED_INSTANCES']
+        self.assertEqual(control.baseline(service, task, cfg)['image_digest'], 'sha256:' + 'a' * 64)
+        payload = control.task_payload(task)
+        self.assertNotIn('requiresCompatibilities', payload)
+        self.assertNotIn('compatibilities', payload)
+        for caps in [None, [], ['EC2'], ['FARGATE', 'FARGATE'], ['FARGATE', 'UNKNOWN'], 'FARGATE', [None]]:
+            with self.subTest(caps=caps), self.assertRaisesRegex(ValueError, 'TASK_FARGATE_ELIGIBILITY'):
+                control.validate_task({**task, 'compatibilities': caps}, cfg)
+        task.pop('compatibilities')
+        with self.assertRaisesRegex(ValueError, 'TASK_FARGATE_ELIGIBILITY'): control.validate_task(task, cfg)
+
+    def test_explicit_invalid_declaration_cannot_borrow_computed_eligibility(self):
+        cfg, _, _, task = fixture()
+        task['compatibilities'] = ['EC2', 'FARGATE', 'MANAGED_INSTANCES']
+        for declaration in [None, [], ['EC2'], ['FARGATE', 'EC2'], ['FARGATE', 'FARGATE'], 'FARGATE']:
+            with self.subTest(declaration=declaration), self.assertRaisesRegex(ValueError, 'TASK_FARGATE_DECLARATION'):
+                control.validate_task({**task, 'requiresCompatibilities': declaration}, cfg)
+        with self.assertRaisesRegex(ValueError, 'TASK_NETWORK_MODE'):
+            control.validate_task({**task, 'networkMode': 'bridge'}, cfg)
+
+    def test_service_admits_only_explicit_fargate_launch_or_valid_fargate_strategy(self):
+        cfg, _, service, _ = fixture()
+        control.validate_service(service, cfg)
+        direct = copy.deepcopy(service)
+        direct.pop('capacityProviderStrategy'); direct['launchType'] = 'FARGATE'
+        direct['deployments'][0].pop('capacityProviderStrategy'); direct['deployments'][0]['launchType'] = 'FARGATE'
+        control.validate_service(direct, cfg)
+        bad = [[], None, [{'capacityProvider': 'EC2', 'weight': 1}],
+            [{'capacityProvider': 'FARGATE', 'weight': 1}, {'capacityProvider': 'UNKNOWN', 'weight': 1}],
+            [{'capacityProvider': 'FARGATE', 'weight': 1}] * 2,
+            [{'capacityProvider': 'FARGATE', 'weight': True}],
+            [{'capacityProvider': 'FARGATE', 'weight': 1.0}],
+            [{'capacityProvider': 'FARGATE', 'weight': 1, 'base': True}],
+            [{'capacityProvider': 'FARGATE', 'weight': 0}],
+            [{'capacityProvider': 'FARGATE', 'weight': 1001}],
+            [{'capacityProvider': 'FARGATE', 'weight': 1, 'base': -1}],
+            [{'capacityProvider': 'FARGATE', 'weight': 1, 'base': 1}, {'capacityProvider': 'FARGATE_SPOT', 'weight': 1, 'base': 1}]]
+        for strategy in bad:
+            for primary in [False, True]:
+                changed = copy.deepcopy(service)
+                target = changed['deployments'][0] if primary else changed
+                target['capacityProviderStrategy'] = strategy
+                with self.subTest(strategy=strategy, primary=primary), self.assertRaisesRegex(ValueError, 'SERVICE_FARGATE'):
+                    control.validate_service(changed, cfg)
+        changed = copy.deepcopy(service); changed['deployments'][0]['capacityProviderStrategy'][0]['weight'] = 2
+        with self.assertRaisesRegex(ValueError, 'SERVICE_FARGATE_PRIMARY_DRIFT'): control.validate_service(changed, cfg)
+        for launch in ['FARGATE', 'EC2', None]:
+            with self.subTest(launch=launch), self.assertRaisesRegex(ValueError, 'SERVICE_FARGATE'):
+                control.validate_service({**service, 'launchType': launch}, cfg)
+
     def test_receipt_age_is_short_bounded_and_never_a_future_attestation(self):
         now = datetime(2026, 9, 18, 12, tzinfo=timezone.utc)
         control.receipt_time({'recorded_at': '2026-09-18T11:00:00Z', 'max_age_seconds': 3600}, now)
@@ -76,7 +129,9 @@ def fixture():
         'serviceArn': f'arn:aws:ecs:us-east-1:{account}:service/fixture/calendar-prod',
         'serviceName': 'calendar-prod', 'status': 'ACTIVE', 'taskDefinition': arn,
         'desiredCount': 0, 'runningCount': 0, 'pendingCount': 0,
-        'deployments': [{'status': 'PRIMARY', 'rolloutState': 'COMPLETED', 'taskDefinition': arn}],
+        'capacityProviderStrategy': [{'capacityProvider': 'FARGATE', 'weight': 1, 'base': 0}, {'capacityProvider': 'FARGATE_SPOT', 'weight': 4, 'base': 0}],
+        'deployments': [{'status': 'PRIMARY', 'rolloutState': 'COMPLETED', 'taskDefinition': arn,
+            'capacityProviderStrategy': [{'capacityProvider': 'FARGATE', 'weight': 1, 'base': 0}, {'capacityProvider': 'FARGATE_SPOT', 'weight': 4, 'base': 0}]}],
         'networkConfiguration': {'awsvpcConfiguration': {'subnets': cfg['subnets'], 'securityGroups': cfg['security_groups'], 'assignPublicIp': 'ENABLED'}},
         'deploymentConfiguration': {'deploymentCircuitBreaker': {'enable': True, 'rollback': False}}}
     task = {'taskDefinitionArn': arn, 'family': 'calendar-prod', 'cpu': '256', 'memory': '512',
