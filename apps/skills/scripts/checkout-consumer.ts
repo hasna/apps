@@ -1,17 +1,16 @@
 #!/usr/bin/env bun
 /** Run against a separately installed archive; this script does not install or publish. */
 import assert from "node:assert/strict";
-import { createRequire } from "node:module";
 import { readFileSync, realpathSync } from "node:fs";
 import { isAbsolute, join, sep } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const consumer = process.argv[2];
 assert(consumer && isAbsolute(consumer), "Pass the absolute, isolated installed-consumer directory");
 const root = realpathSync(join(consumer, "node_modules/@hasna/skills"));
 const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 assert.equal(pkg.name, "@hasna/skills");
-const entry = realpathSync(createRequire(join(consumer, "package.json")).resolve("@hasna/skills/sdk"));
+const entry = realpathSync(fileURLToPath(import.meta.resolve("@hasna/skills/sdk", pathToFileURL(join(consumer, "package.json")).href)));
 assert(entry.startsWith(root + sep), "SDK must resolve inside the selected installed package");
 const originalFetch = globalThis.fetch, posts: Array<{ packId: string; idempotencyKey: string }> = [];
 const key = "installed-checkout-0001", lossKey = "installed-checkout-0002";
