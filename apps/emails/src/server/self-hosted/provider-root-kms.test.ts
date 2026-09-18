@@ -1,5 +1,10 @@
 import {expect,test} from "bun:test";
 import {randomBytes} from "node:crypto";
+import {spawnSync} from "node:child_process";
+import {mkdtempSync,rmSync} from "node:fs";
+import {tmpdir} from "node:os";
+import {join} from "node:path";
+import {fileURLToPath} from "node:url";
 import {buildProviderRootKms} from "./provider-root-kms.js";
 import {openProviderBytes,sealProviderBytes,providerSecretAad} from "./managed-provider-crypto.js";
 test("KMS uses deployment key and exact opaque tenant context; clears response key buffers and closes clients",async()=>{
@@ -32,6 +37,18 @@ test("ECS provider KMS selects container task-role credentials even when general
  })!;
  await local.generate(context,AbortSignal.timeout(1000));
  expect(selected).toEqual([true,true,false]);
+});
+test("real SDK signs provider KMS with ECS metadata and does not fall back after metadata failure",()=>{
+ const home=mkdtempSync(join(tmpdir(),"emails-kms-credentials-"));
+ try{
+  const child=spawnSync(process.execPath,[fileURLToPath(new URL("./provider-root-kms.credentials.fixture.mjs",import.meta.url))],{
+   env:{PATH:process.env.PATH??"",HOME:home,TMPDIR:home,NO_COLOR:"1"},
+   encoding:"utf8",timeout:15000,maxBuffer:32*1024,
+  });
+  expect(child.error).toBeUndefined();
+  expect(child.status).toBe(0);
+  expect(JSON.parse(child.stdout.trim())).toEqual({containerCalls:2,metadataFailureBlocked:true,nonContainerCalls:1,metadataCallsAtLeast:true});
+ }finally{rmSync(home,{recursive:true,force:true});}
 });
 test("AEAD rejects tenant/provider/revision/purpose substitution and altered ciphertext",()=>{
  const key=randomBytes(32),aad=providerSecretAad("tenant","provider",1,"payload"),value=sealProviderBytes(Buffer.from("fixture"),key,aad);
