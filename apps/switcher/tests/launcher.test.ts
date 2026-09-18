@@ -43,7 +43,7 @@ test("Grok authentication lockdown rejects provider launch before discovery or c
   } finally {if(prior===undefined)delete process.env.GROK_DISABLE_API_KEY_AUTH;else process.env.GROK_DISABLE_API_KEY_AUTH=prior;if(team===undefined)delete process.env.GROK_FORCE_LOGIN_TEAM_ID;else process.env.GROK_FORCE_LOGIN_TEAM_ID=team;}
 });
 
-test("Ori backend preflights its contract, preserves the Switcher catalog and uses the explicit Ori executable", async () => {
+test("Ori metadata preflights its contract but Codex launch refuses unaccepted shared-state integration", async () => {
   const root=join(homedir(),"Workspace/scratch/switcher-tests"); await mkdir(root,{recursive:true}); const dir=await mkdtemp(join(root,"ori-launch-"));
   const executable=join(dir,"ori-fixture"),nativeExecutable=join(dir,"native-codex");
   await writeFile(nativeExecutable,"#!/bin/sh\necho codex-cli 0.153.4\n",{mode:0o700});
@@ -82,28 +82,25 @@ exit 7
     }
 
     await writeFile(nativeExecutable,"#!/bin/sh\necho codex-cli 0.152.0\n",{mode:0o700});
-    await expect(launch(routedClient,"ori-profile",{backend:"ori",oriExecutable:executable,cwd:dir,stateDir:join(dir,"state"),resolveCredential:async()=>{resolved++;return "fixture";}})).rejects.toThrow("Codex >=0.153.0");
-    expect(resolved).toBe(0);expect(await readdir(join(dir,"state"))).toEqual([]);
+    await expect(validateOriForPlan(await routedClient.launchPlan("ori-profile"),{oriExecutable:executable,cwd:dir})).rejects.toThrow("Codex >=0.153.0");
+    expect(resolved).toBe(0);
     await writeFile(nativeExecutable,"#!/bin/sh\necho codex-cli 0.153.4\n",{mode:0o700});
     await expect(validateOriForPlan({...await routedClient.launchPlan("ori-profile"),provider:{...resolvedProvider,authStyle:"x-api-key"}},{oriExecutable:executable,cwd:dir})).rejects.toThrow("Bearer authentication contract");
     const previousLogin=process.env.ORI_REQUIRE_LOGIN; process.env.ORI_REQUIRE_LOGIN="1"; resolved=0;
     try {
-      await expect(launch(routedClient,"ori-profile",{backend:"ori",oriExecutable:executable,resolveCredential:async()=>{resolved++;return "fixture";}})).rejects.toThrow("cannot bypass native Ori login policy");
+      await expect(validateOriForPlan(await routedClient.launchPlan("ori-profile"),{oriExecutable:executable})).rejects.toThrow("cannot bypass native Ori login policy");
       expect(resolved).toBe(0);
     } finally { if(previousLogin===undefined) delete process.env.ORI_REQUIRE_LOGIN; else process.env.ORI_REQUIRE_LOGIN=previousLogin; }
     const grokClient={...client,launchPlan:async()=>({...(await client.launchPlan("grok")),profile:{harness:"grok",model:"openrouter/model"},provider:{id:"openrouter",baseUrl:"https://openrouter.ai/api/v1",protocol:"openai-chat",credentialEnv:"SWITCHER_PROVIDER_OPENROUTER",authStyle:"bearer"}})} as unknown as SwitcherClient;
     const previousGrok=process.env.GROK_DISABLE_API_KEY_AUTH; process.env.GROK_DISABLE_API_KEY_AUTH="deployment-lockdown";
     try { await expect(validateOriForPlan(await grokClient.launchPlan("grok"),{oriExecutable:executable})).rejects.toThrow("native authentication policy"); }
     finally { if(previousGrok===undefined) delete process.env.GROK_DISABLE_API_KEY_AUTH; else process.env.GROK_DISABLE_API_KEY_AUTH=previousGrok; }
-    const code=await launch(routedClient,"ori-profile",{backend:"ori",oriExecutable:executable,cwd:dir,stateDir:join(dir,"state"),resolveCredential:async()=>{resolved++;return "fixture-openrouter-key";}});
-    expect(code).toBe(7); expect(resolved).toBe(1); expect(records.at(-1)).toMatchObject({status:"failed",exitCode:7});
-    const args=(await readFile(join(dir,"args"),"utf8")).split("\n");
-    expect(args.slice(0,3)).toEqual(["codex","--model","openrouter/model"]);
-    expect(args.some(value=>value.startsWith("model_catalog_json=../../"))).toBe(false);
-    expect(args.some(value=>value.startsWith("model_catalog_json=\"/"))).toBe(true);
-    expect(await readFile(join(dir,"key-presence"),"utf8")).toBe("present\n");
+    await expect(launch(routedClient,"ori-profile",{backend:"ori",oriExecutable:executable,cwd:dir,stateDir:join(dir,"state"),resolveCredential:async()=>{resolved++;return "fixture-openrouter-key";}})).rejects.toMatchObject({code:"native_state_backend"});
+    expect(resolved).toBe(0); expect(records).toEqual([]);
+    expect(await Bun.file(join(dir,"args")).exists()).toBe(false);
+    await expect(readdir(join(dir,"state"))).rejects.toMatchObject({code:"ENOENT"});
     const badClient={...client,launchPlan:async()=>({...(await client.launchPlan("bad")),provider:{id:"openrouter",baseUrl:"https://evil.example/api/v1",protocol:"openai-responses",credentialEnv:"SWITCHER_PROVIDER_OPENROUTER",authStyle:"bearer"}})} as unknown as SwitcherClient;
-    resolved=0; await expect(launch(badClient,"bad",{backend:"ori",oriExecutable:executable,resolveCredential:async()=>{resolved++;return "fixture";}})).rejects.toThrow("openrouter"); expect(resolved).toBe(0);
+    resolved=0; await expect(validateOriForPlan(await badClient.launchPlan("bad"),{oriExecutable:executable})).rejects.toThrow("openrouter"); expect(resolved).toBe(0);
   } finally { await rm(dir,{recursive:true,force:true}); }
 });
 
@@ -349,3 +346,36 @@ test.skipIf(process.platform === "win32")("normal exit and timeout stop owned ha
     }
   } finally {await rm(dir,{recursive:true,force:true});}
 },25_000);
+
+test("desktop settlement uncertainty during failed launch preparation preserves private files and closes transport", async () => {
+  const root=join(homedir(),"Workspace/scratch/switcher-tests");await mkdir(root,{recursive:true});
+  const dir=await mkdtemp(join(root,"desktop-uncertain-cleanup-"));
+  const native=join(dir,"codex-version"),app=join(dir,"unused-app"),state=join(dir,"state"),profileId="desktop-fixture";
+  await writeFile(native,"#!/bin/sh\necho 'codex-cli 0.154.0'\n",{mode:0o700});
+  await writeFile(app,"#!/bin/sh\nexit 99\n",{mode:0o700});
+  const sessionDir=join(state,"desktop",profileId),configPath=join(sessionDir,"codex/config.toml");
+  let gateway:string|undefined;
+  const client={
+    getProfile:async()=>({providerId:"fixture",harness:"codex"}),
+    launchPlan:async()=>({profile:{harness:"codex",model:"fixture-model"},provider:{id:"fixture",baseUrl:"http://127.0.0.1:1",protocol:"openai-responses"},catalog:{models:[{id:"fixture-model",name:"Fixture"}]},warnings:[]}),
+    createRun:async()=>{
+      const config=Bun.TOML.parse(await readFile(configPath,"utf8")) as any;
+      gateway=config.model_providers.switcher.base_url;
+      // Model a bridge admitted before a later preparation failure. The fixture
+      // creates no native child; production keeps this receipt until settlement.
+      await mkdir(join(sessionDir,"codex-bridges"),{recursive:true,mode:0o700});
+      await writeFile(join(sessionDir,"codex-bridges/fixture.pending"),"fixture",{mode:0o600});
+      throw new Error("fixture createRun failed");
+    },
+  } as unknown as SwitcherClient;
+  try {
+    await expect(launch(client,profileId,{refresh:false,cwd:dir,stateDir:state,
+      desktop:{path:dir,executable:app,codexExecutable:native,bundleId:"com.openai.codex",version:"fixture"},
+    })).rejects.toThrow("fixture createRun failed");
+    expect(await Bun.file(join(sessionDir,"codex/auth.json")).exists()).toBe(true);
+    expect(await Bun.file(join(sessionDir,"codex-bridges/fixture.pending")).exists()).toBe(true);
+    expect((await readdir(state)).filter(name=>name.startsWith("launch-"))).toHaveLength(1);
+    expect(gateway).toBeDefined();
+    await expect(fetch(gateway!)).rejects.toThrow();
+  } finally { await rm(dir,{recursive:true,force:true}); }
+});

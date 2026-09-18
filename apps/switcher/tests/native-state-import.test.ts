@@ -3,7 +3,7 @@ import { link, mkdtemp, mkdir, readFile, readdir, realpath, rm, stat, symlink, w
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { legacyNativeStateWarnings, resolveNativeState } from "../src/native-state";
-import { applyNativeStateImport, nativeStateImportSummary, planNativeStateImport } from "../src/native-state-import";
+import { applyNativeStateImport, nativeStateImportDigest, nativeStateImportSummary, planNativeStateImport } from "../src/native-state-import";
 
 async function fixture(body: (root: string) => Promise<void>) {
   const root = await realpath(await mkdtemp(join(tmpdir(), "switcher-state-import-")));
@@ -19,20 +19,29 @@ test("dry-run creates nothing; explicit staging keeps original transcript/tool I
   const transcript = '{"type":"function_call","call_id":"original-tool-id","arguments":"exact"}\n{"type":"function_call_output","call_id":"original-tool-id","output":"keep"}\n';
   await file(source, "sessions/2026/turn.jsonl", transcript);
   for (const name of ["auth.json", "config.toml", "state_5.sqlite", "state_5.sqlite-wal", "session_index.jsonl", "thread-writer-locks/thread.lock", "plugins/cache"]) await file(source, name, "excluded fixture");
-  await file(source, "skills/example/SKILL.md", "synthetic skill fixture");
+  await file(source, ".hasna/instructions/example.md", "synthetic instruction fixture");
+  await file(source, "skills/example/SKILL.md", "synthetic shared skill fixture");
   const original = await stat(join(source, "sessions/2026/turn.jsonl"));
   const state = await resolveNativeState("codex", { HOME: root }, { create: false });
   const plan = await planNativeStateImport(state, source);
-  expect(plan.files.map(file => file.path).sort()).toEqual(["sessions/2026/turn.jsonl", "skills/example/SKILL.md"]);
+  expect(plan.files.map(file => file.path).sort()).toEqual([".hasna/instructions/example.md", "sessions/2026/turn.jsonl", "skills/example/SKILL.md"]);
   expect(await readdir(root)).toEqual(["legacy"]);
-  expect(nativeStateImportSummary(plan, false)).toMatchObject({ mode: "dry-run", newFiles: 2, cutoverComplete: false });
+  const summary=nativeStateImportSummary(plan, false);
+  expect(summary).toMatchObject({ mode: "dry-run", entries: expect.arrayContaining(["sessions",".hasna/instructions"]), newFiles: 3, cutoverComplete: false });
+  expect(summary).not.toHaveProperty("source");expect(summary).not.toHaveProperty("destination");
   await applyNativeStateImport(plan);
   expect(await readFile(join(state.home, "sessions/2026/turn.jsonl"), "utf8")).toBe(transcript);
   expect(await readFile(join(source, "sessions/2026/turn.jsonl"), "utf8")).toBe(transcript);
   const after = await stat(join(source, "sessions/2026/turn.jsonl"));expect(after.ino).toBe(original.ino);expect(after.mtimeMs).toBe(original.mtimeMs);
-  expect(await readdir(state.home)).toEqual(["sessions", "skills"]);
+  expect((await readdir(state.home)).sort()).toEqual([".hasna", "sessions", "skills"]);
   expect(nativeStateImportSummary(plan, true)).toMatchObject({ mode: "staged-snapshot", cutoverComplete: false, originalsPreserved: true, sqliteCopied: false });
   const repeated = await planNativeStateImport(state, source);expect(repeated.files.every(file => file.existing)).toBe(true);await applyNativeStateImport(repeated);
+}));
+
+test("plan digest binds reviewed empty-directory topology", () => fixture(async root => {
+  const state=await resolveNativeState("codex",{HOME:root},{create:false}),source=join(root,"legacy");await mkdir(join(source,"sessions/empty"),{recursive:true,mode:0o700});
+  const plan=await planNativeStateImport(state,source,["sessions"]),changed={...plan,directories:[...plan.directories,"sessions/unreviewed"]};
+  expect(nativeStateImportDigest(plan)).not.toBe(nativeStateImportDigest(changed));
 }));
 
 test("one divergent collision prevents all writes, including previously unseen conversations", () => fixture(async root => {
@@ -55,8 +64,8 @@ test("changed source after preflight refuses staging before creating the destina
 
 test("symlinks, excluded entries and overlapping directories cannot import credential or unrelated state", () => fixture(async root => {
   const state = await resolveNativeState("codex", { HOME: root }), source = join(root, "legacy");
-  await file(source, "auth.json", "private synthetic fixture");await mkdir(join(source, "skills"), { mode: 0o700 });
-  await symlink(join(source, "auth.json"), join(source, "skills/bad"));
+  await file(source, "auth.json", "private synthetic fixture");await mkdir(join(source, ".hasna/instructions"), { recursive:true,mode: 0o700 });
+  await symlink(join(source, "auth.json"), join(source, ".hasna/instructions/bad"));
   await expect(planNativeStateImport(state, source)).rejects.toMatchObject({ code: "native_state_import_conflict" });
   await expect(planNativeStateImport(state, source, ["auth.json"])).rejects.toMatchObject({ code: "native_state_import_conflict" });
   await expect(planNativeStateImport(state, source, ["../auth.json"])).rejects.toMatchObject({ code: "native_state_import_conflict" });
@@ -79,14 +88,20 @@ test("actual local import CLI defaults to a read-only dry run without accessing 
     env: { HOME: root, PATH: process.env.PATH }, stdin: "ignore", stdout: "pipe", stderr: "pipe",
   });
   const output = await new Response(child.stdout).text(), error = await new Response(child.stderr).text();
-  expect(await child.exited, error).toBe(0);expect(JSON.parse(output)).toMatchObject({ mode: "dry-run", newFiles: 1, cutoverComplete: false });
+  expect(await child.exited, error).toBe(0);const receipt=JSON.parse(output);expect(receipt).toMatchObject({ mode: "dry-run", newFiles: 1, cutoverComplete: false });
+  expect(receipt.source).toBeUndefined();expect(receipt.destination).toBeUndefined();expect(output).not.toContain(source);expect(receipt.planDigest).toMatch(/^[a-f0-9]{64}$/);
   expect(await readdir(root)).not.toContain(".codex");
+  const wrong=Bun.spawn([process.execPath,join(import.meta.dir,"../src/cli.ts"),"state","import","codex","--from",source,"--apply","--plan-digest","0".repeat(64)],{env:{HOME:root,PATH:process.env.PATH},stdin:"ignore",stdout:"pipe",stderr:"pipe"});
+  const [wrongCode,wrongOut,wrongError]=await Promise.all([wrong.exited,new Response(wrong.stdout).text(),new Response(wrong.stderr).text()]);expect(wrongCode).toBe(1);expect(wrongOut).toBe("");expect(wrongError).toContain("native_state_plan_mismatch");expect(await readdir(root)).not.toContain(".codex");
+  const apply=Bun.spawn([process.execPath,join(import.meta.dir,"../src/cli.ts"),"state","import","codex","--from",source,"--apply","--plan-digest",receipt.planDigest],{env:{HOME:root,PATH:process.env.PATH},stdin:"ignore",stdout:"pipe",stderr:"pipe"});
+  const [applyCode,applyOut,applyError]=await Promise.all([apply.exited,new Response(apply.stdout).text(),new Response(apply.stderr).text()]);expect(applyCode,applyError).toBe(0);expect(JSON.parse(applyOut)).toMatchObject({planDigest:receipt.planDigest,publishedFiles:1,cutoverComplete:false});expect(applyOut).not.toContain(source);
+  expect(await readFile(join(root,".codex/sessions/thread.jsonl"),"utf8")).toBe("fixture");
   expect(await readFile(join(source, "sessions/thread.jsonl"), "utf8")).toBe("fixture");
 }));
 
-test("hardlinked aliases cannot copy an excluded authentication file through skills", () => fixture(async root => {
+test("hardlinked aliases cannot copy an excluded authentication file through shared instructions", () => fixture(async root => {
   const state=await resolveNativeState("codex",{HOME:root}),source=join(root,"legacy");
-  await file(source,"auth.json","synthetic private fixture");await mkdir(join(source,"skills"),{mode:0o700});await link(join(source,"auth.json"),join(source,"skills/alias.txt"));
+  await file(source,"auth.json","synthetic private fixture");await mkdir(join(source,".hasna/instructions"),{recursive:true,mode:0o700});await link(join(source,"auth.json"),join(source,".hasna/instructions/alias.txt"));
   await expect(planNativeStateImport(state,source)).rejects.toMatchObject({code:"native_state_import_conflict"});expect(await readdir(state.home)).toEqual([]);
 }));
 

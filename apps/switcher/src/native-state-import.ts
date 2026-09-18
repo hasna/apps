@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
-import { lstat, open, opendir, link, unlink } from "node:fs/promises";
+import { lstat, open, opendir, link, rmdir, unlink } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { Fault } from "./domain";
-import { assertNativeStateDirectory, ensureNativeStateDirectory, NATIVE_STATE_ENTRIES, type NativeState } from "./native-state";
+import { assertNativeStateDirectory, ensureNativeStateDirectory, NATIVE_STATE_ENTRIES, withNativeStateLock, type NativeState } from "./native-state";
 
 const MAX_FILES = 100_000, MAX_BYTES = 2 * 1024 * 1024 * 1024;
 type Identity = { dev: number; ino: number; size: number; mtimeMs: number; ctimeMs: number };
@@ -70,7 +70,7 @@ async function checkSessionIdentities(plan: NativeStateImport): Promise<void> {
 
 async function fingerprint(path: string, copyTo?: string): Promise<{ bytes: number; sha256: string; source: Identity }> {
   const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
-  let output: Awaited<ReturnType<typeof open>> | undefined;
+  let output: Awaited<ReturnType<typeof open>> | undefined, complete = false;
   try {
     const before = await handle.stat();
     if (!before.isFile() || before.nlink !== 1 || before.uid !== process.getuid?.() || (before.mode & 0o022) || before.size > MAX_BYTES) throw refused();
@@ -84,9 +84,12 @@ async function fingerprint(path: string, copyTo?: string): Promise<{ bytes: numb
     }
     const after = await handle.stat(), named = await lstat(path);
     if (named.isSymbolicLink() || after.nlink !== 1 || named.nlink !== 1 || bytes !== before.size || !same(before, after) || !same(after, named)) throw refused();
-    await output?.sync();
+    await output?.sync();complete = true;
     return { bytes, sha256: hash.digest("hex"), source: identity(before) };
-  } finally { await output?.close();await handle.close(); }
+  } finally {
+    await output?.close();await handle.close();
+    if (copyTo && !complete) await unlink(copyTo).catch(() => undefined);
+  }
 }
 
 /** Entire import is checked before writes. Account/auth/config/SQLite files
@@ -128,29 +131,78 @@ export async function planNativeStateImport(state: NativeState, source: string, 
   return plan;
 }
 
+export function nativeStateImportDigest(plan: NativeStateImport): string {
+  return createHash("sha256").update(JSON.stringify({tool:plan.state.tool,source:plan.source,destination:plan.state.home,entries:plan.entries,directories:plan.directories,
+    files:plan.files.map(file=>({path:file.path,bytes:file.bytes,sha256:file.sha256,source:file.source,existing:file.existing,sessionId:file.sessionId}))})).digest("hex");
+}
 export function nativeStateImportSummary(plan: NativeStateImport, applied: boolean) {
-  return { mode: applied ? "staged-snapshot" : "dry-run", tool: plan.state.tool, source: plan.source, destination: plan.state.home,
-    files: plan.files.length, newFiles: plan.files.filter(file => !file.existing).length, bytes: plan.bytes,
+  const newFiles=plan.files.filter(file => !file.existing).length;
+  return { mode: applied ? "staged-snapshot" : "dry-run", tool: plan.state.tool, entries: plan.entries, planDigest:nativeStateImportDigest(plan),
+    files: plan.files.length, newFiles, publishedFiles:applied?newFiles:0, bytes: plan.bytes,
     originalsPreserved: true, cutoverComplete: false, sqliteCopied: false,
     notice: "The original can still receive writes. This copy is not a completed migration. Legacy SQLite/index metadata and login data remain in the original directory; Codex discovery repairs the catalog from copied transcripts." };
 }
 
-export async function applyNativeStateImport(plan: NativeStateImport): Promise<void> {
+async function applyNativeStateImportUnlocked(plan: NativeStateImport): Promise<void> {
   // Re-plan to detect changes since a displayed dry run, before creating dirs.
   const fresh = await planNativeStateImport(plan.state, plan.source, plan.entries);
   if (JSON.stringify(fresh) !== JSON.stringify(plan)) throw refused();
-  await ensureNativeStateDirectory(plan.state.home);
-  for (const path of plan.directories) await ensureNativeStateDirectory(join(plan.state.home, path));
-  for (const file of plan.files) {
-    if (file.existing) continue;
-    const target = join(plan.state.home, file.path);
-    await assertNativeStateDirectory(dirname(target));
-    const temporary = join(dirname(target), `.switcher-import-${crypto.randomUUID()}`);
-    try {
+  const requiredDirectories = new Set<string>([plan.state.home]);
+  for (const path of plan.directories) {
+    for (let directory = join(plan.state.home, path); inside(plan.state.home, directory); directory = dirname(directory)) {
+      requiredDirectories.add(directory); if (directory === plan.state.home) break;
+    }
+  }
+  for (const file of plan.files.filter(file => !file.existing)) {
+    for (let directory = dirname(join(plan.state.home, file.path)); inside(plan.state.home, directory); directory = dirname(directory)) {
+      requiredDirectories.add(directory); if (directory === plan.state.home) break;
+    }
+  }
+  const directories = [...requiredDirectories].sort((a,b)=>a.length-b.length), createdDirectories: string[] = [];
+  const staged: Array<{ temporary: string; target: string }> = [];let published = 0;
+  let committed = false, cleanupFailed = false;
+  try {
+    for (const directory of directories) {
+      if (!await info(directory)) { await ensureNativeStateDirectory(directory); createdDirectories.push(directory); }
+      else await assertNativeStateDirectory(directory);
+    }
+    // Copy and revalidate every source before publishing any destination. This
+    // prevents a later changed source from leaving an earlier partial import.
+    for (const file of plan.files) {
+      if (file.existing) continue;
+      const target = join(plan.state.home, file.path), temporary = join(dirname(target), `.switcher-import-${crypto.randomUUID()}`);
+      staged.push({ temporary, target });
       const copied = await fingerprint(join(plan.source, file.path), temporary);
       if (copied.bytes !== file.bytes || copied.sha256 !== file.sha256 || !same(copied.source, file.source)) throw refused();
-      // Hardlink publication is atomic and never overwrites a racing writer.
-      await link(temporary, target);
-    } finally { await unlink(temporary).catch(error => { if (error.code !== "ENOENT") throw error; }); }
+    }
+    // Each link is no-replace. Once visible, a file is never deleted by
+    // rollback because a native writer may have already appended to it.
+    for (const item of staged) {
+      try { await link(item.temporary, item.target);published++; }
+      catch(error) {
+        if(published)throw new Fault(409,"native_state_import_partial",`Native state import published ${published} reviewed file(s) before a racing destination appeared. Existing and published data was preserved. Run a new dry-run to reconcile the remainder.`);
+        throw error;
+      }
+    }
+    committed = true;
+  } finally {
+    for (const item of staged) {
+      try { await unlink(item.temporary); }
+      catch(error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") cleanupFailed = true; }
+    }
+    if (!committed && published===0) {
+      for (const directory of createdDirectories.sort((a,b)=>b.length-a.length)) {
+        try { await rmdir(directory); }
+        catch(error) { if (!["ENOENT","ENOTEMPTY","EEXIST"].includes((error as NodeJS.ErrnoException).code??"")) cleanupFailed = true; }
+      }
+    }
+    if (cleanupFailed) throw new Fault(500,"native_state_import_recovery","Native state import cleanup was incomplete. Existing data was not intentionally replaced; inspect the destination for .switcher-import files before retrying.");
   }
+}
+
+export async function applyNativeStateImport(plan: NativeStateImport): Promise<void> {
+  const existed=Boolean(await info(plan.state.home));
+  await ensureNativeStateDirectory(plan.state.home);
+  try { return await withNativeStateLock(plan.state,()=>applyNativeStateImportUnlocked(plan)); }
+  catch(error) { if(!existed)await rmdir(plan.state.home).catch(()=>undefined);throw error; }
 }

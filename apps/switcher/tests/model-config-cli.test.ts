@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 const cli=new URL("../src/cli.ts",import.meta.url).pathname;
@@ -9,7 +9,7 @@ async function run(home:string,args:string[]){
   try{const [code,stdout,stderr]=await Promise.all([p.exited,new Response(p.stdout).text(),new Response(p.stderr).text()]);return {code,stdout,stderr};}finally{clearTimeout(timer);}
 }
 test("CLI creates a custom manual provider and edits/selects models without provider JSON",async()=>{
-  const home=await mkdtemp(join(tmpdir(),"switcher-config-cli-"));
+  const home=await realpath(await mkdtemp(join(tmpdir(),"switcher-config-cli-")));
   try{
     const add=await run(home,["providers","add","deployment","--url","http://127.0.0.1:9997/v1","--protocol","openai-responses","--catalog-format","none","--model","vendor/first"]);
     expect(add.code,add.stderr).toBe(0);expect(JSON.parse(add.stdout).manualModels).toEqual([{id:"vendor/first",name:"vendor/first"}]);
@@ -25,7 +25,7 @@ test("CLI creates a custom manual provider and edits/selects models without prov
   }finally{await rm(home,{recursive:true,force:true});}
 },30000);
 test("CLI keeps verb-shaped provider IDs reachable through shorthand and explicit listing",async()=>{
-  const home=await mkdtemp(join(tmpdir(),"switcher-config-cli-"));
+  const home=await realpath(await mkdtemp(join(tmpdir(),"switcher-config-cli-")));
   try{
     for(const provider of ["config","update","remove","add","list"]){
       const created=await run(home,["providers","add",provider,"--url","http://127.0.0.1:9997/v1","--protocol","openai-chat","--catalog-format","none","--model",provider+"/model"]);
@@ -37,7 +37,7 @@ test("CLI keeps verb-shaped provider IDs reachable through shorthand and explici
   }finally{await rm(home,{recursive:true,force:true});}
 },30000);
 test("CLI imports a model array, rejects duplicates and secret-bearing metadata before saving",async()=>{
-  const home=await mkdtemp(join(tmpdir(),"switcher-config-cli-"));
+  const home=await realpath(await mkdtemp(join(tmpdir(),"switcher-config-cli-")));
   try{
     const file=join(home,"models.json");await writeFile(file,JSON.stringify([{id:"a",name:"A"},{id:"b",name:"B"}]));
     const added=await run(home,["providers","add","custom","--url","https://provider.example/v1","--protocol","openai-chat","--models-file",file]);expect(added.code,added.stderr).toBe(0);expect(JSON.parse(added.stdout)).toMatchObject({manualModels:[],additionalModels:[{id:"a",name:"A"},{id:"b",name:"B"}]});

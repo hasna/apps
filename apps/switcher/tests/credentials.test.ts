@@ -151,7 +151,7 @@ else { console.log(JSON.stringify({auth:!!process.env.ANTHROPIC_AUTH_TOKEN&&proc
     await expect(fetch(invocation.deliveryAddress)).rejects.toThrow();
     expect(result.stdout+result.stderr).not.toContain("fixture-provider-key");
     expect(result.stdout+result.stderr).not.toContain("fixture-operator");
-    expect(await readdir(join(dir,"data/state"))).toEqual([]);
+    expect(await readdir(join(dir,"data/state"))).toEqual(["native-claude"]);
     for (const name of ["switcher.db","config/credential-bindings/SWITCHER_PROVIDER_FIXTURE.json"]) {
       const data = await readFile(join(dir,"data",name));
       expect(data.includes(Buffer.from("fixture-provider-key"))).toBe(false);

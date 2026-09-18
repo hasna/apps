@@ -19,12 +19,12 @@ import { prepareClaudeDesktopLaunch } from "./claude-desktop-launch";
 import type { ChatGPTInstallation, ClaudeDesktopInstallation } from "./desktop-apps";
 import type { ReasoningEffort } from "./reasoning";
 import { childEnvironment } from "./harness-environment";
-import { assertCodexCanonicalLaunch, assertNativeInstructionOverlay, legacyNativeStateWarnings, nativeDesktopStateId, nativeStateEnvironment, projectNativeState, resolveNativeState, type NativeState } from "./native-state";
+import { assertCodexCanonicalLaunch, assertNativeInstructionOverlay, legacyNativeStateWarnings, nativeStateEnvironment, projectNativeState, resolveNativeState, validateNativeStateVersion, type NativeState } from "./native-state";
 import { listCodexSessions, resolveCodexResumeArguments } from "./codex-session-discovery";
 import type { RoutingEvent } from "./inference-gateway";
 export { childEnvironment } from "./harness-environment";
 export type LaunchBackend = "direct" | "ori";
-export type LaunchOptions = {desktop?: ChatGPTInstallation; claudeDesktop?:ClaudeDesktopInstallation; reasoning?:ReasoningEffort; dangerouslyBypassApprovalsAndSandbox?:boolean; backend?: LaunchBackend; oriExecutable?: string; cwd?: string; executable?: string; stateDir?: string; args?: string[]; timeoutMs?: number; refresh?: boolean; credentialEnv?: NodeJS.ProcessEnv; credentialPreflight?:string; resolveCredential?: (provider: ProviderInput)=>Promise<string | undefined>};
+export type LaunchOptions = {desktop?: ChatGPTInstallation; claudeDesktop?:ClaudeDesktopInstallation; shareNativeState?:boolean; reasoning?:ReasoningEffort; dangerouslyBypassApprovalsAndSandbox?:boolean; backend?: LaunchBackend; oriExecutable?: string; cwd?: string; executable?: string; stateDir?: string; args?: string[]; timeoutMs?: number; refresh?: boolean; credentialEnv?: NodeJS.ProcessEnv; credentialPreflight?:string; resolveCredential?: (provider: ProviderInput)=>Promise<string | undefined>};
 const LATE_RUN_FINALIZATION_TIMEOUT_MS = 5_000;
 
 async function writeOriCodexCatalog(stateDir: string, models: LaunchPlan["catalog"]["models"]): Promise<string> {
@@ -130,6 +130,10 @@ export async function launch(client: SwitcherClient, profileId: string, options:
   if (backend === "direct" && options.oriExecutable) throw new Error("--ori-executable requires --backend ori.");
   if (options.desktop && (plan.profile.harness !== "codex" || backend !== "direct")) throw new Error("ChatGPT requires the direct Codex provider adapter.");
   if (options.claudeDesktop && (options.desktop || plan.profile.harness !== "claude" || backend !== "direct" || options.executable || options.args?.length)) throw new Error("Claude desktop requires its direct Messages gateway adapter without native CLI overrides.");
+  if (options.shareNativeState && !["codex", "claude"].includes(plan.profile.harness))
+    throw new Fault(400, "native_state_harness", "--share-native-state is supported only for Codex, ChatGPT, Claude CLI and Claude desktop launches.");
+  if (backend !== "direct" && ["codex", "claude"].includes(plan.profile.harness))
+    throw new Fault(400, "native_state_backend", "Shared native state requires the direct native adapter; Ori state/resume integration is not yet accepted.");
   const directCodex = plan.profile.harness === "codex" && backend === "direct" && !options.desktop;
   // Read-only admission before credential resolution, private state creation or
   // any native version probe. The desktop parser retains its own -c-only input.
@@ -150,6 +154,7 @@ export async function launch(client: SwitcherClient, profileId: string, options:
   if (backend === "direct" && !options.claudeDesktop && !detection?.available) throw new Error(harnessInstallationMessage(plan.profile.harness, detection?.executable ?? plan.profile.harness, Boolean(options.executable)));
   if (backend === "direct" && plan.profile.harness === "gemini") validateHarnessVersion("gemini", detection?.version);
   if(backend==="direct"&&plan.profile.harness==="aider")validateHarnessVersion(plan.profile.harness,detection?.version);
+  if (options.desktop) validateNativeStateVersion("codex", detection?.version);
   const root = resolve(options.stateDir ?? join(switcherHome(),"state"));
   await privateDirectory(root);
   const stateDir = await mkdtemp(join(root,"launch-"));
@@ -170,6 +175,15 @@ export async function launch(client: SwitcherClient, profileId: string, options:
   let createRunCancelled = false;
   let runFinalized = false;
   let settlementUncertain = false;
+  const cleanupPrepared = async () => {
+    try { await cleanup?.(); cleanup = undefined; }
+    catch (error) {
+      // Cleanup may be the first observer of a detached desktop bridge whose
+      // native child has not settled. Preserve this across cancellation paths.
+      settlementUncertain ||= error instanceof HarnessSettlementError;
+      throw error;
+    }
+  };
   const routingEvents:RoutingEvent[]=[];
   let routingEventsDropped=0,routingBytes=0;
   const onRoutingEvent=(event:RoutingEvent)=>{const bytes=Buffer.byteLength(JSON.stringify(event));if(routingEvents.length<1000&&routingBytes+bytes<=512*1024){routingEvents.push(event);routingBytes+=bytes;}else routingEventsDropped=Math.min(1000000,routingEventsDropped+1);};
@@ -187,12 +201,17 @@ export async function launch(client: SwitcherClient, profileId: string, options:
   try {
     const sharedState = canonicalState ?? (plan.profile.harness === "codex" || plan.profile.harness === "claude"
       ? await resolveNativeState(plan.profile.harness) : undefined);
-    const desktopState = sharedState ? nativeDesktopStateId(sharedState) : profileId;
+    // Account credentials and Electron state stay private even when the corpus is shared.
+    const desktopState = profileId;
     const stateWarnings = sharedState ? await legacyNativeStateWarnings(root, sharedState) : [];
     let nativeHome: string | undefined;
     if (canonicalState) nativeHome = canonicalState.home;
     else if (sharedState && !options.desktop && !options.claudeDesktop) {
-      nativeHome = resolve(process.env[sharedState.tool === "codex" ? "CODEX_HOME" : "CLAUDE_CONFIG_DIR"] ?? sharedState.home);
+      const variable = sharedState.tool === "codex" ? "CODEX_HOME" : "CLAUDE_CONFIG_DIR";
+      const configured = process.env[variable] ? resolve(process.env[variable]!) : undefined;
+      nativeHome = sharedState.tool === "claude" && (!configured || configured === sharedState.home)
+        ? join(root, "native-claude", profileId) : configured ?? sharedState.home;
+      await privateDirectory(nativeHome);
       await assertNativeInstructionOverlay(sharedState, nativeHome);
       await projectNativeState(sharedState, nativeHome);
     }
@@ -249,7 +268,7 @@ export async function launch(client: SwitcherClient, profileId: string, options:
       // promise can resolve in the same turn as cancellation, before the
       // Promise.race rejection continuation records that it lost.
       createRunCancelled = true;
-      preparationCleanup ??= cleanup?.().catch(error => {
+      preparationCleanup ??= cleanupPrepared().catch(error => {
         console.error(`switcher: Could not clean up the interrupted launch: ${error instanceof Error ? error.message : "unknown cleanup failure"}.`);
       });
       if (cancel) cancelPreparation(preparationSignal);
@@ -302,11 +321,11 @@ export async function launch(client: SwitcherClient, profileId: string, options:
     const {code,interrupted} = await runHarnessProcess({executable:prepared.executable,args:prepared.args,cwd:resolve(options.cwd ?? process.cwd()),env:{...childEnvironment(),...prepared.env},silent:Boolean(options.desktop||options.claudeDesktop),timeoutMs:remainingRuntime,
       ...(codex ? { beforeSpawn: checkCodex } : {})});
     // Close native background traffic before persisting the final routing log.
-    await cleanup?.(); cleanup=undefined;
+    await cleanupPrepared();
     await finishRunOnce(run,{status:interrupted?"interrupted":code===0?"exited":"failed",exitCode:code},`switcher: Harness exited ${code}; final metadata could not be saved for run ${run!.id}.`);
     return code;
   } catch (error) {
-    settlementUncertain = error instanceof HarnessSettlementError;
+    settlementUncertain ||= error instanceof HarnessSettlementError;
     // Flush gateway observations before recording failures, including cancelled
     // native background requests. Cleanup errors must not hide the launch error.
     if (settlementUncertain) {
@@ -315,7 +334,7 @@ export async function launch(client: SwitcherClient, profileId: string, options:
       try { await closeTransport?.(); closeTransport=undefined; } catch { /* retried in finally */ }
     } else {
       await preparationCleanup;
-      try { await cleanup?.(); cleanup=undefined; } catch { /* retried in finally */ }
+      try { await cleanupPrepared(); } catch { /* retried in finally or retained on uncertainty */ }
     }
     if (run) await finishRunOnce(run,{status:preparationSignal ? "interrupted" : "failed",exitCode:preparationSignal?.exitCode ?? 1},"switcher: Could not persist final run status; inspect the run through the API.");
     throw error;
@@ -331,8 +350,15 @@ export async function launch(client: SwitcherClient, profileId: string, options:
       catch { console.error("switcher: Owned transport shutdown failed; launch files remain retained."); }
     } else {
       await preparationCleanup;
-      try { await cleanup?.(); }
-      finally { await rm(stateDir,{recursive:true,force:true}); }
+      try { await cleanupPrepared(); }
+      catch (error) {
+        if (settlementUncertain) {
+          try { await closeTransport?.(); }
+          catch { console.error("switcher: Owned transport shutdown failed; launch files remain retained."); }
+        }
+        throw error;
+      }
+      await rm(stateDir,{recursive:true,force:true});
     }
   }
 }

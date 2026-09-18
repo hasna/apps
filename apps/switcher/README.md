@@ -112,12 +112,12 @@ every provider. See the [browser extension guide](https://learn.chatgpt.com/docs
 and [DeepSeek compatibility details](https://api-docs.deepseek.com/guides/responses_api/).
 
 Switcher starts a separate app instance with private login and Electron state
-under `~/.hasna/switcher/state/desktop/shared-codex-CORPUS_ID`. This identity
-depends on the canonical native state directory, never provider, model or account.
+under `~/.hasna/switcher/state/desktop/PROFILE_ID`. Credentials and Electron
+state remain private to that provider profile; the native corpus is shared.
 Local conversations, skills and instructions use the same native corpus as Codex
 CLI (normally `~/.codex`). Your regular ChatGPT app's signed-in state is preserved;
 authentication and cookies are not copied. A second launch of the same active
-desktop state is refused; quit that instance before changing its provider.
+provider profile is refused; quit that instance before relaunching it.
 Keep the launching terminal running until you quit that instance: Switcher owns
 its inference gateway and stops its own app process on interruption or timeout.
 
@@ -130,11 +130,15 @@ installation with `--app-path /absolute/path/ChatGPT.app`; native CLI arguments,
 
 ### Shared native conversations
 
-`HASNA_CODEX_STATE_HOME` and `HASNA_CLAUDE_STATE_HOME` identify the common native
+Sessions, skills and instructions are shared by default across providers and accounts.
+`HASNA_CODEX_STATE_HOME` and `HASNA_CLAUDE_STATE_HOME` select a custom common native
 corpus. Switcher also honors `SUBSCRIPTIONS_SHARED_HOME_CODEX` and
-`SUBSCRIPTIONS_SHARED_HOME_CLAUDE`, then a native `CODEX_HOME`/`CLAUDE_CONFIG_DIR`
-that is not an account overlay, then `~/.codex`/`~/.claude`. This preserves the
-corpus when one launcher is nested inside another account's environment.
+`SUBSCRIPTIONS_SHARED_HOME_CLAUDE`, otherwise using `~/.codex`/`~/.claude`.
+Ambient `CODEX_HOME`/`CLAUDE_CONFIG_DIR` identifies the current account overlay,
+not a new common corpus. Validated shared-state markers preserve the corpus when
+one launcher is nested inside another account's environment. Conflicting markers
+refuse launch. `--share-native-state` remains accepted for compatibility and is
+unnecessary for normal launches.
 Directories must be absolute, owned and free of writable/symlink redirection.
 
 Direct Codex CLI launches require the exact accepted native installation for
@@ -154,9 +158,9 @@ not perform that migration. Owned processes must settle before their private
 launch directory is removed; uncertain settlement closes the owned gateway and
 retains the files for inspection.
 
-The ChatGPT desktop and Ori adapters retain their existing overlay path; this
-direct CLI change does not establish their support for the accepted auth-home
-runtime. Codex overlays share the sessions, archived sessions, capabilities and
+The ChatGPT desktop adapter retains its existing overlay path; this direct CLI
+change does not establish desktop support for the accepted auth-home runtime.
+Ori shared-state launches are refused until its state/resume integration is accepted. Codex overlays share the sessions, archived sessions, capabilities and
 `thread-writer-locks` directories. The entire SQLite store uses the canonical
 configuration's `sqlite_home`, or the canonical root; inherited account-specific
 `CODEX_SQLITE_HOME` is ignored. There are no per-database or WAL symlinks.
@@ -169,19 +173,20 @@ settings remain separate.
 
 Both tools share only `.hasna/instructions`, never the rest of `.hasna`. Codex's
 optional `AGENTS.override.md` takes native precedence over `AGENTS.md`; Switcher
-does not create empty versions of either file. Missing canonical instruction
-files have dangling overlay links so later user edits are visible without a copy.
+does not create empty versions or dangling links. A later launch links an optional
+file after the canonical regular file exists and passes validation.
 The desktop config projects only the canonical `instructions`,
-`developer_instructions`, `model_instructions_file`, `compact_prompt`, the four
+`developer_instructions`, `model_instructions_file`, `compact_prompt`,
+`experimental_compact_prompt_file`, `model_auto_compact_instructions_file`, the four
 `include_*_instructions`/`include_environment_context` switches, and
-`project_doc_max_bytes`/`project_doc_fallback_filenames`. Relative model instruction
-files resolve against the canonical config directory and must be readable trusted
-regular files. Native file/config instruction precedence is preserved; routing
+`project_doc_max_bytes`/`project_doc_fallback_filenames`. Relative model and compact instruction
+files resolve within the canonical config directory and must be readable trusted
+regular files; file references remain paths rather than inline contents. Native file/config instruction precedence is preserved; routing
 and private authentication settings are rendered separately. Unsupported legacy
 `profile` selection refuses launch rather than silently losing its instructions.
 Codex CLI normally reads these keys directly from its canonical home. When nested
 inside a private authentication home, its audited instruction keys must match the
-canonical projection, including the resolved model instruction file path; missing
+canonical projection, including resolved model and compact instruction file paths; missing
 or stale keys visibly refuse launch. Switcher does not rewrite that account's
 configuration or place instruction text in process arguments. Refresh the account
 overlay's instruction projection before retrying a conflicting nested launch.
@@ -199,7 +204,9 @@ switcher launch codex --provider PROVIDER --model MODEL -- resume SESSION_ID
 ```
 
 The first three forms use Switcher's cross-provider native catalog discovery,
-then execute native Codex with the exact chosen ID. `--all` includes other
+then execute native Codex with the exact chosen ID. The selected conversation
+history is sent through the provider and model chosen for this launch. Native
+metadata does not reliably identify its original provider or account. `--all` includes other
 workspaces; normal discovery keeps the current workspace filter. Explicit IDs
 pass directly to native Codex. Discovery sends no inference prompt. Native
 Codex's own picker outside these Switcher forms can still filter by provider.
@@ -210,21 +217,25 @@ Normal launch reports legacy desktop data as pending migration. Inspect and stag
 an explicit noncredential snapshot with the local native-state command:
 
 ```sh
-switcher state import codex --from /absolute/legacy/profile/codex
-switcher state import codex --from /absolute/legacy/profile/codex --entry sessions --apply
-switcher state import claude --from /absolute/legacy/claude/profile --entry projects --apply
+switcher state import codex --from /absolute/legacy/profile/codex --entry sessions
+# Use planDigest from that dry run, preserving the same source and selection:
+switcher state import codex --from /absolute/legacy/profile/codex --entry sessions --apply --plan-digest SHA256
 ```
 
-The default is a read-only plan. `--apply` copies unique allowlisted files, skips
-byte-identical duplicates, and refuses divergent collisions before starting the
-copy. Recognized native Codex session IDs are also checked across active/archived
-rollouts: divergent versions with different filenames refuse import, while exact
-duplicates are not published twice. `--entry` may be repeated to limit a snapshot.
+The default is a read-only plan with a path-redacting `planDigest`. `--apply`
+requires that exact digest, binding the mutation to the reviewed source,
+destination, selection and file identities. It copies unique allowlisted files,
+skips byte-identical duplicates, and refuses divergent collisions before copying.
+Recognized native Codex session IDs are checked across active and archived
+rollouts: divergent versions refuse import, while exact duplicates are not
+published twice. `--entry` may be repeated to limit a snapshot.
 Source files stay unchanged; symlinks, hardlinked aliases and
 credential/config/SQLite/index/plugin-cache entries cannot be imported.
-All source files are checked again before staging and before publishing each new
-copy without replacement. A racing destination writer is never overwritten.
-Imports are bounded to 100,000 entries and 2 GiB per operation.
+All source files are checked again and staged before publishing any new copy.
+Publication never replaces or deletes a racing writer. If a collision appears
+after publication starts, already published reviewed files are preserved and a
+new dry-run is required to reconcile the remainder. Imports are bounded to
+100,000 entries and 2 GiB per operation.
 
 This is **copy-only staging**, not complete migration: the old home can still
 receive writes. Legacy SQLite metadata and index-only display names stay in the

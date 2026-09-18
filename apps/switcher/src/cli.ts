@@ -13,11 +13,12 @@ import { ensureProviderCredential } from "./provider-credential-onboarding";
 import { detectChatGPTApp, detectClaudeDesktopApp } from "./desktop-apps";
 import { reasoningEffortSchema, codexReasoning } from "./reasoning";
 import { resolveNativeState } from "./native-state";
-import { applyNativeStateImport, nativeStateImportSummary, planNativeStateImport } from "./native-state-import";
+import { applyNativeStateImport, nativeStateImportDigest, nativeStateImportSummary, planNativeStateImport } from "./native-state-import";
 const HELP = `switcher — launch coding harnesses and desktop apps with your provider and model
 
   switcher launch chatgpt --provider PROVIDER --model MODEL [--reasoning EFFORT]
-    [--dangerously-bypass-approvals-and-sandbox] [--app-path /absolute/ChatGPT.app]
+    [--dangerously-bypass-approvals-and-sandbox]
+    [--app-path /absolute/ChatGPT.app]
                          [--dry-run] [--cwd DIR] [--timeout SECONDS]
   switcher launch claude-desktop --provider PROVIDER --model MODEL
                          [--app-path /absolute/Claude.app] [--dry-run]
@@ -50,10 +51,11 @@ const HELP = `switcher — launch coding harnesses and desktop apps with your pr
   switcher credentials repair-executable PRESET_OR_REFERENCE --sha256 EXPECTED
   switcher credentials repair-executable --vault-cli PATH --sha256 EXPECTED
   switcher doctor
-  switcher state import codex|claude --from LEGACY_NATIVE_HOME [--entry NAME] [--apply]
+  switcher state import codex|claude --from LEGACY_NATIVE_HOME [--entry NAME]... [--dry-run | --apply --plan-digest SHA256]
 
 HARNESS: claude, codex, grok, opencode, opencode2, pi, omp, dsh, cline, hermes, prime-agent, gemini, antigravity, junie, aider, kilo
-chatgpt launches the installed macOS desktop app with private login data and shared local sessions.
+chatgpt launches the installed macOS desktop app with private login data.
+Codex/Claude sessions, skills and instructions use the shared native corpus by default.
 Its local Codex conversations use the selected Responses-compatible provider.
 claude-desktop launches Claude in its separate Claude-3p gateway profile with a
 Messages-compatible provider. Quit that instance before switching providers.
@@ -119,8 +121,8 @@ export async function main(args = process.argv.slice(2)) {
   const split = args.indexOf("--"); const nativeArgs = split >= 0 ? args.slice(split+1) : [];
   const {values,positionals} = parseArgs({args:split>=0?args.slice(0,split):args,allowPositionals:true,options:{
     help:{type:"boolean"},version:{type:"string"},json:{type:"boolean"},url:{type:"string"},sha256:{type:"string"},
-    "app-path":{type:"string"},reasoning:{type:"string"},"dangerously-bypass-approvals-and-sandbox":{type:"boolean"},
-    from:{type:"string"},entry:{type:"string",multiple:true},apply:{type:"boolean"},
+    "app-path":{type:"string"},reasoning:{type:"string"},"dangerously-bypass-approvals-and-sandbox":{type:"boolean"},"share-native-state":{type:"boolean"},
+    from:{type:"string"},entry:{type:"string",multiple:true},apply:{type:"boolean"},"plan-digest":{type:"string"},
     protocol:{type:"string"},preset:{type:"string"},name:{type:"string"},file:{type:"string"},"models-file":{type:"string"},
     "credential-env":{type:"string"},"auth-style":{type:"string"},
     "catalog-url":{type:"string"},"catalog-format":{type:"string"},"catalog-auth-style":{type:"string"},
@@ -136,21 +138,27 @@ export async function main(args = process.argv.slice(2)) {
   const output = (value: unknown) => console.log(JSON.stringify(value,null,2));
   if(command === "state") {
     if(action!=="import" || !["codex","claude"].includes(id) || !values.from || positionals.length!==3 || nativeArgs.length
-        || Object.keys(values).some(key=>!["from","entry","apply","dry-run","json"].includes(key)) || values.apply && values["dry-run"])
-      throw new Fault(400,"invalid_request","Use switcher state import codex|claude --from LEGACY_NATIVE_HOME [--entry NAME] [--apply]. The default is a read-only dry run.");
+        || Object.keys(values).some(key=>!["from","entry","apply","plan-digest","dry-run","json"].includes(key)) || values.apply && values["dry-run"]
+        || Boolean(values.apply)!==Boolean(values["plan-digest"]) || values["plan-digest"]!==undefined&&!/^[a-f0-9]{64}$/.test(values["plan-digest"]))
+      throw new Fault(400,"invalid_request","Use switcher state import codex|claude --from LEGACY_NATIVE_HOME [--entry NAME]... [--dry-run | --apply --plan-digest SHA256]. The default is a read-only dry run.");
     const state=await resolveNativeState(id as "codex"|"claude",process.env,{create:false});
     const plan=await planNativeStateImport(state,values.from,values.entry);
+    if(values.apply&&values["plan-digest"]!==nativeStateImportDigest(plan))throw new Fault(409,"native_state_plan_mismatch","The reviewed native-state plan no longer matches this source, destination or selection. Run a new dry-run and review its plan digest.");
     if(values.apply)await applyNativeStateImport(plan);
     output(nativeStateImportSummary(plan,Boolean(values.apply)));return;
   }
-  if(values.from || values.entry || values.apply)
-    throw new Fault(400,"conflicting_options","--from, --entry and --apply belong to switcher state import.");
+  if(values.from !== undefined || values.entry !== undefined || values.apply !== undefined || values["plan-digest"] !== undefined)
+    throw new Fault(400,"conflicting_options","--from, --entry, --plan-digest, --dry-run and --apply belong to switcher state import.");
+  if(values["share-native-state"] && command !== "launch")
+    throw new Fault(400,"conflicting_options","--share-native-state belongs to a Codex, ChatGPT, Claude CLI or Claude desktop launch.");
   const reasoning=values.reasoning===undefined?undefined:parse(reasoningEffortSchema,values.reasoning);
   const dangerouslyBypassApprovalsAndSandbox=values["dangerously-bypass-approvals-and-sandbox"];
   if((reasoning||dangerouslyBypassApprovalsAndSandbox)&&(command!=="launch"||(values.provider&&!["chatgpt","codex"].includes(action))||(values.backend&&values.backend!=="direct")))
     throw new Fault(400,"conflicting_options","--reasoning and --dangerously-bypass-approvals-and-sandbox require a direct Codex or ChatGPT launch.");
   const chatgpt = command === "launch" && action === "chatgpt" && values.provider !== undefined;
   const claudeDesktop = command === "launch" && action === "claude-desktop" && values.provider !== undefined;
+  if(values["share-native-state"] && values.provider !== undefined && !["codex","claude","chatgpt","claude-desktop"].includes(action))
+    throw new Fault(400,"native_state_harness","--share-native-state is supported only for Codex, ChatGPT, Claude CLI and Claude desktop launches.");
   if (values["app-path"] !== undefined && !chatgpt && !claudeDesktop)
     throw new Fault(400,"conflicting_options","--app-path belongs to launch chatgpt or claude-desktop --provider PROVIDER --model MODEL.");
   if ((chatgpt || claudeDesktop) && (nativeArgs.length || positionals.length !== 2 || values.executable !== undefined || values.backend !== undefined || values["ori-executable"] !== undefined))
@@ -246,7 +254,10 @@ export async function main(args = process.argv.slice(2)) {
   if (command === "launch" && provided(["name", "harness", "file"]))
     throw new Fault(400, "conflicting_options", "Launch takes its harness from the positional argument or saved profile; edit named records through providers/profiles.");
   if (command === "launch" && values.provider) {
-    const harness=parse(harnessSchema,chatgpt ? "codex" : claudeDesktop ? "claude" : action);assertHarnessArguments(harness,nativeArgs);
+    const harness=parse(harnessSchema,chatgpt ? "codex" : claudeDesktop ? "claude" : action);
+    if(values.backend==="ori" && ["codex","claude"].includes(harness))
+      throw new Fault(400,"native_state_backend","Shared native state requires the direct native adapter; Ori state/resume integration is not yet accepted.");
+    assertHarnessArguments(harness,nativeArgs);
     await validateHarnessConfiguration(harness,values.cwd??process.cwd(),nativeArgs);
   }
   const dryLaunch = command==="launch"&&Boolean(values["dry-run"]);
@@ -302,6 +313,10 @@ export async function main(args = process.argv.slice(2)) {
       if (values.model || values.protocol || values.url || values["credential-env"] || values["model-policy-file"] || values["role-model"])
         throw new Error("Use --provider PROVIDER for a direct launch, or update the saved profile explicitly.");
       const profile = await client.getProfile(profileId);
+      if(backend==="ori" && ["codex","claude"].includes(profile.harness))
+        throw new Fault(400,"native_state_backend","Shared native state requires the direct native adapter; Ori state/resume integration is not yet accepted.");
+      if(values["share-native-state"] && !["codex","claude"].includes(profile.harness))
+        throw new Fault(400,"native_state_harness","--share-native-state is supported only for Codex, ChatGPT, Claude CLI and Claude desktop launches.");
       assertHarnessArguments(profile.harness,nativeArgs);
       await validateHarnessConfiguration(profile.harness,values.cwd??process.cwd(),nativeArgs);
       const provider = await client.getProvider(profile.providerId);
@@ -315,13 +330,18 @@ export async function main(args = process.argv.slice(2)) {
       if((reasoning||dangerouslyBypassApprovalsAndSandbox)&&plan.profile.harness!=="codex")throw new Fault(400,"conflicting_options","Reasoning and full-access options require Codex or ChatGPT.");
       if(reasoning){const model=plan.catalog.models.find(model=>model.id===plan.profile.model);if(model)codexReasoning(model,plan.provider.baseUrl,reasoning);}
       assertHarnessArguments(plan.profile.harness,nativeArgs);
+      if(values["share-native-state"] && !["codex","claude"].includes(plan.profile.harness))
+        throw new Fault(400,"native_state_harness","--share-native-state is supported only for Codex, ChatGPT, Claude CLI and Claude desktop launches.");
+      const sharedNativeState = ["codex","claude"].includes(plan.profile.harness);
+      if(sharedNativeState){if(plan.profile.harness==="codex")assertHarnessArguments("codex",nativeArgs,{reservedCodexRoots:["sqlite_home"]});await resolveNativeState(plan.profile.harness as "codex"|"claude",process.env,{create:false});}
       if (backend === "ori") {
+        if(sharedNativeState)throw new Fault(400,"native_state_backend","Shared native state currently requires the directly verified native adapter; Ori state/resume integration is not yet accepted.");
         const {contract,warnings} = await validateOriForPlan(plan, {oriExecutable: values["ori-executable"], args: nativeArgs, cwd: values.cwd});
-        output({...plan, backend: {kind: "ori", executable: contract.executable, version: contract.version, target: plan.profile.harness, provider: "openrouter", model: plan.profile.model, warnings: [...plan.warnings,...warnings]}});
-      } else output({...plan,...(desktop?{desktop:{...desktop,mode:"shared-state-private-auth",routingProfile:profileId,sessionIdentity:"canonical-native-corpus"}}:{}),...(claudeApp?{desktop:{...claudeApp,mode:"claude-3p-gateway",routingProfile:profileId,sessionIdentity:"canonical-native-corpus"}}:{}),...(reasoning?{reasoning}:{}),...(dangerouslyBypassApprovalsAndSandbox?{permissions:{approvalPolicy:"never",sandboxMode:"danger-full-access"}}:{})});
+        output({...plan, backend: {kind: "ori", executable: contract.executable, version: contract.version, target: plan.profile.harness, provider: "openrouter", model: plan.profile.model, warnings: [...plan.warnings,...warnings]},...(sharedNativeState?{nativeState:{shared:true,mode:"default"}}:{})});
+      } else output({...plan,...(desktop?{desktop:{...desktop,mode:sharedNativeState?"shared-state-private-auth":"isolated-provider",routingProfile:profileId,...(sharedNativeState?{sessionIdentity:"canonical-native-corpus"}:{})}}:{}),...(claudeApp?{desktop:{...claudeApp,mode:"claude-3p-gateway",routingProfile:profileId,...(sharedNativeState?{sessionIdentity:"canonical-native-corpus"}:{})}}:{}),...(sharedNativeState?{nativeState:{shared:true,mode:"default"}}:{}),...(reasoning?{reasoning}:{}),...(dangerouslyBypassApprovalsAndSandbox?{permissions:{approvalPolicy:"never",sandboxMode:"danger-full-access"}}:{})});
       return;
     }
-    process.exitCode = await launch(client, profileId, {desktop, claudeDesktop:claudeApp, reasoning,dangerouslyBypassApprovalsAndSandbox,backend: backend as LaunchBackend, oriExecutable: values["ori-executable"], cwd: values.cwd, executable: values.executable, stateDir: values["state-dir"], args: nativeArgs, timeoutMs, refresh: false, credentialPreflight, resolveCredential: resolvePreparedCredential??(provider=>credentials.resolve(provider))});
+    process.exitCode = await launch(client, profileId, {desktop, claudeDesktop:claudeApp, shareNativeState:Boolean(values["share-native-state"]), reasoning,dangerouslyBypassApprovalsAndSandbox,backend: backend as LaunchBackend, oriExecutable: values["ori-executable"], cwd: values.cwd, executable: values.executable, stateDir: values["state-dir"], args: nativeArgs, timeoutMs, refresh: false, credentialPreflight, resolveCredential: resolvePreparedCredential??(provider=>credentials.resolve(provider))});
     return;
   }
   if (editingModel) {

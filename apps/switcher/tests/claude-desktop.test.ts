@@ -44,6 +44,9 @@ test("Claude desktop routes arbitrary Messages models, scopes credentials, lease
     expect(await readFile(metaPath,"utf8")).toBe(previous);
     expect(await Bun.file(configPath).exists()).toBe(false);
     expect(await readFile(join(userData,"saved-chat"),"utf8")).toBe("keep");
+    await writeFile(join(sharedState.home,"projects/shared-session.jsonl"),"shared",{mode:0o600});await writeFile(join(root,"engine/.credentials.json"),"private-a",{mode:0o600});await writeFile(join(root,"engine/settings.json"),"private-settings-a",{mode:0o600});await writeFile(join(root,"engine/skills/shared-skill.md"),"shared-skill",{mode:0o600});
+    const secondState=join(root,"second-launch");await mkdir(secondState,{mode:0o700});prepared=await prepareClaudeDesktopLaunch({...input,stateDir:secondState},app,join(root,"engine-b"),system);
+    expect(await readFile(join(root,"engine-b/projects/shared-session.jsonl"),"utf8")).toBe("shared");expect(await readFile(join(root,"engine-b/skills/shared-skill.md"),"utf8")).toBe("shared-skill");for(const name of [".credentials.json","settings.json"])expect(await Bun.file(join(root,"engine-b",name)).exists()).toBe(false);await prepared.cleanup?.();prepared=undefined;
     const crashState=join(root,"crash");await mkdir(crashState,{mode:0o700});
     const crashInput={...input,stateDir:crashState};
     const crashCode=`import {prepareClaudeDesktopLaunch} from ${JSON.stringify(join(import.meta.dir,"../src/claude-desktop-launch.ts"))}; await prepareClaudeDesktopLaunch(${JSON.stringify(crashInput)},${JSON.stringify(app)},${JSON.stringify(join(root,"engine"))},{userData:${JSON.stringify(userData)},assertAvailable:async()=>{}}); process.exit(0);`;

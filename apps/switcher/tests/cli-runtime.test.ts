@@ -1,7 +1,7 @@
 import { test, expect } from "bun:test";
 import { SQL } from "bun";
 import { createCodexCliPreload } from "./fixtures/codex-native";
-import { mkdir, mkdtemp, writeFile, readFile, readdir, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile, readFile, readdir, rm, stat, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -53,28 +53,19 @@ test("models add persists expiry metadata while preserving discovery and rejects
   } finally {await upstream.stop(true);await rm(dir,{recursive:true,force:true});}
 });
 
-test("the CLI builds an Ori plan from a real OpenRouter preset without resolving a credential",async()=>{
-  const dir=await directory(),executable=join(dir,"ori-fixture"),nativeExecutable=join(dir,"native-codex");
-  await writeFile(nativeExecutable,"#!/bin/sh\necho codex-cli 0.153.4\n",{mode:0o700});
-  const upstream=Bun.serve({hostname:"127.0.0.1",port:0,fetch:()=>Response.json({data:[{id:"fixture/one",supported_parameters:["tools"]},{id:"fixture/two",supported_parameters:["tools"]}]})});
-  await writeFile(executable,`#!${process.execPath}
-const args=process.argv.slice(2);
-if(args.includes('--version')||args[0]==='harness'){
-  if(process.env.OPENROUTER_API_KEY)process.exit(90);
-  console.log(args.includes('--version')?'@ori-runtime/cli 0.12.1+fixture':JSON.stringify({data:{launchable:[{kind:'codex',installed:true,path:${JSON.stringify(nativeExecutable)}}]}}));process.exit(0);
-}
-const file=args.find(arg=>arg.startsWith('model_catalog_json='));
-const catalog=await Bun.file(JSON.parse(file.slice('model_catalog_json='.length))).json();
-await Bun.write('ori-proof.json',JSON.stringify({args,models:catalog.models.map(m=>m.slug),keyPresent:Boolean(process.env.OPENROUTER_API_KEY)}));
-process.exit(23);
-`,{mode:0o700});
-  const args=["launch","codex","--provider","openrouter","--model","fixture/one","--catalog-url",upstream.url.origin,"--backend","ori","--ori-executable",executable];
+test("the CLI refuses unaccepted Ori shared-state launch before state or credential discovery",async()=>{
+  const dir=await directory();let requests=0;
+  const upstream=Bun.serve({hostname:"127.0.0.1",port:0,fetch:()=>{requests++;return Response.json({data:[]});}});
   try {
-    const dry=await command(dir,[...args,"--dry-run"]);
-    expect(dry.code,dry.stderr).toBe(0);expect(dry.stdout).toContain('openrouter-responses');
-    expect(await Bun.file(join(dir,"ori-proof.json")).exists()).toBe(false);
+    for(const harness of ["codex","claude"])for(const suffix of [[],["--dry-run"]]) {
+      const result=await command(dir,["launch",harness,"--provider","openrouter","--model","fixture/one","--catalog-url",upstream.url.origin,"--backend","ori",...suffix]);
+      expect(result.code,result.stderr).toBe(1);
+      expect(JSON.parse(result.stderr).error.code).toBe("native_state_backend");
+      await expect(readdir(join(dir,"data"))).rejects.toMatchObject({code:"ENOENT"});
+    }
+    expect(requests).toBe(0);
   } finally {await upstream.stop(true);await rm(dir,{recursive:true,force:true});}
-},30_000);
+});
 
 test("interactive model selection cancels on Ctrl-C, Ctrl-D and SIGTERM without leaving the owned API alive", async () => {
   const upstream = Bun.serve({hostname:"127.0.0.1",port:0,fetch:()=>Response.json({data:[{id:"fixture-model"}]})});
@@ -334,7 +325,12 @@ test("actual CLI auto-configures split DeepSeek catalog, launches a harness, reu
     expect(profiles.code, profiles.stderr).toBe(0); expect(JSON.parse(profiles.stdout).total).toBe(1);
     const runs = await command(dir,["runs","list"]);
     expect(JSON.parse(runs.stdout).data.map((r:any)=>r.status)).toEqual(["exited","exited"]);
-    expect(await readdir(join(dir,"data/state"))).toEqual([]);
+    expect(await readdir(join(dir,"data/state"))).toEqual(["native-claude"]);
+    const profileId=JSON.parse(profiles.stdout).data[0].id;
+    const overlay=join(dir,"data/state/native-claude",profileId);
+    expect(await realpath(join(overlay,"projects"))).toBe(join(await realpath(dir),".claude/projects"));
+    expect(await realpath(join(overlay,"skills"))).toBe(join(await realpath(dir),".claude/skills"));
+    expect(await Bun.file(join(overlay,".credentials.json")).exists()).toBe(false);
     const invalid = await command(dir,args.map((value,i)=>i===5?"absent":value),{SWITCHER_PROVIDER_FIXTURE:"fixture-deepseek-key"});
     expect(invalid.code).toBe(1); expect(JSON.parse(invalid.stderr).error.code).toBe("model_missing");
   } finally { await upstream.stop(true); await rm(dir,{recursive:true,force:true}); }

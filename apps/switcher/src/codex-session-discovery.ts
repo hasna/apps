@@ -1,10 +1,10 @@
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline/promises";
-import { resolve } from "node:path";
+import { basename, resolve } from "node:path";
 import { childEnvironment } from "./harness-environment";
 import { CommandInterrupted, Fault } from "./domain";
 import type { PreparedLaunch } from "./harness-types";
-import { codexCommandIndex, codexOptionTakesValue } from "./harness-arguments";
+import { codexCommandIndex, codexOptionRequestsHelp, codexOptionTakesValue } from "./harness-arguments";
 import { HarnessSettlementError, settleHarnessGroup } from "./harness-process";
 
 type Thread = { id: string; name?: string | null; preview?: string; cwd: string };
@@ -17,6 +17,10 @@ const unavailable = () => new Fault(422, "codex_session_discovery", "Native Code
  * inference; every page has a finite deadline and the owned process is reaped. */
 export async function listCodexSessions(prepared: PreparedLaunch, cwd: string, query: Query,
   beforeSpawn?: () => Promise<void>): Promise<Page> {
+  if (!Number.isSafeInteger(query.limit) || query.limit < 1 || query.limit > 100
+      || (query.cursor !== undefined && query.cursor.length > 4096)
+      || (query.searchTerm !== undefined && query.searchTerm.length > 1024)
+      || cwd.length > 32768 || query.cwd !== undefined && query.cwd.length > 32768) throw unavailable();
   // Every picker page starts a new native process. Revalidate after the user's
   // input, immediately before that spawn, not just before opening the picker.
   let cancelled: CommandInterrupted | undefined;
@@ -26,8 +30,9 @@ export async function listCodexSessions(prepared: PreparedLaunch, cwd: string, q
   try { await beforeSpawn?.(); if (cancelled) throw cancelled; }
   finally { process.off("SIGINT", cancel); process.off("SIGTERM", terminateAdmission); process.off("SIGHUP", terminateAdmission); }
   const grouped = process.platform !== "win32";
+  const nativeStateEnv=Object.fromEntries(Object.entries(prepared.env).filter(([name])=>["CODEX_HOME","CODEX_SQLITE_HOME"].includes(name)));
   const child = spawn(prepared.executable, [...prepared.args, "app-server"], {
-    cwd, env: { ...childEnvironment(), ...prepared.env }, stdio: ["pipe", "pipe", "ignore"], detached: grouped,
+    cwd, env: { ...childEnvironment(), ...nativeStateEnv, SWITCHER_HARNESS_API_KEY:"switcher-metadata-no-auth" }, stdio: ["pipe", "pipe", "ignore"], detached: grouped,
   });
   let done = false, initialized = false, pending = Buffer.alloc(0), responseBytes = 0;
   let killTimer: ReturnType<typeof setTimeout> | undefined;
@@ -77,7 +82,7 @@ export async function listCodexSessions(prepared: PreparedLaunch, cwd: string, q
               || !(page.nextCursor === null || typeof page.nextCursor === "string")
               || (typeof page.nextCursor === "string" && page.nextCursor.length > 4096)) throw unavailable();
           const data = page.data.map((thread: unknown): Thread => {
-            if (!object(thread) || typeof thread.id !== "string" || !/^[a-f\d-]{36}$/i.test(thread.id)
+            if (!object(thread) || typeof thread.id !== "string" || !/^[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/i.test(thread.id)
                 || typeof thread.cwd !== "string" || thread.cwd.length > 32768
                 || (thread.name != null && typeof thread.name !== "string")
                 || (thread.preview !== undefined && typeof thread.preview !== "string")) throw unavailable();
@@ -125,11 +130,11 @@ export async function resolveCodexResumeArguments(prepared: PreparedLaunch, nati
     if (nativeArgs[i] === "--") { positional ||= i > command && Boolean(nativeArgs[i + 1]); break; }
     if(nativeArgs[i].startsWith("--cd="))effectiveCwd=resolve(cwd,nativeArgs[i].slice(5));
     else if(nativeArgs[i].startsWith("-C")&&nativeArgs[i].length>2)effectiveCwd=resolve(cwd,nativeArgs[i].slice(2));
+    if (codexOptionRequestsHelp(nativeArgs[i])) return nativeArgs;
     if (codexOptionTakesValue(nativeArgs[i])) {
       if(nativeArgs[i]==="--cd"||nativeArgs[i]==="-C") { if(!nativeArgs[i+1])throw unavailable();effectiveCwd=resolve(cwd,nativeArgs[i+1]); }
       i++;continue;
     }
-    if (["--help", "-h", "--version", "-V"].includes(nativeArgs[i])) return nativeArgs;
     if (i>command&&nativeArgs[i] === "--last") { last = true; remove.add(i); }
     if (i>command&&nativeArgs[i] === "--all") { all = true; remove.add(i); }
     if (i>command&&!nativeArgs[i].startsWith("-")) positional = true;
@@ -148,18 +153,20 @@ export async function resolveCodexResumeArguments(prepared: PreparedLaunch, nati
   const controller = new AbortController();
   const cancel = () => controller.abort(new CommandInterrupted(130, "Session selection was cancelled."));
   const terminate = () => controller.abort(new CommandInterrupted(143, "Session selection was interrupted."));
-  reader.on("SIGINT", cancel); reader.on("close", cancel); process.on("SIGINT", cancel); process.on("SIGTERM", terminate);
+  const hangup = () => controller.abort(new CommandInterrupted(129, "Session selection ended after terminal hangup."));
+  reader.on("SIGINT", cancel); reader.on("close", cancel); process.on("SIGINT", cancel); process.on("SIGTERM", terminate);process.on("SIGHUP",hangup);
   const display = (value: string) => value.replace(/[\x00-\x1f\x7f-\x9f]/g, "").slice(0, 180);
   try {
     for (;;) {
       console.error("Codex conversations across providers:");
-      page.data.forEach((thread, i) => console.error(`  ${i + 1}. ${display(thread.name ?? thread.preview ?? thread.id)} — ${display(thread.cwd)}`));
+      page.data.forEach((thread, i) => console.error(`  ${i + 1}. ${display(thread.name ?? thread.id)} — workspace ${display(basename(thread.cwd) || "unknown")}`));
       const answer = (await reader.question("Number, search text, or n for next page (Ctrl-C cancels): ", { signal: controller.signal })
         .catch(error => { throw controller.signal.aborted ? controller.signal.reason : error; })).trim();
+      if (answer.length > 1024) throw new Fault(400, "codex_session_search_limit", "Codex session search text must be at most 1024 characters.");
       if (/^[1-9]\d*$/.test(answer) && page.data[Number(answer) - 1]) return finish(page.data[Number(answer) - 1].id);
-      if (answer === "n" && page.nextCursor) query.cursor = page.nextCursor;
+      if (answer === "n") { if (!page.nextCursor) { console.error("No next page.");continue; } query.cursor = page.nextCursor; }
       else { delete query.cursor; query.searchTerm = answer; }
       page = await list(prepared, effectiveCwd, query);
     }
-  } finally { reader.off("SIGINT", cancel); reader.off("close", cancel); process.off("SIGINT", cancel); process.off("SIGTERM", terminate); reader.close(); }
+  } finally { reader.off("SIGINT", cancel); reader.off("close", cancel); process.off("SIGINT", cancel); process.off("SIGTERM", terminate);process.off("SIGHUP",hangup);reader.close(); }
 }

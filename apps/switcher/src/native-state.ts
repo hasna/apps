@@ -1,4 +1,4 @@
-import { lstat, mkdir, open, opendir, readdir, readlink, realpath, symlink } from "node:fs/promises";
+import { lstat, mkdir, open, opendir, readdir, readlink, realpath, rmdir, symlink, unlink } from "node:fs/promises";
 import { constants } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
@@ -8,7 +8,17 @@ import { Fault } from "./domain";
 
 export type SharedNativeTool = "codex" | "claude";
 export type NativeState = { tool: SharedNativeTool; home: string; sqliteHome?: string; marker: string; instructions?: Record<string, unknown> };
-export const CODEX_INSTRUCTION_KEYS = ["instructions", "developer_instructions", "model_instructions_file", "compact_prompt",
+/** Compatibility with older callers; native sessions and skills are shared by default. */
+export function nativeStateRequested(_tool: SharedNativeTool, _environment: NodeJS.ProcessEnv = process.env, _explicit = false): boolean {
+  return true;
+}
+export function validateNativeStateVersion(tool: SharedNativeTool, version: string | undefined): void {
+  if (tool !== "codex") return;
+  const match=version?.match(/(\d+)\.(\d+)\.(\d+)/),actual=match?.slice(1).map(Number);
+  if (!actual || actual[0]!==0 || actual[1]<154)
+    throw new Fault(422,"native_state_version","Shared Codex state requires Codex 0.154.0 or newer, whose metadata and resume protocol has been acceptance-tested by Switcher.");
+}
+export const CODEX_INSTRUCTION_KEYS = ["instructions", "developer_instructions", "model_instructions_file", "compact_prompt", "experimental_compact_prompt_file", "model_auto_compact_instructions_file",
   "include_permissions_instructions", "include_apps_instructions", "include_collaboration_mode_instructions", "include_environment_context",
   "project_doc_max_bytes", "project_doc_fallback_filenames"] as const;
 type Entry = { name: string; kind: "directory" | "file" };
@@ -72,6 +82,37 @@ export function nativeDesktopStateId(state: NativeState): string {
   return `shared-${state.tool}-${createHash("sha256").update(state.home).digest("hex").slice(0, 24)}`;
 }
 
+export async function withNativeStateLock<T>(state: NativeState, operation: () => Promise<T>): Promise<T> {
+  await ensureNativeStateDirectory(state.home);
+  const path=join(state.home,".switcher-shared-state.lock");
+  let handle:Awaited<ReturnType<typeof open>>;
+  try { handle=await open(path,"wx",0o600); }
+  catch(error) {
+    if ((error as NodeJS.ErrnoException).code!=="EEXIST") throw error;
+    const entry=await info(path);
+    if (!entry?.isFile()||entry.isSymbolicLink()||entry.uid!==process.getuid?.()||(entry.mode&0o077)!==0)
+      throw new Fault(422,"native_state_lock","The shared-state lock has unsafe ownership, permissions or type.");
+    throw new Fault(409,"native_state_busy","Another Switcher projection/import owns this corpus, or a prior operation ended before releasing its lock. Inspect native processes and the lock before retrying.");
+  }
+  const identity=await handle.stat();
+  try { return await operation(); }
+  finally {
+    await handle.close();
+    try { const entry=await lstat(path);if(entry.dev===identity.dev&&entry.ino===identity.ino)await unlink(path); } catch(error) { if ((error as NodeJS.ErrnoException).code!=="ENOENT") throw error; }
+  }
+}
+
+async function assertShareableTree(path:string,budget={entries:0},depth=0):Promise<void>{
+  if(depth>32)throw new Fault(422,"native_state_inventory_limit","The shared native corpus exceeds the safe projection inventory limit.");
+  if(depth===0)await assertNativeStateDirectory(path);
+  for await(const child of await opendir(path)){
+    if(++budget.entries>100_000||child.isSymbolicLink())throw new Fault(422,"native_state_entry","A shared native state tree contains an unsupported link or exceeds the safe inventory limit.");
+    const nested=join(path,child.name),entry=await lstat(nested);
+    if(entry.uid!==process.getuid?.()||(entry.mode&0o022)!==0)throw new Fault(422,"native_state_entry","A shared native state entry has unsafe ownership or writable permissions.");
+    if(child.isDirectory()){if(!entry.isDirectory())throw new Fault(422,"native_state_entry","A shared native state directory changed during inspection.");await assertShareableTree(nested,budget,depth+1);continue;}
+    if(!child.isFile()||!entry.isFile()||entry.nlink!==1)throw new Fault(422,"native_state_entry","A shared native state tree contains an unsupported file type or hardlink.");
+  }
+}
 async function readCodexStateConfig(home: string): Promise<Record<string, unknown>> {
   const path = join(home, "config.toml"), entry = await info(path);
   if (!entry) return {};
@@ -89,12 +130,14 @@ async function readCodexStateConfig(home: string): Promise<Record<string, unknow
     if (error instanceof Fault) throw error;
     throw new Fault(422, "native_state_config", "The Codex instruction configuration is invalid.");
   } finally { await handle.close(); }
-  if (config.profile !== undefined)
-    throw new Fault(422, "native_state_config", "Codex legacy profile selection is unsupported by the verified native configuration contract. Resolve that configuration before launching; Switcher will not silently discard its instructions.");
+  if (config.profile !== undefined || config.include !== undefined)
+    throw new Fault(422, "native_state_config", "Codex profile/include selection is unsupported by the verified shared-state instruction contract. Resolve that effective configuration before launching; Switcher will not silently discard its instructions.");
   return config;
 }
 
-async function codexInstructionProjection(home: string, config: Record<string, unknown>): Promise<Record<string, unknown>> {
+type CodexInstructionKey = (typeof CODEX_INSTRUCTION_KEYS)[number];
+const CODEX_INSTRUCTION_FILE_KEYS = new Set<CodexInstructionKey>(["model_instructions_file", "experimental_compact_prompt_file", "model_auto_compact_instructions_file"]);
+async function codexInstructionProjection(home: string, config: Record<string, unknown>, allowedExternalFiles: Partial<Record<CodexInstructionKey,string>> = {}): Promise<Record<string, unknown>> {
   const instructions: Record<string, unknown> = {};
   for (const key of CODEX_INSTRUCTION_KEYS) {
     const value = config[key]; if (value === undefined) continue;
@@ -103,14 +146,15 @@ async function codexInstructionProjection(home: string, config: Record<string, u
       : key === "project_doc_fallback_filenames" ? Array.isArray(value) && value.every(item => typeof item === "string" && !item.includes("\0"))
       : typeof value === "string" && !value.includes("\0");
     if (!valid) throw new Fault(422, "native_state_instructions", "Codex instruction configuration has an unsupported value.");
-    if (key === "model_instructions_file") {
+    if (CODEX_INSTRUCTION_FILE_KEYS.has(key)) {
       const path = resolve(home, value as string), entry = await info(path);
-      if (!entry || !entry.isFile() || entry.nlink !== 1 || entry.isSymbolicLink() || ![0, process.getuid?.()].includes(entry.uid)
+      const relativePath=relative(home,path),contained=relativePath!==".."&&!relativePath.startsWith("../")&&!isAbsolute(relativePath);
+      if ((!contained && path!==allowedExternalFiles[key]) || !entry || !entry.isFile() || entry.nlink !== 1 || entry.isSymbolicLink() || ![0, process.getuid?.()].includes(entry.uid)
           || (entry.mode & 0o022) !== 0 || await realpath(path) !== path)
-        throw new Fault(422, "native_state_instructions", "The model instruction file is not a readable trusted file.");
+        throw new Fault(422, "native_state_instructions", "The configured instruction file is not a readable trusted file.");
       await assertSafeAncestors(dirname(path));
-      const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW).catch(() => { throw new Fault(422, "native_state_instructions", "The model instruction file is not readable."); });
-      try { const opened = await handle.stat(); if (opened.ino !== entry.ino || opened.dev !== entry.dev || opened.nlink !== 1) throw new Fault(409, "native_state_instructions", "The model instruction file changed during preparation."); }
+      const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW).catch(() => { throw new Fault(422, "native_state_instructions", "The configured instruction file is not readable."); });
+      try { const opened = await handle.stat(); if (opened.ino !== entry.ino || opened.dev !== entry.dev || opened.nlink !== 1) throw new Fault(409, "native_state_instructions", "The configured instruction file changed during preparation."); }
       finally { await handle.close(); }
       instructions[key] = path;
     } else instructions[key] = value;
@@ -126,21 +170,26 @@ export async function assertNativeInstructionOverlay(state: NativeState, overlay
   const config = await readCodexStateConfig(overlayHome);
   if (config.profiles !== undefined || config.include !== undefined)
     throw new Fault(422, "native_state_instruction_overlay", "Private Codex profile/include instruction overlays are not supported. Resolve their effective canonical instructions before launching.");
-  const actual = await codexInstructionProjection(overlayHome, config);
   const expected = state.instructions ?? {};
+  const allowedExternalFiles=Object.fromEntries([...CODEX_INSTRUCTION_FILE_KEYS].flatMap(key=>typeof expected[key]==="string"?[[key,expected[key]]]:[])) as Partial<Record<CodexInstructionKey,string>>;
+  const actual = await codexInstructionProjection(overlayHome, config, allowedExternalFiles);
   if (CODEX_INSTRUCTION_KEYS.some(key => JSON.stringify(actual[key]) !== JSON.stringify(expected[key])))
     throw new Fault(409, "native_state_instruction_overlay", "This Codex authentication home has missing or conflicting canonical instructions. Refresh its instruction projection before launching; Switcher will not rewrite private account configuration.");
 }
 
 /** This marker identifies the corpus, never the selected authentication home. */
 export async function resolveNativeState(tool: SharedNativeTool, environment: NodeJS.ProcessEnv = process.env, options: { create?: boolean } = {}): Promise<NativeState> {
+  if(process.platform==="win32")throw new Fault(422,"unsupported_platform","Shared native state currently requires POSIX ownership, no-follow and symlink semantics on Linux or macOS.");
   const suffix = tool.toUpperCase();
-  const marker = `HASNA_${suffix}_STATE_HOME`;
-  const explicit = environment[marker] ?? environment[`SUBSCRIPTIONS_SHARED_HOME_${suffix}`];
-  const native = environment[tool === "codex" ? "CODEX_HOME" : "CLAUDE_CONFIG_DIR"];
+  const marker = `HASNA_${suffix}_STATE_HOME`, legacyMarker = `SUBSCRIPTIONS_SHARED_HOME_${suffix}`;
+  const primary = environment[marker], legacy = environment[legacyMarker];
+  if (primary !== undefined && legacy !== undefined && absolute(primary) !== absolute(legacy))
+    throw new Fault(409, "native_state_identity_conflict", `The ${marker} and ${legacyMarker} corpus identities disagree. Select one exact shared native state directory before launching.`);
+  // The default identity is the native user corpus, never an ambient account
+  // authentication home. Changing accounts must not change the corpus identity.
+  // Custom canonical homes must be named explicitly by one of the markers.
   const userHome = absolute(environment.HOME ?? homedir());
-  const selected = explicit !== undefined ? absolute(explicit)
-    : native && !credentialOverlay(absolute(native)) ? absolute(native) : join(userHome, `.${tool}`);
+  const selected = primary !== undefined ? absolute(primary) : legacy !== undefined ? absolute(legacy) : join(userHome, `.${tool}`);
   if (credentialOverlay(selected))
     throw new Fault(422, "native_state_overlay", "An authentication profile cannot be the shared native state directory. Select its original native state directory.");
   await ensureNativeStateDirectory(selected, options.create !== false);
@@ -210,6 +259,7 @@ async function assertCodexDatabaseRedirectSafe(state: NativeState, overlayHome: 
       throw new Fault(409, "native_state_inventory_changed", "Native database inventory changed; no state was projected.");
   }
 }
+async function directoryHasEntries(path:string):Promise<boolean>{const directory=await opendir(path);try{return Boolean(await directory.read());}finally{await directory.close();}}
 
 /** Metadata only. Old data remains visible as pending migration; normal launch
  * never treats starting a fresh shared overlay as completed legacy migration. */
@@ -221,7 +271,6 @@ export async function legacyNativeStateWarnings(root: string, state: NativeState
   let inspected = 0;
   for await (const entry of await opendir(directory)) {
     if (++inspected > 1000) throw new Fault(409, "native_state_inventory_limit", "Too many legacy desktop profiles to inspect safely.");
-    if (entry.name.startsWith("shared-")) continue;
     if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
     const home = join(directory, entry.name, ...(state.tool === "codex" ? ["codex"] : []));
     if (!await info(home)) continue;
@@ -229,10 +278,18 @@ export async function legacyNativeStateWarnings(root: string, state: NativeState
     for (const name of [...NATIVE_STATE_ENTRIES[state.tool].map(item => item.name), ...(state.tool === "codex" ? ["state_5.sqlite", "session_index.jsonl"] : [])]) {
       const path = join(home, name), item = await info(path);
       if (!item || item.isSymbolicLink()) continue;
-      if (item.isFile() && item.size > 0 || item.isDirectory() && (await readdir(path)).length > 0) { pending.push(home);break; }
+      if (item.isFile() && item.size > 0 || item.isDirectory() && await directoryHasEntries(path)) { pending.push(home);break; }
     }
   }
-  return pending.map(home => `Legacy native state is preserved at ${home}; migration is pending. Inspect with switcher state import ${state.tool} --from ${JSON.stringify(home)}. A copied snapshot does not retire the original or migrate its SQLite/index metadata.`);
+  const display = (path: string) => { const value = JSON.stringify(path).replace(/[\u007f-\u009f\u061c\u200e\u200f\u2028-\u202e\u2066-\u2069]/g, character => `\\u${character.charCodeAt(0).toString(16).padStart(4,"0")}`); return value.length > 768 ? `${value.slice(0,384)}...${value.slice(-381)}` : value; };
+  const warnings = pending.slice(0,10).map(home => `Legacy native state is preserved at ${display(home)}; migration is pending. Inspect with switcher state import ${state.tool} --from ${display(home)}. A copied snapshot does not retire the original or migrate its SQLite/index metadata.`);
+  if (pending.length > warnings.length) warnings.push(`${pending.length-warnings.length} additional legacy ${state.tool} state directories are pending migration; inspect the Switcher state root before launch.`);
+  return warnings;
+}
+
+async function createTrackedDirectory(path:string,created:string[]):Promise<void>{
+  try {await mkdir(path,{mode:0o700});created.push(path);}
+  catch(error){if((error as NodeJS.ErrnoException).code!=="EEXIST")throw error;await assertNativeStateDirectory(path);}
 }
 
 /** Read-only collision admission, shared by legacy projection and canonical launches. */
@@ -255,30 +312,50 @@ async function assertNativeStateProjection(state: NativeState, overlayHome: stri
         || source.isFile() && source.nlink !== 1
         || (entry.kind === "directory" ? !source.isDirectory() : !source.isFile())))
       throw new Fault(422, "native_state_entry", "A shared native state entry has an unsupported type, owner or permissions.");
+    if(source?.isDirectory())await assertShareableTree(target);
     if (existing && (!existing.isSymbolicLink() || resolve(dirname(destination), await readlink(destination)) !== target))
       throw new Fault(409, "native_state_migration_required", "This launch profile already contains native state. Preserve and migrate its noncredential state before linking the shared corpus.");
   }
 }
 
 /** Link only the native noncredential corpus. Existing data is never replaced. */
-export async function projectNativeState(state: NativeState, overlayHome: string): Promise<void> {
+async function projectNativeStateUnlocked(state: NativeState, overlayHome: string): Promise<void> {
   overlayHome = absolute(overlayHome);
   await assertNativeStateProjection(state, overlayHome);
   if (overlayHome === state.home) return;
-  for (const entry of NATIVE_STATE_ENTRIES[state.tool]) {
-    const target = join(state.home, entry.name), destination = join(overlayHome, entry.name);
-    await ensureNativeStateDirectory(dirname(target));
-    await ensureNativeStateDirectory(dirname(destination));
-    // A dangling optional link keeps the canonical file absent, but allows a
-    // later user-created instruction file to become visible without copying it.
-    if (entry.kind === "file" && !entry.name.endsWith(".jsonl") && !await info(target)) {
-      if (!await info(destination)) await symlink(target, destination, "file");
-      continue;
+  const createdLinks: Array<{ destination: string; target: string }> = [];
+  const createdFiles: string[] = [], createdDirectories: string[] = [];
+  try {
+    for (const entry of NATIVE_STATE_ENTRIES[state.tool]) {
+      const target = join(state.home, entry.name), destination = join(overlayHome, entry.name);
+      const targetParent = dirname(target), destinationParent = dirname(destination);
+      if (!await info(targetParent)) await createTrackedDirectory(targetParent,createdDirectories);else await assertNativeStateDirectory(targetParent);
+      if (!await info(destinationParent)) await createTrackedDirectory(destinationParent,createdDirectories);else await assertNativeStateDirectory(destinationParent);
+      // Missing optional instruction files stay absent until a later launch can
+      // validate them. History is created canonically before a native writer
+      // can create an account-private replacement.
+      if (entry.kind === "file" && !entry.name.endsWith(".jsonl") && !await info(target)) continue;
+      if (!await info(target)) {
+        if (entry.kind === "directory") await createTrackedDirectory(target,createdDirectories);
+        else { const file = await open(target, "wx", 0o600); await file.close(); createdFiles.push(target); }
+      }
+      if (!await info(destination)) { await symlink(target, destination, entry.kind === "directory" ? "dir" : "file"); createdLinks.push({ destination, target }); }
     }
-    if (!await info(target)) {
-      if (entry.kind === "directory") await mkdir(target, { mode: 0o700 });
-      else { const file = await open(target, "wx", 0o600); await file.close(); }
+  } catch (error) {
+    for (const item of createdLinks.reverse()) {
+      try { if ((await info(item.destination))?.isSymbolicLink() && resolve(dirname(item.destination), await readlink(item.destination)) === item.target) await unlink(item.destination); } catch { /* Preserve the original refusal. */ }
     }
-    if (!await info(destination)) await symlink(target, destination, entry.kind === "directory" ? "dir" : "file");
+    for (const path of createdFiles.reverse()) {
+      try { const entry = await info(path); if (entry?.isFile() && entry.nlink === 1 && entry.size === 0) await unlink(path); } catch { /* Preserve the original refusal. */ }
+    }
+    for (const path of [...new Set(createdDirectories)].sort((a,b)=>b.length-a.length)) {
+      try { await rmdir(path); } catch { /* Keep nonempty or concurrently used directories. */ }
+    }
+    throw error;
   }
+}
+
+export async function projectNativeState(state: NativeState, overlayHome: string): Promise<void> {
+  if (absolute(overlayHome) === state.home) return;
+  return withNativeStateLock(state,()=>projectNativeStateUnlocked(state,overlayHome));
 }

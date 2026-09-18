@@ -2,4 +2,4 @@
 "@hasna/switcher": patch
 ---
 
-Keep Codex and compatible Claude state in a common native corpus across provider and account overlays, with separate credentials and stable desktop state. Share Codex SQLite and writer locks coherently and discover older conversations through the native cross-provider catalog before resuming their original IDs.
+Share Codex and compatible Claude sessions, skills and instructions by default across provider and account changes, keeping credentials and desktop profiles private. Bind direct Codex launches to the accepted native auth-home runtime, preserve file-backed compact instructions, and discover existing conversations across providers. Bind explicit legacy-state copies to the reviewed import digest.

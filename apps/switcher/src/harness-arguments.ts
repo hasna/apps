@@ -69,14 +69,26 @@ const short: Partial<Record<HarnessId, { required: string; optional: string; boo
   "prime-agent": { required: "p", optional: "", boolean: "hv" },
   gemini: { required: "mpieo", optional: "rw", boolean: "shvydl" },
 };
-const providerKeys = new Set(["model", "model_provider", "model_providers", "model_catalog_json", "review_model", "agents", "memories", "sqlite_home", "auth_home", "cli_auth_credentials_store", "profile", "profiles", "include"]);
+const providerKeys = new Set(["model", "model_provider", "provider", "model_providers", "model_catalog_json", "review_model", "agents", "memories", "sqlite_home", "auth_home", "cli_auth_credentials_store", "profile", "profiles", "include"]);
 export function codexOptionTakesValue(option: string): boolean {
   return values.codex.includes(option) || option.length===2 && option[0]==="-" && short.codex!.required.includes(option[1]);
 }
-export function codexConfigRoots(key: string): string[] {
-  if(key.length>4096||/[\r\n\0]/.test(key))throw new Error("Invalid Codex configuration key.");
-  return Object.keys(Bun.TOML.parse(`${key} = 0`));
+export function codexOptionRequestsHelp(option: string): boolean {
+  if (["--help","--version","-h","-V"].includes(option)) return true;
+  if (!/^-[^-]/.test(option)) return false;
+  for (let index=1;index<option.length;index++) {
+    const name=option[index];if(name==="h"||name==="V")return true;
+    if(short.codex!.required.includes(name))return false;
+  }
+  return false;
 }
+export function codexConfigPath(key: string): string[] {
+  if(key.length>4096||/[\r\n\0]/.test(key))throw new Error("Invalid Codex configuration key.");
+  let value:unknown=Bun.TOML.parse(`${key} = 0`);const path:string[]=[];
+  while(value!==0){if(value===null||typeof value!=="object"||Array.isArray(value))throw new Error("Invalid Codex configuration key.");const entries=Object.entries(value);if(entries.length!==1)throw new Error("Ambiguous Codex configuration key.");path.push(entries[0][0]);value=entries[0][1];}
+  if(!path.length)throw new Error("Invalid Codex configuration key.");return path;
+}
+export function codexConfigRoots(key: string): string[] { return [codexConfigPath(key)[0]]; }
 /** Locate a native subcommand without confusing option values or a literal
  * prompt after -- with that command. Reuse the validated Codex option grammar. */
 export function codexCommandIndex(args: readonly string[]): number {
@@ -112,10 +124,10 @@ function codexProviderOverride(value: string): boolean {
   // Match the TOML key syntax, including quoted roots, rather than looking for
   // provider words in unrelated option values such as a custom system prompt.
   try { return codexConfigRoots(key).some(root => providerKeys.has(root)); }
-  catch { return /^(model|model_provider|model_providers|model_catalog_json|review_model|agents|memories|sqlite_home|auth_home|cli_auth_credentials_store|profile|profiles|include)(?:\s*\.|\s*$)/.test(key); }
+  catch { return /^(model|model_provider|provider|model_providers|model_catalog_json|review_model|agents|memories|sqlite_home|auth_home|cli_auth_credentials_store|profile|profiles|include)(?:\s*\.|\s*$)/.test(key); }
 }
 
-export function assertHarnessArguments(harness: HarnessId, args: readonly string[], options: { additionalReserved?: readonly string[]; reserveCodexConfig?: boolean } = {}): void {
+export function assertHarnessArguments(harness: HarnessId, args: readonly string[], options: { additionalReserved?: readonly string[]; reserveCodexConfig?: boolean; reservedCodexRoots?: readonly string[] } = {}): void {
   if(harness==="kilo"){validateKiloArgs([...args]);return;}
   if(harness==="aider"){aiderArguments(args);return;}
   const blocked = new Set([...reserved[harness], ...options.additionalReserved ?? []]);
@@ -143,7 +155,12 @@ export function assertHarnessArguments(harness: HarnessId, args: readonly string
       if (rootValues.has(arg) || ["--continue", "-c"].includes(arg) && args[i + 1] !== undefined && !args[i + 1].startsWith("-")) i++;
     }
   }
-  const config = (value: string) => { if (harness === "codex" && (options.reserveCodexConfig || codexProviderOverride(value))) reject(); };
+  const config = (value: string) => {
+    if(harness!=="codex")return;
+    const key=value.slice(0,value.indexOf("=")<0?value.length:value.indexOf("=")).trim();
+    let reserved=false;try{reserved=codexConfigRoots(key).some(root=>options.reservedCodexRoots?.includes(root));}catch{reserved=Boolean(options.reservedCodexRoots?.some(root=>new RegExp(`^${root.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")}(?:\\s*\\.|\\s*$)`).test(key)));}
+    if(options.reserveCodexConfig||codexProviderOverride(value)||reserved)reject();
+  };
   let hermesChat = false;
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];

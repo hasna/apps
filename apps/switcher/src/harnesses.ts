@@ -800,7 +800,7 @@ async function prepareNativeLaunch(input: HarnessLaunchInput, providerBaseUrl = 
   return {executable,args:native,env,configPaths,warnings};
 }
 async function prepareTransportLaunch(input: HarnessLaunchInput): Promise<PreparedLaunch> {
-  assertHarnessArguments(input.harness,input.args ?? []);
+  assertHarnessArguments(input.harness,input.args ?? [],input.sharedState?.tool==="codex"?{reservedCodexRoots:["sqlite_home"]}:{});
   if(input.harness==="kilo") {
     await validateKiloConfiguration(input.cwd,[...input.args??[]]);
     if(input.protocol==="gemini-generate-content") throw new Error("Kilo is incompatible with this protocol.");
@@ -834,7 +834,7 @@ async function prepareTransportLaunch(input: HarnessLaunchInput): Promise<Prepar
 }
 
 export async function prepareHarnessLaunch(input: HarnessLaunchInput): Promise<PreparedLaunch> {
-  assertHarnessArguments(input.harness,input.args??[]);
+  assertHarnessArguments(input.harness,input.args??[],input.sharedState?.tool==="codex"?{reservedCodexRoots:["sqlite_home"]}:{});
   if(input.harness==="gemini"&&input.authStyle!=="x-api-key")throw new Error("Gemini CLI requires x-api-key authentication.");
   validateHarnessVersion(input.harness,input.version);
   if(!compatible(input.harness,input.protocol))throw new Error("Harness and provider protocol are incompatible.");

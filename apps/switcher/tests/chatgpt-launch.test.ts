@@ -58,24 +58,28 @@ test.skipIf(process.platform!=="darwin")("exact desktop CLI selects an arbitrary
   const app=join(root,"Installed ChatGPT.app"),contents=join(app,"Contents");
   await mkdir(join(contents,"MacOS"),{recursive:true});await mkdir(join(contents,"Resources"));
   await writeFile(join(contents,"Info.plist"),`<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.openai.codex</string><key>CFBundleExecutable</key><string>ChatGPT</string><key>CFBundleShortVersionString</key><string>26.901.51231</string></dict></plist>`);
-  await writeFile(join(contents,"Resources/codex"),"#!/bin/sh\necho 'codex-cli 0.153.4'\n",{mode:0o700});
-  await writeFile(join(contents,"MacOS/ChatGPT"),`#!${process.execPath}\nconst config=Bun.TOML.parse(await Bun.file(process.env.CODEX_HOME+"/config.toml").text());await Bun.write(${JSON.stringify(join(root,"receipt.json"))},JSON.stringify({model:config.model,provider:config.model_provider,home:process.env.CODEX_HOME,reasoning:config.model_reasoning_effort,approval:config.approval_policy,sandbox:config.sandbox_mode}));console.log("private-gui-output");process.exit(7);\n`,{mode:0o700});
+  await mkdir(join(root,".codex"),{mode:0o700});
+  await writeFile(join(root,".codex/compact.md"),"canonical compact fixture",{mode:0o600});
+  await writeFile(join(root,".codex/config.toml"),'experimental_compact_prompt_file="compact.md"\n',{mode:0o600});
+  await writeFile(join(contents,"Resources/codex"),`#!${process.execPath}\nif(process.argv.includes('--version')){console.log('codex-cli 0.154.0');process.exit(0)}\nimport{createInterface}from'node:readline';createInterface({input:process.stdin}).on('line',line=>console.log(line));\n`,{mode:0o700});
+  await writeFile(join(contents,"MacOS/ChatGPT"),`#!${process.execPath}\nconst config=Bun.TOML.parse(await Bun.file(process.env.CODEX_HOME+"/config.toml").text());const bridge=Bun.spawn([process.env.CODEX_CLI_PATH,'app-server'],{env:process.env,stdin:'pipe',stdout:'pipe',stderr:'pipe'});bridge.stdin.write(JSON.stringify({id:1,method:'thread/list',params:{modelProviders:['old'],useStateDbOnly:true}})+'\\n');bridge.stdin.end();const bridged=JSON.parse(await new Response(bridge.stdout).text());if(await bridge.exited)process.exit(8);await Bun.write(${JSON.stringify(join(root,"receipt.json"))},JSON.stringify({model:config.model,provider:config.model_provider,home:process.env.CODEX_HOME,reasoning:config.model_reasoning_effort,approval:config.approval_policy,sandbox:config.sandbox_mode,compact:config.experimental_compact_prompt_file,compactText:await Bun.file(config.experimental_compact_prompt_file).text(),bridged:bridged.params}));console.log("private-gui-output");process.exit(7);\n`,{mode:0o700});
   const run=async(args:string[])=>{
-    const child=Bun.spawn([process.execPath,join(import.meta.dir,"../src/cli.ts"),...args],{cwd:root,env:{PATH:process.env.PATH,HOME:root,HASNA_STATION:"desktop-cli-fixture",HASNA_SWITCHER_LOCAL:"1",HASNA_SWITCHER_HOME:join(root,"data")},stdin:"ignore",stdout:"pipe",stderr:"pipe"});
+    const cli=process.env.SWITCHER_TEST_DIST==="1"?join(import.meta.dir,"../dist/cli/index.js"):join(import.meta.dir,"../src/cli.ts");
+    const child=Bun.spawn([process.execPath,cli,...args],{cwd:root,env:{PATH:process.env.PATH,HOME:root,HASNA_STATION:"desktop-cli-fixture",HASNA_SWITCHER_LOCAL:"1",HASNA_SWITCHER_HOME:join(root,"data")},stdin:"ignore",stdout:"pipe",stderr:"pipe"});
     const timer=setTimeout(()=>child.kill("SIGKILL"),15000);
     try{const [code,stdout,stderr]=await Promise.all([child.exited,new Response(child.stdout).text(),new Response(child.stderr).text()]);return {code,stdout,stderr};}finally{clearTimeout(timer);}
   };
   try {
     const created=await run(["providers","add","arbitrary","--url","http://127.0.0.1:9997/v1","--protocol","openai-responses","--catalog-format","none","--model","vendor/model"]);
     expect(created.code,created.stderr).toBe(0);
-    const command=["launch","chatgpt","--provider","arbitrary","--model","vendor/model","--app-path",app,"--reasoning","max","--dangerously-bypass-approvals-and-sandbox"];
+    const command=["launch","chatgpt","--provider","arbitrary","--model","vendor/model","--share-native-state","--app-path",app,"--reasoning","max","--dangerously-bypass-approvals-and-sandbox"];
     const plan=await run([...command,"--dry-run"]);expect(plan.code,plan.stderr).toBe(0);
     expect(JSON.parse(plan.stdout)).toMatchObject({profile:{harness:"codex",model:"vendor/model"},desktop:{path:app,mode:"shared-state-private-auth",sessionIdentity:"canonical-native-corpus"}});
     expect(await Bun.file(join(root,"receipt.json")).exists()).toBe(false);
     for(const extra of [["--backend","direct"],["--","exec"]])expect((await run([...command,...extra])).code).toBe(1);
     const launched=await run(command);expect(launched.code,launched.stderr).toBe(7);
     expect(launched.stdout).toBe("");expect(launched.stderr).not.toContain("private-gui-output");
-    const receipt=await Bun.file(join(root,"receipt.json")).json();expect(receipt).toMatchObject({model:"vendor/model",provider:"switcher",reasoning:"max",approval:"never",sandbox:"danger-full-access"});
+    const receipt=await Bun.file(join(root,"receipt.json")).json();expect(receipt).toMatchObject({model:"vendor/model",provider:"switcher",reasoning:"max",approval:"never",sandbox:"danger-full-access",compact:join(root,".codex/compact.md"),compactText:"canonical compact fixture",bridged:{modelProviders:[],useStateDbOnly:false}});
     expect(await Bun.file(join(receipt.home,"auth.json")).exists()).toBe(false);
     const normal=await run(command.slice(0,-3));expect(normal.code,normal.stderr).toBe(7);
     expect(await Bun.file(join(root,"receipt.json")).json()).toMatchObject({approval:"on-request",sandbox:"workspace-write"});
