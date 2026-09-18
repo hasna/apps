@@ -16,7 +16,7 @@ const enabled = Boolean(process.env.SKILLS_TEST_CLAUDE_BIN && process.env.SKILLS
 const nativeTest = enabled ? test : test.skip;
 const cleanup: Array<() => void> = [];
 afterEach(() => { for (const dispose of cleanup.splice(0).reverse()) dispose(); });
-nativeTest("Claude command sources install and update only freshly authorized Skills projections", async () => {
+nativeTest.each([false, true])("Claude command sources install and update freshly authorized projections (versionless=%s)", async (versionless) => {
   expect(process.platform).toBe("linux");
   expect(readlinkSync("/proc/self/ns/net")).toMatch(/^net:\[\d+\]$/);
   expect(Object.keys(networkInterfaces())).toEqual(["lo"]);
@@ -43,7 +43,7 @@ nativeTest("Claude command sources install and update only freshly authorized Sk
   const resolver = realpathSync(resolve(import.meta.dir, "../..", "bin/index.js"));
   const env = { HOME: home, CLAUDE_CONFIG_DIR: join(home, ".claude"), PATH: `${dirname(process.execPath)}:/usr/bin:/bin`, LANG: "C.UTF-8", TMPDIR: join(root, "tmp"), DISABLE_AUTOUPDATER: "1", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" };
   putSynthetic(join(home, ".claude/settings.json"), JSON.stringify({ disableBundledSkills: true, syncClaudeAiSkills: false, syncClaudeAiPlugins: false }));
-  const fixture = pluginFixture(join(root, "packages")), credential = "synthetic-native-admission-fixture";
+  const fixture = pluginFixture(join(root, "packages"), { versionless }), credential = "synthetic-native-admission-fixture";
   let unrelatedSelection = false;
   const calls: Array<{ path: string; status: number }> = [], steps: Array<{ label: string; exitCode: number }> = [];
   const fetchSynthetic = async (request: Request) => {
@@ -68,7 +68,9 @@ nativeTest("Claude command sources install and update only freshly authorized Sk
   // Custom instances retain /api/v1; the fleet gateway alone uses its /v1 rewrite.
   const client = new HttpProfileClient(credential, base); fixture.state.authority = client.authority;
   putSynthetic(join(home, ".hasna/skills/config/credentials"), `HASNA_SKILLS_API_URL=${base}\nHASNA_SKILLS_API_KEY=${credential}\n`, 0o600);
-  fixture.target.native = { version: "2.1.274", executable: native, digest: pluginExecutableDigest(native) };
+  const nativeVersion = process.env.SKILLS_TEST_CLAUDE_VERSION ?? "2.1.274";
+  expect(["2.1.274", "2.1.276"]).toContain(nativeVersion);
+  fixture.target.native = { version: nativeVersion as "2.1.274" | "2.1.276", executable: native, digest: pluginExecutableDigest(native) };
   fixture.target.resolver = { executable: resolver, digest: pluginExecutableDigest(resolver) };
   const options = { client, storeRoot: join(home, ".hasna/skills/plugin-admission") };
   async function run(label: string, args: string[], binary = native) {
@@ -93,7 +95,7 @@ nativeTest("Claude command sources install and update only freshly authorized Sk
   };
   try {
     const version = await run("certified-version", ["--version"]);
-    expect(version.exitCode).toBe(0); expect(version.stdout.trim()).toBe("2.1.274 (Claude Code)");
+    expect(version.exitCode).toBe(0); expect(version.stdout.trim()).toBe(`${nativeVersion} (Claude Code)`);
     const baseline = join(root, "baseline");
     cpSync(join(root, "packages/bundle-1.0.0/original"), join(baseline, "original"), { recursive: true });
     putSynthetic(join(baseline, ".claude-plugin/marketplace.json"), JSON.stringify({ name: "baseline", owner: { name: "Synthetic fixture" }, plugins: [{ name: "fixture", source: "./original" }] }));
@@ -161,6 +163,6 @@ nativeTest("Claude command sources install and update only freshly authorized Sk
     expect(mutated.exitCode).toBe(0); expect(mutated.stdout).toContain("reseeded"); expect(registration()).toEqual(updated);
     expect(existsSync(first.materializedPath) && existsSync(second.materializedPath)).toBe(true);
     expect(calls.some(call => call.status === 403) && calls.some(call => call.status === 503)).toBe(true);
-    console.info(JSON.stringify({ nativePluginProof: "passed", certifiedNative: "2.1.274", nativeDigest: fixture.target.native.digest, resolverDigest: fixture.target.resolver.digest, isolatedNetwork: true, ownerFileCredential: true, originalPrompts: 2, projectedPrompts: 0, preservedComponents: ["agent", "hook", "mcp", "lsp", "asset"], unrelatedProfileUpdatePreservesAdmission: true, approvedUpdateAcceptedByDiscovery: true, cacheMutationRejectedByDiscovery: true, apiReads: calls.length, steps }));
+    console.info(JSON.stringify({ nativePluginProof: "passed", certifiedNative: nativeVersion, versionless, nativeDigest: fixture.target.native.digest, resolverDigest: fixture.target.resolver.digest, isolatedNetwork: true, ownerFileCredential: true, originalPrompts: 2, projectedPrompts: 0, preservedComponents: ["agent", "hook", "mcp", "lsp", "asset"], unrelatedProfileUpdatePreservesAdmission: true, approvedUpdateAcceptedByDiscovery: true, cacheMutationRejectedByDiscovery: true, apiReads: calls.length, steps }));
   } finally { server.stop(true); rmSync(root, { recursive: true, force: true }); }
 });

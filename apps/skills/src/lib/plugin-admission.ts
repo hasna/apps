@@ -10,13 +10,13 @@ import type { ResolvedSkillSelection } from "../types/skill-selection.js";
 import { SkillEntryPaths } from "./skill-entry-path.js";
 import { describeEntries } from "./selected-manifest.js";
 
-/** Version 1 is certified against native Claude 2.1.274; new hosts require a contract revision/test. */
+/** Version 1 is certified against native Claude 2.1.274 and 2.1.276; new hosts require a contract revision/test. */
 export interface PluginAdmissionTarget {
   schemaVersion: 1;
   pluginId: string;
   /** One marketplace command serves all explicitly reviewed native registration scopes. */
   registrations: Array<{ scope: "user" | "project"; projectPath: string | null }>;
-  native: { version: "2.1.274"; executable: string; digest: string };
+  native: { version: "2.1.274" | "2.1.276"; executable: string; digest: string };
   resolver: { executable: string; digest: string };
 }
 export interface PluginAdmissionBinding {
@@ -67,7 +67,7 @@ export function validatePluginTarget(value: unknown): asserts value is PluginAdm
     pluginKeys(value[key], key === "native" ? ["version", "executable", "digest"] : ["executable", "digest"]);
     pluginText(value[key].executable); pluginNeed(isAbsolute(value[key].executable as string) && resolve(value[key].executable as string) === value[key].executable, "Plugin executable must have a canonical absolute path"); pluginDigest(value[key].digest);
   }
-  pluginNeed((value.native as Record<string, unknown>).version === "2.1.274", "Plugin admission requires the certified Claude 2.1.274 command-source runtime");
+  pluginNeed(["2.1.274", "2.1.276"].includes((value.native as Record<string, unknown>).version as string), "Plugin admission requires a certified Claude command-source runtime (2.1.274 or 2.1.276)");
 }
 /** Deterministic JSON for typed contracts; array order remains meaningful. */
 function canonicalJson(value: unknown): string { return JSON.stringify(value, (_key, item) => pluginObject(item) ? Object.fromEntries(Object.keys(item).sort().map(key => [key, item[key]])) : item); }

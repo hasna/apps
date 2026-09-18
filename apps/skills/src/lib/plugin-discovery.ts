@@ -34,6 +34,10 @@ function readRegistry(path: string): { value: Record<string, unknown>; rawDigest
     return { value, rawDigest: pluginHash(bytes.subarray(0, length)) };
   } finally { closeSync(fd); }
 }
+function nativeVersionMatches(version: string, receipt: PluginAdmissionReceipt): boolean {
+  const upstream = receipt.plan.manifest.upstream.version;
+  return upstream === null ? /^[a-f0-9]{12}$/.test(version) : version.startsWith(`${upstream}-`);
+}
 /** This is a structured witness, not an exemption for a plugin ID or its cache directory. */
 export function hashManagedPluginRegistry(path: string, managed: ManagedPluginRegistrationWitness[]): string {
   validateManagedPluginWitnesses(managed);
@@ -52,7 +56,7 @@ export function hashManagedPluginRegistry(path: string, managed: ManagedPluginRe
       pluginNeed(row.sourceCommand === pluginResolverCommand(binding), "Managed plugin command source changed");
       pluginText(row.version, 256); pluginText(row.installPath); pluginText(row.sourceProducerPath); pluginText(row.lastUpdated, 64);
       pluginNeed(Number.isFinite(Date.parse(row.lastUpdated)), "Invalid managed plugin update timestamp");
-      pluginNeed(/^[A-Za-z0-9][A-Za-z0-9._+-]*-[a-f0-9]{12}$/.test(row.version) && row.installPath === join(cacheRoot, row.version), "Managed plugin cache path or version is outside its registration");
+      pluginNeed(/^(?:[A-Za-z0-9][A-Za-z0-9._+-]*-)?[a-f0-9]{12}$/.test(row.version) && row.installPath === join(cacheRoot, row.version), "Managed plugin cache path or version is outside its registration");
       const approval = (producer: string) => {
         pluginText(producer); const digest = `sha256:${basename(producer)}`;
         const receipt = readPluginAdmissionReceipt(witness.storeRoot, witness.bindingId, digest);
@@ -66,7 +70,7 @@ export function hashManagedPluginRegistry(path: string, managed: ManagedPluginRe
         return receipt;
       };
       const receipt = approval(row.sourceProducerPath);
-      pluginNeed(row.version.startsWith(`${receipt.plan.manifest.upstream.version}-`), "Native plugin version differs from its admitted original version");
+      pluginNeed(nativeVersionMatches(row.version, receipt), "Native plugin version differs from its admitted original version");
       const expected = JSON.stringify(receipt.plan.files), previousExpected = currentFiles.get(row.installPath);
       pluginNeed(previousExpected === undefined || previousExpected === expected, "Native scopes disagree about their shared installed package"); currentFiles.set(row.installPath, expected);
       if (row.previousProducerPaths !== undefined) {
@@ -82,13 +86,13 @@ export function hashManagedPluginRegistry(path: string, managed: ManagedPluginRe
     const directory = opendirSync(cacheRoot), names: string[] = [];
     try { for (let item = directory.readSync(); item; item = directory.readSync()) { pluginNeed(names.length < PLUGIN_PROJECTION_LIMITS.history, "Managed native cache history exceeds its limit"); pluginNeed(item.isDirectory(), "Unexpected native cache member"); names.push(item.name); } } finally { directory.closeSync(); }
     for (const version of names.sort()) {
-      const files = pluginFileWitnesses(snapshotPluginTree(join(cacheRoot, version), { nativeRuntime: "claude-2.1.274" }));
+      const files = pluginFileWitnesses(snapshotPluginTree(join(cacheRoot, version), { nativeRuntime: `claude-${target.native.version}` }));
       verifiedBytes += files.reduce((total, file) => total + file.size, 0);
       pluginNeed(verifiedBytes <= 256 * 1024 * 1024, "Managed plugin verification exceeds its aggregate byte budget");
       const serialized = JSON.stringify(files);
       const expected = currentFiles.get(join(cacheRoot, version));
       pluginNeed(expected === undefined || serialized === expected, "Current native cache differs from its exact registered producer receipt");
-      pluginNeed([...approvals.values()].some(receipt => version.startsWith(`${receipt.plan.manifest.upstream.version}-`) && JSON.stringify(receipt.plan.files) === serialized), "A retained native plugin cache version differs from every approved projection");
+      pluginNeed([...approvals.values()].some(receipt => nativeVersionMatches(version, receipt) && JSON.stringify(receipt.plan.files) === serialized), "A retained native plugin cache version differs from every approved projection");
     }
     for (const row of rows) pluginNeed(names.includes((row as Record<string, unknown>).version as string), "Managed native plugin installation is missing");
     const after = lstatSync(cacheRoot); safe(cacheRoot);

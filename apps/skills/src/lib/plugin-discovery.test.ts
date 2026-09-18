@@ -11,15 +11,15 @@ import { assertProjectDiscovery, captureDiscoveryByteSources, verifyAgentDiscove
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
-async function fixture() {
+async function fixture(versionless = false) {
   const root = mkdtempSync(join(tmpdir(), "skills-plugin-registry-")); roots.push(root);
-  const f = pluginFixture(root), registry = join(root, ".claude/plugins/installed_plugins.json");
+  const f = pluginFixture(root, { versionless }), registry = join(root, ".claude/plugins/installed_plugins.json");
   f.target.registrations.push({ scope: "project", projectPath: join(root, "project") });
   async function admit() { const plan = await planPluginAdmission("synthetic-integration", "synthetic-profile", f.target, f.options); return admitPlugin("synthetic-integration", "synthetic-profile", f.target, plan.planDigest, f.options); }
   let current: PluginAdmissionReceipt = await admit(); const previous: string[] = [];
   let document: any;
   function install() {
-    const version = `${current.plan.manifest.upstream.version}-${current.plan.projectionTreeDigest.slice(7, 19)}`, installPath = join(root, ".claude/plugins/cache/synthetic/fixture", version);
+    const version = `${current.plan.manifest.upstream.version === null ? "" : `${current.plan.manifest.upstream.version}-`}${current.plan.projectionTreeDigest.slice(7, 19)}`, installPath = join(root, ".claude/plugins/cache/synthetic/fixture", version);
     cpSync(current.materializedPath, installPath, { recursive: true });
     document = { version: 2, plugins: { "unmanaged@other": [{ scope: "user", installPath: "/synthetic/unmanaged", unknown: "must-remain-exact" }], "fixture@synthetic": f.target.registrations.map(scope => ({ scope: scope.scope, ...(scope.projectPath ? { projectPath: scope.projectPath } : {}), installPath, version, installedAt: "2026-01-01T00:00:00.000Z", lastUpdated: "2026-01-01T00:00:00.000Z", sourceCommand: current.plan.sourceCommand, sourceProducerPath: current.materializedPath, previousProducerPaths: [...previous] })) } };
     write();
@@ -28,7 +28,7 @@ async function fixture() {
   install();
   const source = captureManagedPluginRegistry(registry, [{ bindingId: current.plan.bindingId, storeRoot: f.options.storeRoot }]);
   const binding: AgentDiscoveryBinding = { agent: "claude", method: "reviewed", roots: [], sources: [source] };
-  return { ...f, root, registry, binding, get document() { return document; }, write, async update(upstreamVersion = "1.0.1") { previous.push(current.materializedPath); f.state.revision = "r2"; f.update("1.0.1", upstreamVersion); current = await admit(); install(); } };
+  return { ...f, root, registry, binding, get document() { return document; }, write, async update(upstreamVersion: string | null = versionless ? null : "1.0.1") { previous.push(current.materializedPath); f.state.revision = "r2"; f.update("1.0.1", upstreamVersion); current = await admit(); install(); } };
 }
 test("a reviewed immutable update across exact user/project scopes keeps the discovery witness valid", async () => {
   const f = await fixture(); expect(() => verifyAgentDiscovery(f.binding)).not.toThrow(); await f.update(); expect(() => verifyAgentDiscovery(f.binding)).not.toThrow();
@@ -98,4 +98,16 @@ test("canonical JSON receipt serialization preserves exact current and retained 
     writeFileSync(path, JSON.stringify(receipt, (_key, item) => item && typeof item === "object" && !Array.isArray(item) ? Object.fromEntries(Object.keys(item).sort().map(key => [key, item[key]])) : item));
   }
   expect(() => verifyAgentDiscovery(f.binding)).not.toThrow();
+});
+
+test("versionless native cache updates remain receipt-bound and reject invented version prefixes", async () => {
+  const f = await fixture(true), original = f.document.plugins["fixture@synthetic"][0];
+  expect(original.version).toMatch(/^[a-f0-9]{12}$/);
+  expect(() => verifyAgentDiscovery(f.binding)).not.toThrow();
+  await f.update(); expect(() => verifyAgentDiscovery(f.binding)).not.toThrow();
+  for (const row of f.document.plugins["fixture@synthetic"]) row.sourceProducerPath = original.sourceProducerPath;
+  f.write(); expect(() => verifyAgentDiscovery(f.binding)).toThrow("exact registered producer");
+  const other = await fixture(true);
+  for (const row of other.document.plugins["fixture@synthetic"]) { row.version = `invented-${row.version}`; row.installPath = join(other.root, ".claude/plugins/cache/synthetic/fixture", row.version); }
+  other.write(); expect(() => verifyAgentDiscovery(other.binding)).toThrow("original version");
 });

@@ -15,14 +15,17 @@ export interface PluginPayloadMapping {
   sourceDigest: string;
   target: Pick<SkillSelection, "slug" | "version" | "bundleDigest">;
 }
-export interface PluginProjectionManifest {
-  schemaVersion: 1;
+interface PluginProjectionFields {
   agent: "claude";
   pluginId: string;
-  upstream: { source: string; revision: string; version: string; license: string; treeDigest: string };
-  review: { hooks: "reviewed-no-skill-injection"; dependencies: "reviewed-no-retired-payload-dependency" };
   payloads: PluginPayloadMapping[];
 }
+interface PluginUpstream { source: string; revision: string; license: string; treeDigest: string }
+interface PluginReview { hooks: "reviewed-no-skill-injection"; dependencies: "reviewed-no-retired-payload-dependency" }
+export type PluginProjectionManifest = PluginProjectionFields & (
+  | { schemaVersion: 1; upstream: PluginUpstream & { version: string }; review: PluginReview }
+  | { schemaVersion: 2; upstream: PluginUpstream & { version: string | null }; review: PluginReview & { documentation: Array<{ path: string; sourceDigest: string }> } }
+);
 export interface PluginFileWitness { path: string; mode: number; size: number; sha256: string }
 export interface PluginProjection {
   manifest: PluginProjectionManifest;
@@ -49,13 +52,25 @@ function parse(bytes: Uint8Array): unknown {
 }
 export function validatePluginManifest(value: unknown): asserts value is PluginProjectionManifest {
   pluginKeys(value, ["schemaVersion", "agent", "pluginId", "upstream", "review", "payloads"]);
-  pluginNeed(value.schemaVersion === 1 && value.agent === "claude", "Unsupported plugin projection contract"); pluginId(value.pluginId);
+  pluginNeed((value.schemaVersion === 1 || value.schemaVersion === 2) && value.agent === "claude", "Unsupported plugin projection contract"); pluginId(value.pluginId);
   pluginKeys(value.upstream, ["source", "revision", "version", "license", "treeDigest"]);
-  for (const key of ["source", "revision", "version", "license"]) pluginText(value.upstream[key], 2048);
+  for (const key of ["source", "revision", "license"]) pluginText(value.upstream[key], 2048);
   try { const url = new URL(value.upstream.source as string); pluginNeed(url.protocol === "https:" && !url.username && !url.password && !url.search && !url.hash, "Upstream provenance requires a credential-free HTTPS source"); } catch { pluginRefusal("Invalid upstream provenance source"); }
-  pluginNeed(/^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$/.test(value.upstream.version as string) && !(value.upstream.version as string).includes(".."), "Invalid upstream version");
+  if (value.schemaVersion === 2) pluginNeed(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(value.upstream.revision as string), "Schema two requires an immutable full Git revision");
+  if (value.schemaVersion !== 2 || value.upstream.version !== null) {
+    pluginText(value.upstream.version, 128);
+    pluginNeed(/^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$/.test(value.upstream.version) && !value.upstream.version.includes(".."), "Invalid upstream version");
+  }
   pluginDigest(value.upstream.treeDigest);
-  pluginKeys(value.review, ["hooks", "dependencies"]);
+  pluginKeys(value.review, value.schemaVersion === 2 ? ["hooks", "dependencies", "documentation"] : ["hooks", "dependencies"]);
+  if (value.schemaVersion === 2) {
+    pluginNeed(Array.isArray(value.review.documentation) && value.review.documentation.length <= 1, "Invalid reviewed plugin documentation");
+    for (const item of value.review.documentation) {
+      pluginKeys(item, ["path", "sourceDigest"]);
+      pluginNeed(typeof item.path === "string" && /^README\.md$/i.test(item.path), "Only a root README.md can be reviewed as inert documentation");
+      pluginDigest(item.sourceDigest);
+    }
+  }
   pluginNeed(value.review.hooks === "reviewed-no-skill-injection" && value.review.dependencies === "reviewed-no-retired-payload-dependency", "Plugin components require an explicit dependency and hook review");
   pluginNeed(Array.isArray(value.payloads) && value.payloads.length <= PLUGIN_PROJECTION_LIMITS.files, "Invalid payload mapping collection");
   const seen = new Set<string>();
@@ -108,7 +123,7 @@ export function buildPluginProjection(entries: SkillBundleEntry[]): PluginProjec
   pluginNeed(originalTreeDigest === manifest.upstream.treeDigest, "The original plugin package differs from its immutable provenance");
   const native = original.find(item => item.path === ".claude-plugin/plugin.json"); pluginNeed(native, "The original plugin manifest is missing");
   const config = parse(native.bytes); pluginKeys(config, MANIFEST_FIELDS);
-  pluginNeed(config.name === manifest.pluginId.split("@")[0] && config.version === manifest.upstream.version, "Original plugin identity differs from its contract");
+  pluginNeed(config.name === manifest.pluginId.split("@")[0] && (manifest.upstream.version === null ? !Object.hasOwn(config, "version") : config.version === manifest.upstream.version), "Original plugin identity differs from its contract");
   const skillRoots = ["skills", ...declaredPaths(config.skills)], commandRoots = ["commands", ...declaredPaths(config.commands)];
   const promptKind = (path: string): "skill" | "command" | undefined => /(^|\/)SKILL\.md$/i.test(path) ? "skill" : /\.md$/i.test(path) && commandRoots.some(root => within(path, root)) ? "command" : undefined;
   const prompts = original.filter(item => promptKind(item.path));
@@ -123,16 +138,27 @@ export function buildPluginProjection(entries: SkillBundleEntry[]): PluginProjec
   const retainedConfig = { ...config }; delete retainedConfig.skills; delete retainedConfig.commands;
   const ordinaryDefaults = ["agents", "hooks", "workflows", "output-styles", "bin", "monitors", "themes", ".mcp.json", ".lsp.json", "settings.json"];
   pluginNeed(!removed.some(item => ordinaryDefaults.some(path => within(item.path, path))), "A skill root overlaps an ordinary component");
-  function referencesRemoved(value: unknown): boolean {
+  function referencesPaths(value: unknown, paths: string[]): boolean {
     if (typeof value === "string") {
       const normalized = posix.normalize(value).replace(/\/$/, "");
-      return removed.some(item => normalized.toLowerCase().includes(item.path.toLowerCase()) || value.startsWith("./") && within(item.path, normalized));
+      return paths.some(path => normalized.toLowerCase().includes(path.toLowerCase()) || value.startsWith("./") && within(path, normalized));
     }
-    if (Array.isArray(value)) return value.some(referencesRemoved);
-    return pluginObject(value) && Object.values(value).some(referencesRemoved);
+    if (Array.isArray(value)) return value.some(item => referencesPaths(item, paths));
+    return pluginObject(value) && Object.values(value).some(item => referencesPaths(item, paths));
   }
-  pluginNeed(!referencesRemoved(retainedConfig), "The plugin manifest references a removed ordinary component");
+  pluginNeed(!referencesPaths(retainedConfig, [...removedPaths]), "The plugin manifest references a removed ordinary component");
   const files = original.filter(item => !removedPaths.has(item.path)).map(item => ({ ...item, bytes: new Uint8Array(item.bytes) }));
+  const documentation = manifest.schemaVersion === 2 ? manifest.review.documentation : [];
+  const documentationPaths = documentation.map(item => item.path);
+  for (const document of documentation) {
+    const item = files.find(item => item.path === document.path);
+    pluginNeed(item && item.mode === 0o644 && pluginTreeDigest([item]) === document.sourceDigest, "Reviewed documentation differs from its inert file witness");
+    pluginNeed(!referencesPaths(retainedConfig, [document.path]), "A native component references reviewed documentation");
+    // An explicit root component directory can select README without naming it.
+    for (const key of ["agents", "outputStyles", "workflows"]) {
+      pluginNeed(!declaredPaths(config[key]).some(root => within(document.path, root)), "A native component selects reviewed documentation");
+    }
+  }
   for (const item of files) {
     if (item.path === native.path) continue;
     if (item.path.toLowerCase() === "package.json") {
@@ -140,6 +166,8 @@ export function buildPluginProjection(entries: SkillBundleEntry[]): PluginProjec
       for (const key of ["scripts", "dependencies", "optionalDependencies", "devDependencies", "peerDependencies", "workspaces", "bundledDependencies", "bundleDependencies", "packageManager"]) pluginNeed(pkg[key] === undefined, "Upstream package installation is outside plugin admission");
     }
     let text: string; try { text = new TextDecoder("utf-8", { fatal: true }).decode(item.bytes); } catch { continue; }
+    if (documentationPaths.includes(item.path)) continue;
+    pluginNeed(!documentationPaths.some(path => text.toLowerCase().includes(path.toLowerCase())), "A retained component references reviewed documentation");
     pluginNeed(![...removedPaths].some(path => text.toLowerCase().includes(path.toLowerCase())), "A retained component references a removed prompt or skill asset");
     if (/\.md$/i.test(item.path)) pluginNeed(!/^skills\s*:/m.test(text), "A retained agent preloads native skills; review its Skills CLI replacement first");
   }
