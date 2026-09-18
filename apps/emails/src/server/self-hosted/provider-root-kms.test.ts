@@ -15,6 +15,24 @@ test("KMS failures expose no raw exception and configuration cannot silently fal
  const kms=buildProviderRootKms({EMAILS_PROVIDER_KMS_KEY_ID:"alias/fixture",EMAILS_PROVIDER_KMS_REGION:"us-east-1"},()=>({send:async()=>{throw Error("private exception material");},destroy:()=>{closed++;}}))!;
  await expect(kms.generate({app:"emails",tenant:"t",root:"r",purpose:"provider-root"},AbortSignal.timeout(1000))).rejects.toThrow("KMS generation failed");expect(closed).toBe(1);
 });
+test("ECS provider KMS selects container task-role credentials even when general AWS credentials exist",async()=>{
+ const selected:boolean[]=[];
+ const context={app:"emails" as const,tenant:"tenant-fixture",root:"root-fixture",purpose:"provider-root" as const};
+ for(const metadata of [{AWS_CONTAINER_CREDENTIALS_RELATIVE_URI:"/v2/credentials/fixture"},{AWS_CONTAINER_CREDENTIALS_FULL_URI:"http://127.0.0.1/fixture"}]){
+  const kms=buildProviderRootKms({EMAILS_PROVIDER_KMS_KEY_ID:"alias/provider-fixture",EMAILS_PROVIDER_KMS_REGION:"us-east-1",AWS_ACCESS_KEY_ID:"synthetic-access",AWS_SECRET_ACCESS_KEY:"synthetic-secret",...metadata},(_region,useContainerRole)=>{
+   selected.push(useContainerRole);
+   return{send:async()=>({Plaintext:randomBytes(32),CiphertextBlob:Buffer.from("encrypted-fixture")}),destroy:()=>{}};
+  })!;
+  await kms.generate(context,AbortSignal.timeout(1000));
+ }
+ expect(selected).toEqual([true,true]);
+ const local=buildProviderRootKms({EMAILS_PROVIDER_KMS_KEY_ID:"alias/provider-fixture",EMAILS_PROVIDER_KMS_REGION:"us-east-1",AWS_ACCESS_KEY_ID:"synthetic-access"},(_region,useContainerRole)=>{
+  selected.push(useContainerRole);
+  return{send:async()=>({Plaintext:randomBytes(32),CiphertextBlob:Buffer.from("encrypted-fixture")}),destroy:()=>{}};
+ })!;
+ await local.generate(context,AbortSignal.timeout(1000));
+ expect(selected).toEqual([true,true,false]);
+});
 test("AEAD rejects tenant/provider/revision/purpose substitution and altered ciphertext",()=>{
  const key=randomBytes(32),aad=providerSecretAad("tenant","provider",1,"payload"),value=sealProviderBytes(Buffer.from("fixture"),key,aad);
  expect(openProviderBytes(value,key,aad).toString()).toBe("fixture");
