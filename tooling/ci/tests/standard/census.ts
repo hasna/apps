@@ -388,11 +388,6 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
     task: "fleet-alignment wave 2026-09-11 (W2 census) — owner: changelog lane; declare the two bins and the api/mcp surfaces or waive them",
   },
   {
-    member: "contacts",
-    cause: "credential_seam_compliance: src/cli/status-domain.preload.ts:45 reads HASNA_CONTACTS_API_KEY straight from the process environment (in-tree kit 1.0.2; first measured failing when validation moved in-tree).",
-    task: "fleet-alignment wave 2026-09-11 (W2 census) — owner: contacts lane; resolve through @hasna/contracts/client",
-  },
-  {
     member: "conversations",
     cause: "bins_match_package: conversations-inbox and conversations-hook undeclared; storage_capabilities: storage.pgTestGate required; public_manifest_safety: secret-ref values at storage.databaseUrlSecretRef, metadata.service.signingSecretSecretRef, metadata.service.databaseUrlOwnerSecretRef; published_artifact_gate: metadata.release.artifactScan.script required (in-tree kit 1.0.2).",
     task: "todos ee9fbb4d (import row — conversations)",
