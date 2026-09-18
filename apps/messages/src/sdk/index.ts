@@ -240,11 +240,11 @@ export class MessagesClient {
   }
 
   /** Drain the agent's inbox: transitions stored -> delivered and returns them. */
-  receive(agent: string): Promise<{ messages: DeliveredMessage[] }> {
-    return this.request(
-      "GET",
-      `/v1/messages/receive?agent=${encodeURIComponent(agent)}`,
-    );
+  receive(agent: string, limit?: number, full = false): Promise<{ messages: DeliveredMessage[] }> {
+    const query = new URLSearchParams({ agent });
+    if (limit !== undefined) query.set("limit", String(limit));
+    if (full) query.set("full", "1");
+    return this.request("GET", `/v1/messages/receive?${query}`);
   }
 
   /** Per-message per-recipient delivery state for a thread. */

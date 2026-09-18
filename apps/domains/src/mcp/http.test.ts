@@ -158,6 +158,10 @@ describe("stdio mode", () => {
     expect(compact.domains[0]!.metadata).toBeUndefined();
     expect(compact.domains[0]!.notes).not.toContain("y".repeat(120));
 
+    const zeroResult = await client.callTool({ name: "list_domains", arguments: { limit: 0 } });
+    expect(zeroResult.isError).toBe(true);
+    expect(JSON.stringify(zeroResult.content)).toContain("greater than 0");
+
     const verboseResult = await client.callTool({ name: "list_domains", arguments: { limit: 1, verbose: true } });
     const verboseText = (verboseResult.content as Array<{ type: string; text: string }>)[0]?.text ?? "";
     const verbose = JSON.parse(verboseText) as {

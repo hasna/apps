@@ -421,6 +421,28 @@ curl -H "x-api-key: <key>" http://127.0.0.1:19428/v1/orgs
 ```
 
 
+### Container build
+
+Build the server image from the monorepo root, selecting the target platform:
+
+```bash
+docker build --platform linux/arm64 -f apps/calendar/Dockerfile -t calendar:local .
+docker run --rm calendar:local bun dist/server/index.js --version
+```
+
+The image uses the committed Calendar lockfile and public registry dependencies,
+bundles Contracts authentication into the server, and includes the committed SQL
+migrations. Runtime package downloads are disabled. It contains the HTTP server
+and migration command; the CLI and MCP command-line executables are distributed
+by the npm package.
+
+Set `HASNA_CALENDAR_DATABASE_URL` with `sslmode=verify-full` and
+`HASNA_CALENDAR_API_SIGNING_KEY` at runtime. The image includes the public RDS CA
+bundle; another PostgreSQL authority needs its trusted CA mounted and
+`PGSSLROOTCERT` set to that path. Run `bun dist/server/index.js migrate` explicitly
+before starting the default server command. Migration preserves unassigned rows;
+tenant provisioning and ownership assignment remain separate operations.
+
 ## Development And Validation
 
 ```sh

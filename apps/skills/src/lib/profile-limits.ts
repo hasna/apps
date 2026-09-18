@@ -5,8 +5,9 @@ export const MAX_PROFILE_SELECTIONS = 4096;
 export const MAX_PROFILE_DOCUMENT_BYTES = 8 * 1024 * 1024;
 export const MAX_SKILL_SESSION_ID_CHARS = 256;
 // Every selected bundle may be loaded once: a quoted 64-character key plus its
-// separator. Reserve the escaped session ID and the fixed receipt fields too.
-export const PROFILE_SESSION_ENVELOPE_BYTES = MAX_PROFILE_SELECTIONS * 67 + MAX_SKILL_SESSION_ID_CHARS * 6 + 256;
+// separator. Reserve escaped child + parent session IDs, hash/generation binding,
+// and the remaining fixed receipt fields too.
+export const PROFILE_SESSION_ENVELOPE_BYTES = MAX_PROFILE_SELECTIONS * 67 + MAX_SKILL_SESSION_ID_CHARS * 12 + 512;
 export const MAX_RESOLVED_PROFILE_BYTES = MAX_PROFILE_DOCUMENT_BYTES - PROFILE_SESSION_ENVELOPE_BYTES;
 export const LEGACY_PROFILE_SELECTIONS = 256;
 export const LEGACY_PROFILE_DOCUMENT_BYTES = 1_000_000;

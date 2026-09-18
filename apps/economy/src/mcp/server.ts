@@ -102,7 +102,7 @@ const TOOL_DESCRIPTIONS: Record<string, string> = {
   get_project_breakdown: 'period?(today|week|month|year|all), limit(20), verbose?, json? -> project_name, sessions, tokens, cost',
   get_agent_breakdown: 'period?(today|week|month|year|all) -> agent, sessions, requests, tokens, api-equivalent, billable, included',
   get_account_breakdown: 'period?(today|week|month|year|all), limit(20), verbose?, json? -> account profile, sessions, requests, tokens, api-equivalent, billable, included',
-  get_cost_center_breakdown: 'period?(today|week|month|year|all), kind?(loop|app|repo|service|team) -> cost center, sessions, requests, tokens, cost',
+  get_cost_center_breakdown: 'period?(today|week|month|year|all), kind?(loop|app|repo|service|team), cursor(0), limit(20), verbose?, json? -> paged cost centers; json=true returns the legacy full array',
   get_budget_status: 'limit(20), verbose?, json? -> budget limits, current spend, percent_used, is_over_alert',
   set_budget: 'period(daily|weekly|monthly), limit_usd, project_path?, agent?, cost_center_id?, alert_at_percent? -> create budget',
   remove_budget: 'id -> delete budget',
@@ -127,7 +127,7 @@ const TOOL_DESCRIPTIONS: Record<string, string> = {
   register_agent: 'name, session_id? -> register agent session',
   heartbeat: 'agent_id -> update last_seen_at',
   set_focus: 'agent_id, project_id? -> set active project context',
-  list_agents: 'no params -> registered agent list',
+  list_agents: 'online_only?, include_archived?, cursor(0), limit(20), verbose?, full? -> registered agent page',
   send_feedback: 'message, email?, category? -> save feedback locally',
 }
 
@@ -349,16 +349,24 @@ server.tool(
 
 server.tool(
   'get_cost_center_breakdown',
-  'Cost per cost center. Params: period(today|week|month|year|all), kind(loop|app|repo|service|team).',
+  'Cost per cost center. Params: period, kind, cursor(0), limit(20), verbose, json. json=true preserves the complete legacy array.',
   {
     period: z.enum(['today', 'week', 'month', 'year', 'all']).optional(),
     kind: z.enum(['loop', 'app', 'repo', 'service', 'team']).optional(),
+    cursor: z.number().int().nonnegative().optional(),
+    limit: z.number().int().positive().max(100).optional(),
+    verbose: z.boolean().optional(),
+    json: z.boolean().optional(),
   },
-  async ({ period, kind }: { period?: Exclude<Period, 'yesterday'>; kind?: CostCenterKind }) => {
+  async ({ period, kind, cursor, limit, verbose, json }: { period?: Exclude<Period, 'yesterday'>; kind?: CostCenterKind; cursor?: number; limit?: number; verbose?: boolean; json?: boolean }) => {
     const rows = (await store.costCenterBreakdown({ period: period ?? 'all', kind })) as unknown as Array<Record<string, unknown>>
+    if (json) return text(JSON.stringify(rows))
     if (rows.length === 0) return text('No cost-center usage yet.')
+    const offset = cursor ?? 0
+    const selectedLimit = rowLimit(limit, verbose)
+    const visibleRows = rows.slice(offset, offset + selectedLimit)
     const lines = ['kind     cost_center          sessions requests tokens   cost']
-    for (const row of rows) {
+    for (const row of visibleRows) {
       lines.push(
         `${String(row['kind']).slice(0, 8).padEnd(9)}` +
         `${String(row['name'] || row['cost_center_id'] || '—').slice(0, 20).padEnd(21)}` +
@@ -368,6 +376,11 @@ server.tool(
         `${fmtUsd(Number(row['cost_usd']))}`,
       )
     }
+    const shownStart = visibleRows.length === 0 ? 0 : offset + 1
+    const shownEnd = offset + visibleRows.length
+    lines.push(`Showing ${shownStart}-${shownEnd} of ${rows.length} cost centers.`)
+    const remaining = Math.max(rows.length - shownEnd, 0)
+    if (remaining > 0) lines.push(`... ${remaining} more cost centers hidden; continue with cursor=${shownEnd}, or use verbose=true/json=true.`)
     return text(lines.join('\n'))
   },
 )

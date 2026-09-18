@@ -16,7 +16,10 @@ def require(ok, code):
 
 def get(path, timeout=20):
     require(path.startswith("/") and not path.startswith("/v1/v1/"), "PUBLIC_PATH")
-    request = urllib.request.Request(BASE + path, headers={"Accept": "application/json"})
+    request = urllib.request.Request(BASE + path, headers={
+        "Accept": "application/json",
+        "User-Agent": "HasnaEmailsDeployment/1.0 (+https://github.com/hasna/apps)",
+    })
     with urllib.request.urlopen(request, timeout=timeout) as response:
         require(response.geturl() == BASE + path, "PUBLIC_REDIRECT")
         require(response.status == 200, "PUBLIC_HTTP")

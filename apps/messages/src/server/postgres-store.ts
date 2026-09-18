@@ -534,6 +534,7 @@ export class PostgresMessagesStore implements MessagesStore {
   async deliverTo(
     recipient: string,
     at: string,
+    limit?: number,
   ): Promise<Array<{ message: Message; delivery: MessageDelivery }>> {
     // Capture stored rows, transition them to delivered, return them.
     const { rows } = await this.pool.query(
@@ -541,8 +542,9 @@ export class PostgresMessagesStore implements MessagesStore {
        FROM message_deliveries d
        JOIN messages m ON m.id = d.message_id
        WHERE d.recipient = $1 AND d.state = 'stored'
-       ORDER BY m.seq ASC, m.created_at ASC`,
-      [recipient],
+       ORDER BY m.seq ASC, m.created_at ASC
+       ${limit === undefined ? "" : "LIMIT $2"}`,
+      limit === undefined ? [recipient] : [recipient, limit],
     );
     if (rows.length === 0) return [];
     const ids = (rows as MessageDeliveryJoin[]).map((r) => r.id);

@@ -168,6 +168,20 @@ describe("MessagesService", () => {
     expect(await service.receive(B)).toHaveLength(0);
   });
 
+  test("receive limits each durable delivery batch without dropping the remainder", async () => {
+    const { service } = testService();
+    for (let i = 0; i < 25; i += 1) {
+      await service.send({ from_agent: A, to_agent: B, content: `batch ${i}` });
+    }
+    const first = await service.receive(B, 20);
+    expect(first).toHaveLength(20);
+    expect(first[0]!.content).toBe("batch 0");
+    const second = await service.receive(B, 20);
+    expect(second).toHaveLength(5);
+    expect(second[0]!.content).toBe("batch 20");
+    expect(await service.receive(B, 20)).toHaveLength(0);
+  });
+
   test("markRead transitions delivered -> read and clears unread for the reading side only", async () => {
     const { service } = testService();
     await service.send({ from_agent: A, to_agent: B, content: "hello" });

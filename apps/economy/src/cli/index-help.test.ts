@@ -191,7 +191,7 @@ describe('economy CLI help', () => {
     expect(result.stderr).toBe('')
   })
 
-  test('breakdown caps high-cardinality human output and keeps JSON complete', async () => {
+  test('breakdown caps high-cardinality human and JSON output with explicit full compatibility', async () => {
     const tempRoot = mkdtempSync(join(tmpdir(), 'economy-breakdown-test-'))
     tempRoots.push(tempRoot)
     const dbPath = join(tempRoot, 'economy.db')
@@ -214,8 +214,20 @@ describe('economy CLI help', () => {
     const payload = JSON.parse(jsonResult.stdout)
     expect(payload.by).toBe('model')
     expect(payload.total).toBe(25)
-    expect(payload.rows).toHaveLength(25)
+    expect(payload.limit).toBe(20)
+    expect(payload.next_cursor).toBe(20)
+    expect(payload.rows).toHaveLength(20)
     expect(jsonResult.stderr).toContain('LOCAL mode')
+
+    const fullResult = await runCli(['breakdown', '--by', 'model', '--json', '--full'], env)
+    const fullPayload = JSON.parse(fullResult.stdout)
+    expect(Array.isArray(fullPayload)).toBe(true)
+    expect(fullPayload).toHaveLength(25)
+
+    const fullAccounts = await runCli(['accounts', 'all', '--json', '--full'], env)
+    const accountPayload = JSON.parse(fullAccounts.stdout)
+    expect(Array.isArray(accountPayload)).toBe(true)
+    expect(accountPayload).toHaveLength(25)
   })
 
   test('documents Gemini as a billing sync provider', async () => {

@@ -76,7 +76,8 @@ test("maximum resolved profile leaves room for every loaded key and an escaped s
   expect(profileDocumentBytes(profile)).toBeGreaterThan(MAX_RESOLVED_PROFILE_BYTES - 4);
   expect(() => validateResolvedProfile(profile)).not.toThrow();
   const sessionId = "\u0001".repeat(256), loaded = profile.selections.map(selectionKey);
-  const receipt = { schemaVersion: 1 as const, verifiedAt: "2026-09-13T00:00:00.000Z", profile, sessionId, loaded };
+  const receipt = { schemaVersion: 1 as const, verifiedAt: "2026-09-13T00:00:00.000Z", profile, sessionId, loaded, generation: 1,
+    parent: { sessionId: "p".repeat(256), generation: Number.MAX_SAFE_INTEGER, receiptSha256: "a".repeat(64) } };
   const path = sessionReceiptPath(sessionId, { cacheDir });
   try {
     writeSelectionJson(path, receipt);
