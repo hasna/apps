@@ -87,6 +87,40 @@ export function listRepos(opts: ListOptions & { org?: string; query?: string } =
     .all(...params) as Repo[]).map(sanitizeRepoForOutput);
 }
 
+export interface StableRepoPageOptions {
+  org?: string;
+  query?: string;
+  limit: number;
+  afterId?: number;
+  snapshotMaxId?: number;
+}
+
+/** Immutable-id snapshot page used by agent-facing cursors; updated_at churn cannot reorder it. */
+export function listReposStablePage(opts: StableRepoPageOptions): { repos: Repo[]; snapshotMaxId: number; total: number; hasMore: boolean } {
+  const db = getDb();
+  const filters: string[] = [];
+  const filterParams: any[] = [];
+  if (opts.org) { filters.push("org = ?"); filterParams.push(opts.org); }
+  if (opts.query) {
+    filters.push("(name LIKE ? OR description LIKE ? OR remote_url LIKE ?)");
+    filterParams.push(`%${opts.query}%`, `%${opts.query}%`, `%${opts.query}%`);
+  }
+  const baseWhere = filters.length > 0 ? `WHERE ${filters.join(" AND ")}` : "";
+  const snapshotMaxId = opts.snapshotMaxId ?? Number((db.query(`SELECT COALESCE(MAX(id), 0) AS max_id FROM repos ${baseWhere}`).get(...filterParams) as { max_id: number }).max_id);
+  const boundedFilters = [...filters, "id > ?", "id <= ?"];
+  const boundedParams = [...filterParams, opts.afterId ?? 0, snapshotMaxId];
+  const rows = db.query(`SELECT * FROM repos WHERE ${boundedFilters.join(" AND ")} ORDER BY id ASC LIMIT ?`)
+    .all(...boundedParams, opts.limit + 1) as Repo[];
+  const totalFilters = [...filters, "id <= ?"];
+  const total = Number((db.query(`SELECT COUNT(*) AS count FROM repos WHERE ${totalFilters.join(" AND ")}`).get(...filterParams, snapshotMaxId) as { count: number }).count);
+  return {
+    repos: rows.slice(0, opts.limit).map(sanitizeRepoForOutput),
+    snapshotMaxId,
+    total,
+    hasMore: rows.length > opts.limit,
+  };
+}
+
 /**
  * Total repos matching a filter, ignoring limit/offset. `repos --json` used to
  * stop at its default page size with nothing in the output to say so, which

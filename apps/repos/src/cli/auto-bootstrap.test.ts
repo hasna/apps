@@ -94,7 +94,7 @@ describe("cli auto bootstrap", () => {
       stdio: ["pipe", "pipe", "pipe"],
     });
 
-    const repos = JSON.parse(output) as Array<{ name: string }>;
+    const repos = (JSON.parse(output) as { repos: Array<{ name: string }> }).repos;
     const hookContent = readFileSync(join(repoPath, ".git", "hooks", "post-commit"), "utf-8");
 
     expect(repos.some((repo) => repo.name === "workspace-repo")).toBe(true);
@@ -132,7 +132,7 @@ describe("cli auto bootstrap", () => {
       probe.stop();
     }
 
-    const repos = JSON.parse(stdout) as Array<{ name: string }>;
+    const repos = (JSON.parse(stdout) as { repos: Array<{ name: string }> }).repos;
     expect(repos.some((repo) => repo.name === "workspace-repo")).toBe(true);
     expect(readFileSync(probe.logPath, "utf-8")).toBe("");
   });
