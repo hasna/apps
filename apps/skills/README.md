@@ -314,6 +314,35 @@ pinned session. It preserves exact versions and does not extend an expired
 receipt's lifetime. Authentication, integrity and native discovery failures still
 block; they do not silently switch to a local catalog.
 
+An intentional profile change for an already running session uses a separate
+reviewed operation. `sync` and hook reinstallation do not migrate session pins:
+
+```bash
+skills sessions show <session-id> --json
+skills sessions reconcile <session-id> \
+  --from-profile <old-profile> --from-revision <old-revision> \
+  --receipt-sha256 <receipt-sha256> \
+  --selection-profile <target-profile> --profile-revision <target-revision> --json
+# After reviewing that exact plan, repeat with --apply --plan-digest <digest>.
+```
+
+Reconciliation authenticates against the current target profile and refuses a
+changed target revision, authority, workspace, old receipt or plan. It archives
+the original bytes and prepared replacement under
+`selection-cache/session-reconciliations`, then replaces only the named session
+receipt atomically. Loaded instructions are retained only when their exact
+authority, workspace, version and bundle digest still match. Existing child
+sessions and project locks keep their own pins; new children inherit the newly
+reviewed parent selection. No agent process is stopped or restarted.
+
+Use the same updated Skills installation for every process writing this cache.
+Session writers coordinate with reconciliation and refuse a stale write that
+would restore an earlier pin. A competing writer or surviving lock fails closed;
+do not delete a lock without reviewing its owning operation. If application
+reports an incomplete outcome, inspect `sessions show` and the preserved
+operation receipt before retrying. The archive contains both original and
+prepared bytes even if the final receipt write fails.
+
 ## Profiles, station sync and rollback
 
 ```bash
@@ -702,6 +731,8 @@ of app folders, and `XDG_CONFIG_HOME` is not consulted at all.
 | `skills load <name> --selection-profile <id>` | | Load complete instructions from the verified selection |
 | `skills context <prompt> --selection-profile <id>` | | Resolve instructions matching the prompt and profile triggers |
 | `skills hook install --agent all --selection-profile <id>` | | Plan one CLI bridge plus supported native hooks; `--apply` installs it, then restart and trust the hooks |
+| `skills sessions show <id> --json` | | Inspect one session's exact profile revision and receipt hash without loading payloads |
+| `skills sessions reconcile <id> --from-profile <id> --from-revision <rev> --receipt-sha256 <sha> --selection-profile <id> --profile-revision <rev>` | | Plan an explicit migration of one live session; `--apply --plan-digest <digest>` preserves its old receipt and applies the reviewed replacement |
 | `skills hook agents --json` | | Report maintained adapters and explicit coverage limits |
 | `skills migrate native` | | Inventory native copies; `--apply` archives managed copies, with explicit `--include-unmanaged` and `--include-vendor` retirement options |
 | `skills pull --all --selection-profile <id>` | | With CLI loading active, refresh the selected profile into the verified cache |

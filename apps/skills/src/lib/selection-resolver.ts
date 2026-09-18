@@ -7,7 +7,7 @@ import { readSelectedDocument } from "./selected-document.js";
 import {
   activateSelectionProfile, assertFreshCachedProfile, cacheSelectionBundle, projectSelectionLockPath,
   readCachedSelection, readProjectSelection, readSelectionProfile, readSkillSession, selectionKey,
-  sessionReceiptPath, SkillSelectionError, validateResolvedProfile, writeSelectionJson,
+  SkillSelectionError, validateResolvedProfile, writeSelectionJson, writeSkillSession,
   type CachedSelectionProfile, type SelectionCacheOptions, type SkillSessionReceipt,
 } from "./selection-cache.js";
 
@@ -73,7 +73,7 @@ export async function resolveSelectionContext(profileId: string, options: Select
   const parentSession = !session && options.parentSessionId ? readSkillSession(options.parentSessionId, options) : null;
   const project = options.projectDir ? readProjectSelection(options.projectDir) : null;
   if ((session && session.profile.profileId !== profileId) || (parentSession && parentSession.profile.profileId !== profileId) || (project && project.profile.profileId !== profileId)) {
-    throw new SkillSelectionError("PROFILE_LOCK_MISMATCH", "The session or project is pinned to a different Skills profile. Select that profile or explicitly sync the new selection.");
+    throw new SkillSelectionError("PROFILE_LOCK_MISMATCH", "The session or project is pinned to a different Skills profile. Select the pinned profile, or review skills sessions reconcile for an intentional session change and explicit project sync for a project change.");
   }
   if (options.cached) {
     const receipt = session ?? parentSession ?? project ?? readSelectionProfile(profileId, options);
@@ -133,7 +133,7 @@ export async function loadSelectedSkill(spec: string, profileId: string, options
       ...context.receipt, sessionId: options.sessionId,
       loaded: [...new Set([...(context.session?.loaded ?? []), selectionKey(selection)])],
     };
-    writeSelectionJson(sessionReceiptPath(options.sessionId, options), session);
+    writeSkillSession(session, context.session, options);
   }
   return { content, selection, receipt };
 }
