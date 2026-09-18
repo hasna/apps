@@ -1,3 +1,10 @@
+## 0.7.2
+
+### Patch Changes
+
+- Render scoped instructions into Sumi's native AGENTS.md, reject settings and retired sources in prompt profiles, and refresh managed profiles from their hosted authority. Add exact preimage adoption and reconciliation with snapshots so existing prompt files can be migrated without blanket overwrites. Preserve retired standard sources during initialization and require explicit adoption of local files in hosted mode.
+
+
 ## 0.7.1
 
 ### Patch Changes

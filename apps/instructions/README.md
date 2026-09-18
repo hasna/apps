@@ -361,12 +361,19 @@ upgrade.
 
 `instructions session plan` and `instructions session apply` render
 OpenIdentities and instruction sources into provider-native files for Claude,
-Codex, Cursor, OpenCode, Codewith, Qwen, aicopilot, and Google Antigravity.
+Codex, Cursor, OpenCode, Sumi, Codewith, Qwen, aicopilot, and Google Antigravity.
 The old Google agent target is removed; Antigravity is the only Google coding
 agent render target. Antigravity workspace rules are rendered to
 `.agents/rules/*.md`; its current global rules and MCP files use Google's
 legacy-named `~/.gemini/GEMINI.md` and `~/.gemini/config/mcp_config.json`
 paths but remain owned by the `antigravity` target.
+
+Sumi renders one flattened `AGENTS.md`. Pass its actual config directory from
+`sumi debug paths config` as `--target-home`, or use `--project-root` for
+repository instructions. Global plans return `SUMI_CONFIG_DIR`; project plans
+do not change the global config environment. No OpenCode config or fragment
+imports are written. See [session rendering](docs/session-rendering.md) for
+capability limits and examples.
 
 Qwen Code session rendering writes `QWEN.md` instructional context with
 `QWEN_HOME` pointing at the rendered profile home. Known config sync also

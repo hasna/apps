@@ -20,6 +20,7 @@ export const CONFIG_AGENTS = [
   "claude",
   "codex",
   "opencode",
+  "sumi",
   "cursor",
   "codewith",
   "aicopilot",
@@ -43,6 +44,7 @@ export const CONFIG_TRANSFORMS = [
   "claude-passthrough",
   "codex-flat",
   "opencode-flat",
+  "sumi-flat",
   "cursor-mdc",
   "skill-neutral",
 ] as const;

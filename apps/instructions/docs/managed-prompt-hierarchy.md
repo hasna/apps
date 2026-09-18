@@ -42,6 +42,7 @@ continue to map to `repo`; `machine-overlay` maps to `machine`; and
 | `codex` | Flattened `AGENTS.md`. |
 | `cursor` | Project-owned `.cursor/rules/*.mdc`. |
 | `opencode` | `AGENTS.md`, `opencode.json`, and `.hasna/instructions` fragments. |
+| `sumi` | Flattened `AGENTS.md` in the explicit resolved Sumi config directory or project root; no config instruction arrays. |
 | `aicopilot` | `AICOPILOT.md`, with optional `aicopilot.json` instructions in a later pass. |
 | `qwen` | Profile-scoped `QWEN.md` session render/apply output; known sync also tracks `~/.qwen/QWEN.md`, `~/.qwen/settings.json`, project `QWEN.md`, and `.qwen/settings.json`. Native hooks should be represented in settings when verified. |
 | `antigravity` | Project-owned `.agents/rules/*.md`, workspace MCP at `.agents/mcp_config.json`, and Google's current legacy-named global Antigravity files at `~/.gemini/GEMINI.md` and `~/.gemini/config/mcp_config.json`. |

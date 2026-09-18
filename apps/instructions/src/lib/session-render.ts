@@ -26,6 +26,7 @@ import {
   type ProjectContextSessionGuard,
 } from "./project-context.js";
 import { isRetiredOrUnsupportedConfigAgent } from "./config-agents.js";
+import { instructionSourceRejection } from "./instruction-source-policy.js";
 import { applyTransform } from "./transforms.js";
 import { providerVersionSatisfies } from "./provider-version.js";
 import { configAssetDigest, resolveAssetDestination, type AssetPlan } from "./asset-plan.js";
@@ -69,6 +70,7 @@ export const SESSION_RENDER_TOOLS = [
   "codex",
   "cursor",
   "opencode",
+  "sumi",
   "codewith",
   "qwen",
   "aicopilot",
@@ -248,6 +250,25 @@ export interface SessionProfileRenderSelection {
   providerConfig?: SessionProviderConfig;
 }
 
+/** Durable selectors only; generated files and historical snapshots are never
+ * used as the authoritative input to a hosted profile refresh. */
+export interface SessionHostedProfileSelector {
+  schema: "hasna.instructions.hosted-profile-selector/v1";
+  authority: string;
+  profileId: string;
+  providerVersion: string;
+  providerVariant?: string;
+  model?: string;
+  path?: string;
+  manual: string[];
+  codewithNativeImports: boolean;
+  allowEmptySources: boolean;
+  stationProfile: boolean;
+  checkGlobalCoverage: boolean;
+  assetSurface?: string;
+  assetScope?: "global" | "project" | "session";
+}
+
 export interface SessionRenderInput {
   tool: SessionRenderTool;
   profile: string;
@@ -257,6 +278,7 @@ export interface SessionRenderInput {
    * AGENTS.md when projectRoot is absent; no operator home is inferred. */
   targetHome?: string;
   sessionId?: string;
+  refreshSelector?: SessionHostedProfileSelector;
   /**
    * Explicit Cursor authority home for isolated planners/tests. Production
    * callers omit this and the detector resolves the current user home.
@@ -300,6 +322,20 @@ export interface SessionRenderManifest {
   adapterMode: SessionRenderMode;
   profile: string;
   sessionId: string | null;
+  refreshSelector?: SessionHostedProfileSelector;
+  adoptions?: Array<{
+    relativePath: string;
+    preimageSha256: string;
+    renderedSha256: string;
+    sourceIds: string[];
+  }>;
+  reconciliations?: Array<{
+    relativePath: string;
+    preimageSha256: string;
+    renderedSha256: string;
+    previousManagedSha256: string;
+    sourceIds: string[];
+  }>;
   targetHome: string;
   targetKind: SessionRenderTargetKind;
   targetOwner: SessionTargetOwner;
@@ -501,6 +537,15 @@ export const SESSION_TOOL_ADAPTERS: Record<SessionRenderTool, SessionToolAdapter
     nativeImports: false,
     description: "OpenCode AGENTS.md plus opencode.json instructions pointing at managed fragments.",
     providerSurface: "legacy-dual",
+  },
+  sumi: {
+    tool: "sumi",
+    mode: "flattened-markdown",
+    indexFile: "AGENTS.md",
+    managedDir: SESSION_RENDER_INSTRUCTIONS_MANAGED_DIR,
+    envVar: "SUMI_CONFIG_DIR",
+    nativeImports: false,
+    description: "Sumi native AGENTS.md in the explicit resolved config directory or project root.",
   },
   aicopilot: {
     tool: "aicopilot",
@@ -949,9 +994,19 @@ function normalizeSources(
   tool: SessionRenderTool,
   allowEmptySources: boolean,
 ): { sources: OrderedSessionInstructionSource[]; skipped: SessionSkippedSource[] } {
+  const providerSkipped: SessionSkippedSource[] = [];
   const normalized = sources
-    .map((source, index) => {
+    .flatMap((source, index) => {
       if (!source.id.trim()) throw new Error("Session instruction source id is required.");
+      if (source.targetProviders?.length && !providerTargetsTool(source.targetProviders, tool)) {
+        providerSkipped.push({
+          id: source.id,
+          label: source.label ?? source.id,
+          targetProviders: source.targetProviders,
+          reason: "instruction source targets a different provider",
+        });
+        return [];
+      }
       // Floor BEFORE provider filtering: the pinned digest describes the payload as
       // published, so comparing filtered bytes against it would fail for any payload that
       // legitimately uses provider-only blocks and would silently replace it.
@@ -973,7 +1028,7 @@ function normalizeSources(
       if (!allowEmptySources && !normalized.content.trim() && normalized.resolvedRules.length === 0 && !hasPathReferences) {
         throw new Error(`Session instruction source "${source.id}" is empty. Pass --allow-empty-sources only for explicit empty renders.`);
       }
-      return normalized;
+      return [normalized];
     });
   const originalOrder = [...normalized].sort(compareSessionInstructionSources);
   const deduplicated = deduplicateSemanticPolicySources(normalized);
@@ -981,7 +1036,7 @@ function normalizeSources(
   validateTargetedReplacementSources(originalOrder, ordered, deduplicated.skipped, tool);
   rejectDuplicateSourceSlugs(ordered);
   rejectDuplicateRulePaths(ordered);
-  return { sources: ordered, skipped: deduplicated.skipped };
+  return { sources: ordered, skipped: [...providerSkipped, ...deduplicated.skipped] };
 }
 
 function compareSessionInstructionSources(
@@ -1912,6 +1967,10 @@ export function isNativeProfileSessionTarget(input: Pick<SessionRenderInput, "to
 }
 
 function adapterFor(input: SessionRenderInput): SessionToolAdapter {
+  if (input.tool === "sumi" && input.projectRoot) {
+    if (input.providerSurface) throw new Error(`Provider surface ${input.providerSurface} is not valid for Sumi.`);
+    return Object.freeze({ ...SESSION_TOOL_ADAPTERS.sumi, projectScoped: true, envVar: undefined });
+  }
   if (input.tool === "opencode" && input.providerSurface) {
     if (input.providerSurface !== "opencode-config-instructions" && input.providerSurface !== "opencode-agents-md") {
       throw new Error(`Provider surface ${input.providerSurface} is not valid for OpenCode.`);
@@ -1956,9 +2015,10 @@ function adapterFor(input: SessionRenderInput): SessionToolAdapter {
   }
   if (input.tool !== "codewith") return SESSION_TOOL_ADAPTERS[input.tool];
   const gatedNativeImports =
-    input.codewithNativeImports === true ||
-    process.env[CODEWITH_NATIVE_IMPORTS_ENV] === "1" ||
-    process.env[CODEWITH_NATIVE_IMPORTS_ENV] === "true";
+    input.codewithNativeImports ?? (
+      process.env[CODEWITH_NATIVE_IMPORTS_ENV] === "1" ||
+      process.env[CODEWITH_NATIVE_IMPORTS_ENV] === "true"
+    );
   return gatedNativeImports ? CODEWITH_NATIVE_ADAPTER : CODEWITH_FLATTENED_ADAPTER;
 }
 
@@ -2014,6 +2074,15 @@ function resolveRenderTarget(input: SessionRenderInput, adapter: SessionToolAdap
   targetKind: SessionRenderTargetKind;
   blockers: string[];
 } {
+  // Sumi's resolved config directory varies with its launcher and platform.
+  // An arbitrary session directory is not evidence that its runtime loads it.
+  if (input.tool === "sumi" && !input.projectRoot && !input.targetHome?.trim()) {
+    return {
+      targetHome: defaultTargetHome(input.tool, input.profile, input.sessionId),
+      targetKind: "blocked",
+      blockers: ["Sumi requires --target-home from `sumi debug paths config`, or --project-root for repository AGENTS.md."],
+    };
+  }
   if (adapter.projectScoped) {
     if (!input.projectRoot) {
       const label = input.tool === "cursor"
@@ -2136,6 +2205,15 @@ export function planSessionRender(input: SessionRenderInput): SessionRenderPlan 
   const normalized = normalizeSources(input.sources, input.tool, allowEmptySources);
   const composed = composeSources(normalized.sources, input.tool);
   const orderedSources = composed.sources;
+  if (input.tool === "sumi") {
+    for (const source of orderedSources) {
+      const activation = source.metadata?.["activation"] as { mode?: string } | undefined;
+      if (source.globs?.length || source.resolvedRules.some((rule) => rule.globs?.length)
+        || (activation?.mode && activation.mode !== "always")) {
+        throw new Error(`Sumi AGENTS.md cannot preserve conditional activation for source ${source.id}; compile a profile with an explicit supported fallback.`);
+      }
+    }
+  }
   // Caller-supplied entries first (provider filtering, done before the render was even
   // asked for), then everything this render discarded itself.
   const skippedSources: SessionSkippedSource[] = [
@@ -2189,6 +2267,7 @@ export function planSessionRender(input: SessionRenderInput): SessionRenderPlan 
     adapterMode: adapter.mode,
     profile: input.profile,
     sessionId: input.sessionId ?? null,
+    ...(input.refreshSelector ? { refreshSelector: input.refreshSelector } : {}),
     targetHome,
     targetKind,
     targetOwner,
@@ -2399,13 +2478,12 @@ export function selectProfileConfigsForSessionRender(
       else skippedSources.push(skippedProfileConfig(config, ["opencode"], "provider settings belong to OpenCode"));
       continue;
     }
-    if (config.category !== "rules") {
+    const sourceRejection = instructionSourceRejection(config);
+    if (sourceRejection) {
       skippedSources.push(skippedProfileConfig(
         config,
         [],
-        config.kind === "reference"
-          ? "reference config is not a provider instruction source"
-          : "profile config is handled by direct config preview/apply",
+        sourceRejection,
       ));
       continue;
     }
@@ -2416,7 +2494,7 @@ export function selectProfileConfigsForSessionRender(
       continue;
     }
     const selectedContent = output
-      ? applyTransform(config, output, { configs })
+      ? applyTransform(config, output, { configs: [config] })
       : config.content;
     sources.push({
       config,

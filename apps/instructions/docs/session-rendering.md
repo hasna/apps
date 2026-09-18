@@ -98,6 +98,7 @@ as a substitute for their repository root.
 | Codewith | flattened by default | `CODEWITH.md` | `CODEWITH_HOME` |
 | Cursor | project MDC | `.cursor/rules/*.mdc` | none |
 | OpenCode | config + fragments | `AGENTS.md`, `opencode.json`, `.hasna/instructions/*.md` | `OPENCODE_CONFIG_DIR` |
+| Sumi | flattened Markdown | `AGENTS.md` | `SUMI_CONFIG_DIR` for global; none for project |
 | Qwen | flattened Markdown | `QWEN.md` | `QWEN_HOME` |
 | AI Copilot | flattened Markdown | `AICOPILOT.md` | `AICOPILOT_CONFIG_DIR` |
 | Antigravity | project rules | `.agents/rules/*.md` | none |
@@ -109,6 +110,33 @@ fragments below `.hasna/instructions` and imports them from `CODEWITH.md`.
 OpenCode preserves existing non-managed `instructions` entries. If a profile
 contains OpenCode config rows, the newest equivalent provider config is used;
 conflicting provider configs fail.
+
+Sumi has an independent adapter for the verified 0.2.22–0.2.x native
+`AGENTS.md` loader. It requires an explicit `--target-home` from the running
+Sumi launcher's `sumi debug paths config`, or `--project-root`. It does not
+infer an OpenCode directory or write an `instructions` array, imports, or Sumi
+configuration. The caller must use the returned `SUMI_CONFIG_DIR` when launching
+against a different global config directory. Project rendering writes the
+repository `AGENTS.md` without changing global config resolution.
+
+```bash
+instructions session plan --tool sumi --profile knowledge-work \
+  --target-home /absolute/resolved/sumi/config \
+  --compile-profile reviewed-instructions --provider-version 0.2.22 --json
+instructions session plan --tool sumi --profile project-work \
+  --project-root /absolute/project \
+  --compile-profile reviewed-instructions --provider-version 0.2.22 --json
+```
+
+Sumi supports always-on instructions. Conditional profile bindings fail unless
+an explicit supported fallback is selected; direct conditional sources are
+rejected because flattening would broaden their scope. Unverified asset loaders
+(skills, plugins, workflows) remain unsupported rather than inheriting OpenCode
+capabilities. Applying preserves the shared drift, conflict, snapshot, and
+symlink guards. An existing unmanaged `AGENTS.md` must first be reviewed and
+imported as sources before an explicit adoption/overwrite. Knowledge and
+messaging sessions consume this same file only when their actual Sumi runtime
+loads it; generation alone does not prove consumer delivery.
 
 Cursor generates always-applied MDC files and honors nested-rule globs.
 Antigravity generates numbered Markdown files and rejects any generated rule
@@ -130,8 +158,10 @@ Before a real apply, the renderer:
    segments;
 2. reads the previous compatible manifest and checks its recorded files for
    missing/hash-mismatch drift;
-3. rejects existing unmanaged files unless `--force` adopts them;
-4. rejects changed stale managed files unless `--force` permits removal;
+3. rejects existing unmanaged files unless reviewed exact preimages are named
+   by `--adopt-file`;
+4. rejects managed drift unless each retained drifted target is explicitly
+   reconciled with its observed hash and the expected manifest hash;
 5. writes a version-2 snapshot when there are before-images;
 6. writes provider files, removes safe stale files, and writes the manifest
    last.
@@ -142,6 +172,31 @@ the project-context lock when durable project context is present.
 
 Snapshots are stored below `.hasna/session-render-snapshots/`, use mode 0600,
 and include before-images plus the expected post-apply state.
+
+## Hosted refresh and reviewed adoption
+
+Hosted `--compile-profile` renders persist a selector containing the exact API
+authority, profile ID, provider version and selection context. Each invocation
+of `instructions session refresh --target-home <managed-target>` fetches the
+current hosted profile, source versions, config bindings and asset bindings.
+Generated prompt files and rollback snapshots never substitute for those reads.
+API/authentication failures, unavailable binding routes, changed authority,
+invalid sources and managed drift stop refresh. Identical sources and output
+produce an `unchanged` receipt without rewriting files or creating a snapshot.
+Use its exit status as a prerequisite when launching a new consumer session.
+
+Before initially adopting existing prompts, import and review their content in
+the hosted source collection. Pass `--adopt-file AGENTS.md=<observed-sha256>` for
+each existing unmanaged generated target. An unknown path, changed hash, managed
+file or unrelated conflict is refused. The snapshot retains the exact preimage;
+the manifest records its digest and the source IDs that produced its replacement.
+
+For a reviewed out-of-band edit to an already managed target, use
+`--reconcile-file AGENTS.md=<observed-sha256>` together with
+`--expected-manifest-sha256 <observed-manifest-sha256>`. Reconciliation records both
+the prior managed baseline and current preimage, preserves all unrelated guards,
+and carries its provenance into later refreshes. These scoped operations cannot
+be combined with legacy `--force`.
 
 ## Restore
 
@@ -178,3 +233,26 @@ Codex, or Codewith session renders recompose its canonical fragment into the
 new plan and use the project-context lock during apply. The reserved source ID
 `project-context-bundle` cannot be supplied as an ordinary session source. See
 [Project context](project-context.md).
+
+## Source eligibility and profile scope
+
+Session profiles contain reviewed instruction prose: `rules` records in Markdown
+or text, with templates resolved before injection. Compiling a mixed machine
+profile fails if it selects scripts, settings, execution policies, retired
+sources or configuration-only records. An optional invalid source is omitted
+only when its binding explicitly declares `required: false` and `fallback:
+omit`; the plan records the diagnostic. Required invalid sources fail before
+any prompt file is written.
+
+Bindings without provider selectors retain the config's declared provider
+scope. A reviewed binding can explicitly reuse prose for another provider;
+a declared output selects its transform. Graph composition never implicitly
+appends unrelated rule records through a legacy flatten transform. Project and
+role scope still require selecting the appropriate profile and render target.
+A provider match alone does not grant global scope.
+
+Keep superseded records as history with `retired-instruction-source` (or
+`retired-global-source` for legacy global coverage). Seeding helpers preserve
+these retirement markers rather than restoring embedded defaults. Generated
+files must be refreshed from the authoritative selected profile; modifying a
+local projection does not update that source.
