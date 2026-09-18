@@ -81,8 +81,14 @@ jobs:
             }
           '
 
+      - name: Select the explicit npm delivery mode
+        id: delivery
+        env:
+          RELEASE_PUBLISH_MODE: ${{ vars.RELEASE_PUBLISH_MODE }}
+        run: bun apps/todos/scripts/resolve-npm-release-publish-mode.ts
+
       - name: Reject an existing version or an inconclusive registry lookup
-        if: github.event_name == 'push'
+        if: github.event_name == 'push' && steps.delivery.outputs.mode == 'oidc'
         env:
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
         run: |
@@ -127,14 +133,28 @@ jobs:
         run: bun test
 
       - name: Exercise the public release checks without publishing
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' || steps.delivery.outputs.mode == 'vault-token'
         working-directory: apps/todos
         run: bun run verify:release
 
-      - name: Publish via OIDC and the package-owned prepublishOnly gate
+      - name: Verify the independent signed review for every release tag
         if: github.event_name == 'push'
         working-directory: apps/todos
         env:
+          RELEASE_PUBLISH_MODE: ${{ steps.delivery.outputs.mode }}
+          HASNA_TODOS_EXPECTED_COMMIT: ${{ github.sha }}
+          HASNA_TODOS_RELEASE_PACKAGE_PATH: apps/todos
+          RELEASE_REVIEWER_AGENT: ${{ vars.RELEASE_REVIEWER_AGENT }}
+          RELEASE_REVIEW_KEY_ID: ${{ vars.RELEASE_REVIEW_KEY_ID }}
+          RELEASE_REVIEW_PUBLIC_KEY: ${{ vars.RELEASE_REVIEW_PUBLIC_KEY }}
+          NPM_RELEASE_AGENT_REVIEW_RECEIPT: ${{ secrets.NPM_RELEASE_AGENT_REVIEW_RECEIPT }}
+        run: bun run verify:release-review
+
+      - name: Publish via OIDC and the package-owned prepublishOnly gate
+        if: github.event_name == 'push' && steps.delivery.outputs.mode == 'oidc'
+        working-directory: apps/todos
+        env:
+          RELEASE_PUBLISH_MODE: ${{ steps.delivery.outputs.mode }}
           HASNA_TODOS_EXPECTED_COMMIT: ${{ github.sha }}
           HASNA_TODOS_RELEASE_PACKAGE_PATH: apps/todos
           RELEASE_REVIEWER_AGENT: ${{ vars.RELEASE_REVIEWER_AGENT }}
@@ -144,7 +164,7 @@ jobs:
         run: npm publish --provenance --access public
 
       - name: Verify the published version
-        if: github.event_name == 'push'
+        if: github.event_name == 'push' && steps.delivery.outputs.mode == 'oidc'
         env:
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
         run: |

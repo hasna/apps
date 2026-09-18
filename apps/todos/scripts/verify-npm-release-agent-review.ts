@@ -8,6 +8,7 @@ import {
   type ExpectedNpmReleaseAgentReview,
   type NpmReleaseAgentReviewFailure,
 } from "../src/lib/npm-release-agent-review";
+import { parseNpmReleaseLane, resolveNpmReleaseContext, resolveNpmReleasePublishMode } from "../src/lib/npm-release-context";
 import { resolveNpmReleasePackageByTag } from "../src/lib/npm-release-package";
 
 type ReleasePackage = {
@@ -24,26 +25,26 @@ main();
 
 function main(): void {
   const failures: NpmReleaseAgentReviewFailure[] = [];
-  const releaseCommit = process.env["GITHUB_SHA"] ?? "";
-  const tag = process.env["GITHUB_REF_NAME"] ?? "";
+  const context = resolveNpmReleaseContext(process.env);
+  if (context.failures.length > 0) fail(context.failures);
+  const { releaseCommit, tag } = context;
+  if (runGit(["rev-parse", "HEAD"], "release-agent-review-checkout") !== releaseCommit) {
+    fail([{ check: "release-agent-review-checkout", message: "the current checkout must equal the exact release commit" }]);
+  }
   let releasePackage;
   try {
     releasePackage = resolveNpmReleasePackageByTag(tag);
   } catch {
-    fail([{ check: "release-agent-review-ref-name", message: "GITHUB_REF_NAME must use an allowed npm release tag prefix" }]);
+    fail([{ check: "release-agent-review-ref-name", message: "the release tag must use an allowed npm release tag prefix" }]);
   }
   const packageJson = JSON.parse(runGit(["show", `${releaseCommit}:${releasePackage.manifestPath}`], "release-agent-review-package-manifest", false)) as ReleasePackage;
   const reviewerAgentId = process.env["RELEASE_REVIEWER_AGENT"] ?? "";
   const reviewerKeyId = process.env["RELEASE_REVIEW_KEY_ID"] ?? "";
   const reviewerPublicKey = process.env["RELEASE_REVIEW_PUBLIC_KEY"] ?? "";
 
-  addContextFailure(failures, process.env["GITHUB_EVENT_NAME"] !== "push", "release-agent-review-event", "agent review authority requires a tag push event");
-  addContextFailure(failures, process.env["GITHUB_REPOSITORY"] !== REPOSITORY, "release-agent-review-context-repository", `GITHUB_REPOSITORY must be ${REPOSITORY}`);
-  addContextFailure(failures, !/^[0-9a-f]{40}$/.test(releaseCommit), "release-agent-review-context-commit", "GITHUB_SHA must identify the exact 40-hex release commit");
-  addContextFailure(failures, process.env["GITHUB_REF_TYPE"] !== "tag", "release-agent-review-ref-type", "the release ref must be a tag");
   addContextFailure(failures, packageJson.name !== releasePackage.packageName, "release-agent-review-package", `${releasePackage.manifestPath} must declare ${releasePackage.packageName}`);
   addContextFailure(failures, !packageJson.version, "release-agent-review-version", "package.json must declare a release version");
-  addContextFailure(failures, packageJson.version !== releasePackage.version, "release-agent-review-ref-name", `GITHUB_REF_NAME must carry ${releasePackage.manifestPath} version ${packageJson.version ?? ""}`);
+  addContextFailure(failures, packageJson.version !== releasePackage.version, "release-agent-review-ref-name", `the release tag must carry ${releasePackage.manifestPath} version ${packageJson.version ?? ""}`);
   addContextFailure(failures, packageJson.publishConfig?.registry !== "https://registry.npmjs.org", "release-agent-review-registry", "package.json must target the public npm registry");
   addContextFailure(
     failures,
@@ -64,11 +65,6 @@ function main(): void {
   addContextFailure(failures, !reviewerKeyId, "release-agent-review-key-id-config", "RELEASE_REVIEW_KEY_ID must identify the fixed reviewer public key");
   addContextFailure(failures, !reviewerPublicKey, "release-agent-review-public-key", "RELEASE_REVIEW_PUBLIC_KEY must contain the fixed reviewer public key");
 
-  const expectedCommit = process.env["HASNA_TODOS_EXPECTED_COMMIT"];
-  if (expectedCommit !== undefined) {
-    addContextFailure(failures, expectedCommit !== releaseCommit, "release-agent-review-expected-commit", "HASNA_TODOS_EXPECTED_COMMIT must equal GITHUB_SHA");
-  }
-
   if (failures.length > 0) fail(failures);
 
   const ancestry = spawnSync("git", ["merge-base", "--is-ancestor", releaseCommit, "refs/remotes/origin/main"], { cwd: root, encoding: "utf8" });
@@ -83,9 +79,23 @@ function main(): void {
   }
   const tagCommit = runGit(["rev-parse", `${tagRef}^{commit}`], "release-agent-review-tag-commit");
   if (tagCommit !== releaseCommit) {
-    fail([{ check: "release-agent-review-tag-commit", message: "the annotated release tag must target GITHUB_SHA exactly" }]);
+    fail([{ check: "release-agent-review-tag-commit", message: "the annotated release tag must target the release commit exactly" }]);
   }
   const tagMessage = runGit(["for-each-ref", "--format=%(contents)", tagRef], "release-agent-review-tag-message", false);
+  if (releasePackage.packagePath === "apps/todos") {
+    try {
+      const lane = parseNpmReleaseLane(tagMessage);
+      const expectedLane = context.mode === "vault-token" ? "vault-token" : resolveNpmReleasePublishMode(process.env.RELEASE_PUBLISH_MODE);
+      if (lane !== expectedLane) throw new Error("the annotated release tag lane must match the explicit publisher delivery mode");
+      if (context.mode === "github-actions" && process.env.npm_lifecycle_event === "prepublishOnly" && lane !== "oidc") {
+        throw new Error("GitHub Actions may publish only a tag assigned to the oidc lane");
+      }
+    } catch (error) {
+      fail([{ check: "release-agent-review-delivery-lane", message: error instanceof Error ? error.message : "invalid release delivery lane" }]);
+    }
+  } else if (context.mode === "vault-token") {
+    fail([{ check: "release-agent-review-delivery-package", message: "the local vault-token context is supported only for apps/todos" }]);
+  }
   const publisher = parsePublisherAgentTrailer(tagMessage);
   if (publisher.failures.length > 0 || !publisher.agentId) fail(publisher.failures);
 
@@ -111,6 +121,7 @@ function main(): void {
   if (result.failures.length > 0 || !result.receipt || !result.payload) fail(result.failures);
 
   console.log(JSON.stringify({
+    context: context.mode,
     schema: result.receipt.schema,
     signature_algorithm: result.receipt.signature.algorithm,
     signature_key_id: result.receipt.signature.key_id,

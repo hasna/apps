@@ -16,6 +16,19 @@ const companionPackage = JSON.parse(readFileSync(resolve(import.meta.dir, "../ai
   scripts: Record<string, string>;
 };
 describe("npm release procedure", () => {
+  test("vault-token tag pushes verify but only explicit OIDC delivery publishes", () => {
+    const workflow = readFileSync(resolve(repoRoot, ".github/workflows/release-todos.yml"), "utf8");
+    expect(workflow).toContain("run: bun apps/todos/scripts/resolve-npm-release-publish-mode.ts");
+    expect(workflow).toContain("RELEASE_PUBLISH_MODE: ${{ vars.RELEASE_PUBLISH_MODE }}");
+    expect(workflow).toContain("name: Verify the independent signed review for every release tag");
+    expect(workflow).toContain("run: bun run verify:release-review");
+    const publish = workflow.slice(workflow.indexOf("      - name: Publish via OIDC"), workflow.indexOf("      - name: Verify the published version"));
+    expect(publish).toContain("if: github.event_name == 'push' && steps.delivery.outputs.mode == 'oidc'");
+    expect(publish).toContain("RELEASE_PUBLISH_MODE: ${{ steps.delivery.outputs.mode }}");
+    expect(publish).toContain("npm publish --provenance --access public");
+    expect(workflow).toContain("if: github.event_name == 'workflow_dispatch' || steps.delivery.outputs.mode == 'vault-token'");
+  });
+
   test("uses each package's strict prepublish hook as the signed procedure", () => {
     expect(rootPackage.scripts.prepublishOnly).toBe("bun run scripts/verify-public-release.ts --mode=publish");
     expect(companionPackage.scripts["verify:release-review"]).toBe("bun run ../scripts/verify-npm-release-agent-review.ts");

@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { resolve } from "node:path";
 import type { ResolvedSkillSelection } from "../types/skill-selection.js";
 import { exactProfileSelection, readSelectedEntries, resolveSelectionContext, type SelectionResolverOptions } from "./selection-resolver.js";
-import { selectionKey, sessionReceiptPath, SkillSelectionError, writeSelectionJson } from "./selection-cache.js";
+import { selectionKey, SkillSelectionError, writeSkillSession } from "./selection-cache.js";
 import { readSelectedDocument } from "./selected-document.js";
 import { selectionMatchesName } from "./selection-aliases.js";
 
@@ -107,6 +107,6 @@ export async function buildSkillContext(input: SkillContextInput, options: Skill
     workspaceId: profile.workspaceId, source: options.cached ? "verified-cache" as const : "api" as const,
     ...(sessionId ? { sessionId } : {}), restored: Boolean(input.restore), chars: context.length, selections,
   };
-  if (sessionId) writeSelectionJson(sessionReceiptPath(sessionId, options), { ...resolved.receipt, sessionId, loaded: [...loaded] });
+  if (sessionId) writeSkillSession({ ...resolved.receipt, sessionId, loaded: [...loaded] }, resolved.session, options);
   return { context, selections, omitted, receipt };
 }
