@@ -111,11 +111,14 @@ Successful inference does not establish browser or computer compatibility for
 every provider. See the [browser extension guide](https://learn.chatgpt.com/docs/chrome-extension)
 and [DeepSeek compatibility details](https://api-docs.deepseek.com/guides/responses_api/).
 
-Switcher starts a separate app instance with persistent provider/model state
-under `~/.hasna/switcher/state/desktop/PROFILE`. Your regular ChatGPT app and its
-signed-in state are preserved. Each profile retains its own local conversations
-and preferences across launches; it does not copy the regular app's login or
-conversation history. A second launch of the same active profile is refused.
+Switcher starts a separate app instance with private login and Electron state.
+That private overlay remains provider/profile-scoped. `--share-native-state` (or
+an explicit shared-state marker below) projects only the allowlisted native corpus
+into that overlay, so local conversations and instructions can remain available
+without reusing another provider/account's cookies, settings or authentication.
+The canonical Codex corpus is normally `~/.codex`. Your regular ChatGPT app's
+signed-in state is preserved; authentication and cookies are not copied. A second
+launch of the same active provider profile is refused.
 Keep the launching terminal running until you quit that instance: Switcher owns
 its inference gateway and stops its own app process on interruption or timeout.
 
@@ -125,6 +128,111 @@ Switcher refuses to overwrite authentication added manually to a provider
 profile. It does not modify or re-sign the installed app. Select a nonstandard
 installation with `--app-path /absolute/path/ChatGPT.app`; native CLI arguments,
 `--executable` and `--backend` are not accepted for desktop launches.
+
+### Shared native conversations
+
+Sharing is opt-in. Pass `--share-native-state`, set
+`HASNA_CODEX_STATE_HOME`/`HASNA_CLAUDE_STATE_HOME`, or set the compatible
+`SUBSCRIPTIONS_SHARED_HOME_CODEX`/`SUBSCRIPTIONS_SHARED_HOME_CLAUDE` marker.
+Without one of those signals, Switcher keeps its historical provider/account state
+layout and creates no shared links. The command flag selects `~/.codex` or
+`~/.claude`; a custom canonical corpus must be named by a marker. Ambient
+`CODEX_HOME`/`CLAUDE_CONFIG_DIR` is treated only as the current private overlay,
+never silently promoted into the cross-account identity. If both marker forms are
+present they must resolve to the same directory. Markers are consumed by Switcher
+and are not forwarded to provider processes or nested launchers. Directories must
+be absolute, owned and free of writable/symlink redirection. This contract is
+currently supported on Linux and macOS; Windows refuses before creating state.
+
+Codex overlays share sessions, archived sessions and `thread-writer-locks`. Native
+skill directories are deliberately excluded: Skills-owned migration and hook
+controls remain authoritative and account-synced skill copies must not enter a
+cross-account corpus. The entire SQLite store uses the canonical
+configuration's `sqlite_home`, or the canonical root; inherited account-specific
+`CODEX_SQLITE_HOME` is ignored. There are no per-database or WAL symlinks.
+`session_index.jsonl` stays an overlay-local native index; legacy index-only names
+remain pending explicit migration. Authentication,
+Electron cookies, `.codex-global-state.json`, plugin caches and worktree metadata
+are not projected between homes. Claude's projects, todos, history and explicit `CLAUDE.md`/`.hasna/instructions`
+policy roots use its common corpus. Commands, agents, rules, credentials, settings,
+native skills and plugin state remain private. Skills continue through the
+reviewed Skills bridge.
+
+Both tools share only `.hasna/instructions`, never the rest of `.hasna`. Codex's
+optional `AGENTS.override.md` takes native precedence over `AGENTS.md`; Switcher
+does not create empty versions or dangling links. A later launch links an optional
+file only after the canonical regular file exists and passes validation.
+The desktop config projects only the canonical `instructions`,
+`developer_instructions`, `model_instructions_file`, `compact_prompt`, the four
+`include_*_instructions`/`include_environment_context` switches, and
+`project_doc_max_bytes`/`project_doc_fallback_filenames`. Relative model instruction
+files resolve inside the canonical config directory and must be readable trusted
+regular files; they cannot escape into authentication or unrelated state. Native file/config instruction precedence is preserved; routing
+and private authentication settings are rendered separately. Unsupported legacy
+`profile` selection refuses launch rather than silently losing its instructions.
+Codex CLI normally reads these keys directly from its canonical home. When nested
+inside a private authentication home, its audited instruction keys must match the
+canonical projection, including the resolved model instruction file path; missing
+or stale keys visibly refuse launch. Switcher does not rewrite that account's
+configuration or place instruction text in process arguments. Refresh the account
+overlay's instruction projection before retrying a conflicting nested launch.
+
+The desktop adapter requests native `thread/list` with all providers and filesystem
+read-repair, then starts, resumes or forks with the current launch provider and model.
+Shared state requires Codex 0.154.0 or newer and the directly verified adapter;
+Ori shared-state/resume support remains refused until separately accepted.
+It disables the supported provider-model fallback on `thread/start`, preserves
+native permissions, and does not rewrite saved transcripts or tool-call IDs. For CLI resume:
+
+```sh
+switcher launch codex --provider PROVIDER --model MODEL --share-native-state -- resume
+switcher launch codex --provider PROVIDER --model MODEL --share-native-state -- resume --last
+switcher launch codex --provider PROVIDER --model MODEL --share-native-state -- resume --all
+switcher launch codex --provider PROVIDER --model MODEL --share-native-state -- resume SESSION_ID
+```
+
+The first three forms use Switcher's cross-provider native catalog discovery,
+then execute native Codex with the exact chosen ID. Shared-state consent also
+means the selected conversation history will be sent through the provider/model
+chosen for this launch; native metadata does not reliably expose an original
+provider/account label, so Switcher does not claim provenance it cannot verify.
+`--all` includes other
+workspaces; normal discovery keeps the current workspace filter. Explicit IDs
+pass directly to native Codex. Discovery sends no inference prompt. Native
+Codex's own picker outside these Switcher forms can still filter by provider.
+Existing nonempty legacy overlay directories are preserved and are never
+silently replaced with links; conflicting state requires an explicit migration.
+
+Normal launch reports legacy desktop data as pending migration. Inspect and stage
+an explicit noncredential snapshot with the local native-state command:
+
+```sh
+switcher state import codex --from /absolute/legacy/profile/codex
+# Review planDigest from the dry-run, then bind the exact plan to the mutation:
+switcher state import codex --from /absolute/legacy/profile/codex --entry sessions --apply --plan-digest SHA256
+switcher state import claude --from /absolute/legacy/claude/profile --entry projects --apply --plan-digest SHA256
+```
+
+The default is a read-only plan with a path-redacting `planDigest`. `--apply`
+requires that exact digest, binding explicit mutation consent to the reviewed
+source, destination, selection and file identities. It copies unique allowlisted files, skips byte-identical duplicates, and refuses
+divergent collisions before starting the copy. Recognized native Codex session IDs are also checked across active/archived
+rollouts: divergent versions with different filenames refuse import, while exact
+duplicates are not published twice. `--entry` may be repeated to limit a snapshot.
+Source files stay unchanged; symlinks, hardlinked aliases and
+credential/config/SQLite/index/plugin-cache/native-skill entries cannot be imported.
+All source files are checked again and staged before publishing any new copy.
+No-replace publication never overwrites or deletes a racing writer. If a
+collision appears after publication starts, already published reviewed files are
+preserved and the command requires a new dry-run to reconcile the remainder. Imports are bounded
+to 100,000 entries and 2 GiB per operation.
+
+This is **copy-only staging**, not complete migration: the old home can still
+receive writes. Legacy SQLite metadata and index-only display names stay in the
+original, and the pending warning remains. Codex's supported catalog scan repairs
+copied transcript discovery; this does not prove every legacy desktop preference
+or title has migrated. Stop old writers and review their remaining state before
+retiring any old profile. Switcher does not retire or delete it automatically.
 
 `--dry-run` validates app detection and provider/model discovery without opening
 the app. The SDK offers local installation discovery through `detectChatGPTApp()`;
@@ -606,7 +714,7 @@ Grok uses a per-launch authenticated loopback bridge because its environment ove
 
 Hermes uses the same loopback boundary with its documented `custom` provider. The bridge exposes only the Switcher catalog, translates the selected provider's Bearer, `x-api-key` or literal `api-key` credential, and forwards deployment prefixes unchanged. Hermes `state.db` and `sessions/` are linked to a profile-owned stable directory for resume; generated config and bridge credentials remain per-launch. Focused bridge tests cover all three native protocol routes and auth styles, including cleanup of an active stream without caller cancellation. Run `bun scripts/test-native-hermes.ts` with `SWITCHER_TEST_HERMES_EXECUTABLE` for the installed native CLI fixture proof, which performs a real `read_file` loop and deleted-file resume against a generic preset.
 
-Native history and credentials stay with the harness. Resume only with the same profile/provider/model configuration unless the harness explicitly supports a change; cross-provider reasoning/session migration is not provided. Temporary nonsecret picker/config files are removed when the child exits. Run records contain launch/end metadata and initial model, not transcripts or a claim about later native picker selections.
+Codex and Claude can use their [shared native corpus](#shared-native-conversations) only after explicit command or environment consent. Sessions and reviewed instruction roots may cross provider/account overlays; authentication, native skills, settings, plugins and broader capability trees remain private. Other harnesses retain their documented native storage and resume restrictions; cross-provider conversion of incompatible reasoning or session formats is not provided. Temporary nonsecret picker/config files are removed when the child exits. Run records contain launch/end metadata and initial model, not transcripts or a claim about later native picker selections.
 
 ## SDK and API
 

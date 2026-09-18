@@ -561,7 +561,7 @@ async function prepareNativeLaunch(input: HarnessLaunchInput, providerBaseUrl = 
     return {executable,args:["--settings",file,"--model",input.model,...args],env,configPaths,warnings};
   }
   if(input.harness==="codex") {
-    const rolePolicy=await prepareCodexModelPolicy({cwd:input.cwd,stateDir:input.stateDir,model:input.model,policy:input.modelPolicy?{version:1,...input.modelPolicy}:undefined,switcherProvider:"switcher",switcherBaseUrl:input.baseUrl});
+    const rolePolicy=await prepareCodexModelPolicy({home:input.sharedState?.home,cwd:input.cwd,stateDir:input.stateDir,model:input.model,policy:input.modelPolicy?{version:1,...input.modelPolicy}:undefined,switcherProvider:"switcher",switcherBaseUrl:input.baseUrl});
     const selectableModels=input.models.filter(model=>input.compiledPolicy?.allowedModels.includes(model.id)??true);
     const file=await jsonFile(input.stateDir,"codex-models.json",{models:selectableModels.map((model,index)=>codexModel(model,index,providerBaseUrl,model.id===input.model?input.reasoning:undefined))});
     configPaths.push(file);
@@ -579,6 +579,7 @@ async function prepareNativeLaunch(input: HarnessLaunchInput, providerBaseUrl = 
       overrides.push("-c",`agents.${name}.config_file=${quote(path)}`);
     }
     overrides.push("-c",`memories.extract_model=${quote(input.model)}`,"-c",`memories.consolidation_model=${quote(input.model)}`);
+    if(input.sharedState?.sqliteHome)overrides.push("-c",`sqlite_home=${quote(input.sharedState.sqliteHome)}`);
     if(input.reasoning)overrides.push("-c",`model_reasoning_effort=${quote(input.reasoning)}`);
     if(input.dangerouslyBypassApprovalsAndSandbox)overrides.push("-c",'approval_policy="never"',"-c",'sandbox_mode="danger-full-access"');
     warnings.push("Codex catalog uses conservative generic tool metadata and a model-neutral coding prompt; reasoning controls come from declared capabilities, documented provider support or an explicit --reasoning selection.");
@@ -799,7 +800,7 @@ async function prepareNativeLaunch(input: HarnessLaunchInput, providerBaseUrl = 
   return {executable,args:native,env,configPaths,warnings};
 }
 async function prepareTransportLaunch(input: HarnessLaunchInput): Promise<PreparedLaunch> {
-  assertHarnessArguments(input.harness,input.args ?? []);
+  assertHarnessArguments(input.harness,input.args ?? [],input.sharedState?.tool==="codex"?{reservedCodexRoots:["sqlite_home"]}:{});
   if(input.harness==="kilo") {
     await validateKiloConfiguration(input.cwd,[...input.args??[]]);
     if(input.protocol==="gemini-generate-content") throw new Error("Kilo is incompatible with this protocol.");
@@ -833,7 +834,7 @@ async function prepareTransportLaunch(input: HarnessLaunchInput): Promise<Prepar
 }
 
 export async function prepareHarnessLaunch(input: HarnessLaunchInput): Promise<PreparedLaunch> {
-  assertHarnessArguments(input.harness,input.args??[]);
+  assertHarnessArguments(input.harness,input.args??[],input.sharedState?.tool==="codex"?{reservedCodexRoots:["sqlite_home"]}:{});
   if(input.harness==="gemini"&&input.authStyle!=="x-api-key")throw new Error("Gemini CLI requires x-api-key authentication.");
   validateHarnessVersion(input.harness,input.version);
   if(!compatible(input.harness,input.protocol))throw new Error("Harness and provider protocol are incompatible.");
