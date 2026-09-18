@@ -8,7 +8,7 @@ OIDC trust; selecting the environment does not establish a reviewer gate. The sc
 lock, then pushed with an immutable tag and deployed by registry digest.
 
 `knowledge_deploy` in the authoritative SSM manifest must explicitly bind the
-backup bucket, authority, existing client-key reference, no-pending-migration
+backup bucket, authority, existing client-key reference, reviewed migration
 policy, disabled legacy owner, and short service maintenance window. An absent
 contract fails before service mutation. The infrastructure source owns that
 contract and the OIDC/S3 grants; this lane cannot repair its own authority.
@@ -18,8 +18,17 @@ captures a full custom-format `pg_dump` from the same exported snapshot used to
 hash every non-system table and sequence, validates the archive table of
 contents, uploads it to a private versioned S3 key, and hashes the exact version
 on readback. Only then does it run the existing migration ledger dry-run and
-no-op apply. Any pending migration is refused. All table and sequence counts and
-digests must match afterwards. Database bytes and connection strings never
+apply. The `no-pending-migrations` policy refuses every pending migration.
+The `reviewed-additive-nonce-v1` policy also pins the complete SHA256 of
+`reviewed-migrations.json`. It accepts only all five exact ledger additions
+`knowledge_pg_132` through `knowledge_pg_136`, or an already applied set; partial
+or unrelated pending sets fail before migration. It verifies the exact new empty
+nonce table, function and always-enabled immutability trigger, while preserving
+every existing table, function, sequence and old ledger row. The web and migration
+tasks must resolve the same runtime DSN reference, and the runtime role must
+already have the required schema and future-table SELECT/INSERT privileges.
+The lane changes no grants. Post-migration checks verify those privileges again.
+Database bytes and connection strings never
 reach GitHub artifacts. Private backup objects have no automated deletion path.
 
 Service activation retains existing task properties and removes the retired

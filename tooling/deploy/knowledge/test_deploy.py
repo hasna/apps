@@ -6,7 +6,8 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
-from deploy import validate_manifest, registration, stable_service, validate_receipt, Deployment
+from deploy import (validate_manifest, registration, stable_service, validate_receipt,
+                    reviewed_migrations, verify_database_secret_bindings, Deployment)
 
 ACCOUNT = '123456789012'
 DIGEST = 'sha256:' + 'a' * 64
@@ -25,6 +26,37 @@ def manifest():
 
 
 class Guards(unittest.TestCase):
+    def test_additive_policy_requires_exact_reviewed_contract(self):
+        _, checksum = reviewed_migrations()
+        candidate = manifest()
+        contract = candidate['knowledge_deploy']
+        contract.update(migration_policy='reviewed-additive-nonce-v1', reviewed_migrations_sha256=checksum)
+        validate_manifest(candidate, ACCOUNT, 'us-east-1')
+        for changed in [None, '0' * 64, checksum.upper()]:
+            contract['reviewed_migrations_sha256'] = changed
+            with self.subTest(checksum=changed), self.assertRaisesRegex(ValueError, 'REVIEWED_MIGRATION_CONTRACT'):
+                validate_manifest(candidate, ACCOUNT, 'us-east-1')
+        contract.update(migration_policy='no-pending-migrations', reviewed_migrations_sha256=checksum)
+        with self.assertRaisesRegex(ValueError, 'UNEXPECTED_MIGRATION_CONTRACT'):
+            validate_manifest(candidate, ACCOUNT, 'us-east-1')
+
+    def test_runtime_privilege_proof_uses_the_actual_web_database_secret(self):
+        key = 'HASNA_KNOWLEDGE_DATABASE_URL'
+        ref = f'arn:aws:secretsmanager:us-east-1:{ACCOUNT}:secret:fixture-runtime'
+        web = {'containerDefinitions': [{'name': 'knowledge', 'secrets': [{'name': key, 'valueFrom': ref}]}]}
+        migration = {'containerDefinitions': [{'name': 'knowledge-migrate', 'secrets': [{'name': key, 'valueFrom': ref}]}]}
+        verify_database_secret_bindings(web, migration)
+        for secrets, environment in [
+            ([], []),
+            ([{'name': key, 'valueFrom': ref + '-other'}], []),
+            ([{'name': key, 'valueFrom': ref}] * 2, []),
+            ([{'name': key, 'valueFrom': ref}], [{'name': key, 'value': 'synthetic-override'}]),
+        ]:
+            changed = copy.deepcopy(migration)
+            changed['containerDefinitions'][0].update(secrets=secrets, environment=environment)
+            with self.subTest(secrets=len(secrets), environment=bool(environment)), self.assertRaises(ValueError):
+                verify_database_secret_bindings(web, changed)
+
     def test_manifest_requires_reviewed_backup_and_owner_contract(self):
         validate_manifest(manifest(), ACCOUNT, 'us-east-1')
         for field, value in [('legacy_owner_mode', 'infer'), ('legacy_owner_tenant_id', 'guessed'),

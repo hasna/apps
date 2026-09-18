@@ -18,6 +18,28 @@ def require(ok, code):
         raise ValueError(code)
 
 
+def reviewed_migrations():
+    raw = Path(__file__).with_name('reviewed-migrations.json').read_bytes()
+    value = json.loads(raw)
+    require(value.get('schema') == 'knowledge.reviewed-migrations.v1' and
+            value.get('policy') == 'reviewed-additive-nonce-v1', 'REVIEWED_MIGRATION_SCHEMA')
+    require([m['id'] for m in value.get('migrations', [])] ==
+            [f'knowledge_pg_{i}' for i in range(132, 137)], 'REVIEWED_MIGRATION_IDS')
+    require(all(re.fullmatch(r'sha256:[0-9a-f]{64}', m.get('checksum', ''))
+                for m in value['migrations']), 'REVIEWED_MIGRATION_CHECKSUMS')
+    return value, hashlib.sha256(raw).hexdigest()
+
+
+def validate_migration_policy(contract):
+    policy = contract.get('migration_policy')
+    if policy == 'no-pending-migrations':
+        require(not contract.get('reviewed_migrations_sha256'), 'UNEXPECTED_MIGRATION_CONTRACT')
+    else:
+        require(policy == 'reviewed-additive-nonce-v1', 'MIGRATION_POLICY')
+        _, expected = reviewed_migrations()
+        require(contract.get('reviewed_migrations_sha256') == expected, 'REVIEWED_MIGRATION_CONTRACT')
+
+
 def aws(*args):
     p = subprocess.run(['aws', *args, '--output', 'json'], capture_output=True, timeout=90)
     require(p.returncode == 0, 'AWS_' + args[0].upper() + '_REFUSED')
@@ -37,7 +59,7 @@ def validate_manifest(value, account, region):
                 all(re.fullmatch(pattern, x) for x in value[key]), 'NETWORK_' + key.upper())
     contract = value.get('knowledge_deploy', {})
     require(contract.get('schema') == 'knowledge.production-deploy.v1', 'DEPLOY_CONTRACT_REQUIRED')
-    require(contract.get('migration_policy') == 'no-pending-migrations', 'MIGRATION_POLICY')
+    validate_migration_policy(contract)
     require(contract.get('legacy_owner_mode') == 'disabled', 'LEGACY_OWNER_MODE')
     require(not contract.get('legacy_owner_tenant_id'), 'LEGACY_OWNER_NOT_REVIEWED')
     require(contract.get('allow_service_quiescence') is True, 'QUIESCENCE_CONTRACT_REQUIRED')
@@ -80,6 +102,19 @@ def check_authority(definition, name, contract):
     require('HASNA_KNOWLEDGE_LEGACY_OWNER_TENANT_ID' not in {x['name'] for x in row.get('secrets', [])}, 'TASK_SECRET_OWNER_OVERRIDE')
 
 
+def verify_database_secret_bindings(web, migrate):
+    references = []
+    for definition, name in ((web, 'knowledge'), (migrate, 'knowledge-migrate')):
+        row = container(definition, name)
+        key = 'HASNA_KNOWLEDGE_DATABASE_URL'
+        require(key not in {x['name'] for x in row.get('environment', [])}, 'RUNTIME_DATABASE_ENV_OVERRIDE')
+        secrets = [x['valueFrom'] for x in row.get('secrets', []) if x['name'] == key]
+        require(len(secrets) == 1 and isinstance(secrets[0], str) and
+                secrets[0].startswith('arn:aws:secretsmanager:'), 'RUNTIME_DATABASE_SECRET_REQUIRED')
+        references.append(secrets[0])
+    require(references[0] == references[1], 'RUNTIME_DATABASE_SECRET_MISMATCH')
+
+
 def registration(definition, name, image, database_config=None):
     allowed = ('family', 'taskRoleArn', 'executionRoleArn', 'networkMode', 'containerDefinitions',
                'volumes', 'placementConstraints', 'requiresCompatibilities', 'cpu', 'memory',
@@ -96,7 +131,67 @@ def registration(definition, name, image, database_config=None):
     return result
 
 
-def validate_receipt(value, source, image_digest, bucket, prefix):
+def json_sha256(value):
+    return hashlib.sha256(json.dumps(value, separators=(',', ':'), ensure_ascii=False).encode()).hexdigest()
+
+
+def validate_reviewed_receipt(value, contract):
+    reviewed, expected_hash = reviewed_migrations()
+    validate_migration_policy(contract)
+    migration = value.get('migration', {})
+    require(migration.get('policy') == reviewed['policy'] and
+            migration.get('reviewed_migrations_sha256') == expected_hash, 'RECEIPT_MIGRATION_CONTRACT')
+    before, after, executed = (migration.get(k, {}) for k in ('before', 'after', 'executed'))
+    ids = [m['id'] for m in reviewed['migrations']]
+    require(before.get('pending_ids') in ([], ids) and before.get('pending') == len(before['pending_ids']), 'RECEIPT_PENDING_SET')
+    require(executed == before and after.get('pending') == 0 and after.get('pending_ids') == [], 'RECEIPT_MIGRATION_EXECUTION')
+    total = before.get('total')
+    require(type(total) is int and total >= len(ids) and after.get('total') == total and
+            after.get('already_applied') == total and before.get('already_applied') == total - before['pending'], 'RECEIPT_LEDGER_TOTAL')
+    integrity = value['integrity']
+    pre, post, proof = (integrity.get(k, {}) for k in ('pre', 'post', 'proof'))
+    for snapshot in (pre, post):
+        require(snapshot.get('sha256') == json_sha256({k: v for k, v in snapshot.items() if k != 'sha256'}), 'RECEIPT_SNAPSHOT_DIGEST')
+        require(isinstance(snapshot.get('tables'), list) and snapshot['tables'] and
+                isinstance(snapshot.get('functions'), list) and isinstance(snapshot.get('sequences'), list), 'RECEIPT_SNAPSHOT_SHAPE')
+    require(proof.get('existing_domain_preserved') is True and proof.get('existing_ledger_preserved') is True and
+            proof.get('runtime_permissions_verified') is True, 'RECEIPT_PRESERVATION_PROOF')
+    for section, a, b in [('existing_domain', 'pre', 'post'), ('ledger', 'preserved_pre', 'preserved_post')]:
+        hashes = proof.get(section, {})
+        require(isinstance(hashes.get(a), str) and re.fullmatch(r'[0-9a-f]{64}', hashes[a]) and
+                hashes.get(a) == hashes.get(b), 'RECEIPT_PRESERVATION_DIGEST')
+    additions = before['pending'] > 0
+    require(proof.get('exact_reviewed_additions') is additions, 'RECEIPT_ADDITION_MODE')
+    if not additions:
+        require(pre == post and all(proof.get(k) == [] for k in ('added_migrations', 'added_tables', 'added_functions')), 'RECEIPT_DOMAIN_DRIFT')
+        return
+    added = proof.get('added_migrations', [])
+    require([{'id': m.get('id'), 'checksum': m.get('checksum')} for m in added] == reviewed['migrations'] and
+            all(isinstance(m.get('applied_at'), str) and m['applied_at'] for m in added), 'RECEIPT_LEDGER_ADDITIONS')
+    key = lambda row: (row.get('schema'), row.get('table'))
+    pre_tables, post_tables = ({key(row): row for row in snapshot['tables']} for snapshot in (pre, post))
+    require(len(pre_tables) == len(pre['tables']) and len(post_tables) == len(post['tables']), 'RECEIPT_DUPLICATE_TABLE')
+    nonce = (reviewed['added_table']['schema'], reviewed['added_table']['name'])
+    ledger = (reviewed['ledger']['schema'], reviewed['ledger']['table'])
+    require(nonce not in pre_tables and set(post_tables) == set(pre_tables) | {nonce} and ledger in pre_tables, 'RECEIPT_TABLE_DELTA')
+    for name, row in pre_tables.items():
+        revised = post_tables[name]
+        if name == ledger:
+            require(row.get('schema_sha256') == revised.get('schema_sha256') and
+                    revised.get('count') == row.get('count') + len(ids), 'RECEIPT_LEDGER_DELTA')
+        else:
+            require(row == revised, 'RECEIPT_DOMAIN_DRIFT')
+    empty = post_tables[nonce]
+    require(empty.get('count') == 0 and empty.get('sha256') == hashlib.sha256(b'').hexdigest() and
+            proof.get('added_tables') == [empty], 'RECEIPT_NONCE_NOT_EMPTY')
+    is_function = lambda fn: fn.get('schema') == reviewed['added_function']['schema'] and fn.get('name') == reviewed['added_function']['name']
+    functions = [fn for fn in post['functions'] if is_function(fn)]
+    require(not any(is_function(fn) for fn in pre['functions']) and len(functions) == 1 and functions[0].get('arguments') == '' and
+            proof.get('added_functions') == functions and [fn for fn in post['functions'] if not is_function(fn)] == pre['functions'], 'RECEIPT_FUNCTION_DELTA')
+    require(pre['sequences'] == post['sequences'] and pre.get('sequence_sha256') == post.get('sequence_sha256'), 'RECEIPT_SEQUENCE_DRIFT')
+
+
+def validate_receipt(value, source, image_digest, bucket, prefix, contract=None):
     require(value.get('schema') == 'knowledge.database-deploy-receipt.v1' and value.get('success') is True, 'RECEIPT_SCHEMA')
     require(value.get('source') == source and value.get('image_digest') == image_digest, 'RECEIPT_SOURCE_IMAGE')
     require(value.get('legacy_owner_mode') == 'disabled', 'RECEIPT_OWNER_MODE')
@@ -106,6 +201,9 @@ def validate_receipt(value, source, image_digest, bucket, prefix):
     require(re.fullmatch(r'[0-9a-f]{64}', backup.get('sha256', '')) and
             type(backup.get('bytes')) is int and backup['bytes'] > 0, 'RECEIPT_BACKUP_DIGEST')
     integrity = value.get('integrity', {})
+    if contract and contract.get('migration_policy') == 'reviewed-additive-nonce-v1':
+        validate_reviewed_receipt(value, contract)
+        return value
     require(integrity.get('pre') == integrity.get('post') and isinstance(integrity.get('pre'), dict), 'RECEIPT_DOMAIN_DRIFT')
     require(re.fullmatch(r'[0-9a-f]{64}', integrity['pre'].get('sha256', '')), 'RECEIPT_DOMAIN_DIGEST')
     require(bool(integrity['pre'].get('tables')), 'RECEIPT_EMPTY_DOMAIN')
@@ -173,6 +271,7 @@ class Deployment:
             check_authority(task, name, self.contract)
             require(task.get('taskRoleArn') == f'arn:aws:iam::{self.account}:role/knowledge-prod-task', 'TASK_ROLE')
             require(task.get('executionRoleArn') == f'arn:aws:iam::{self.account}:role/knowledge-prod-exec', 'EXECUTION_ROLE')
+        verify_database_secret_bindings(old, migrate)
         old_image = container(old, 'knowledge')['image']
         require(re.fullmatch(re.escape(self.manifest['ecr_repository_url']) + r'@sha256:[0-9a-f]{64}', old_image), 'ROLLBACK_IMAGE_MUST_BE_IMMUTABLE')
         self.old_digest = old_image.rsplit('@', 1)[1]
@@ -181,7 +280,10 @@ class Deployment:
         require(aws('s3api', 'get-bucket-versioning', '--bucket', self.contract['backup_bucket']).get('Status') == 'Enabled', 'BACKUP_VERSIONING')
         prefix = self.contract['backup_prefix'] + '/' + os.environ['GITHUB_RUN_ID'] + '-' + os.environ['GITHUB_RUN_ATTEMPT'] + '/' + self.source
         database_config = {'schema': 'knowledge.database-deploy.v1', 'source': self.source,
-                           'image_digest': self.digest, 'bucket': self.contract['backup_bucket'], 'prefix': prefix, 'legacy_owner_mode': 'disabled'}
+                           'image_digest': self.digest, 'bucket': self.contract['backup_bucket'], 'prefix': prefix,
+                           'legacy_owner_mode': 'disabled', 'migration_policy': self.contract['migration_policy']}
+        if self.contract.get('reviewed_migrations_sha256'):
+            database_config['reviewed_migrations_sha256'] = self.contract['reviewed_migrations_sha256']
         migration_definition = registration(migrate, 'knowledge-migrate', self.image, database_config)
         migration_task = aws('ecs', 'register-task-definition', '--cli-input-json', self.file('migration-task.json', migration_definition))['taskDefinition']['taskDefinitionArn']
         stable_service(self.service(), self.old_task, self.desired)
@@ -210,7 +312,7 @@ class Deployment:
         receipt_path = self.root / 'database-receipt.json'
         aws('s3api', 'get-object', '--bucket', self.contract['backup_bucket'], '--key', prefix + '/receipt.json', str(receipt_path))
         receipt_path.chmod(0o600)
-        receipt = validate_receipt(json.loads(receipt_path.read_text()), self.source, self.digest, self.contract['backup_bucket'], prefix)
+        receipt = validate_receipt(json.loads(receipt_path.read_text()), self.source, self.digest, self.contract['backup_bucket'], prefix, self.contract)
         self.database_verified = True
         self.wait_quiescent()
         definition = registration(old, 'knowledge', self.image)
@@ -291,9 +393,10 @@ class Deployment:
         current = self.service()
         require(current['taskDefinition'] in (self.old_task, self.new_task), 'RECOVERY_TASK_DRIFT')
         require(current['desiredCount'] in (0, self.desired), 'RECOVERY_DESIRED_DRIFT')
-        # Pending migrations are refused before application: this release lane
-        # only permits the no-op ledger path, so the captured old image remains
-        # schema-compatible. No database restore is performed automatically.
+        # A verified receipt proves no existing schema/data changed. Only the
+        # exact reviewed additive nonce objects and ledger rows may be new;
+        # the captured server starts without DDL and can use the old domain.
+        # No database restore is performed automatically.
         aws('ecs', 'update-service', '--cluster', self.manifest['cluster'], '--service', self.manifest['service'], '--task-definition', self.old_task, '--desired-count', str(self.desired))
         self.wait_stable(self.old_task, self.old_digest)
         self.file('recovery-receipt.json', {'schema': 'knowledge.deploy-recovery.v1', 'task_definition': self.old_task, 'desired_count': self.desired, 'status': 'old_image_restored_verified'})
