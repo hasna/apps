@@ -7,6 +7,7 @@ const workflow = readFileSync(join(root, ".github/workflows/emails-current-serve
 const reusable = readFileSync(join(root, ".github/workflows/emails-search-promotion-execute.yml"), "utf8");
 const gate = readFileSync(join(root, "tooling/deploy/emails-current/gate.py"), "utf8");
 const deploy = readFileSync(join(root, "tooling/deploy/emails-current/deploy.py"), "utf8");
+const promotion = readFileSync(join(root, "tooling/deploy/emails-search/promotion.py"), "utf8");
 const proof = readFileSync(join(root, "tooling/deploy/emails-current/public_proof.py"), "utf8");
 
 describe("Emails complete current-server deploy lane", () => {
@@ -27,6 +28,10 @@ describe("Emails complete current-server deploy lane", () => {
     expect(gate).toContain('"apps/emails/**"');
     expect(gate).toContain('row.get("path") == ".github/workflows/ci.yml"');
     expect(reusable).toContain("This reusable workflow path is the IAM trust-bound sanctioned authority");
+    expect(reusable).not.toContain("allowed-account-ids:");
+    expect(reusable).toContain('test "$(aws sts get-caller-identity --query Account --output text)" = "789877399345"');
+    expect(deploy).toContain('promotion.aws("sts", "get-caller-identity")["Account"] == promotion.ACCOUNT');
+    expect(promotion).toContain('aws("sts", "get-caller-identity")["Account"] == ACCOUNT');
     expect(reusable).toContain("Retain metadata-only search preparation and mutation receipts");
     expect(reusable).toContain("Retain metadata-only current server deployment receipts");
     expect(reusable).not.toContain("path: |\n            ${{ runner.temp }}/emails-promotion-receipts/*.json");

@@ -110,7 +110,6 @@ jobs:
           role-to-assume: arn:aws:iam::789877399345:role/emails-prod-gha-deploy
           aws-region: us-east-1
           role-session-name: emails-search-${{ github.run_id }}
-          allowed-account-ids: "789877399345"
           mask-aws-account-id: true
 
       - name: Prepare image or promote exact reviewed task change
