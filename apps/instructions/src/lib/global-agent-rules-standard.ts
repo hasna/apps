@@ -1,3 +1,5 @@
+import { ConfigNotFoundError } from "../types/index.js";
+import { isRetiredInstructionSource } from "./instruction-source-policy.js";
 import { createHash } from "node:crypto";
 import type { Config } from "../types/index.js";
 import { resolveConfigStore, type ConfigStore } from "../data/config-store.js";
@@ -379,10 +381,12 @@ export async function ensureGlobalAgentRulesStandardConfig(store: ConfigStore = 
   let existing: Config;
   try {
     existing = await store.getConfig(GLOBAL_AGENT_RULES_STANDARD_SLUG);
-  } catch {
+  } catch (error) {
+    if (!(error instanceof ConfigNotFoundError)) throw error;
     return await store.createConfig(standardConfigInput(resolveAgentOperatingRulesPayload(null)));
   }
 
+  if (isRetiredInstructionSource(existing)) return existing;
   const payload = resolveAgentOperatingRulesPayload(existing.content);
   const input = standardConfigInput(payload);
   if (

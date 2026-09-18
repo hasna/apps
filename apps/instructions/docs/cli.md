@@ -269,6 +269,7 @@ instructions restore <file> [--overwrite]
 ```text
 instructions session plan --tool <tool> --profile <profile> [options]
 instructions session apply --tool <tool> --profile <profile> [options]
+instructions session refresh --target-home <path> [--dry-run] [--json]
 instructions session restore <snapshot> [--dry-run] [--json]
 ```
 
@@ -285,12 +286,22 @@ instructions session restore <snapshot> [--dry-run] [--json]
 - `--allow-empty-sources`
 - `--json`
 
-`apply` additionally accepts `--dry-run` and `--force`. `--force` adopts or
-overwrites unmanaged files and permits removal of changed stale managed files;
-it does not disable path or symlink guards. See [Session
+`apply` additionally accepts `--dry-run`, `--adopt-file <relativepath=sha256>`,
+`--reconcile-file <relativepath=sha256>`, and `--expected-manifest-sha256 <sha256>`.
+Adoption is limited to reviewed unmanaged output preimages. Reconciliation is
+limited to reviewed owned drift and requires the exact observed manifest hash.
+Both record source mappings and restorable snapshots; unrelated conflicts still
+block. Legacy `--force` remains available but cannot be combined with these
+scoped operations. Path and symlink guards remain enforced.
+
+Hosted `--compile-profile` applies record a durable profile selector. `session
+refresh` fetches that profile, its bindings and sources from the same configured
+API on every invocation. It refuses local fallback, API failures, authority
+changes and target drift. Unchanged output is not rewritten. Run refresh before
+starting a consumer session and require a successful exit before launching it. See [Session
 rendering](session-rendering.md).
 
-Supported tools are `claude`, `codex`, `cursor`, `opencode`, `codewith`,
+Supported tools are `claude`, `codex`, `cursor`, `opencode`, `sumi`, `codewith`,
 `qwen`, `aicopilot`, and `antigravity`. Layer aliases are `provider` →
 `tool`, `project` → `repo`, and `identity` → `agent`.
 
@@ -391,9 +402,13 @@ exits. See [MCP reference](mcp.md).
 
 ## Setup, diagnostics, and maintenance
 
-- `init [--force]` syncs known configs, seeds managed reference configs,
-  creates `my-setup`, and ensures platform profiles. `--force` wipes the local
-  SQLite DB and is refused in API mode.
+- `init [--force] [--import-local]` seeds reusable reference records and creates
+  empty `my-setup`, `linux-arm64`, and `macos-arm64` profiles. Source membership
+  is never inferred from the registry: bind each reviewed provider/project/role
+  source explicitly. Public platform presets select only OS and architecture and
+  contain no fleet hostnames or workspace paths. Hosted initialization imports
+  known disk files only with `--import-local`; explicit local mode continues to
+  sync known configs. `--force` wipes the local SQLite DB and is refused in API mode.
 - `status [--json] [--deep]` reports the metadata-only status contract,
   including drift, missing targets, unredacted findings, retired-agent rows,
   and counts. `counts.profileLinks` and `counts.snapshots` need one API read

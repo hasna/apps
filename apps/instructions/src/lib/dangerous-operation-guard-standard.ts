@@ -1,3 +1,5 @@
+import { ConfigNotFoundError } from "../types/index.js";
+import { isRetiredInstructionSource } from "./instruction-source-policy.js";
 import type { Config } from "../types/index.js";
 import { resolveConfigStore, type ConfigStore } from "../data/config-store.js";
 
@@ -114,6 +116,7 @@ export async function ensureDangerousOperationGuardStandardConfig(store: ConfigS
 
   try {
     const existing = await store.getConfig(DANGEROUS_OPERATION_GUARD_STANDARD_SLUG);
+    if (isRetiredInstructionSource(existing)) return existing;
     if (
       existing.content !== input.content
       || existing.description !== input.description
@@ -126,7 +129,8 @@ export async function ensureDangerousOperationGuardStandardConfig(store: ConfigS
       return await store.updateConfig(existing.id, input);
     }
     return existing;
-  } catch {
+  } catch (error) {
+    if (!(error instanceof ConfigNotFoundError)) throw error;
     return await store.createConfig(input);
   }
 }

@@ -20,6 +20,33 @@ describe("InstructionsV1Client mixed-version compatibility", () => {
     expect(client).toBeInstanceOf(GeneratedInstructionsV1Client);
   });
 
+  test.each(["updateConfig", "putConfig"] as const)("%s with expected_version fails closed on an older server", async (method) => {
+    const calls: Array<{ path: string; method?: string }> = [];
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = new URL(String(input)).pathname;
+      calls.push({ path, method: init?.method });
+      return path.endsWith("/conditional-update")
+        ? new Response(JSON.stringify({ error: "unknown config action" }), { status: 404 })
+        : jsonResponse({ config: { content: "unconditional mutation" } });
+    }) as typeof fetch;
+    const client = new InstructionsV1Client({ baseUrl: "https://api.hasna.com/instructions", fetch: fetchImpl });
+    await expect(client[method]("config/id", { content: "candidate", expected_version: 7 })).rejects.toMatchObject({ status: 404 });
+    expect(calls).toEqual([{ path: "/instructions/v1/configs/config%2Fid/conditional-update", method: "POST" }]);
+  });
+
+  test("generated SDK exposes a conditional-only operation requiring a version", async () => {
+    let request: { path: string; method?: string; body: unknown } | undefined;
+    const client = new GeneratedInstructionsV1Client({
+      baseUrl: "https://api.hasna.com/instructions",
+      fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
+        request = { path: new URL(String(input)).pathname, method: init?.method, body: JSON.parse(String(init?.body)) };
+        return jsonResponse({ config: { id: "c1", version: 8 } });
+      }) as typeof fetch,
+    });
+    expect(await client.conditionalUpdateConfig("c1", { content: "candidate", expected_version: 7 })).toMatchObject({ config: { version: 8 } });
+    expect(request).toEqual({ path: "/instructions/v1/configs/c1/conditional-update", method: "POST", body: { content: "candidate", expected_version: 7 } });
+  });
+
   test("normalizes production 0.5 legacy config/profile/machine arrays into bounded envelopes", async () => {
     const fetchImpl = (async (input: RequestInfo | URL) => {
       const url = new URL(String(input));

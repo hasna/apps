@@ -86,6 +86,10 @@ export function buildOpenCodeAgentsMd(source: Config, context: TransformContext 
   return flattenWithRules(source, context);
 }
 
+export function buildSumiAgentsMd(source: Config, context: TransformContext = {}): string {
+  return flattenWithRules(source, context);
+}
+
 export function buildCursorMdc(source: Config): string {
   const stem = source.target_path
     ? basename(source.target_path, extname(source.target_path))
@@ -129,6 +133,8 @@ export function applyTransform(
       return buildCodexAgentsMd(source, context);
     case "opencode-flat":
       return buildOpenCodeAgentsMd(source, context);
+    case "sumi-flat":
+      return buildSumiAgentsMd(source, context);
     case "cursor-mdc":
       return buildCursorMdc(source);
     case "skill-neutral":

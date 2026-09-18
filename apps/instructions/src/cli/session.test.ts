@@ -858,7 +858,7 @@ describe("configs session CLI -- global-source coverage gate (O15-00694)", () =>
     mkdirSync(join(home, "sources"), { recursive: true });
     const sourcePath = join(home, "sources", "global-fix-lane-regression.md");
     writeFileSync(sourcePath, sourceBody);
-    const seeded = runCli(["add", sourcePath, "--name", "global-fix-lane-regression", "--category", "agent", "--agent", "global"], env);
+    const seeded = runCli(["add", sourcePath, "--name", "global-fix-lane-regression", "--category", "rules", "--agent", "global"], env);
     const list = runCli(["list", "--json"], env);
     expect(
       seeded.status,

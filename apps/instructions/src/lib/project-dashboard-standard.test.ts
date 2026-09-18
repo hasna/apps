@@ -64,7 +64,7 @@ describe("project dashboard standard", () => {
     expect(stored.version).toBe(2);
   });
 
-  test("platform profiles include project variables and link the standard config", async () => {
+  test("platform profiles include generic project variables without implicitly linking the standard config", async () => {
     const standard = await ensureProjectDashboardStandardConfig(new LocalConfigStore(db));
     const profiles = await ensurePlatformProfiles(new LocalConfigStore(db));
 
@@ -75,7 +75,7 @@ describe("project dashboard standard", () => {
     for (const profile of profiles) {
       expect(profile.variables).toMatchObject(PROJECT_DASHBOARD_PROFILE_VARIABLES);
       expect(profile.variables.PROJECT_CHANNEL_PREFIX).toBe("");
-      expect(getProfileConfigs(profile.id, db).map((config) => config.id)).toContain(standard.id);
+      expect(getProfileConfigs(profile.id, db).map((config) => config.id)).not.toContain(standard.id);
     }
   });
 
@@ -97,7 +97,7 @@ describe("project dashboard standard", () => {
     expect(linux.variables.CUSTOM_VALUE).toBe("preserved");
   });
 
-  test("reconciles station01 selectors and preset variables without dropping custom values", async () => {
+  test("preserves explicit hostname selectors and preset variables without seeding private hostnames", async () => {
     const store = new LocalConfigStore(db);
     const existing = await store.createProfile({
       name: "linux-arm64",
@@ -108,13 +108,13 @@ describe("project dashboard standard", () => {
     const profiles = await ensurePlatformProfiles(store);
     const linux = profiles.find((profile) => profile.id === existing.id)!;
     const resolved = await store.resolveProfileForMachine(detectMachineContext({
-      hostname: "station01",
+      hostname: "custom-linux",
       os: "linux",
       arch: "arm64",
-      home_dir: "/home/hasna",
+      home_dir: "/home/example",
     }));
 
-    expect(linux.selectors.hostnames).toEqual(expect.arrayContaining(["custom-linux", "station01"]));
+    expect(linux.selectors.hostnames).toEqual(["custom-linux"]);
     expect(linux.variables).toMatchObject({
       CUSTOM_VALUE: "preserved",
       BUN_BIN_DIR: "{{HOME_DIR}}/.bun/bin",

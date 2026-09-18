@@ -178,6 +178,7 @@ export type {
 } from "./lib/asset-plan.js";
 export { providerVersionSatisfies } from "./lib/provider-version.js";
 export type {
+  SessionHostedProfileSelector,
   SessionInstructionLayer,
   SessionInstructionMerge,
   SessionInstructionOwner,
@@ -206,6 +207,8 @@ export {
   restoreSessionRenderSnapshot,
   SessionApplyError,
 } from "./lib/session-apply.js";
+export { normalizeSessionHostedProfileSelector, refreshSessionRender } from "./lib/session-refresh.js";
+export type { SessionRefreshResult } from "./lib/session-refresh.js";
 
 // Lib — strict Projects context bundle rendering
 export {
@@ -243,13 +246,16 @@ export type {
   SessionApplyResult,
   SessionDriftCheck,
   SessionDriftEntry,
+  SessionFileAdoption,
+  SessionFileAdoptionReceipt,
+  SessionFileReconciliationReceipt,
   SessionRestoreConflict,
   SessionRestoreFileResult,
   SessionRestoreOptions,
   SessionRestoreResult,
 } from "./lib/session-apply.js";
 // Lib — transforms
-export { applyTransform, buildCodexAgentsMd, buildCursorMdc, buildOpenCodeAgentsMd, stripClaudeOnlySections, transformSkillContent } from "./lib/transforms.js";
+export { applyTransform, buildCodexAgentsMd, buildCursorMdc, buildOpenCodeAgentsMd, buildSumiAgentsMd, stripClaudeOnlySections, transformSkillContent } from "./lib/transforms.js";
 export type { TransformContext } from "./lib/transforms.js";
 
 // Lib — machine

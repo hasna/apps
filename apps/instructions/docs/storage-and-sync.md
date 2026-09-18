@@ -149,12 +149,12 @@ Kinds:
 Categories are `agent`, `rules`, `mcp`, `shell`, `secrets_schema`, `workspace`,
 `git`, and `tools`.
 
-Active agent values are `claude`, `codex`, `opencode`, `cursor`, `codewith`,
+Active agent values are `claude`, `codex`, `opencode`, `sumi`, `cursor`, `codewith`,
 `aicopilot`, `antigravity`, `qwen`, `zsh`, `git`, `npm`, and `global`.
 
 Formats are `text`, `json`, `toml`, `yaml`, `markdown`, and `ini`. Fan-out
 transforms are `passthrough`, `claude-passthrough`, `codex-flat`,
-`opencode-flat`, `cursor-mdc`, and `skill-neutral`.
+`opencode-flat`, `sumi-flat`, `cursor-mdc`, and `skill-neutral`.
 
 Updating a config increments its version. Applying changed content over an
 existing target stores the prior bytes as a config snapshot before writing.
@@ -189,6 +189,10 @@ Cursor MDC files.
 Before storage, sync redacts secret-like content and templateizes detected
 machine paths. Existing records are matched by target path or generated slug.
 Files over 500 KiB are skipped by project sync.
+
+Sumi is an active config owner and session renderer, but has no guessed known-sync
+path. Import its resolved `AGENTS.md` explicitly. Use the Sumi session renderer
+with `--target-home <resolved-config>` or `--project-root <repository>`.
 
 ## Project sync
 

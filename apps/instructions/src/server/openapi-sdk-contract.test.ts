@@ -45,6 +45,7 @@ describe("Instructions complete OpenAPI and generated SDK contract", () => {
       "category",
       "content",
       "description",
+      "expected_version",
       "format",
       "is_template",
       "kind",
@@ -58,6 +59,10 @@ describe("Instructions complete OpenAPI and generated SDK contract", () => {
     expect(updateConfig.target_path).toMatchObject({ type: "string", nullable: true });
     expect(updateConfig.synced_at).toMatchObject({ type: "string", nullable: true });
     expect(updateConfig.outputs).toEqual({ type: "array", items: { type: "object" } });
+    expect(updateConfig.expected_version).toMatchObject({ type: "integer", minimum: 1 });
+    expect(schemas.ConditionalUpdateConfigInput.required).toEqual(["expected_version"]);
+    expect(schemas.ConditionalUpdateConfigInput.properties).toEqual(updateConfig);
+    expect(spec.paths["/v1/configs/{id}/conditional-update"].post.operationId).toBe("conditionalUpdateConfig");
 
     expect(schemas.UpdateProfileInput.properties.description).toMatchObject({
       type: "string",
@@ -79,6 +84,7 @@ describe("Instructions complete OpenAPI and generated SDK contract", () => {
     expect(generated).toContain("export interface FeedbackInput");
     expect(generated).toContain("export interface MachineAppliedInput");
     expect(generated).toContain("export interface PruneSnapshotsInput");
+    expect(generated).toContain("async conditionalUpdateConfig(id: string, body: ConditionalUpdateConfigInput");
     expect(generated).toContain("async updateConfig(id: string, body: UpdateConfigInput");
     expect(generated).toContain("async putConfig(id: string, body: UpdateConfigInput");
     expect(generated).toContain("async updateProfile(id: string, body: UpdateProfileInput");
