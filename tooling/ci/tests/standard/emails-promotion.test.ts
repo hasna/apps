@@ -52,4 +52,5 @@ test("Emails authority is only behind explicit main CI and production review", (
   expect(checks).toBeGreaterThanOrEqual(0);
   expect(checks).toBeLessThan(aws);
   expect(String(steps.find(s => String(s.run).includes("emails-current/gate.py"))?.run)).toContain('test "$RECIPE" = "search-capacity"');
+  expect(String(steps.find(s => String(s.run).includes("emails-migration/gate.py"))?.run)).toContain('test "$RECIPE" = "search-capacity"');
 });
