@@ -5,10 +5,10 @@ const root = resolve(import.meta.dir, "../../../.."), workflow = readFileSync(re
 type Workflow = { permissions: unknown; jobs: Record<string, any> };
 const step = (job: any, name: string) => job?.steps?.find((row: any) => row.name === name);
 function problems(source: Workflow, executable: string): string[] {
-  const out: string[] = [], jobs = source.jobs, planner = jobs["affected-plan"], shard = jobs["affected-shard"], aggregate = jobs["build-test"];
+  const out: string[] = [], jobs = source.jobs, livePg = jobs["loops-live-postgres"], planner = jobs["affected-plan"], shard = jobs["affected-shard"], aggregate = jobs["build-test"];
   const require = (ok: unknown, label: string) => { if (!ok) out.push(label); };
   require(JSON.stringify(source.permissions) === JSON.stringify({ contents: "read" }), "read-only workflow");
-  require(JSON.stringify(Object.keys(jobs)) === JSON.stringify(["gates", "test-suites", "affected-plan", "affected-shard", "build-test", "client-gates", "verify-generated", "publish-guard"]), "explicit complete job topology");
+  require(JSON.stringify(Object.keys(jobs)) === JSON.stringify(["gates", "test-suites", "loops-live-postgres", "affected-plan", "affected-shard", "build-test", "client-gates", "verify-generated", "publish-guard"]), "explicit complete job topology");
   for (const [name, job] of Object.entries(jobs)) {
     require(job.permissions === undefined && job["continue-on-error"] === undefined, `${name}: no permission or failure override`);
   }
@@ -23,7 +23,13 @@ function problems(source: Workflow, executable: string): string[] {
   require(shard?.strategy?.matrix === "${{ fromJSON(needs.affected-plan.outputs.matrix) }}", "planner is sole matrix authority");
   require(planner?.env?.NODE_OPTIONS === "--max-old-space-size=14336" && shard?.env?.NODE_OPTIONS === "--max-old-space-size=14336", "preserved memory cap");
   require(step(shard, "Execute serial affected shard")?.run === 'bun tooling/ci/run-affected-shards.ts shard "$RUNNER_TEMP/affected-plan/plan.json" "$AFFECTED_PLAN_SHA256" "$AFFECTED_SHARD" "$RUNNER_TEMP/affected-shard"', "task IDs stay in validated argv");
-  require(aggregate?.name === "build + test (affected)" && aggregate.if === "${{ always() }}" && JSON.stringify(aggregate.needs) === JSON.stringify(["affected-plan", "affected-shard"]), "required aggregate runs after every outcome");
+  require(aggregate?.name === "build + test (affected)" && aggregate.if === "${{ always() }}" && JSON.stringify(aggregate.needs) === JSON.stringify(["affected-plan", "affected-shard", "loops-live-postgres"]), "required aggregate runs after every outcome");
+  require(livePg?.name === "loops live PostgreSQL import integrity" && livePg?.["runs-on"] === "ubuntu-latest", "live PostgreSQL proof is a required root job");
+  require(livePg?.services?.postgres?.image?.startsWith("postgres:16-alpine@sha256:"), "live PostgreSQL proof pins PostgreSQL 16");
+  const liveStep = step(livePg, "Prove orphan preflight and forced rollback on PostgreSQL 16");
+  require(liveStep?.env?.LOOPS_IMPORT_CI_DATABASE_URL === "postgres://postgres@127.0.0.1:5432/loops_import_ci", "live PostgreSQL proof uses only its disposable service database");
+  require(liveStep?.run?.includes("postgres-import-ci.ts") && liveStep.run.includes("0 fail") && liveStep.run.includes("skip"), "live PostgreSQL proof executes both import regressions and refuses skips");
+  require(step(aggregate, "Require live PostgreSQL import integrity proof")?.if === "${{ always() }}", "aggregate requires the live PostgreSQL proof after every outcome");
   require(step(aggregate, "Verify complete disjoint task execution")?.if === "${{ always() }}", "aggregate validation never skips on failure");
   require(aggregate?.env?.AFFECTED_MATRIX_RESULT === "${{ needs.affected-shard.result }}", "aggregate binds actual matrix result");
   for (const [job, name] of [[planner, "Retain immutable affected plan"], [shard, "Retain shard terminal evidence"], [aggregate, "Retain aggregate acceptance"]] as const) {

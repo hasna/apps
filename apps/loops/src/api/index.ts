@@ -646,8 +646,8 @@ function safeImportedLoop(loop: Loop, opts: { preserveLoopScheduling: boolean })
 /**
  * Bulk id-preserving import for a local->self-hosted backfill.
  *
- * Accepts batches of full `workflows` / `loops` / `runs` rows (the same public
- * shapes that `loops export` emits) and upserts them by id via the storage
+ * Accepts batches of strict full-fidelity `workflows` / `loops` / `runs` rows
+ * (not the smaller public list projections) and upserts them by id via the storage
  * `upsertMigration*` methods. Backfill safety is enforced at this API boundary:
  * workflows are archived and loops are paused with scheduling pointers cleared
  * unless explicit preserve flags are supplied. Rows are applied in FK-safe order

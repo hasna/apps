@@ -103,7 +103,55 @@ export interface WorkflowWorkItemResponse { "ok": boolean; "workItem": WorkflowW
 
 export interface WorkflowWorkItemListResponse { "ok": boolean; "workItems": Array<WorkflowWorkItem> }
 
-export interface ImportInput { "operationId"?: string; "workflows"?: Array<Workflow>; "loops"?: Array<Loop>; "runs"?: Array<Run>; "replace"?: boolean; "preserveLoopScheduling"?: boolean; "preserveWorkflowActivation"?: boolean }
+export interface ImportAccountRef { "profile": string; "tool"?: string }
+
+export interface ImportRuntimePreflightPolicy { "beforeRun"?: boolean }
+
+export interface ImportGoalSpec { "objective": string; "tokenBudget"?: number; "maxTurns"?: number; "maxTokens"?: number; "model"?: string; "autoExecute"?: "off" | "readyOnly" | "aiDirected" }
+
+export interface ImportAgentAllowlist { "tools"?: Array<string>; "commands"?: Array<string>; "enforcement"?: "metadata_only"; "safetyReason"?: string }
+
+export interface ImportAgentWorktree { "mode": "auto" | "required" | "off" | "main"; "enabled": boolean; "originalCwd": string; "cwd": string; "repoRoot"?: string; "root"?: string; "path"?: string; "branch"?: string; "reason"?: string }
+
+export interface ImportAgentRouting { "projectPath"?: string; "projectGroup"?: string; "taskId"?: string; "eventId"?: string; "eventType"?: string; "eventSource"?: string; "role"?: "triage" | "planner" | "worker" | "verifier" }
+
+export interface ImportAgentPromptSource { "type": "file"; "path": string }
+
+export interface ImportCommandTarget { "type": "command"; "command": string; "args"?: Array<string>; "cwd"?: string; "shell"?: boolean; "env"?: Record<string, string>; "timeoutMs"?: number | null; "idleTimeoutMs"?: number; "account"?: ImportAccountRef; "preflight"?: ImportRuntimePreflightPolicy }
+
+export interface ImportAgentTarget { "type": "agent"; "provider": "claude" | "cursor" | "codewith" | "aicopilot" | "opencode" | "codex"; "prompt": string; "promptSource"?: ImportAgentPromptSource; "cwd"?: string; "model"?: string; "variant"?: string; "agent"?: string; "authProfile"?: string; "env"?: Record<string, string>; "extraArgs"?: Array<string>; "addDirs"?: Array<string>; "timeoutMs"?: number | null; "idleTimeoutMs"?: number; "configIsolation"?: "safe" | "none"; "permissionMode"?: "default" | "plan" | "auto" | "bypass"; "sandbox"?: "read-only" | "workspace-write" | "danger-full-access" | "enabled" | "disabled"; "manualBreakGlass"?: boolean; "automated"?: boolean; "allowlist"?: ImportAgentAllowlist; "worktree"?: ImportAgentWorktree; "routing"?: ImportAgentRouting; "account"?: ImportAccountRef; "preflight"?: ImportRuntimePreflightPolicy }
+
+export type ImportExecutableTarget = ImportCommandTarget | ImportAgentTarget;
+
+export interface ImportWorkflowTarget { "type": "workflow"; "workflowId": string; "input"?: Record<string, string>; "timeoutMs"?: number | null; "preflight"?: ImportRuntimePreflightPolicy }
+
+export type ImportLoopTarget = ImportCommandTarget | ImportAgentTarget | ImportWorkflowTarget;
+
+export interface ImportOnceSchedule { "type": "once"; "at": string }
+
+export interface ImportIntervalSchedule { "type": "interval"; "everyMs": number; "anchor"?: "fixed_rate" | "fixed_delay" }
+
+export interface ImportCronSchedule { "type": "cron"; "expression": string }
+
+export interface ImportDynamicSchedule { "type": "dynamic"; "minIntervalMs"?: number }
+
+export type ImportSchedule = ImportOnceSchedule | ImportIntervalSchedule | ImportCronSchedule | ImportDynamicSchedule;
+
+export interface ImportWorkflowStep { "id": string; "name"?: string; "description"?: string; "target": ImportExecutableTarget; "goal"?: ImportGoalSpec; "dependsOn"?: Array<string>; "continueOnFailure"?: boolean; "timeoutMs"?: number | null; "account"?: ImportAccountRef }
+
+export interface ImportWorkflow { "id": string; "name": string; "description"?: string; "version": number; "status": "active" | "archived"; "goal"?: ImportGoalSpec; "steps": Array<ImportWorkflowStep>; "createdAt": string; "updatedAt": string }
+
+export interface ImportLoopMachineRef { "id": string; "requestedId"?: string; "route"?: "local" | "lan" | "tailscale" | "ssh" | "unknown"; "local"?: boolean; "confidence"?: "exact" | "high" | "medium" | "low" | "none"; "workspacePath"?: string; "resolvedAt"?: string; "packageVersion"?: string; "warnings"?: Array<string> }
+
+export interface ImportLoop { "id": string; "name": string; "description"?: string; "labels"?: Array<string>; "status": "active" | "paused" | "stopped" | "expired"; "archivedAt"?: string; "archivedFromStatus"?: "active" | "paused" | "stopped" | "expired"; "schedule": ImportSchedule; "target": ImportLoopTarget; "goal"?: ImportGoalSpec; "machine"?: ImportLoopMachineRef; "nextRunAt"?: string; "retryScheduledFor"?: string; "catchUp": "none" | "latest" | "all"; "catchUpLimit": number; "overlap": "skip" | "allow"; "maxAttempts": number; "retryDelayMs": number; "leaseMs": number; "expiresAt"?: string; "expiresAfterRuns"?: number; "bundleName"?: string; "bundlePinnedVersion"?: number; "latestRunId"?: string; "latestRunStatus"?: "running" | "succeeded" | "failed" | "timed_out" | "abandoned" | "skipped"; "lastRunAt"?: string; "createdAt": string; "updatedAt": string }
+
+export interface ImportRunningRun { "id": string; "loopId": string; "loopName": string; "scheduledFor": string; "attempt": number; "startedAt"?: string; "claimedBy"?: string; "leaseExpiresAt"?: string; "pid"?: number; "pgid"?: number; "processStartedAt"?: string; "exitCode"?: number; "durationMs"?: number; "stdout"?: string; "stderr"?: string; "error"?: string; "goalRunId"?: string; "createdAt": string; "updatedAt": string; "status": "running" }
+
+export interface ImportTerminalRun { "id": string; "loopId": string; "loopName": string; "scheduledFor": string; "attempt": number; "startedAt"?: string; "claimedBy"?: string; "leaseExpiresAt"?: string; "pid"?: number; "pgid"?: number; "processStartedAt"?: string; "exitCode"?: number; "durationMs"?: number; "stdout"?: string; "stderr"?: string; "error"?: string; "goalRunId"?: string; "createdAt": string; "updatedAt": string; "status": "succeeded" | "failed" | "timed_out" | "abandoned" | "skipped"; "finishedAt": string }
+
+export type ImportRun = ImportRunningRun | ImportTerminalRun;
+
+export interface ImportInput { "operationId"?: string; "workflows"?: Array<ImportWorkflow>; "loops"?: Array<ImportLoop>; "runs"?: Array<ImportRun>; "replace"?: boolean; "preserveLoopScheduling"?: boolean; "preserveWorkflowActivation"?: boolean }
 
 export interface ImportResponse { "ok": boolean; "imported": { "workflows": number; "loops": number; "runs": number }; "skippedRunning": number; "skippedExisting": { "workflows": number; "loops": number; "runs": number }; "receipt": ImportReceiptV2 }
 

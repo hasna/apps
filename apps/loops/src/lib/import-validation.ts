@@ -12,7 +12,13 @@ import { validateAgentTarget } from "./agent-adapter.js";
 import { MigrationImportInvalidError } from "./errors.js";
 import { normalizeLoopLabels } from "./labels.js";
 import { validateLoopMachineRef } from "./machines.js";
-import { validImportOperationId, type ImportContractInput } from "./import-contract.js";
+import {
+  validImportOperationId,
+  type ImportContractInput,
+  type ImportLoopRow,
+  type ImportRunRow,
+  type ImportWorkflowRow,
+} from "./import-contract.js";
 import { isExpiresAfterRuns, isLeaseMs, isLoopStatus, isMaxAttempts } from "./loop-status.js";
 import { parseCron } from "./recurrence.js";
 import { normalizeGoalSpec, workflowExecutionOrder } from "./workflow-spec.js";
@@ -23,9 +29,9 @@ const CATCH_UP_POLICIES = new Set(["none", "latest", "all"]);
 const OVERLAP_POLICIES = new Set(["skip", "allow"]);
 
 export interface ValidatedImportRequest extends ImportContractInput {
-  workflows: WorkflowSpec[];
-  loops: Loop[];
-  runs: LoopRun[];
+  workflows: ImportWorkflowRow[];
+  loops: ImportLoopRow[];
+  runs: ImportRunRow[];
 }
 
 function invalid(): never {
@@ -121,6 +127,7 @@ function goal(value: unknown): void {
   if (value === undefined) return;
   const row = record(value);
   onlyKeys(row, ["objective", "tokenBudget", "maxTurns", "maxTokens", "model", "autoExecute"]);
+  optionalString(row.model);
   normalizeGoalSpec(row);
 }
 

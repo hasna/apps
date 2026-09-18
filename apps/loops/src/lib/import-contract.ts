@@ -3,11 +3,15 @@ import type { Loop, LoopRun, WorkflowSpec } from "../types.js";
 
 export const LOOPS_IMPORT_RECEIPT_CONTRACT = "loops.import.v2" as const;
 
+export type ImportWorkflowRow = WorkflowSpec;
+export type ImportLoopRow = Loop;
+export type ImportRunRow = LoopRun;
+
 export interface ImportContractInput {
   operationId?: string;
-  workflows?: WorkflowSpec[];
-  loops?: Loop[];
-  runs?: LoopRun[];
+  workflows?: ImportWorkflowRow[];
+  loops?: ImportLoopRow[];
+  runs?: ImportRunRow[];
   replace?: boolean;
   preserveLoopScheduling?: boolean;
   preserveWorkflowActivation?: boolean;
