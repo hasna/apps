@@ -865,9 +865,9 @@ const toolContracts: McpToolContract[] = [
 const remoteCustomerContracts: McpToolContract[] = REMOTE_CUSTOMER_OPERATIONS.map(operation => ({
   name: operation.name, title: operation.title,
   description: `${operation.title} on the configured server; unavailable capabilities fail explicitly.`,
-  params: operation.parameter ? [operation.parameter] : [], category: "execution",
+  params: operation.parameter ? [operation.parameter, ...(operation.name === "create_credit_checkout" ? ["idempotency_key?"] : [])] : [], category: "execution",
   sideEffects: operation.mutates ? "local-process-or-remote-run" : "none", stable: true,
-  inputSchema: objectSchema(operation.parameter ? { [operation.parameter]: stringSchema("Server resource identifier.") } : {}, operation.parameter ? [operation.parameter] : []),
+  inputSchema: objectSchema(operation.parameter ? { [operation.parameter]: stringSchema("Server resource identifier."), ...(operation.name === "create_credit_checkout" ? { idempotency_key: { type: "string", pattern: "^[A-Za-z0-9._:-]{8,255}$", description: "Caller-owned key retained before submission; reuse only for explicit recovery of the same server/account/pack." } } : {}) } : {}, operation.parameter ? [operation.parameter] : []),
   outputSchema: { oneOf: [objectSchema({}, [], "Server response.", true), { type: "array", items: objectSchema({}, [], "Server record.", true) }] },
 }));
 remoteCustomerContracts.push({

@@ -179,12 +179,19 @@ export interface MessageFilters {
   project_id?: string;
   type?: MessageType;
   limit?: number;
+  offset?: number;
 }
 
 export interface CallFilters {
   agent_id?: string;
   project_id?: string;
   limit?: number;
+  offset?: number;
+}
+
+export interface TelephonyPage<T> {
+  items: T[];
+  total: number | null;
 }
 
 export interface VoicemailFilters {
@@ -242,6 +249,7 @@ export interface TelephonyStore {
   /** Attach the media-copy pointers (object_key + sha256) to an existing message row. */
   updateMessageMedia(id: string, extra: { object_key: string; sha256: string }): Promise<void>;
   listMessages(filters?: MessageFilters): Promise<Message[]>;
+  listMessagesPage(filters?: MessageFilters): Promise<TelephonyPage<Message>>;
   searchMessages(query: string, limit?: number): Promise<Message[]>;
   getConversation(phoneNumber: string, limit?: number): Promise<Message[]>;
 
@@ -255,6 +263,7 @@ export interface TelephonyStore {
   /** Find a call row by its provider SID — what a Twilio webhook knows before it can address the row by id. */
   getCallByTwilioSid(twilioSid: string): Promise<Call | null>;
   listCalls(filters?: CallFilters): Promise<Call[]>;
+  listCallsPage(filters?: CallFilters): Promise<TelephonyPage<Call>>;
 
   // Voicemails
   createVoicemail(input: CreateVoicemailInput): Promise<Voicemail>;
@@ -409,6 +418,9 @@ export class LocalStore implements TelephonyStore {
   async listMessages(filters?: MessageFilters) {
     return (await this.impl()).listMessages(filters);
   }
+  async listMessagesPage(filters?: MessageFilters) {
+    return (await this.impl()).listMessagesPage(filters);
+  }
   async searchMessages(query: string, limit?: number) {
     return (await this.impl()).searchMessages(query, limit);
   }
@@ -432,6 +444,9 @@ export class LocalStore implements TelephonyStore {
   }
   async listCalls(filters?: CallFilters) {
     return (await this.impl()).listCalls(filters);
+  }
+  async listCallsPage(filters?: CallFilters) {
+    return (await this.impl()).listCallsPage(filters);
   }
 
   // Voicemails
@@ -524,6 +539,16 @@ export class ApiStore implements TelephonyStore {
       }
     }
     return (await this.cloud.list<T>(resource, { query: q })).items;
+  }
+
+  private async listPage<T>(resource: string, query?: Record<string, string | number | undefined>): Promise<TelephonyPage<T>> {
+    const q: Record<string, string | number> = {};
+    if (query) for (const [key, value] of Object.entries(query)) if (value !== undefined) q[key] = value;
+    const page = await this.cloud.list<T>(resource, { query: q });
+    const raw = page.raw as { total?: unknown } | undefined;
+    const candidate = raw?.total ?? (page as { total?: unknown }).total;
+    const total = typeof candidate === "number" && Number.isSafeInteger(candidate) && candidate >= 0 ? candidate : null;
+    return { items: page.items, total };
   }
 
   // Agents
@@ -647,7 +672,10 @@ export class ApiStore implements TelephonyStore {
     await this.cloud.update<Message>("messages", id, extra);
   }
   async listMessages(filters?: MessageFilters) {
-    return this.listAll<Message>("messages", { ...filters });
+    return (await this.listMessagesPage(filters)).items;
+  }
+  async listMessagesPage(filters?: MessageFilters) {
+    return this.listPage<Message>("messages", { ...filters });
   }
   async searchMessages(query: string, limit?: number) {
     // Full-table body search served DB-side (`search` param): case-insensitive
@@ -684,7 +712,10 @@ export class ApiStore implements TelephonyStore {
     return items[0] ?? null;
   }
   async listCalls(filters?: CallFilters) {
-    return this.listAll<Call>("calls", { ...filters });
+    return (await this.listCallsPage(filters)).items;
+  }
+  async listCallsPage(filters?: CallFilters) {
+    return this.listPage<Call>("calls", { ...filters });
   }
 
   // Voicemails

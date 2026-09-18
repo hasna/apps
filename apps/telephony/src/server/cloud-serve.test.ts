@@ -147,6 +147,10 @@ describe("telephony cloud serve", () => {
     };
     expect(Object.keys(doc.paths).length).toBeGreaterThanOrEqual(10);
     expect(doc.paths["/v1/contacts"]).toBeDefined();
+    for (const path of ["/v1/messages", "/v1/calls"]) {
+      const operation = doc.paths[path] as { get: { parameters: Array<{ name: string; in: string; schema: { type: string } }> } };
+      expect(operation.get.parameters).toContainEqual({ name: "offset", in: "query", schema: { type: "integer" } });
+    }
     expect(doc.components.securitySchemes.apiKey).toBeDefined();
   });
 
@@ -322,6 +326,54 @@ describe("telephony cloud serve", () => {
     const verifier = verifyApiKey({ app: "telephony", signingSecret: SIGNING, keyStatus: store.keyStatus });
     return { deps: { client, verifier, store, version: "9.9.9" }, sql };
   }
+
+  it("applies message/call offsets and returns authoritative totals without overlap", async () => {
+    const messages = Array.from({ length: 45 }, (_, index) => ({
+      id: `message-${index}`, type: "sms_inbound", from_number: "+1", to_number: "+2", body: `body ${index}`,
+      media_url: null, object_key: null, sha256: null, status: "received", agent_id: null, project_id: null,
+      twilio_sid: null, error_message: null, metadata: "{}", created_at: new Date(45 - index), updated_at: new Date(45 - index),
+    }));
+    const calls = Array.from({ length: 45 }, (_, index) => ({
+      id: `call-${index}`, direction: "inbound", from_number: "+1", to_number: "+2", status: "completed",
+      duration: 1, recording_url: null, object_key: null, sha256: null, transcription: null, agent_id: null,
+      project_id: null, twilio_sid: null, metadata: "{}", started_at: new Date(45 - index), ended_at: new Date(45 - index), created_at: new Date(45 - index),
+    }));
+    const run = (text: string, params: readonly unknown[] = []) => {
+      const sql = text.replace(/\s+/g, " ").trim().toLowerCase();
+      if (sql.startsWith("select 1")) return { rows: [{ ok: 1 }], rowCount: 1 };
+      if (sql.includes("from api_keys")) return { rows: [{ kid: params[0], app: "telephony", scopes: [], token_hash: "x", issued_at: new Date(0).toISOString(), expires_at: null, revoked_at: null }], rowCount: 1 };
+      const source = sql.includes("from messages") ? messages : sql.includes("from calls") ? calls : null;
+      if (source && sql.startsWith("select count(*)")) return { rows: [{ count: String(source.length) }], rowCount: 1 };
+      if (source && sql.startsWith("select *")) {
+        const limit = Number(sql.match(/limit (\d+)/)?.[1] ?? source.length);
+        const offset = Number(sql.match(/offset (\d+)/)?.[1] ?? 0);
+        const rows = source.slice(offset, offset + limit);
+        return { rows, rowCount: rows.length };
+      }
+      return { rows: [], rowCount: 0 };
+    };
+    const client = {
+      async query(t: string, p?: readonly unknown[]) { return run(t, p); }, async many(t: string, p?: readonly unknown[]) { return run(t, p).rows; },
+      async get(t: string, p?: readonly unknown[]) { return run(t, p).rows[0] ?? null; }, async one(t: string, p?: readonly unknown[]) { return run(t, p).rows[0]; },
+      async execute(t: string, p?: readonly unknown[]) { run(t, p); }, pool: {} as never,
+      async transaction<T>(fn: (c: unknown) => Promise<T>) { return fn(client); }, async close() {},
+    } as unknown as PoolQueryClient;
+    const store = new ApiKeyStore(client);
+    const verifier = verifyApiKey({ app: "telephony", signingSecret: SIGNING, keyStatus: store.keyStatus });
+    const handler = createServeHandler({ client, verifier, store, version: "9.9.9" });
+    const key = mintApiKey({ app: "telephony", scopes: ["telephony:read"], signingSecret: SIGNING }).token;
+    const read = async (resource: "messages" | "calls", offset: number) => {
+      const response = await handler(new Request(`http://x/v1/${resource}?limit=20&offset=${offset}`, { headers: { "x-api-key": key } }));
+      return await response.json() as { items: Array<{ id: string }>; total: number };
+    };
+    for (const resource of ["messages", "calls"] as const) {
+      const first = await read(resource, 0); const second = await read(resource, 20); const third = await read(resource, 40);
+      expect(first.total).toBe(45); expect(second.total).toBe(45); expect(third.total).toBe(45);
+      const ids = [...first.items, ...second.items, ...third.items].map((row) => row.id);
+      expect(new Set(ids).size).toBe(45);
+      expect(third.items).toHaveLength(5);
+    }
+  });
 
   it("filters /v1/numbers by exact number DB-side (not a client scan)", async () => {
     const { deps: d, sql } = capturingDeps();

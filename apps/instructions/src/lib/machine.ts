@@ -45,7 +45,8 @@ export function detectMachineContext(
     created_at: "",
     os_family: osFamily,
     home_dir: homeDir,
-    workspace_root: overrides.workspace_root ?? join(homeDir, osFamily === "macos" ? "Workspace" : "workspace"),
+    // A workspace is an explicit project setting, not an OS-specific home child.
+    workspace_root: overrides.workspace_root ?? "",
     bun_bin_dir: bunBinDir,
     bun_path: overrides.bun_path ?? defaultBunPath,
     path_prefix: overrides.path_prefix ?? (osFamily === "macos" ? `${join("/opt", "homebrew", "bin")}:${bunBinDir}` : bunBinDir),
@@ -59,7 +60,7 @@ export function machineContextToVariables(machine: MachineContext): ProfileVaria
     OS_FAMILY: machine.os_family,
     ARCH: machine.arch ?? "",
     HOME_DIR: machine.home_dir,
-    WORKSPACE_ROOT: machine.workspace_root,
+    ...(machine.workspace_root ? { WORKSPACE_ROOT: machine.workspace_root } : {}),
     BUN_BIN_DIR: machine.bun_bin_dir,
     BUN_PATH: machine.bun_path,
     PATH_PREFIX: machine.path_prefix,

@@ -1,0 +1,59 @@
+name: calendar-promotion
+on:
+  workflow_dispatch:
+    inputs:
+      phase:
+        type: choice
+        required: true
+        options: [prepare, reconcile, promote]
+        description: Prepare a candidate, read current state, or promote an operator-admitted candidate
+      candidate_run_id:
+        type: string
+        required: false
+        default: ""
+        description: Successful prepare run (promote only)
+      candidate_sha256:
+        type: string
+        required: false
+        default: ""
+        description: Independently reviewed candidate.json SHA256 (promote only)
+permissions:
+  contents: read
+concurrency:
+  group: calendar-production
+  cancel-in-progress: false
+jobs:
+  gate:
+    if: ${{ github.repository == 'hasna/apps' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Admit exact current main CI and immutable candidate evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PHASE: ${{ inputs.phase }}
+          CANDIDATE_RUN: ${{ inputs.candidate_run_id }}
+          CANDIDATE_SHA: ${{ inputs.candidate_sha256 }}
+        run: >-
+          python3 -I -B tooling/deploy/calendar/gate.py
+          --source "$GITHUB_SHA" --phase "$PHASE"
+          --candidate-run "$CANDIDATE_RUN" --candidate-sha256 "$CANDIDATE_SHA"
+  execute:
+    needs: gate
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    uses: ./.github/workflows/calendar-promotion-execute.yml
+    with:
+      phase: ${{ inputs.phase }}
+      source: ${{ github.sha }}
+      candidate_run_id: ${{ inputs.candidate_run_id }}
+      candidate_sha256: ${{ inputs.candidate_sha256 }}

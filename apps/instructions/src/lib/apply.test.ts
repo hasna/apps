@@ -443,7 +443,7 @@ describe("apply renders machine variables even when the caller supplies none", (
     expect(survivingMachineTokens(notRendered)).toEqual(["HOME_DIR"]);
   });
 
-  test("leaves redaction placeholders intact and still expands machine ones in the same file", async () => {
+  test("preserves secret and unconfigured workspace placeholders and reports unresolved inputs", async () => {
     const db = getDatabase();
     const target = join(tmpDir, "config.toml");
     // The file already holds the placeholder, so there is no live value in that
@@ -465,7 +465,9 @@ describe("apply renders machine variables even when the caller supplies none", (
     // live credential to disk, which is the failure redact.ts exists to prevent.
     expect(written).toContain("{{AUTHORIZATION}}");
     // ...and the operator is told, rather than it passing silently.
-    expect(result.unresolved_template_vars).toEqual(["AUTHORIZATION"]);
+    // Workspace is no longer guessed from the OS; preview reports it unresolved.
+    expect(written).toContain("{{WORKSPACE_ROOT}}");
+    expect(result.unresolved_template_vars).toEqual(["AUTHORIZATION", "WORKSPACE_ROOT"]);
   });
 
   // Reviewer sabinus, P1 on PR #38. Rendering preserves what it cannot resolve,

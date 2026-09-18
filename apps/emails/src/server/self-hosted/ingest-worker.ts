@@ -32,6 +32,8 @@ import { parseInboundMime } from "../../lib/inbound-mime.js";
 import { createHash } from "node:crypto";
 import { getSelfHostedPool, closeSelfHostedPool } from "./env.js";
 import { assertServingRoleCannotBypassRls } from "./rls-guard.js";
+import { emailsSelfHostedMigrations } from "./migrations.js";
+import { checkSchemaReadiness } from "./schema-readiness.js";
 import {
   EmailsSelfHostedStore,
   type InboundRouteResolution,
@@ -577,8 +579,11 @@ export interface QueueAgeSamplerDeps {
 export async function fetchIngestQueueAttributes(
   sqs: import("@aws-sdk/client-sqs").SQSClient,
   queueUrl: string,
+  isRunning: () => boolean = () => true,
 ): Promise<Record<string, string>> {
   const { GetQueueAttributesCommand } = await import("@aws-sdk/client-sqs");
+  // The import can yield while another readiness check stops the worker.
+  if (!isRunning()) return {};
   const out = await sqs.send(new GetQueueAttributesCommand({
     QueueUrl: queueUrl,
     AttributeNames: ["ApproximateNumberOfMessages"],
@@ -722,170 +727,219 @@ export async function runIngestWorker(options: WorkerOptions = {}): Promise<void
   const configuredBucket = defaultBucket!;
 
   const { client } = getSelfHostedPool();
-  // Fail closed: the inbound worker writes to a FORCE-RLS table. If it ever ran
-  // as a role that can bypass RLS, a missing/mismatched tenant context would NOT
-  // fail loudly — it would silently write cross-tenant. Refuse to start unless
-  // the serving role is subject to RLS (design §6 Layer 2 / H1). This is the same
-  // invariant serve.ts asserts; the headless worker had no such guard, which let
-  // an RLS-incompatible writer keep running through the 0016 cutover.
-  await assertServingRoleCannotBypassRls(client);
-  const store = new EmailsSelfHostedStore(client);
-
-  const [{ SQSClient, ReceiveMessageCommand, DeleteMessageCommand }, { S3Client, GetObjectCommand }] =
-    await Promise.all([import("@aws-sdk/client-sqs"), import("@aws-sdk/client-s3")]);
-  const sqs = new SQSClient({ region });
-  const s3 = new S3Client({ region });
-
-  const fetchObject = async (bucket: string, key: string): Promise<Buffer> => {
-    const res = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
-    if (!res.Body) throw new Error(`empty S3 object ${bucket}/${key}`);
-    const chunks: Uint8Array[] = [];
-    for await (const chunk of res.Body as AsyncIterable<Uint8Array>) chunks.push(chunk);
-    return Buffer.concat(chunks);
-  };
-
-  const deps: IngestDeps = {
-    store,
-    fetchObject,
-    now: () => new Date().toISOString(),
-    prefixDomainMappings,
-  };
-
   let running = true;
+  let health: IngestHealthServer | null = null;
+  let sampler: Promise<void> | undefined;
+  let destroyClients: (() => void) | undefined;
+  let readinessFailure: Error | undefined;
+  const migrations = emailsSelfHostedMigrations();
   const stop = (sig: string) => {
-    console.log(`[ingest] received ${sig}, finishing current batch and shutting down`);
+    console.log(`[ingest] received ${sig}, finishing current message and shutting down`);
     running = false;
   };
-  process.on("SIGTERM", () => stop("SIGTERM"));
-  process.on("SIGINT", () => stop("SIGINT"));
-
-  const status = createIngestWorkerStatus();
-  const counts = status.counts;
-  let lastReport = Date.now();
-
-  // Independent SQS visibility sampling keeps /ready honest when the loop
-  // stalls. Queue age is unknown here: deployment-owned CloudWatch alarms
-  // must monitor ApproximateAgeOfOldestMessage separately.
-  const healthPort = parseIngestHealthPort(process.env["EMAILS_WORKER_HEALTH_PORT"]);
-  const progressStaleMs = parseIngestProgressStaleMs(process.env["EMAILS_WORKER_PROGRESS_STALE_MS"]);
-  const queueAgeAlarmSeconds = parseIngestQueueAgeAlarmSeconds(
-    process.env["EMAILS_INGEST_QUEUE_AGE_ALARM_SECONDS"],
-  );
-  const queueAgePollSeconds = parseIngestQueueAgePollSeconds(
-    process.env["EMAILS_INGEST_QUEUE_AGE_POLL_SECONDS"],
-  );
-  // The health probe fails closed when the queue-attributes sample is older
-  // than this: a stalled loop with no proof the queue is empty is the incident
-  // this guard exists for.
-  const queueSampleStaleAfterMs = Math.max(queueAgePollSeconds * 3, 180) * 1000;
-  let health: IngestHealthServer | null = null;
-  if (healthPort > 0) {
-    health = startIngestProgressHealthServer({
-      port: healthPort,
-      staleMs: progressStaleMs,
-      lastProgressAt: () => status.lastCycleMs ?? 0,
-      status,
-      queueState: {
-        lastSampleAt: () => status.lastQueueSampleMs,
-        visible: () => status.queueVisible,
-        sampleStaleAfterMs: queueSampleStaleAfterMs,
-      },
-      queueAgeAlarmThresholdSeconds: queueAgeAlarmSeconds,
-    });
-    console.log(
-      `[ingest] progress liveness: ${health.url}/ready (stale after ${progressStaleMs} ms; ` +
-        `queue visibility sampled every ${queueAgePollSeconds} s; queue age requires CloudWatch)`,
-    );
-  } else {
-    console.log(
-      `[ingest] progress liveness: disabled (EMAILS_WORKER_HEALTH_PORT is 0); ` +
-        `queue visibility sampled every ${queueAgePollSeconds} s; queue age requires CloudWatch`,
-    );
-  }
-
-  const fetchQueueAttributes = () => fetchIngestQueueAttributes(sqs, configuredQueueUrl);
-  // Independent visibility sampling continues even when the poll loop stalls.
-  void runIngestQueueAgeSampler({
-    fetchAttributes: fetchQueueAttributes,
-    status,
-    thresholdSeconds: queueAgeAlarmSeconds,
-    pollSeconds: queueAgePollSeconds,
-    isRunning: () => running,
-  });
-
-  console.log(
-    `[ingest] starting: queue=${configuredQueueUrl.split("/").pop()} region=${region} ` +
-      `bucket=${configuredBucket}`,
-  );
-
-  while (running) {
-    let messages: Array<{ Body?: string; ReceiptHandle?: string }> = [];
-    try {
-      const out = await sqs.send(
-        new ReceiveMessageCommand({
-          QueueUrl: configuredQueueUrl,
-          MaxNumberOfMessages: maxMessages,
-          WaitTimeSeconds: waitTimeSeconds,
-          VisibilityTimeout: visibilityTimeout,
-        }),
-        { abortSignal: AbortSignal.timeout(INGEST_RECEIVE_DEADLINE_MS) },
+  const onTerm = () => stop("SIGTERM");
+  const onInt = () => stop("SIGINT");
+  const assertSchemaReady = async (): Promise<boolean> => {
+    if (!running) return false;
+    const ready = await checkSchemaReadiness({ client, migrations });
+    if (!ready.ok) {
+      // Do not include ledger contents or driver diagnostics in worker logs.
+      readinessFailure ??= new Error(
+        "Emails ingest schema readiness failed; refusing new queue work. " +
+        "Use the matching API /ready probe to diagnose the migration inventory.",
       );
-      messages = out.Messages ?? [];
-    } catch (err) {
-      console.error(`[ingest] receive failed: ${err instanceof Error ? err.message : String(err)}`);
-      await sleep(5000);
-      continue;
+      running = false;
+      health?.stop();
+      health = null;
+      throw readinessFailure;
     }
-    // A completed receive cycle is progress even with zero messages: it proves
-    // the poll loop is alive (the wedge the 2026-08-31 incident saw stops
-    // right here, with the task still 'healthy').
-    status.lastCycleMs = Date.now();
-    status.cycles += 1;
-    if (messages.length > 0) status.lastNonEmptyCycleMs = status.lastCycleMs;
+    return running;
+  };
 
-    for (const m of messages) {
-      if (!running) break;
-      const result = await processInboundNotification(deps, m.Body ?? "", configuredBucket);
-      counts[result.status]++;
+  try {
+    // Fail closed: the inbound worker writes to a FORCE-RLS table. If it ever ran
+    // as a role that can bypass RLS, a missing/mismatched tenant context would NOT
+    // fail loudly — it would silently write cross-tenant. Refuse to start unless
+    // the serving role is subject to RLS (design §6 Layer 2 / H1). This is the same
+    // invariant serve.ts asserts; the headless worker had no such guard, which let
+    // an RLS-incompatible writer keep running through the 0016 cutover.
+    await assertServingRoleCannotBypassRls(client);
+    await assertSchemaReady();
+    const store = new EmailsSelfHostedStore(client);
 
-      if (!shouldDeleteIngestResult(result)) {
-        console.error(`[ingest] error key=${result.key ?? "-"}: ${result.error} (left for redelivery)`);
-        continue; // do NOT delete — SQS redelivers, then DLQ after maxReceiveCount
+    const [{ SQSClient, ReceiveMessageCommand, DeleteMessageCommand }, { S3Client, GetObjectCommand }] =
+      await Promise.all([import("@aws-sdk/client-sqs"), import("@aws-sdk/client-s3")]);
+    const sqs = new SQSClient({ region });
+    const s3 = new S3Client({ region });
+    destroyClients = () => { sqs.destroy(); s3.destroy(); };
+
+    const fetchObject = async (bucket: string, key: string): Promise<Buffer> => {
+      const res = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+      if (!res.Body) throw new Error(`empty S3 object ${bucket}/${key}`);
+      const chunks: Uint8Array[] = [];
+      for await (const chunk of res.Body as AsyncIterable<Uint8Array>) chunks.push(chunk);
+      return Buffer.concat(chunks);
+    };
+
+    const deps: IngestDeps = {
+      store,
+      fetchObject,
+      now: () => new Date().toISOString(),
+      prefixDomainMappings,
+    };
+
+    process.on("SIGTERM", onTerm);
+    process.on("SIGINT", onInt);
+
+    const status = createIngestWorkerStatus();
+    const counts = status.counts;
+    let lastReport = Date.now();
+
+    // Independent SQS visibility sampling keeps /ready honest when the loop
+    // stalls. Queue age is unknown here: deployment-owned CloudWatch alarms
+    // must monitor ApproximateAgeOfOldestMessage separately.
+    const healthPort = parseIngestHealthPort(process.env["EMAILS_WORKER_HEALTH_PORT"]);
+    const progressStaleMs = parseIngestProgressStaleMs(process.env["EMAILS_WORKER_PROGRESS_STALE_MS"]);
+    const queueAgeAlarmSeconds = parseIngestQueueAgeAlarmSeconds(
+      process.env["EMAILS_INGEST_QUEUE_AGE_ALARM_SECONDS"],
+    );
+    const queueAgePollSeconds = parseIngestQueueAgePollSeconds(
+      process.env["EMAILS_INGEST_QUEUE_AGE_POLL_SECONDS"],
+    );
+    // The health probe fails closed when the queue-attributes sample is older
+    // than this: a stalled loop with no proof the queue is empty is the incident
+    // this guard exists for.
+    const queueSampleStaleAfterMs = Math.max(queueAgePollSeconds * 3, 180) * 1000;
+    if (healthPort > 0) {
+      health = startIngestProgressHealthServer({
+        port: healthPort,
+        staleMs: progressStaleMs,
+        lastProgressAt: () => status.lastCycleMs ?? 0,
+        status,
+        queueState: {
+          lastSampleAt: () => status.lastQueueSampleMs,
+          visible: () => status.queueVisible,
+          sampleStaleAfterMs: queueSampleStaleAfterMs,
+        },
+        queueAgeAlarmThresholdSeconds: queueAgeAlarmSeconds,
+      });
+      console.log(
+        `[ingest] progress liveness: ${health.url}/ready (stale after ${progressStaleMs} ms; ` +
+          `queue visibility sampled every ${queueAgePollSeconds} s; queue age requires CloudWatch)`,
+      );
+    } else {
+      console.log(
+        `[ingest] progress liveness: disabled (EMAILS_WORKER_HEALTH_PORT is 0); ` +
+          `queue visibility sampled every ${queueAgePollSeconds} s; queue age requires CloudWatch`,
+      );
+    }
+
+    const fetchQueueAttributes = async () => {
+      if (!await assertSchemaReady() || !running) return {};
+      return fetchIngestQueueAttributes(sqs, configuredQueueUrl, () => running);
+    };
+    // Independent visibility sampling continues even when the poll loop stalls.
+    sampler = runIngestQueueAgeSampler({
+      fetchAttributes: fetchQueueAttributes,
+      status,
+      thresholdSeconds: queueAgeAlarmSeconds,
+      pollSeconds: queueAgePollSeconds,
+      isRunning: () => running,
+    });
+
+    console.log(
+      `[ingest] starting: queue=${configuredQueueUrl.split("/").pop()} region=${region} ` +
+        `bucket=${configuredBucket}`,
+    );
+
+    while (running) {
+      // A batch fence plus a second check after the long poll prevents starting
+      // newly received work against an inventory that changed while waiting.
+      // This is not a substitute for quiescing every writer during migrations.
+      if (!await assertSchemaReady() || !running) break;
+      let messages: Array<{ Body?: string; ReceiptHandle?: string }> = [];
+      try {
+        const out = await sqs.send(
+          new ReceiveMessageCommand({
+            QueueUrl: configuredQueueUrl,
+            MaxNumberOfMessages: maxMessages,
+            WaitTimeSeconds: waitTimeSeconds,
+            VisibilityTimeout: visibilityTimeout,
+          }),
+          { abortSignal: AbortSignal.timeout(INGEST_RECEIVE_DEADLINE_MS) },
+        );
+        messages = out.Messages ?? [];
+      } catch (err) {
+        console.error(`[ingest] receive failed: ${err instanceof Error ? err.message : String(err)}`);
+        if (running) await sleep(5000);
+        continue;
       }
+      if (!await assertSchemaReady() || !running) break;
+      // A completed receive cycle is progress even with zero messages: it proves
+      // the poll loop is alive (the wedge the 2026-08-31 incident saw stops
+      // right here, with the task still 'healthy').
+      status.lastCycleMs = Date.now();
+      status.cycles += 1;
+      if (messages.length > 0) status.lastNonEmptyCycleMs = status.lastCycleMs;
 
-      if (m.ReceiptHandle) {
-        try {
-          await sqs.send(new DeleteMessageCommand({ QueueUrl: configuredQueueUrl, ReceiptHandle: m.ReceiptHandle }));
-        } catch (err) {
-          console.error(`[ingest] delete failed key=${result.key ?? "-"}: ${err instanceof Error ? err.message : String(err)}`);
+      for (const m of messages) {
+        if (!running) break;
+        const result = await processInboundNotification(deps, m.Body ?? "", configuredBucket);
+        counts[result.status]++;
+
+        if (!shouldDeleteIngestResult(result)) {
+          console.error(`[ingest] error key=${result.key ?? "-"}: ${result.error} (left for redelivery)`);
+          continue; // do NOT delete — SQS redelivers, then DLQ after maxReceiveCount
+        }
+
+        if (m.ReceiptHandle) {
+          try {
+            await sqs.send(new DeleteMessageCommand({ QueueUrl: configuredQueueUrl, ReceiptHandle: m.ReceiptHandle }));
+          } catch (err) {
+            console.error(`[ingest] delete failed key=${result.key ?? "-"}: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
+
+        if (result.status === "ingested") {
+          console.log(`[ingest] stored ${result.inserted ? "new" : "updated"} key=${result.key}`);
         }
       }
 
-      if (result.status === "ingested") {
-        console.log(`[ingest] stored ${result.inserted ? "new" : "updated"} key=${result.key}`);
+      if (Date.now() - lastReport > 30_000) {
+        console.log(
+          `[ingest] progress ingested=${counts.ingested} duplicate=${counts.duplicate} ` +
+            `quarantined=${counts.quarantined} error=${counts.error}`,
+        );
+        lastReport = Date.now();
       }
     }
 
-    if (Date.now() - lastReport > 30_000) {
-      console.log(
-        `[ingest] progress ingested=${counts.ingested} duplicate=${counts.duplicate} ` +
-          `quarantined=${counts.quarantined} error=${counts.error}`,
-      );
-      lastReport = Date.now();
+    console.log(
+      `[ingest] stopped. totals ingested=${counts.ingested} duplicate=${counts.duplicate} ` +
+        `quarantined=${counts.quarantined} error=${counts.error}`,
+    );
+  } finally {
+    running = false;
+    health?.stop();
+    health = null;
+    process.off("SIGTERM", onTerm);
+    process.off("SIGINT", onInt);
+    // Drain visibility sampling before closing its clients/pool.
+    try {
+      await sampler;
+    } finally {
+      destroyClients?.();
+      await closeSelfHostedPool();
     }
   }
-
-  console.log(
-    `[ingest] stopped. totals ingested=${counts.ingested} duplicate=${counts.duplicate} ` +
-      `quarantined=${counts.quarantined} error=${counts.error}`,
-  );
-  if (health) health.stop();
-  await closeSelfHostedPool();
+  // A pending sampler check can observe drift while shutdown drains it.
+  if (readinessFailure) throw readinessFailure;
 }
 
 /**
  * Scheduled visibility pass. Samples once per tick, and on each failure logs
- * and retries at the next tick; never crashes the worker.
+ * and retries ordinary queue failures at the next tick. A schema failure in
+ * fetchAttributes stops the owning worker even though sampling catches it.
  */
 async function runIngestQueueAgeSampler(args: {
   fetchAttributes: () => Promise<Record<string, string>>;

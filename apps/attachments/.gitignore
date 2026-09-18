@@ -1,8 +1,0 @@
-node_modules/
-dist/
-.hasna/
-*.js.map
-.env
-.secrets/
-*.sqlite
-pnpm-lock.yaml

@@ -7,10 +7,18 @@ const root = resolve(import.meta.dir, "../../../..");
 const script = join(root, "apps/switcher/scripts/ci/verify-public-api.sh");
 const ready = { status: "ready", backend: "postgresql", version: "0.2.5" };
 const accepted = [[200, ready], [200, {version:"0.2.5"}], [401, {error:{code:"auth_required"}}]];
-function run(responses: unknown[], waiting = true, timeout = "5") {
+function run(responses: unknown[], waiting = true, timeout = "5", expireBeforeRequest = false) {
   const dir=mkdtempSync(join(tmpdir(),"switcher-public-acceptance-"));
   try {
     writeFileSync(join(dir,"responses.json"), JSON.stringify(responses));
+    if (expireBeforeRequest) writeFileSync(join(dir,"mktemp"), `#!/usr/bin/env python3
+import pathlib,time
+# Preparation happens after the script starts its deadline and before curl.
+time.sleep(1.1)
+body=pathlib.Path(__file__).parent/'response-body'
+body.touch(exist_ok=False)
+print(body)
+`,{mode:0o700});
     writeFileSync(join(dir,"curl"), `#!/usr/bin/env python3
 import sys,json,pathlib
 p=pathlib.Path(__file__).parent
@@ -53,8 +61,16 @@ for(const response of [[302,{}],[403,{}],[404,{error:"another_error"}]]) test(`r
 test("origin does not wait for a missing gateway route",()=>{
   const r=run([[404,{error:"unknown_app"}]],false);expect(r.status).not.toBe(0);expect(r.calls).toBe(1);
 });
-test("canonical route timeout fails without success receipt",()=>{
-  const r=run([[404,{error:"unknown_app"}]],true,"1");expect(r.status).not.toBe(0);expect(r.calls).toBeGreaterThan(0);expect(r.stderr).toContain("deadline");expect(r.stdout).not.toContain('verified');
+test("canonical deadline can expire before the first request without a success receipt",()=>{
+  // An integer-second boundary or slow preparation can exhaust the budget before curl.
+  // Separate transient-route tests require actual calls and complete retry sequences.
+  const r=run([[404,{error:"unknown_app"}]],true,"1",true);
+  expect(r.error).toBeUndefined();
+  expect(r.status).toBe(1);
+  expect(r.calls).toBe(0);
+  expect(r.stderr).toContain("deadline");
+  expect(r.stderr).toContain("endpoint=/ready http_status=000 error_class=deadline_exceeded");
+  expect(r.stdout).not.toContain('verified');
 });
 test("wrong canonical version is terminal",()=>{
   const r=run([accepted[0],[200,{version:"0.2.4"}]]);expect(r.status).not.toBe(0);expect(r.calls).toBe(2);

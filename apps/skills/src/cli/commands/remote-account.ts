@@ -1,5 +1,5 @@
 import type { Command } from "commander";
-import { createRemoteSkillsClient, RemoteCapabilityUnavailableError, RemoteQuoteUnavailableError } from "../../lib/remote-client.js";
+import { createRemoteSkillsClient, RemoteCapabilityUnavailableError, RemoteQuoteUnavailableError, RemoteCreditCheckoutError } from "../../lib/remote-client.js";
 
 /** These commands expose the configured server's account contract, without local prices. */
 export function registerRemoteAccount(parent: Command) {
@@ -31,8 +31,9 @@ export function registerRemoteAccount(parent: Command) {
     .action((options: { json: boolean }) => execute(options, client => client.listCreditPacks()));
   credits.command("buy").argument("<pack-id>", "An ID returned by credits packs")
     .option("--json", "Output as JSON", false)
-    .description("Create an external checkout link; payment is confirmed in the browser")
-    .action((packId: string, options: { json: boolean }) => execute(options, client => client.createCreditCheckout(packId)));
+    .option("--idempotency-key <key>", "Retain and reuse this request key for explicit checkout recovery")
+    .description("Create an external checkout link; payment is confirmed in the browser. No automatic retries.")
+    .action((packId: string, options: { json: boolean; idempotencyKey?: string }) => execute(options, client => client.createCreditCheckout(packId, { idempotencyKey: options.idempotencyKey })));
 }
 
 export async function execute(options: { json: boolean }, action: (client: NonNullable<Awaited<ReturnType<typeof createRemoteSkillsClient>>>) => Promise<unknown>) {
@@ -44,6 +45,17 @@ export async function execute(options: { json: boolean }, action: (client: NonNu
     console.log(JSON.stringify(result, null, 2));
   } catch (error) {
     const message = error instanceof Error ? error.message : "The Skills server request failed";
+    if (error instanceof RemoteCreditCheckoutError) {
+      const result = { error: error.message, code: error.code, status: error.status,
+        requestIdempotencyKey: error.requestIdempotencyKey,
+        ...(error.retryAfterSeconds === undefined ? {} : { retryAfterSeconds: error.retryAfterSeconds }) };
+      if (options.json) console.log(JSON.stringify(result));
+      else console.error(`${error.message}\nRequest key: ${error.requestIdempotencyKey}` +
+        (error.code === "CREDIT_CHECKOUT_UNCONFIRMED" || error.code === "CREDIT_CHECKOUT_IN_PROGRESS"
+          ? "\nFor explicit recovery, pass this key with --idempotency-key. Keep the same server, account and pack." : ""));
+      process.exitCode = 1;
+      return;
+    }
     if (options.json) console.log(JSON.stringify({ error: message,
       ...(error instanceof RemoteCapabilityUnavailableError || error instanceof RemoteQuoteUnavailableError ? { code: error.code, status: error.status } : {}),
     }));

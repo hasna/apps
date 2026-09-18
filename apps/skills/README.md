@@ -190,6 +190,16 @@ contract and 16 MiB file limit; they are not silently converted into byte hashes
 Directory membership and file bytes are separate witnesses. Neither substitutes
 for reviewing the actual executable, import paths or loader behavior.
 
+For reviewed Claude user settings, `captureClaudeSettings(canonicalSettingsPath)`
+emits an opt-in `claude-settings-v1` witness. It permits a fixed set of typed
+terminal display preferences and recognized built-in model selections to change
+while binding hooks, permissions, native skill protections, plugins,
+marketplaces, environment and every unknown field. Provider mappings, custom
+model values and instruction settings remain bound. Replace the settings source
+in an explicitly reviewed discovery input, then use the normal `skills hook install
+--discovery-inputs <file>` plan/apply flow; existing raw witnesses are never
+automatically converted or refreshed. See [settings witness scope and migration](docs/plugin-admission.md#claude-settings-preferences).
+
 For an explicitly reviewed launcher or interpreter reached through symlinks,
 use `captureDiscoveryPathSources(paths)` and retain `hashMode: "path-bytes"`.
 Its digest binds the canonical input, directory identities, each link's identity
@@ -1145,7 +1155,7 @@ skills --profile customer billing status --json
 skills --profile customer billing usage --json
 skills --profile customer billing invoices --json
 skills --profile customer credits packs --json
-skills --profile customer credits buy <pack-id> --json
+skills --profile customer credits buy <pack-id> --idempotency-key checkout-001 --json
 skills --profile customer billing portal --json
 skills --profile customer auth keys list --email you@example.com --code <FRESH-CODE> --json
 # Request a fresh OTP, then create a separately scoped key (shown once).
@@ -1153,6 +1163,19 @@ skills --profile customer auth signup --email you@example.com --json
 skills --profile customer auth keys create automation --email you@example.com --code <CODE> --scope runs:read --json
 skills --profile customer auth logout --json
 ```
+
+For credit checkouts, generate and retain a unique request key **before** calling.
+The SDK accepts `createCreditCheckout(packId, { idempotencyKey })`; MCP
+`create_credit_checkout` accepts `idempotency_key`. Success and bounded checkout
+errors retain `requestIdempotencyKey`. An omitted key is generated before the
+single POST, but an explicit saved key is needed if the client process exits
+before returning any result. Recover only on the same server, account and pack.
+No surface retries a checkout automatically. For unresolved or in-progress
+outcomes, inspect billing and explicitly reuse the same key after any indicated
+wait. Expired or fulfilled outcomes need a deliberate decision, not a fresh key
+on an automatic retry. The provider's derived `idempotencyKey` is not the request
+key. This protocol requires the configured server to honor checkout idempotency;
+older servers can return a link without proving durable recovery semantics.
 
 An origin, a full `/api/v1` base and a base with a path prefix normalize to the
 same routes. `HASNA_PROFILE=customer` selects the same profile as `--profile`.
