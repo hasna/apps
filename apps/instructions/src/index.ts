@@ -162,6 +162,7 @@ export {
   configAssetDigest,
   configAssetLocator,
   normalizeProfileAssetBinding,
+  renderNativeAgentContent,
   resolveAssetDestination,
   selectAssetCapability,
 } from "./lib/asset-plan.js";
@@ -248,6 +249,7 @@ export type {
   SessionDriftEntry,
   SessionFileAdoption,
   SessionFileAdoptionReceipt,
+  SessionFileRetirementReceipt,
   SessionFileReconciliationReceipt,
   SessionRestoreConflict,
   SessionRestoreFileResult,

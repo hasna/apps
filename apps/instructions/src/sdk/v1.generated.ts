@@ -2,7 +2,7 @@
 // Regenerate: bun run scripts/generate-sdk.ts
 
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
-// Source: Instructions V1 API 0.7.1
+// Source: Instructions V1 API 0.7.3
 
 export interface Config { "id"?: string; "name"?: string; "slug"?: string; "kind"?: string; "category"?: string; "agent"?: string; "target_path"?: string | null; "outputs"?: Array<Record<string, unknown>>; "format"?: string; "content"?: string; "description"?: string | null; "tags"?: Array<string>; "is_template"?: boolean; "version"?: number; "created_at"?: string; "updated_at"?: string; "synced_at"?: string | null }
 
@@ -40,7 +40,9 @@ export interface ProfileConfigBindingSpec { "schema": string; "activation": Reco
 
 export interface ProfileConfigBinding { "profile_id": string; "config_id": string; "sort_order": number; "binding": ProfileConfigBindingSpec }
 
-export interface ProfileAssetBindingSpec { "schema": string; "assetKey": string; "kind": "skill" | "workflow" | "plugin" | "extension" | "hook" | "custom-agent"; "enabled": boolean; "required": boolean; "selector": { "provider": string; "versionRange": string; "surface": string; "scope": "global" | "project" | "session" }; "source": { "kind": "skill" | "workflow" | "plugin" | "extension" | "hook" | "custom-agent"; "locator": string; "digest": string; "immutable": boolean; "allowed": boolean }; "destination": { "strategy": "emit-file" | "install-local" | "install-marketplace" | "unsupported"; "root": "target-home" | "project-root"; "relativePath": string }; "uninstall": "remove-managed" | "retain"; "rollback": "snapshot" | "installer-receipt" | "none" }
+export interface NativeAgentMetadata { "name": string; "description": string; "frontmatter"?: string }
+
+export interface ProfileAssetBindingSpec { "schema": string; "assetKey": string; "kind": "skill" | "workflow" | "plugin" | "extension" | "hook" | "custom-agent"; "enabled": boolean; "required": boolean; "selector": { "provider": string; "versionRange": string; "surface": string; "scope": "global" | "project" | "session" }; "source": { "kind": "skill" | "workflow" | "plugin" | "extension" | "hook" | "custom-agent"; "locator": string; "digest": string; "immutable": boolean; "allowed": boolean }; "destination": { "strategy": "emit-file" | "install-local" | "install-marketplace" | "unsupported"; "root": "target-home" | "project-root"; "relativePath": string }; "nativeAgent"?: NativeAgentMetadata; "uninstall": "remove-managed" | "retain"; "rollback": "snapshot" | "installer-receipt" | "none" }
 
 export interface ProfileAssetBinding { "profile_id": string; "source_config_id": string; "sort_order": number; "binding": ProfileAssetBindingSpec }
 
