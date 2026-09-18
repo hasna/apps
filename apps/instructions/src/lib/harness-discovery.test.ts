@@ -41,7 +41,8 @@ describe("read-only portable harness discovery", () => {
     expect(result.tools[1]!.config).toMatchObject({ path: join(f.home, "selected"), source: "override" });
     expect(result.tools[1]!.executableSource).toBe("override");
     expect(result.tools[0]!.status).toBe("absent");
-    expect(() => discoverHarnesses({ env: f.env, overrides: { codex: { configDir: "./relative" } } })).toThrow("absolute");
+    expect(result.tools[0]!.diagnostics.join(" ")).toContain("Relative or empty PATH entries");
+    expect(() => discoverHarnesses({ env: f.env, overrides: { codex: { configDir: "relative" } } })).toThrow("absolute");
   });
 
   test("invalid explicit executable does not fall back to another PATH installation", () => {
@@ -55,7 +56,7 @@ describe("read-only portable harness discovery", () => {
 
   test("native env selectors and Sumi XDG-before-home precedence are explicit", () => {
     const f = fixture();
-    const env = { ...f.env, CLAUDE_CONFIG_DIR: "~/custom-claude", CODEX_HOME: "~/custom-codex", OPENCODE_CONFIG_DIR: "~/custom-opencode", SUMI_CONFIG_DIR: "~/custom-sumi", XDG_CONFIG_HOME: "~/xdg", SUMI_HOME: "~/sumi-root" };
+    const env = { ...f.env, CLAUDE_CONFIG_DIR: join(f.home, "custom-claude"), CODEX_HOME: join(f.home, "custom-codex"), OPENCODE_CONFIG_DIR: join(f.home, "custom-opencode"), SUMI_CONFIG_DIR: join(f.home, "custom-sumi"), XDG_CONFIG_HOME: join(f.home, "xdg"), SUMI_HOME: join(f.home, "sumi-root") };
     for (const tool of ["claude", "codex", "opencode", "sumi"]) f.executable(tool);
     const result = discoverHarnesses({ env });
     for (const entry of result.tools) expect(entry.config!.path).toBe(join(f.home, `custom-${entry.tool}`));
@@ -105,5 +106,47 @@ describe("read-only portable harness discovery", () => {
     expect(result.tools[2]!.globalPrompt).toMatchObject({ state: "missing", viaSymlink: true });
     expect(result.tools[2]!.scopeReviewRequired).toBe(true);
     expect(existsSync(join(project, "opencode"))).toBe(false);
+  });
+
+  test("rejects dot segments before resolving symlinks and ignores ambiguous PATH entries", () => {
+    const f = fixture(); f.executable("codex");
+    const elsewhere = join(f.home, "elsewhere"); mkdirSync(join(elsewhere, "nested"), { recursive: true });
+    symlinkSync(join(elsewhere, "nested"), join(f.home, "link"));
+    const ambiguous = `${f.home}/link/../config`;
+    expect(() => discoverHarnesses({ env: f.env, overrides: { codex: { configDir: ambiguous } } })).toThrow("dot segments");
+    expect(() => discoverHarnesses({ env: f.env, projectRoot: "~/link/../config" })).toThrow("dot segments");
+    const result = discoverHarnesses({ env: { ...f.env, PATH: `${f.home}/link/../../bin`, CODEX_HOME: ambiguous } });
+    expect(result.tools[1]!.config).toBeNull();
+    expect(result.tools[1]!.status).toBe("absent");
+    expect(result.tools[1]!.diagnostics.join(" ")).toContain("ambiguous PATH");
+  });
+
+  test("does not expand native env placeholders or guess a default for ambiguous selectors", () => {
+    const f = fixture();
+    for (const value of ["~/literal", "${HOME}/literal", "{{HOME_DIR}}/literal", "relative", " "]) {
+      const result = discoverHarnesses({ env: { ...f.env, CODEX_HOME: value, OPENCODE_CONFIG_DIR: value } });
+      expect(result.tools[1]!.config).toBeNull();
+      expect(result.tools[2]!.config).toBeNull();
+      expect(result.tools[1]!.diagnostics.join(" ")).toContain("CODEX_HOME is present");
+    }
+    const empty = discoverHarnesses({ env: { ...f.env, CODEX_HOME: "", OPENCODE_CONFIG_DIR: "" } });
+    expect(empty.tools[1]!.config!.source).toBe("native-default");
+    expect(empty.tools[2]!.config).toBeNull();
+    expect(discoverHarnesses({ env: f.env, overrides: { codex: { configDir: "~/portable" } } }).tools[1]!.config!.path).toBe(join(f.home, "portable"));
+  });
+
+  test("Codex override candidates cannot hide linked project scope or pretend AGENTS.md is effective", () => {
+    const f = fixture(); mkdirSync(join(f.home, ".codex"));
+    const project = join(f.home, "project"); mkdirSync(project);
+    writeFileSync(join(project, "AGENTS.override.md"), "PRIVATE_OVERRIDE_RULES");
+    symlinkSync(join(project, "AGENTS.override.md"), join(f.home, ".codex/AGENTS.override.md"));
+    const result = discoverHarnesses({ env: f.env, projectRoot: project });
+    const codex = result.tools[1]!;
+    expect(codex.globalPrompt!.path).toBe(join(f.home, ".codex/AGENTS.md"));
+    expect(codex.promptOverrides).toHaveLength(2);
+    expect(codex.promptOverrides[0]).toMatchObject({ symlink: true, realPath: join(project, "AGENTS.override.md") });
+    expect(codex.scopeReviewRequired).toBe(true);
+    expect(codex.diagnostics.join(" ")).toContain("may take precedence");
+    expect(JSON.stringify(result)).not.toContain("PRIVATE_OVERRIDE_RULES");
   });
 });

@@ -11,7 +11,9 @@ Owner-home precedence is explicit `ownerHome`/`--owner-home`, `HOME`,
 on each station; do not send the controller station's environment to every host.
 Explicit executable overrides win over absolute entries in that station's PATH.
 A missing explicit executable stays absent; discovery does not choose another
-installation. Relative and empty PATH entries are ignored. `executable-found`
+installation. Relative and empty PATH entries are ignored with a diagnostic.
+This is an absolute-path candidate inventory, not proof of which executable an
+interactive shell, alias or launcher selects. `executable-found`
 means an executable file was found; `versionEvidence: "not-probed"` explicitly
 does not prove its version, native loading behavior, or a running session.
 
@@ -36,17 +38,27 @@ instructions harness discover --json \
   --project-root '~/repositories/example'
 ```
 
-Paths accept absolute paths, `~/`, `{{HOME}}/`, `{{HOME_DIR}}/`, or `${HOME}/`.
-There is no arbitrary environment substitution or shell expansion. Quote these
-forms in a shell. Relative paths depending on the controller's current directory
-are refused.
+The owner-home option itself must be absolute. Other explicit path options accept absolute paths, `~/`, `{{HOME}}/`, `{{HOME_DIR}}/`, or
+`${HOME}/`. There is no arbitrary environment substitution or shell expansion.
+Quote these forms in a shell. Native environment selectors are separate: only
+unambiguous absolute values are inventoried. A native relative, tilde, template,
+or whitespace selector remains unresolved instead of being reinterpreted. Empty
+`CODEX_HOME` follows its native default; other empty selectors remain unresolved.
+Supply a reviewed absolute runtime result when necessary. Dot segments (`.` and
+`..`) are refused before normalization because normalization through a symlink
+can select a different target. Ambiguous PATH entries are ignored with a diagnostic.
 
 The result preserves the lexical path and separately reports its real path,
-existence and symlink state. Global prompt or config symlinks require scope
+existence and symlink state, including linked ancestors of missing leaves.
+Global prompt or config symlinks require scope
 review: a link may point to a project-specific prompt. A project root produces a
 separate `projectPrompt`; it never changes the global root or emits a Sumi global
 environment assignment. Discovery neither follows a link to overwrite it nor
-grants permission to replace it.
+grants permission to replace it. Codex `AGENTS.override.md` candidates are
+reported separately and require review when present, unreadable or linked.
+Their content and precedence are not evaluated; the reported `AGENTS.md` is a
+managed candidate, not proof of the effective native prompt. Discovery does not
+walk the complete project ancestor instruction chain.
 
 `templateVariables` declares `HOME_DIR`, optional `PROJECT_ROOT`, and
 `<HARNESS>_EXECUTABLE` / `<HARNESS>_CONFIG_DIR` for found harnesses with resolved
