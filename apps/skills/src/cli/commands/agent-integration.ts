@@ -51,8 +51,8 @@ export function registerAgentIntegration(parent: Command): void {
     .action(async () => { await writeCliOutput(JSON.stringify({ agents: INTEGRATION_AGENTS.map(agent => ({ agent, bridge: true, ...AGENT_ADAPTERS[agent] })), inventoryOnly: ["codewith", "windsurf", "pi", "amp", "cline", "roo", "copilot"], limitations: ["Cursor prompt hooks gate submission; selected context is injected at session start only.", "Native discovery checks cover known home roots and current project ancestors. External plugin hook injection and arbitrary added directories require separate review.", "Hermes injects selected prompt context, but native pre_llm_call fails open. Exact native hook trust, bundled reseeding opt-out, native payload retirement and a supervised pre-tool guard are required. Child failures block explicitly; native host/supervisor death is not a universal fail-closed guarantee.", "Restart agents and use their normal hook trust controls after installation."] }, null, 2)); });
   hook.command("install")
     .option("--agent <agent>", `Agent to configure: ${INTEGRATION_AGENTS.join(", ")}, all`, "all")
-    .option("--command <path>", "Skills executable used by the hook", "skills")
-    .option("--selection-profile <id>", "Shared selection profile", "default")
+    .option("--command <path>", "Skills executable used by the hook (preserves existing binding; new agents use skills)")
+    .option("--selection-profile <id>", "Selection profile (preserves existing binding; new agents use default)")
     .option("--include-vendor", "Retained for compatibility; vendor system skills are always inventoried and disabled", false)
     .option("--discovery-inputs <file>", "Advanced reviewed active plugin roots and source hashes for unsupported registrations")
     .option("--allow-root-aliases", "Allow home .claude/.codex aliases to existing directories within this home", false)

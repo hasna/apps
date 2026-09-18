@@ -64,6 +64,77 @@ test("native invocation profile must match the adapter binding, including retain
   expect(() => assertManagedAgentBridge("claude", options)).not.toThrow();
 });
 
+test("omitted reinstall options preserve the existing fleet binding and policy default", () => {
+  const f = fixture();
+  applyAgentIntegration(planAgentIntegration({ ...f, agents: ["claude", "codex"], command: "/opt/bin/skills", profileId: "fleet" }));
+  const plan = planAgentIntegration({ ...f, agents: ["claude"] });
+  expect(plan.profileId).toBe("fleet");
+  expect(plan.changes).toEqual([]);
+  expect(() => assertManagedAgentBridge("claude", { ...f, projectDir: f.home, profileId: "fleet" })).not.toThrow();
+});
+
+test("mixed-agent reinstalls preserve each binding, including generated plugins and supervisors", () => {
+  const f = fixture();
+  const agents = ["claude", "codex", "gemini", "opencode", "cursor", "hermes"] as const;
+  for (const agent of agents) applyAgentIntegration(planAgentIntegration({ ...f, agents: [agent], command: `/opt/${agent}/skills`, profileId: `${agent}-profile` }));
+  const plan = planAgentIntegration({ ...f, agents: [...agents] });
+  expect(plan.profileId).toBe("hermes-profile");
+  expect(plan.changes).toEqual([]);
+  for (const agent of agents) {
+    const verify = () => assertManagedAgentBridge(agent, { ...f, projectDir: f.home, profileId: `${agent}-profile` });
+    // Installing unchanged Hermes hooks still requires its separate native trust.
+    if (agent === "hermes") expect(verify).toThrow("approve the exact managed commands");
+    else expect(verify).not.toThrow();
+  }
+});
+
+test("explicit profile and command overrides independently replace only the requested binding", () => {
+  const f = fixture(), policyPath = join(f.dataDir, "agent-policy.json");
+  applyAgentIntegration(planAgentIntegration({ ...f, agents: ["claude", "codex"], command: "/opt/bin/skills", profileId: "fleet" }));
+  applyAgentIntegration(planAgentIntegration({ ...f, agents: ["claude"], profileId: "default" }));
+  let policy = JSON.parse(readFileSync(policyPath, "utf8"));
+  expect(policy.bridge.commands).toEqual({ claude: "/opt/bin/skills", codex: "/opt/bin/skills" });
+  expect(policy.bridge.profiles).toEqual({ claude: "default", codex: "fleet" });
+  applyAgentIntegration(planAgentIntegration({ ...f, agents: ["codex"], command: "skills" }));
+  policy = JSON.parse(readFileSync(policyPath, "utf8"));
+  expect(policy.bridge.commands).toEqual({ claude: "/opt/bin/skills", codex: "skills" });
+  expect(policy.bridge.profiles).toEqual({ claude: "default", codex: "fleet" });
+  expect(policy.profileId).toBe("default");
+  for (const [agent, profileId] of [["claude", "default"], ["codex", "fleet"]] as const)
+    expect(() => assertManagedAgentBridge(agent, { ...f, projectDir: f.home, profileId })).not.toThrow();
+});
+
+test("new bindings use installation defaults without resetting other agents or the policy default", () => {
+  const f = fixture(), policyPath = join(f.dataDir, "agent-policy.json");
+  applyAgentIntegration(planAgentIntegration({ ...f, agents: ["claude"], command: "/opt/bin/skills", profileId: "fleet" }));
+  applyAgentIntegration(planAgentIntegration({ ...f, agents: ["claude", "codex"] }));
+  const policy = JSON.parse(readFileSync(policyPath, "utf8"));
+  expect(policy.bridge.commands).toEqual({ claude: "/opt/bin/skills", codex: "skills" });
+  expect(policy.bridge.profiles).toEqual({ claude: "fleet", codex: "default" });
+  expect(policy.profileId).toBe("fleet");
+  expect(() => assertManagedAgentBridge("codex", { ...f, projectDir: f.home, profileId: "default" })).not.toThrow();
+});
+
+test("legacy managed agents retain the global profile when per-agent profiles are absent", () => {
+  const f = fixture(), policyPath = join(f.dataDir, "agent-policy.json");
+  applyAgentIntegration(planAgentIntegration({ ...f, agents: ["claude"], command: "/opt/bin/skills", profileId: "fleet" }));
+  const policy = JSON.parse(readFileSync(policyPath, "utf8")); delete policy.bridge.profiles;
+  writeFileSync(policyPath, JSON.stringify(policy));
+  applyAgentIntegration(planAgentIntegration({ ...f, agents: ["claude", "codex"] }));
+  expect(JSON.parse(readFileSync(policyPath, "utf8")).bridge.profiles).toEqual({ claude: "fleet", codex: "default" });
+  expect(() => assertManagedAgentBridge("claude", { ...f, projectDir: f.home, profileId: "fleet" })).not.toThrow();
+});
+
+test("a retained invalid per-agent profile refuses planning before writing hooks", () => {
+  const f = fixture(), policyPath = join(f.dataDir, "agent-policy.json"), settingsPath = join(f.home, ".claude", "settings.json");
+  applyAgentIntegration(planAgentIntegration({ ...f, agents: ["claude"], profileId: "fleet" }));
+  const policy = JSON.parse(readFileSync(policyPath, "utf8")); policy.bridge.profiles.claude = "invalid profile";
+  writeFileSync(policyPath, JSON.stringify(policy));
+  const before = readFileSync(settingsPath, "utf8");
+  expect(() => planAgentIntegration({ ...f, agents: ["claude"] })).toThrow("Invalid selection profile id");
+  expect(readFileSync(settingsPath, "utf8")).toBe(before);
+});
+
 test("hook install plans without writes, preserves unrelated hooks and is idempotent", () => {
   const f = fixture(), path = join(f.home, ".claude", "settings.json");
   put(path, JSON.stringify({ permissions: { allow: ["Bash(git status)"], deny: ["Read(.env)"] }, hooks: { Stop: [{ hooks: [{ type: "command", command: "existing-stop" }] }] } }));

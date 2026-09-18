@@ -92,6 +92,13 @@ before synchronization or context loading. Review the hook installation and
 restart the native client to load its current commands. Explicit `skills load`,
 `skills context`, and `skills sync` commands can still select other profiles.
 
+Reinstalling hooks without `--command` or `--selection-profile` preserves each
+agent's existing executable and profile independently, including when using
+`--agent all`. New agents use `skills` and `default`. Either explicit flag
+overrides that choice for the requested agents. The policy's shared default
+profile changes only when `--selection-profile` is supplied; older managed
+agents without a per-agent profile retain that shared default.
+
 The hook install `--include-vendor` option is retained for compatibility with
 older scripts. Hook planning always inventories and disables discovered vendor
 system skills; use `migrate native --include-vendor` when retiring their
