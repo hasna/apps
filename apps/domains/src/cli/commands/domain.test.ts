@@ -50,6 +50,7 @@ describe("registerDomainCommand", () => {
       "--offset",
       "--all",
       "--verbose",
+      "--full",
       "--json",
     ]));
   });
