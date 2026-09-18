@@ -10,6 +10,8 @@ import {
   getMemoryByKey,
   getMemoriesByKey,
   listMemories,
+  listMemoriesPage,
+  listMemoryHistoryPage,
   updateMemory,
   deleteMemory,
   bulkDeleteMemories,
@@ -643,6 +645,36 @@ describe("listMemories", () => {
     expect(result[0]!.key).toBe("high");
     expect(result[1]!.key).toBe("mid");
     expect(result[2]!.key).toBe("low");
+  });
+
+  it("uses id DESC as the final list-page tie-breaker", () => {
+    const memories = [
+      createMemory({ key: "tied-a", value: "v", importance: 5 }, "merge", db),
+      createMemory({ key: "tied-b", value: "v", importance: 5 }, "merge", db),
+      createMemory({ key: "tied-c", value: "v", importance: 5 }, "merge", db),
+    ];
+    db.run("UPDATE memories SET created_at = ?", ["2026-09-18T10:00:00.000Z"]);
+    const expected = memories.map((memory) => memory.id).sort().reverse();
+
+    const first = listMemoriesPage({ limit: 2, offset: 0 }, db);
+    const second = listMemoriesPage({ limit: 2, offset: 2 }, db);
+    expect([...first.rows, ...second.rows].map((memory) => memory.id)).toEqual(expected);
+    expect(second.rows.some((memory) => first.rows.some((row) => row.id === memory.id))).toBe(false);
+  });
+
+  it("uses id DESC as the final equal-access-time history-page tie-breaker", () => {
+    const memories = [
+      createMemory({ key: "history-tied-a", value: "v" }, "merge", db),
+      createMemory({ key: "history-tied-b", value: "v" }, "merge", db),
+      createMemory({ key: "history-tied-c", value: "v" }, "merge", db),
+    ];
+    db.run("UPDATE memories SET accessed_at = ?", ["2026-09-18T10:00:00.000Z"]);
+    const expected = memories.map((memory) => memory.id).sort().reverse();
+
+    const first = listMemoryHistoryPage({ limit: 2, offset: 0 }, db);
+    const second = listMemoryHistoryPage({ limit: 2, offset: 2 }, db);
+    expect([...first.rows, ...second.rows].map((memory) => memory.id)).toEqual(expected);
+    expect(second.rows.some((memory) => first.rows.some((row) => row.id === memory.id))).toBe(false);
   });
 });
 
