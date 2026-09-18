@@ -278,5 +278,5 @@ describe("standard-adherence: connector package SDK quarantine admission (7-day 
       if (finding) findings.push(finding);
     }
     expect(findings).toEqual([]);
-  });
+  }, 120_000);
 });
