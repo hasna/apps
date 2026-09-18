@@ -15,11 +15,11 @@ test("plan is write-free; admission pins provenance and migration; resolution fr
   expect(existsSync(f.options.storeRoot)).toBe(false);
   expect(plan.removed.map(file => file.path)).toEqual(["commands/command-example.md", "skills/example/SKILL.md"]);
   expect(plan.files.map(file => file.path)).toEqual([".claude-plugin/plugin.json", ".lsp.json", ".mcp.json", "agents/observer.md", "assets/retained.txt", "hooks/hooks.json"]);
-  const receipt = await admitPlugin("synthetic-integration", "synthetic-profile", f.target, plan.planDigest, f.options);
+  const receipt = await admitPlugin("synthetic-integration", "synthetic-profile", f.target, plan.planDigest, plan.evidenceDigest, f.options);
   const calls = f.state.bundleCalls;
   expect(await resolveAdmittedPlugin(plan.bindingId, f.options)).toBe(receipt.materializedPath);
   expect(f.state.bundleCalls - calls).toBe(2);
-  expect(await admitPlugin("synthetic-integration", "synthetic-profile", f.target, plan.planDigest, f.options)).toEqual(receipt);
+  expect(await admitPlugin("synthetic-integration", "synthetic-profile", f.target, plan.planDigest, plan.evidenceDigest, f.options)).toEqual(receipt);
   f.state.offline = true;
   await expect(resolveAdmittedPlugin(plan.bindingId, f.options)).rejects.toThrow();
   expect(existsSync(receipt.materializedPath)).toBe(true);
@@ -27,7 +27,7 @@ test("plan is write-free; admission pins provenance and migration; resolution fr
 test("revocation, changed package, cross-workspace and changed executables cannot reuse admission", async () => {
   for (const failure of ["revoke", "version", "workspace", "executable", "corrupt"]) {
     const f = fixture(), plan = await planPluginAdmission("synthetic-integration", "synthetic-profile", f.target, f.options);
-    await admitPlugin("synthetic-integration", "synthetic-profile", f.target, plan.planDigest, f.options);
+    await admitPlugin("synthetic-integration", "synthetic-profile", f.target, plan.planDigest, plan.evidenceDigest, f.options);
     if (failure === "revoke") f.state.revoked = true;
     if (failure === "version") f.update("1.0.1");
     if (failure === "workspace") f.state.workspace = "another-workspace";
@@ -39,7 +39,7 @@ test("revocation, changed package, cross-workspace and changed executables canno
 test("digest review prevents TOCTOU approval; failed timeout and missing migration never publish a directory", async () => {
   const f = fixture(), plan = await planPluginAdmission("synthetic-integration", "synthetic-profile", f.target, f.options);
   f.update("1.0.1");
-  await expect(admitPlugin("synthetic-integration", "synthetic-profile", f.target, plan.planDigest, f.options)).rejects.toThrow("plan changed");
+  await expect(admitPlugin("synthetic-integration", "synthetic-profile", f.target, plan.planDigest, plan.evidenceDigest, f.options)).rejects.toThrow("plan changed");
   expect(existsSync(f.options.storeRoot)).toBe(false);
   await expect(planPluginAdmission("synthetic-integration", "synthetic-profile", f.target, { ...f.options, timeoutMs: 10, client: { ...f.client, resolveProfile: () => new Promise(() => {}) } })).rejects.toThrow("deadline");
   expect(existsSync(f.options.storeRoot)).toBe(false);
