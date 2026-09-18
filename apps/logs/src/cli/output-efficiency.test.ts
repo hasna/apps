@@ -25,6 +25,10 @@ afterEach(() => {
 });
 
 function fixture(count = 40): string {
+  // This file shares the module-global DB adapter with any earlier test file in
+  // the same Bun worker. Close it before changing HASNA_LOGS_DB_PATH so this
+  // fixture always seeds and reads its own database.
+  closeDb();
   const root = mkdtempSync(join(tmpdir(), "logs-output-efficiency-"));
   roots.push(root);
   process.env.HASNA_LOGS_DB_PATH = join(root, "logs.db");
