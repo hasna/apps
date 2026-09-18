@@ -738,6 +738,7 @@ export interface UpdateTaskInput {
   sla_minutes?: number | null;
   actual_minutes?: number;
   completed_at?: string | null;
+  archived_at?: string | null;
   confidence?: number | null;
   retry_count?: number;
   max_retries?: number;
@@ -828,6 +829,8 @@ export interface TaskFilter {
   cursor?: string;
   /** When true, include archived tasks. Default: false (archived tasks excluded) */
   include_archived?: boolean;
+  /** When true, select only tasks carrying archived_at. Implies include_archived. */
+  archived_only?: boolean;
   /** Exact top-level metadata filters, e.g. { fingerprint: "loop:key" }. */
   metadata?: Record<string, unknown>;
 }
@@ -1430,7 +1433,7 @@ export class ProjectNotFoundError extends Error {
 
 export class ResourceConflictError extends Error {
   constructor(
-    public readonly code: "TEMPLATE_VERSION_CONFLICT" | "TASK_LIST_NOT_EMPTY" | "PLAN_NOT_EMPTY" | "PROJECT_INCOMPLETE" | "PROJECT_NOT_EMPTY" | "PROJECT_SLUG_CONFLICT" | "TASK_LIST_SLUG_CONFLICT" | "PLAN_SLUG_CONFLICT" | "PLAN_PROJECT_LINK_CONFLICT" | "TASK_PARENT_CYCLE" | "PROJECT_PARENT_CYCLE" | "SNAPSHOT_DESTINATION_CONFLICT",
+    public readonly code: "TEMPLATE_VERSION_CONFLICT" | "TASK_LIST_NOT_EMPTY" | "PLAN_NOT_EMPTY" | "PROJECT_INCOMPLETE" | "PROJECT_NOT_EMPTY" | "PROJECT_SLUG_CONFLICT" | "TASK_LIST_SLUG_CONFLICT" | "PLAN_SLUG_CONFLICT" | "PLAN_PROJECT_LINK_CONFLICT" | "TASK_PARENT_CYCLE" | "PROJECT_PARENT_CYCLE" | "SNAPSHOT_DESTINATION_CONFLICT" | "BULK_DELETE_DUPLICATE_TASK" | "BULK_CREATE_DUPLICATE_DEPENDENCY",
     message: string,
   ) {
     super(message);

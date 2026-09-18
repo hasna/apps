@@ -450,8 +450,11 @@ export function listTasks(filter: TaskFilter = {}, db?: Database): Task[] {
     }
   }
 
-  // Exclude archived tasks by default
-  if (!filter.include_archived) {
+  // Archive selection is SQL-side so an archived-only page never scans the
+  // fleet's full live corpus. archived_only takes precedence over inclusion.
+  if (filter.archived_only) {
+    conditions.push("archived_at IS NOT NULL");
+  } else if (!filter.include_archived) {
     conditions.push("archived_at IS NULL");
   }
 
@@ -467,9 +470,12 @@ export function listTasks(filter: TaskFilter = {}, db?: Database): Task[] {
     }
   }
 
+  const orderBy = filter.archived_only
+    ? "archived_at DESC, id DESC"
+    : `${PRIORITY_RANK}, created_at DESC, id ASC`;
   const rows = d
     .query(
-      `SELECT * FROM tasks ${where} ORDER BY ${PRIORITY_RANK}, created_at DESC, id ASC${limitClause}`,
+      `SELECT * FROM tasks ${where} ORDER BY ${orderBy}${limitClause}`,
     )
     .all(...params) as TaskRow[];
 
@@ -679,8 +685,10 @@ export function countTasks(filter: Omit<TaskFilter, 'limit' | 'offset'> = {}, db
 
   addMetadataConditions(filter.metadata, conditions, params);
 
-  // Exclude archived tasks by default (consistent with listTasks)
-  if (!filter.include_archived) {
+  // Keep count in exact parity with the SQL-side archive selection above.
+  if (filter.archived_only) {
+    conditions.push("archived_at IS NOT NULL");
+  } else if (!filter.include_archived) {
     conditions.push("archived_at IS NULL");
   }
 
@@ -868,6 +876,10 @@ function updateTaskStored(
     sets.push("completed_at = ?");
     params.push(input.completed_at);
   }
+  if (input.archived_at !== undefined) {
+    sets.push("archived_at = ?");
+    params.push(input.archived_at);
+  }
   if (input.confidence !== undefined) {
     sets.push("confidence = ?");
     params.push(input.confidence);
@@ -957,6 +969,7 @@ function updateTaskStored(
   if (input.title !== undefined && input.title !== task.title) logTaskChange(id, "update", "title", task.title, input.title, agentId, d);
   if (input.parent_id !== undefined && input.parent_id !== task.parent_id) logTaskChange(id, "update", "parent_id", task.parent_id, input.parent_id, agentId, d);
   if (input.assigned_to !== undefined && input.assigned_to !== task.assigned_to) logTaskChange(id, "update", "assigned_to", task.assigned_to, input.assigned_to, agentId, d);
+  if (input.archived_at !== undefined && input.archived_at !== task.archived_at) logTaskChange(id, "update", "archived_at", task.archived_at, input.archived_at, agentId, d);
   if (input.working_dir !== undefined && input.working_dir !== task.working_dir) logTaskChange(id, "update", "working_dir", task.working_dir, input.working_dir, agentId, d);
   if (input.approved_by !== undefined) logTaskChange(id, "approve", "approved_by", null, input.approved_by, agentId, d);
 

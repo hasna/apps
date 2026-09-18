@@ -22,8 +22,14 @@ import { resolveStorageClient, type HasnaStorageClient } from "@hasna/contracts/
 import { randomUUID } from "node:crypto";
 import { resolve as resolvePath } from "node:path";
 import type { Agent, CreatePlanInput, CreateTaskListInput, CreateTemplateInput, Plan, PlanComment, PlanProjectLinkResult, PlanProjectLinkRollbackResult, Project, ProjectTaskListEnsureResult, ProjectTaskListRollbackResult, RegisterAgentInput, StaleLockHandoffReceipt, Task, TaskComment, TaskDependency, TaskFilter, TaskHistory, TaskList, TaskTemplate, TemplateWithTasks, UpdatePlanInput, UpdateTaskListInput } from "../types/index.js";
-import { isBlockingDependencyStatus } from "../types/index.js";
-import type { TodosTaskFailureResult, UpdateTemplateInput } from "../storage/interfaces.js";
+import { isBlockingDependencyStatus, TASK_PRIORITIES, TASK_STATUSES } from "../types/index.js";
+import type {
+  TodosBulkCreateReceipt,
+  TodosBulkCreateTaskInput,
+  TodosBulkDeleteReceipt,
+  TodosTaskFailureResult,
+  UpdateTemplateInput,
+} from "../storage/interfaces.js";
 import { redactEvidenceText } from "../lib/redaction.js";
 import { changedSinceStampNewer } from "../lib/instant-compare.js";
 import type { IntegrityReport, IntegrityTaskRow } from "../lib/integrity.js";
@@ -1120,6 +1126,12 @@ function toListQuery(filter: TaskFilter = {}): Record<string, string | number> {
   if (filter.project_id) query["project_id"] = filter.project_id;
   if (filter.parent_id !== undefined) query["parent_id"] = filter.parent_id ?? "";
   if (filter.include_subtasks !== undefined) query["include_subtasks"] = filter.include_subtasks ? "true" : "false";
+  // `GET /v1/tasks` accepts include_archived (server: src/server/v1.ts) and the
+  // Postgres adapter only excludes archived rows when it is explicitly false.
+  // Without forwarding it there was no way to ask the hosted authority for the
+  // archived set, so `get_archived_tasks` had no route to call.
+  if (filter.include_archived !== undefined) query["include_archived"] = filter.include_archived ? "true" : "false";
+  if (filter.archived_only !== undefined) query["archived_only"] = filter.archived_only ? "true" : "false";
   if (filter.plan_id) query["plan_id"] = filter.plan_id;
   if (filter.task_list_id) query["task_list_id"] = filter.task_list_id;
   if (filter.assigned_to) query["assigned_to"] = filter.assigned_to;
@@ -1437,6 +1449,154 @@ export async function cloudListTasks(client: HasnaStorageClient, filter: TaskFil
   return union.slice(start, windowEnd);
 }
 
+export interface CloudArchivedTaskPage {
+  tasks: Task[];
+  total: number;
+  limit: number;
+  offset: number;
+  has_more: boolean;
+  next_offset: number | null;
+}
+
+/** Read one archived-only page; never exhaust or filter the full task corpus. */
+export async function cloudListArchivedTasksPage(
+  client: HasnaStorageClient,
+  options: { project_id?: string; limit?: number; offset?: number } = {},
+): Promise<CloudArchivedTaskPage> {
+  const limit = options.limit ?? 50;
+  const offset = options.offset ?? 0;
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200) {
+    throw new Error("archived task limit must be an integer from 1 to 200");
+  }
+  if (!Number.isSafeInteger(offset) || offset < 0 || offset > 10_000) {
+    throw new Error("archived task offset must be an integer from 0 to 10000");
+  }
+  const page = await requestRawCloudTaskPage(client, {
+    include_archived: true,
+    archived_only: true,
+    include_subtasks: true,
+    ...(options.project_id ? { project_id: options.project_id } : {}),
+    limit,
+    offset,
+  });
+  if (page.total === undefined || page.tasks.length > limit || offset + page.tasks.length > page.total) {
+    throw new Error("REMOTE_API_INCOMPATIBLE: archived-only task page lacks a consistent authoritative total");
+  }
+  const seen = new Set<string>();
+  for (const task of page.tasks) {
+    if (!task || typeof task.id !== "string" || !task.id || !task.archived_at || seen.has(task.id) ||
+        (options.project_id !== undefined && task.project_id !== options.project_id)) {
+      throw new Error("REMOTE_API_INCOMPATIBLE: archived-only task page returned a malformed, repeated, or out-of-scope row");
+    }
+    seen.add(task.id);
+  }
+  const hasMore = offset + page.tasks.length < page.total;
+  if (hasMore && page.tasks.length === 0) {
+    throw new Error("REMOTE_API_INCOMPATIBLE: archived-only task pagination stalled before its authoritative total");
+  }
+  return {
+    tasks: page.tasks,
+    total: page.total,
+    limit,
+    offset,
+    has_more: hasMore,
+    next_offset: hasMore ? offset + page.tasks.length : null,
+  };
+}
+
+/**
+ * Exhaust one exact task query through bounded pages. New hosted MCP operations
+ * use this instead of an unbounded list request so they either observe the whole
+ * authoritative selection or refuse before mutation.
+ */
+export async function cloudListTasksCompleteBounded(
+  client: HasnaStorageClient,
+  filter: TaskFilter,
+  maxTasks = 10_000,
+): Promise<Task[]> {
+  if (!Number.isSafeInteger(maxTasks) || maxTasks < 1 || maxTasks > 10_000) {
+    throw new Error("maxTasks must be an integer from 1 to 10000");
+  }
+  if ((filter.offset ?? 0) !== 0) throw new Error("complete bounded task reads require offset zero");
+  if (Array.isArray(filter.status)) {
+    if (filter.status.length === 0) {
+      const { status: _status, ...unfiltered } = filter;
+      return cloudListTasksCompleteBounded(client, unfiltered, maxTasks);
+    }
+    const combined: Task[] = [];
+    const ids = new Set<string>();
+    const { status: _status, ...baseFilter } = filter;
+    for (const status of filter.status) {
+      const remaining = maxTasks - combined.length;
+      if (remaining < 1) throw new Error(`REMOTE_RESULT_TOO_LARGE: /v1/tasks exceeds the bounded limit ${maxTasks}`);
+      const rows = await cloudListTasksCompleteBounded(client, { ...baseFilter, status }, remaining);
+      for (const task of rows) {
+        if (ids.has(task.id)) {
+          throw new Error("REMOTE_API_INCOMPATIBLE: scalar status pages repeated a task across disjoint statuses");
+        }
+        ids.add(task.id);
+        combined.push(task);
+      }
+    }
+    combined.sort(compareCloudTaskOrder);
+    return combined;
+  }
+  const pageSize = Math.min(500, maxTasks);
+  const base = { ...filter, offset: undefined, limit: undefined };
+  const first = await requestRawCloudTaskPage(client, { ...base, limit: pageSize, offset: 0 });
+  if (first.total === undefined) {
+    throw new Error("REMOTE_API_INCOMPATIBLE: complete bounded task reads require an authoritative total");
+  }
+  const total = first.total;
+  if (!Number.isSafeInteger(total) || total < 0 || total > maxTasks) {
+    throw new Error(`REMOTE_RESULT_TOO_LARGE: /v1/tasks reports ${String(total)} rows above the bounded limit ${maxTasks}`);
+  }
+  const tasks: Task[] = [];
+  const ids = new Set<string>();
+  const statuses = filter.status === undefined ? null : new Set(Array.isArray(filter.status) ? filter.status : [filter.status]);
+  const priorities = filter.priority === undefined ? null : new Set(Array.isArray(filter.priority) ? filter.priority : [filter.priority]);
+  const matchesSelection = (task: Task) => {
+    if (statuses && !statuses.has(task.status)) return false;
+    if (priorities && !priorities.has(task.priority)) return false;
+    if (filter.project_id !== undefined && task.project_id !== filter.project_id) return false;
+    if (filter.parent_id !== undefined && (task.parent_id ?? null) !== filter.parent_id) return false;
+    if (filter.plan_id !== undefined && task.plan_id !== filter.plan_id) return false;
+    if (filter.task_list_id !== undefined && task.task_list_id !== filter.task_list_id) return false;
+    if (filter.assigned_to !== undefined && task.assigned_to !== filter.assigned_to) return false;
+    if (filter.agent_id !== undefined && task.agent_id !== filter.agent_id) return false;
+    if (filter.archived_only === true && !task.archived_at) return false;
+    if (filter.include_archived === false && task.archived_at) return false;
+    if (filter.include_subtasks !== true && filter.parent_id === undefined && task.parent_id) return false;
+    return true;
+  };
+  const append = (page: Task[]) => {
+    for (const task of page) {
+      if (!task || typeof task.id !== "string" || !task.id || ids.has(task.id)) {
+        throw new Error("REMOTE_API_INCOMPATIBLE: /v1/tasks returned a malformed or repeated task page");
+      }
+      if (!matchesSelection(task)) {
+        throw new Error("REMOTE_API_INCOMPATIBLE: /v1/tasks returned a row outside the requested bounded selection");
+      }
+      ids.add(task.id);
+      tasks.push(task);
+    }
+  };
+  append(first.tasks);
+  if (tasks.length > total) throw new Error("REMOTE_API_INCOMPATIBLE: /v1/tasks returned more rows than its total");
+  while (tasks.length < total) {
+    const page = await requestRawCloudTaskPage(client, {
+      ...base,
+      limit: Math.min(pageSize, total - tasks.length),
+      offset: tasks.length,
+    });
+    if (page.total !== total || page.tasks.length === 0 || tasks.length + page.tasks.length > total) {
+      throw new Error("REMOTE_API_INCOMPATIBLE: /v1/tasks pagination changed or stopped before the authoritative total");
+    }
+    append(page.tasks);
+  }
+  return tasks;
+}
+
 /**
  * Resolve an exact UUID, an exact short id, or a unique task-id prefix to a
  * canonical task UUID over `/v1` in a SINGLE bounded request. Full UUIDs
@@ -1592,6 +1752,33 @@ export async function cloudUpdateTask(client: HasnaStorageClient, id: string, pa
   return unwrapTask(await client.transport.patch<unknown>(`/tasks/${encodeURIComponent(id)}`, patch));
 }
 
+export async function cloudUpdateTaskVerified(
+  client: HasnaStorageClient,
+  id: string,
+  patch: Record<string, unknown>,
+): Promise<Task> {
+  const task = await cloudUpdateTask(client, id, patch);
+  if (!task || typeof task !== "object" || typeof task.id !== "string" || task.id !== id) {
+    throw new Error(`REMOTE_API_INCOMPATIBLE: PATCH /v1/tasks/${encodeURIComponent(id)} returned a mismatched task`);
+  }
+  const row = task as unknown as Record<string, unknown>;
+  if (typeof row["title"] !== "string" || !TASK_STATUSES.includes(row["status"] as never) ||
+      !TASK_PRIORITIES.includes(row["priority"] as never) || !Number.isSafeInteger(row["version"]) ||
+      typeof row["created_at"] !== "string" || typeof row["updated_at"] !== "string" ||
+      !Array.isArray(row["tags"]) || !row["metadata"] || typeof row["metadata"] !== "object" || Array.isArray(row["metadata"])) {
+    throw new Error(`REMOTE_API_INCOMPATIBLE: PATCH /v1/tasks/${encodeURIComponent(id)} returned an incomplete task record`);
+  }
+  for (const [field, expected] of Object.entries(patch)) {
+    if (field === "version") continue;
+    const actual = row[field] ?? null;
+    const normalizedExpected = expected ?? null;
+    if (JSON.stringify(actual) !== JSON.stringify(normalizedExpected)) {
+      throw new Error(`REMOTE_API_INCOMPATIBLE: PATCH /v1/tasks/${encodeURIComponent(id)} did not preserve requested field ${field}`);
+    }
+  }
+  return task;
+}
+
 /** Delete a task (`DELETE /v1/tasks/:id`); resolves for 2xx and 404. */
 export async function cloudDeleteTask(client: HasnaStorageClient, id: string): Promise<boolean> {
   try {
@@ -1601,6 +1788,159 @@ export async function cloudDeleteTask(client: HasnaStorageClient, id: string): P
     if (error && typeof error === "object" && (error as { status?: unknown }).status === 404) return false;
     throw error;
   }
+}
+
+function bulkReceiptError(route: string, detail: string): Error {
+  return new Error(`REMOTE_API_INCOMPATIBLE: ${route} ${detail}; refusing to report a partial or ambiguous bulk mutation`);
+}
+
+export async function cloudBulkCreateTasks(
+  client: HasnaStorageClient,
+  tasks: TodosBulkCreateTaskInput[],
+): Promise<TodosBulkCreateReceipt> {
+  const tempIds = new Set(tasks.flatMap((task) => task.temp_id ? [task.temp_id] : []));
+  const normalizedTasks: TodosBulkCreateTaskInput[] = [];
+  for (const task of tasks) {
+    const dependsOn: string[] = [];
+    for (const reference of task.depends_on ?? []) {
+      dependsOn.push(tempIds.has(reference) ? reference : await cloudResolveTaskRef(client, reference));
+    }
+    if (new Set(dependsOn).size !== dependsOn.length) {
+      throw new Error("BULK_CREATE_DUPLICATE_DEPENDENCY: multiple references resolve to the same dependency; no request was sent");
+    }
+    normalizedTasks.push({ ...task, ...(dependsOn.length ? { depends_on: dependsOn } : { depends_on: undefined }) });
+  }
+  const raw = await requiredRemoteRoute(
+    client,
+    "/v1/tasks/bulk-create",
+    () => client.transport.post<unknown>(
+      "/tasks/bulk-create",
+      { schema_version: 1, tasks: normalizedTasks },
+      { retry: false },
+    ),
+  );
+  const receipt = raw && typeof raw === "object" ? (raw as Record<string, unknown>)["receipt"] : null;
+  if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)) {
+    throw bulkReceiptError("/v1/tasks/bulk-create", "did not return a receipt object");
+  }
+  const value = receipt as Record<string, unknown>;
+  if (value["schema_version"] !== 1 || value["atomic"] !== true) {
+    throw bulkReceiptError("/v1/tasks/bulk-create", "did not attest schema_version=1 and atomic=true");
+  }
+  const created = value["created"];
+  const dependencies = value["dependencies"];
+  if (!Array.isArray(created) || created.length !== normalizedTasks.length || !Array.isArray(dependencies)) {
+    throw bulkReceiptError("/v1/tasks/bulk-create", "returned incomplete created/dependency collections");
+  }
+  const createdIds = new Set<string>();
+  const parsedCreated: TodosBulkCreateReceipt["created"] = created.map((item, index) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      throw bulkReceiptError("/v1/tasks/bulk-create", `created[${index}] is malformed`);
+    }
+    const row = item as Record<string, unknown>;
+    const expectedTemp = normalizedTasks[index]!.temp_id ?? null;
+    if (row["temp_id"] !== expectedTemp || typeof row["id"] !== "string" || !UUID_RE.test(row["id"]) ||
+        typeof row["title"] !== "string" || row["title"] !== normalizedTasks[index]!.title ||
+        (row["short_id"] !== null && typeof row["short_id"] !== "string")) {
+      throw bulkReceiptError("/v1/tasks/bulk-create", `created[${index}] does not match the requested task`);
+    }
+    if (createdIds.has(row["id"])) throw bulkReceiptError("/v1/tasks/bulk-create", "returned duplicate task ids");
+    createdIds.add(row["id"]);
+    return {
+      temp_id: expectedTemp,
+      id: row["id"],
+      short_id: row["short_id"] as string | null,
+      title: row["title"],
+    };
+  });
+  const idByTemp = new Map<string, string>();
+  normalizedTasks.forEach((task, index) => {
+    if (task.temp_id) idByTemp.set(task.temp_id, parsedCreated[index]!.id);
+  });
+  const expectedEdges = normalizedTasks.flatMap((task, index) => (task.depends_on ?? []).map((reference) => ({
+    task_id: parsedCreated[index]!.id,
+    depends_on: idByTemp.get(reference) ?? reference,
+  })));
+  if (dependencies.length !== expectedEdges.length) {
+    throw bulkReceiptError("/v1/tasks/bulk-create", "returned the wrong dependency-edge count");
+  }
+  const seenEdges = new Set<string>();
+  const parsedDependencies: TaskDependency[] = dependencies.map((item, index) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      throw bulkReceiptError("/v1/tasks/bulk-create", `dependencies[${index}] is malformed`);
+    }
+    const row = item as Record<string, unknown>;
+    if (typeof row["task_id"] !== "string" || !createdIds.has(row["task_id"]) ||
+        typeof row["depends_on"] !== "string" || !row["depends_on"]) {
+      throw bulkReceiptError("/v1/tasks/bulk-create", `dependencies[${index}] is not bound to this batch`);
+    }
+    const key = `${row["task_id"]}\u0000${row["depends_on"]}`;
+    if (seenEdges.has(key)) throw bulkReceiptError("/v1/tasks/bulk-create", "returned duplicate dependency edges");
+    seenEdges.add(key);
+    return { task_id: row["task_id"], depends_on: row["depends_on"] };
+  });
+  const expectedKeys = expectedEdges.map((edge) => `${edge.task_id}\u0000${edge.depends_on}`).sort();
+  const receivedKeys = parsedDependencies.map((edge) => `${edge.task_id}\u0000${edge.depends_on}`).sort();
+  if (JSON.stringify(receivedKeys) !== JSON.stringify(expectedKeys)) {
+    throw bulkReceiptError("/v1/tasks/bulk-create", "returned dependency edges that do not match the request");
+  }
+  return { schema_version: 1, atomic: true, created: parsedCreated, dependencies: parsedDependencies };
+}
+
+export async function cloudBulkDeleteTasks(
+  client: HasnaStorageClient,
+  taskIds: string[],
+  force: boolean,
+): Promise<TodosBulkDeleteReceipt> {
+  const raw = await requiredRemoteRoute(
+    client,
+    "/v1/tasks/bulk-delete",
+    () => client.transport.post<unknown>(
+      "/tasks/bulk-delete",
+      { schema_version: 1, task_ids: taskIds, force },
+      { retry: false },
+    ),
+  );
+  const receipt = raw && typeof raw === "object" ? (raw as Record<string, unknown>)["receipt"] : null;
+  if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)) {
+    throw bulkReceiptError("/v1/tasks/bulk-delete", "did not return a receipt object");
+  }
+  const value = receipt as Record<string, unknown>;
+  if (value["schema_version"] !== 1 || value["atomic"] !== true || value["force"] !== force || !Array.isArray(value["results"])) {
+    throw bulkReceiptError("/v1/tasks/bulk-delete", "did not return the requested atomic force receipt");
+  }
+  if (value["results"].length !== taskIds.length) {
+    throw bulkReceiptError("/v1/tasks/bulk-delete", "returned an incomplete result set");
+  }
+  const seenTaskIds = new Set<string>();
+  const results: TodosBulkDeleteReceipt["results"] = value["results"].map((item, index) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      throw bulkReceiptError("/v1/tasks/bulk-delete", `results[${index}] is malformed`);
+    }
+    const row = item as Record<string, unknown>;
+    const outcome = row["outcome"];
+    const taskId = row["task_id"];
+    const reason = row["reason"];
+    if (row["requested_id"] !== taskIds[index] || !["deleted", "skipped", "missing"].includes(String(outcome)) ||
+        (taskId !== null && (typeof taskId !== "string" || !UUID_RE.test(taskId))) ||
+        (UUID_RE.test(taskIds[index]!) && taskId !== null && taskId.toLowerCase() !== taskIds[index]!.toLowerCase()) ||
+        (outcome === "deleted" && (typeof taskId !== "string" || reason !== null)) ||
+        (outcome === "skipped" && (typeof taskId !== "string" || reason !== "has_children")) ||
+        (outcome === "missing" && (taskId !== null || reason !== "not_found"))) {
+      throw bulkReceiptError("/v1/tasks/bulk-delete", `results[${index}] contradicts the request`);
+    }
+    if (typeof taskId === "string") {
+      if (seenTaskIds.has(taskId)) throw bulkReceiptError("/v1/tasks/bulk-delete", "returned duplicate resolved task ids");
+      seenTaskIds.add(taskId);
+    }
+    return {
+      requested_id: taskIds[index]!,
+      task_id: taskId as string | null,
+      outcome: outcome as "deleted" | "skipped" | "missing",
+      reason: reason as "has_children" | "not_found" | null,
+    };
+  });
+  return { schema_version: 1, atomic: true, force, results };
 }
 
 function unwrapTemplate(raw: unknown): TemplateWithTasks {
@@ -2010,11 +2350,74 @@ export async function cloudScanTaskRows(
   return { complete: reason === undefined, ...(reason ? { reason } : {}), scanned: rows.length, total, pages, rows };
 }
 
-/** List registered agents from the cloud (`GET /v1/agents`). */
-export async function cloudListAgents(client: HasnaStorageClient): Promise<Agent[]> {
-  const res = await client.list<Agent>("agents");
-  const envelope = res.raw as { agents?: Agent[] } | undefined;
-  return Array.isArray(envelope?.agents) ? envelope!.agents : res.items;
+/** Exhaust the shared roster through storage-bounded `/v1/agents` pages. */
+export async function cloudListAgents(
+  client: HasnaStorageClient,
+  options: { include_archived?: boolean; max_agents?: number } = {},
+): Promise<Agent[]> {
+  const maxAgents = options.max_agents ?? 10_000;
+  if (!Number.isSafeInteger(maxAgents) || maxAgents < 1 || maxAgents > 10_000) {
+    throw new Error("max_agents must be an integer from 1 to 10000");
+  }
+  const pageSize = Math.min(500, maxAgents);
+  const agents: Agent[] = [];
+  const seen = new Set<string>();
+  let total: number | null = null;
+  while (total === null || agents.length < total) {
+    const offset = agents.length;
+    const requestedLimit = Math.min(pageSize, maxAgents - offset);
+    if (requestedLimit < 1) {
+      throw new Error(`REMOTE_RESULT_TOO_LARGE: /v1/agents exceeds the bounded limit ${maxAgents}`);
+    }
+    const raw = await requiredRemoteRoute(client, "/v1/agents", () => client.transport.get<unknown>("/agents", {
+      query: { limit: requestedLimit, offset, include_archived: options.include_archived === true },
+    }));
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      throw new Error("REMOTE_API_INCOMPATIBLE: /v1/agents did not return a bounded roster envelope");
+    }
+    const envelope = raw as Record<string, unknown>;
+    const page = envelope["agents"];
+    const pageTotal = envelope["total"];
+    if (!Array.isArray(page) || !Number.isSafeInteger(pageTotal) || (pageTotal as number) < 0 ||
+        envelope["count"] !== page.length || envelope["limit"] !== requestedLimit || envelope["offset"] !== offset ||
+        page.length > requestedLimit || offset + page.length > (pageTotal as number)) {
+      throw new Error("REMOTE_API_INCOMPATIBLE: /v1/agents returned a contradictory bounded page");
+    }
+    if ((pageTotal as number) > maxAgents) {
+      throw new Error(`REMOTE_RESULT_TOO_LARGE: /v1/agents reports ${String(pageTotal)} rows above the bounded limit ${maxAgents}`);
+    }
+    if (total !== null && pageTotal !== total) {
+      throw new Error("REMOTE_API_INCOMPATIBLE: /v1/agents total changed during pagination");
+    }
+    total = pageTotal as number;
+    const hasMore = offset + page.length < total;
+    if (envelope["has_more"] !== hasMore || envelope["next_offset"] !== (hasMore ? offset + page.length : null) ||
+        (hasMore && page.length === 0)) {
+      throw new Error("REMOTE_API_INCOMPATIBLE: /v1/agents returned a stalled or contradictory page receipt");
+    }
+    for (const item of page) {
+      const agent = item as Agent;
+      if (!agent || typeof agent !== "object" || typeof agent.id !== "string" || !agent.id ||
+          typeof agent.name !== "string" || !agent.name || seen.has(agent.id)) {
+        throw new Error("REMOTE_API_INCOMPATIBLE: /v1/agents returned a malformed or repeated agent");
+      }
+      seen.add(agent.id);
+      agents.push(agent);
+    }
+  }
+  return agents;
+}
+
+export async function cloudResolveAgentRef(client: HasnaStorageClient, ref: string): Promise<string> {
+  const normalized = ref.trim().toLowerCase();
+  if (!normalized) throw new Error("Agent reference must not be empty");
+  const matches = (await cloudListAgents(client)).filter((agent) =>
+    agent.id.toLowerCase() === normalized || agent.name.toLowerCase() === normalized);
+  if (matches.length === 0) throw new Error(`Agent not found: ${ref}`);
+  if (matches.length > 1 && new Set(matches.map((agent) => agent.id)).size > 1) {
+    throw new Error(`Agent reference is ambiguous: ${ref}`);
+  }
+  return matches[0]!.id;
 }
 
 /** List projects from the cloud (`GET /v1/projects`). */
@@ -2722,11 +3125,85 @@ function redactComment(comment: TaskComment): TaskComment {
  * a cloud task whose trail lives in the shared dataset. Requires the
  * `/v1/tasks/:id/history` server route (ECS redeploy).
  */
+function assertTaskHistoryRows(raw: unknown, route: string): TaskHistory[] {
+  if (!Array.isArray(raw)) {
+    throw new Error(`REMOTE_API_INCOMPATIBLE: ${route} did not return a task-history array`);
+  }
+  for (let index = 0; index < raw.length; index++) {
+    const entry = raw[index];
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      throw new Error(`REMOTE_API_INCOMPATIBLE: ${route} entry ${index} is malformed`);
+    }
+    const row = entry as Record<string, unknown>;
+    if (typeof row["id"] !== "string" || !row["id"] || typeof row["task_id"] !== "string" || !row["task_id"] ||
+        typeof row["action"] !== "string" || !row["action"] || typeof row["created_at"] !== "string" || !row["created_at"]) {
+      throw new Error(`REMOTE_API_INCOMPATIBLE: ${route} entry ${index} is incomplete`);
+    }
+  }
+  return raw as TaskHistory[];
+}
+
 export async function cloudTaskHistory(client: HasnaStorageClient, taskId: string): Promise<TaskHistory[]> {
   const raw = await client.transport.get<unknown>(`/tasks/${encodeURIComponent(taskId)}/history`);
-  const envelope = (raw ?? {}) as { history?: TaskHistory[] };
-  if (Array.isArray(envelope.history)) return envelope.history;
-  return Array.isArray(raw) ? (raw as TaskHistory[]) : [];
+  if (Array.isArray(raw)) return assertTaskHistoryRows(raw, "/v1/tasks/:id/history");
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("REMOTE_API_INCOMPATIBLE: /v1/tasks/:id/history did not return an object");
+  }
+  const envelope = raw as Record<string, unknown>;
+  const history = assertTaskHistoryRows(envelope["history"], "/v1/tasks/:id/history");
+  if (envelope["count"] !== undefined && envelope["count"] !== history.length) {
+    throw new Error("REMOTE_API_INCOMPATIBLE: /v1/tasks/:id/history count contradicts its rows");
+  }
+  if (history.some((entry) => entry.task_id !== taskId)) {
+    throw new Error("REMOTE_API_INCOMPATIBLE: /v1/tasks/:id/history returned an entry for another task");
+  }
+  return history;
+}
+
+export interface CloudTaskHistoryPage {
+  history: TaskHistory[];
+  count: number;
+  total: number;
+  limit: number;
+  offset: number;
+  order: "asc" | "desc";
+  has_more: boolean;
+  next_offset: number | null;
+}
+
+export async function cloudTaskHistoryPage(
+  client: HasnaStorageClient,
+  taskId: string,
+  options: { limit: number; offset: number; order: "asc" | "desc"; since?: string; until?: string },
+): Promise<CloudTaskHistoryPage> {
+  const raw = await requiredRemoteRoute(client, "/v1/tasks/:id/history pagination", () =>
+    client.transport.get<unknown>(`/tasks/${encodeURIComponent(taskId)}/history`, { query: options }));
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("REMOTE_API_INCOMPATIBLE: paginated task history did not return an object");
+  }
+  const envelope = raw as Record<string, unknown>;
+  const history = assertTaskHistoryRows(envelope["history"], "/v1/tasks/:id/history");
+  const count = envelope["count"];
+  const total = envelope["total"];
+  const limit = envelope["limit"];
+  const offset = envelope["offset"];
+  const order = envelope["order"];
+  const hasMore = envelope["has_more"];
+  const nextOffset = envelope["next_offset"];
+  if (count !== history.length || total === undefined || !Number.isSafeInteger(total) || (total as number) < 0 ||
+      limit !== options.limit || offset !== options.offset || order !== options.order || typeof hasMore !== "boolean" ||
+      (nextOffset !== null && (!Number.isSafeInteger(nextOffset) || (nextOffset as number) < 0)) ||
+      history.length > options.limit ||
+      (history.length > 0 && (options.offset >= (total as number) || history.length > (total as number) - options.offset)) ||
+      (hasMore ? nextOffset !== options.offset + history.length : nextOffset !== null) ||
+      hasMore !== (options.offset + history.length < (total as number)) ||
+      history.some((entry) => entry.task_id !== taskId)) {
+    throw new Error("REMOTE_API_INCOMPATIBLE: paginated task history returned contradictory metadata");
+  }
+  return {
+    history, count: history.length, total: total as number, limit: options.limit, offset: options.offset,
+    order: options.order, has_more: hasMore, next_offset: nextOffset as number | null,
+  };
 }
 
 /** Result of an idempotent fingerprint upsert (`POST /v1/tasks/upsert`). */
@@ -3653,11 +4130,26 @@ export async function cloudTaskStats(client: HasnaStorageClient, filter: TaskFil
  * Requires the `/v1/activity` server route (ECS redeploy).
  */
 export async function cloudRecentActivity(client: HasnaStorageClient, limit = 50): Promise<TaskHistory[]> {
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 10_000) {
+    throw new Error("activity limit must be an integer from 1 to 10000");
+  }
   const raw = await client.transport.get<unknown>("/activity", { query: { limit } });
-  const envelope = (raw ?? {}) as { activity?: TaskHistory[]; entries?: TaskHistory[] };
-  if (Array.isArray(envelope.activity)) return envelope.activity;
-  if (Array.isArray(envelope.entries)) return envelope.entries;
-  return Array.isArray(raw) ? (raw as TaskHistory[]) : [];
+  if (Array.isArray(raw)) {
+    const legacy = assertTaskHistoryRows(raw, "/v1/activity");
+    if (legacy.length > limit) throw new Error("REMOTE_API_INCOMPATIBLE: /v1/activity exceeded its requested bound");
+    return legacy;
+  }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("REMOTE_API_INCOMPATIBLE: /v1/activity did not return an object");
+  }
+  const envelope = raw as Record<string, unknown>;
+  const rows = envelope["activity"] ?? envelope["entries"];
+  const activity = assertTaskHistoryRows(rows, "/v1/activity");
+  if (activity.length > limit || envelope["count"] !== activity.length ||
+      (envelope["limit"] !== undefined && envelope["limit"] !== limit)) {
+    throw new Error("REMOTE_API_INCOMPATIBLE: /v1/activity count or limit contradicts its rows");
+  }
+  return activity;
 }
 
 /**

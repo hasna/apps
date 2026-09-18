@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import { TaskReferenceAmbiguousError, type Task, type TaskDependency, type TaskFilter } from "../types/index.js";
+import { ResourceConflictError, TaskNotFoundError, TaskReferenceAmbiguousError, type Task, type TaskDependency, type TaskFilter, type TaskHistory } from "../types/index.js";
 import { searchTasks } from "../lib/search.js";
 import {
   createTask,
@@ -50,6 +50,7 @@ import {
   getAgent,
   getAgentByName,
   listAgents,
+  listAgentsPage,
   updateAgent,
 } from "../db/agents.js";
 import {
@@ -84,7 +85,15 @@ import {
   getPlanProjectLinkReceiptByIdempotencyKey,
   rollbackPlanProjectLinkSqlite,
 } from "../db/plan-project-links.js";
-import type { TodosStorageAdapter } from "./interfaces.js";
+import type {
+  TodosBulkCreateReceipt,
+  TodosBulkCreateTaskInput,
+  TodosBulkDeleteReceipt,
+  TodosStorageAdapter,
+  TodosStorageContext,
+  TodosTaskHistoryPage,
+  TodosTaskHistoryPageOptions,
+} from "./interfaces.js";
 import {
   exportSqliteTodosStorageSnapshot,
   importSqliteTodosStorageSnapshot,
@@ -92,6 +101,103 @@ import {
 
 export interface CreateLocalSqliteTodosStorageAdapterOptions {
   db?: Database;
+}
+
+function bulkCreateAtomicSqlite(
+  db: Database,
+  inputs: TodosBulkCreateTaskInput[],
+): TodosBulkCreateReceipt {
+  return db.transaction((): TodosBulkCreateReceipt => {
+    const tempIds = new Map<string, string>();
+    const created: TodosBulkCreateReceipt["created"] = [];
+    const dependencies: TaskDependency[] = [];
+
+    for (const input of inputs) {
+      const { temp_id, depends_on: _dependsOn, ...taskInput } = input;
+      const task = createTask(taskInput, db);
+      if (temp_id) tempIds.set(temp_id, task.id);
+      created.push({ temp_id: temp_id ?? null, id: task.id, short_id: task.short_id, title: task.title });
+    }
+
+    for (let index = 0; index < inputs.length; index++) {
+      const input = inputs[index]!;
+      const taskId = created[index]!.id;
+      const seenDependencies = new Set<string>();
+      for (const reference of input.depends_on ?? []) {
+        const dependencyId = tempIds.get(reference) ?? resolveTaskRefLocal(db, reference)?.id;
+        if (!dependencyId) throw new TaskNotFoundError(reference);
+        if (seenDependencies.has(dependencyId)) {
+          throw new ResourceConflictError("BULK_CREATE_DUPLICATE_DEPENDENCY", `Multiple references resolve to dependency ${dependencyId}`);
+        }
+        seenDependencies.add(dependencyId);
+        addDependency(taskId, dependencyId, db);
+        dependencies.push({ task_id: taskId, depends_on: dependencyId });
+      }
+    }
+
+    return { schema_version: 1, atomic: true, created, dependencies };
+  })();
+}
+
+function deleteTaskHierarchySqlite(db: Database, rootId: string): void {
+  const rows = db.query(`WITH RECURSIVE tree(id, depth) AS (
+    SELECT id, 0 FROM tasks WHERE id = ?
+    UNION ALL
+    SELECT child.id, tree.depth + 1 FROM tasks child JOIN tree ON child.parent_id = tree.id
+  ) SELECT id FROM tree ORDER BY depth DESC, id`).all(rootId) as Array<{ id: string }>;
+  if (rows.length === 0) throw new TaskNotFoundError(rootId);
+  for (const row of rows) {
+    if (!deleteTask(row.id, db)) throw new Error(`Atomic hierarchy delete lost task ${row.id}`);
+  }
+}
+
+function bulkDeleteAtomicSqlite(
+  db: Database,
+  ids: string[],
+  force: boolean,
+): TodosBulkDeleteReceipt {
+  return db.transaction((): TodosBulkDeleteReceipt => {
+    const resolved = ids.map((reference) => ({ reference, task: resolveTaskRefLocal(db, reference) }));
+    const seen = new Set<string>();
+    for (const item of resolved) {
+      if (!item.task) continue;
+      if (seen.has(item.task.id)) {
+        throw new ResourceConflictError("BULK_DELETE_DUPLICATE_TASK", `Multiple references resolve to task ${item.task.id}`);
+      }
+      seen.add(item.task.id);
+    }
+
+    const childState = new Map<string, boolean>();
+    for (const item of resolved) {
+      if (!item.task) continue;
+      childState.set(item.task.id, Boolean(db.query("SELECT id FROM tasks WHERE parent_id = ? LIMIT 1").get(item.task.id)));
+    }
+    const planned = resolved.filter((item) => item.task && (force || !childState.get(item.task.id))) as Array<{ reference: string; task: Task }>;
+    const plannedIds = new Set(planned.map((item) => item.task.id));
+    const roots = planned.filter((item) => {
+      if (!force) return true;
+      let parentId = item.task.parent_id;
+      while (parentId) {
+        if (plannedIds.has(parentId)) return false;
+        parentId = getTask(parentId, db)?.parent_id ?? null;
+      }
+      return true;
+    });
+    for (const item of roots) deleteTaskHierarchySqlite(db, item.task.id);
+
+    return {
+      schema_version: 1,
+      atomic: true,
+      force,
+      results: resolved.map((item) => {
+        if (!item.task) return { requested_id: item.reference, task_id: null, outcome: "missing" as const, reason: "not_found" as const };
+        if (!force && childState.get(item.task.id)) {
+          return { requested_id: item.reference, task_id: item.task.id, outcome: "skipped" as const, reason: "has_children" as const };
+        }
+        return { requested_id: item.reference, task_id: item.task.id, outcome: "deleted" as const, reason: null };
+      }),
+    };
+  })();
 }
 
 const TASK_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -236,6 +342,10 @@ export function createLocalSqliteTodosStorageAdapter(
       },
       handoffStaleLock: (input) => handoffStaleTaskLock(input, database()),
       delete: (id) => deleteTask(id, database()),
+      bulkCreateAtomic: (inputs: TodosBulkCreateTaskInput[], _context?: TodosStorageContext) =>
+        bulkCreateAtomicSqlite(database(), inputs),
+      bulkDeleteAtomic: (ids: string[], force: boolean, _context?: TodosStorageContext) =>
+        bulkDeleteAtomicSqlite(database(), ids, force),
       start: (id, agentId) => startTask(id, agentId, database()),
       complete: (id, agentId, options) => completeTask(id, agentId, database(), options),
       fail: (id, agentId, reason, options) => failTask(id, agentId, reason, options, database()),
@@ -319,6 +429,7 @@ export function createLocalSqliteTodosStorageAdapter(
       get: (id) => getAgent(id, database()),
       getByName: (name) => getAgentByName(name, database()),
       list: (options) => listAgents(options, database()),
+      listPage: (options) => listAgentsPage(options, database()),
       update: (id, input) => updateAgent(id, input, database()),
     },
     taskLists: {
@@ -363,6 +474,25 @@ export function createLocalSqliteTodosStorageAdapter(
         return comments;
       },
       getTaskHistory: (taskId) => getTaskHistory(taskId, database()),
+      getTaskHistoryPage: (taskId, options: TodosTaskHistoryPageOptions): TodosTaskHistoryPage => {
+        if (!Number.isSafeInteger(options.limit) || options.limit < 1 || options.limit > 500) {
+          throw new Error("Task history limit must be an integer from 1 to 500");
+        }
+        if (!Number.isSafeInteger(options.offset) || options.offset < 0) {
+          throw new Error("Task history offset must be a non-negative integer");
+        }
+        const conditions = ["task_id = ?"];
+        const values: Array<string | number> = [taskId];
+        if (options.since) { conditions.push("created_at >= ?"); values.push(options.since); }
+        if (options.until) { conditions.push("created_at <= ?"); values.push(options.until); }
+        const where = conditions.join(" AND ");
+        const total = (database().query(`SELECT COUNT(*) AS total FROM task_history WHERE ${where}`).get(...values) as { total: number }).total;
+        const direction = options.order === "asc" ? "ASC" : "DESC";
+        const history = database().query(
+          `SELECT * FROM task_history WHERE ${where} ORDER BY created_at ${direction}, id ${direction} LIMIT ? OFFSET ?`,
+        ).all(...values, options.limit, options.offset) as TaskHistory[];
+        return { history, total };
+      },
       getRecentActivity: (limit) => getRecentActivity(limit, database()),
     },
     sync: {

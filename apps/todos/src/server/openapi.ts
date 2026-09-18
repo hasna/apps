@@ -44,6 +44,81 @@ const taskDependencySchema = {
   },
 } as const;
 
+const bulkCreateTaskInputSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["title"],
+  properties: {
+    temp_id: { type: "string", minLength: 1, maxLength: 100 },
+    depends_on: { type: "array", maxItems: 100, items: { type: "string", minLength: 1, maxLength: 200 } },
+    title: { type: "string", minLength: 1, maxLength: 20_000 },
+    description: { type: "string", nullable: true, maxLength: 100_000 },
+    status: { type: "string", enum: [...TASK_STATUSES] },
+    priority: { type: "string", enum: [...TASK_PRIORITIES] },
+    project_id: { type: "string", minLength: 1, maxLength: 200 },
+    parent_id: { type: "string" },
+    plan_id: { type: "string" },
+    task_list_id: { type: "string", minLength: 1, maxLength: 200 },
+    assigned_to: { type: "string", minLength: 1, maxLength: 200 },
+    agent_id: { type: "string" },
+    created_by: { type: "string" },
+    tags: { type: "array", maxItems: 100, items: { type: "string", minLength: 1, maxLength: 100 } },
+    estimated_minutes: { type: "number", minimum: 0 },
+  },
+} as const;
+
+const bulkCreateReceiptSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["schema_version", "atomic", "created", "dependencies"],
+  properties: {
+    schema_version: { type: "integer", enum: [1] },
+    atomic: { type: "boolean", enum: [true] },
+    created: {
+      type: "array",
+      maxItems: 100,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["temp_id", "id", "short_id", "title"],
+        properties: {
+          temp_id: { type: "string", nullable: true },
+          id: { type: "string" },
+          short_id: { type: "string", nullable: true },
+          title: { type: "string" },
+        },
+      },
+    },
+    dependencies: { type: "array", maxItems: 100, items: { $ref: "#/components/schemas/TaskDependency" } },
+  },
+} as const;
+
+const bulkDeleteReceiptSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["schema_version", "atomic", "force", "results"],
+  properties: {
+    schema_version: { type: "integer", enum: [1] },
+    atomic: { type: "boolean", enum: [true] },
+    force: { type: "boolean" },
+    results: {
+      type: "array",
+      maxItems: 100,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["requested_id", "task_id", "outcome", "reason"],
+        properties: {
+          requested_id: { type: "string" },
+          task_id: { type: "string", nullable: true },
+          outcome: { type: "string", enum: ["deleted", "skipped", "missing"] },
+          reason: { oneOf: [{ type: "string", enum: ["has_children", "not_found"] }, { type: "null" }] },
+        },
+      },
+    },
+  },
+} as const;
+
 const dependencyPageSchema = {
   type: "object",
   additionalProperties: false,
@@ -1233,6 +1308,9 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
         Task: taskSchema,
         TaskDependency: taskDependencySchema,
         DependencyPage: dependencyPageSchema,
+        BulkCreateTaskInput: bulkCreateTaskInputSchema,
+        BulkCreateReceipt: bulkCreateReceiptSchema,
+        BulkDeleteReceipt: bulkDeleteReceiptSchema,
         Project: projectSchema,
         TaskManifestBounds: taskManifestBoundsSchema,
         TaskManifestCapability: taskManifestCapabilitySchema,
@@ -1313,6 +1391,7 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
             parent_id: { type: "string", nullable: true },
             plan_id: { type: "string", nullable: true },
             task_list_id: { type: "string", nullable: true },
+            archived_at: { type: "string", format: "date-time", nullable: true },
             version: { type: "number" },
           },
         },
@@ -2727,6 +2806,7 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
             { name: "parent_id", in: "query", schema: { type: "string", nullable: true } },
             { name: "include_subtasks", in: "query", schema: { type: "boolean" } },
             { name: "include_archived", in: "query", schema: { type: "boolean" }, description:"Explicit archive selection; false excludes archived rows" },
+            { name: "archived_only", in: "query", schema: { type: "boolean" }, description:"Select only rows carrying archived_at; applied before bounded LIMIT/OFFSET and implies include_archived" },
             { name: "plan_read_contract", in: "query", schema: { type: "string", enum:["1"] }, description:"Requires plan_id and explicit include_subtasks=true/include_archived; returns a versioned selection receipt" },
             { name: "plan_id", in: "query", schema: { type: "string" } },
             { name: "task_list_id", in: "query", schema: { type: "string" } },
@@ -2784,6 +2864,66 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           },
         },
       },
+      "/v1/tasks/bulk-create": {
+        post: {
+          operationId: "bulkCreateTasks",
+          summary: "Atomically create a bounded task batch and its dependency edges",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  additionalProperties: false,
+                  required: ["schema_version", "tasks"],
+                  properties: {
+                    schema_version: { type: "integer", enum: [1] },
+                    tasks: { type: "array", minItems: 1, maxItems: 50, items: { $ref: "#/components/schemas/BulkCreateTaskInput" } },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            "201": { content: { "application/json": { schema: { type: "object", required: ["receipt"], properties: { receipt: { $ref: "#/components/schemas/BulkCreateReceipt" } } } } } },
+            "400": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "404": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "413": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "501": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+      },
+      "/v1/tasks/bulk-delete": {
+        post: {
+          operationId: "bulkDeleteTasks",
+          summary: "Atomically delete a bounded task set using authoritative child checks",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  additionalProperties: false,
+                  required: ["schema_version", "task_ids"],
+                  properties: {
+                    schema_version: { type: "integer", enum: [1] },
+                    task_ids: { type: "array", minItems: 1, maxItems: 100, uniqueItems: true, items: { type: "string", minLength: 1, maxLength: 200 } },
+                    force: { type: "boolean", default: false, description: "Requires todos:* scope when true" },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            "200": { content: { "application/json": { schema: { type: "object", required: ["receipt"], properties: { receipt: { $ref: "#/components/schemas/BulkDeleteReceipt" } } } } } },
+            "400": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "403": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "409": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "501": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+          },
+        },
+      },
       "/v1/tasks/{id}": {
         get: {
           operationId: "getTask",
@@ -2829,6 +2969,41 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
                 },
               },
             },
+          },
+        },
+      },
+      "/v1/tasks/{id}/history": {
+        get: {
+          operationId: "listTaskHistory",
+          summary: "List a storage-bounded page of one task's audit history",
+          description: "The storage adapter applies task scope, time filters, deterministic order, LIMIT, and OFFSET before materializing rows. Omission uses a bounded 500-row compatibility window and returns 426 when incomplete.",
+          parameters: [
+            { name: "id", in: "path", required: true, schema: { type: "string" } },
+            { name: "limit", in: "query", required: false, schema: { type: "integer", minimum: 1, maximum: 500, default: 500 } },
+            { name: "offset", in: "query", required: false, schema: { type: "integer", minimum: 0, default: 0 } },
+            { name: "since", in: "query", schema: { type: "string", format: "date-time" } },
+            { name: "until", in: "query", schema: { type: "string", format: "date-time" } },
+            { name: "order", in: "query", schema: { type: "string", enum: ["asc", "desc"], default: "desc" } },
+          ],
+          responses: {
+            "200": { content: { "application/json": { schema: {
+              type: "object", additionalProperties: false,
+              required: ["history", "count", "total", "limit", "offset", "order", "has_more", "next_offset"],
+              properties: {
+                history: { type: "array", maxItems: 500, items: { type: "object", additionalProperties: true } },
+                count: { type: "integer", minimum: 0, maximum: 500 },
+                total: { type: "integer", minimum: 0 },
+                limit: { type: "integer", minimum: 1, maximum: 500 },
+                offset: { type: "integer", minimum: 0 },
+                order: { type: "string", enum: ["asc", "desc"] },
+                has_more: { type: "boolean" },
+                next_offset: { type: "integer", minimum: 0, nullable: true },
+              },
+            } } } },
+            "400": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "404": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "426": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "501": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
           },
         },
       },
@@ -3894,18 +4069,79 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           },
         },
       },
+      "/v1/agents": {
+        get: {
+          operationId: "listAgents",
+          summary: "List the shared agent roster with storage-bounded pagination",
+          description:
+            "The authority applies a maximum 500-row LIMIT/OFFSET before materializing agents. Omitting pagination uses a 500-row legacy window and returns 426 when the roster is larger.",
+          parameters: [
+            { name: "limit", in: "query", required: false, schema: { type: "integer", minimum: 1, maximum: 500, default: 500 } },
+            { name: "offset", in: "query", required: false, schema: { type: "integer", minimum: 0, default: 0 } },
+            { name: "include_archived", in: "query", required: false, schema: { type: "boolean", default: false } },
+          ],
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    required: ["agents", "count", "total", "limit", "offset", "has_more", "next_offset"],
+                    properties: {
+                      agents: { type: "array", items: { type: "object" } },
+                      count: { type: "integer", minimum: 0 },
+                      total: { type: "integer", minimum: 0 },
+                      limit: { type: "integer", minimum: 1, maximum: 500 },
+                      offset: { type: "integer", minimum: 0 },
+                      has_more: { type: "boolean" },
+                      next_offset: { anyOf: [{ type: "integer", minimum: 0 }, { type: "null" }] },
+                    },
+                  },
+                },
+              },
+            },
+            "426": { description: "Legacy unpaged request exceeded the bounded roster window" },
+          },
+        },
+      },
+      "/v1/activity": {
+        get: {
+          operationId: "listRecentActivity",
+          summary: "List a bounded recent task-history window",
+          parameters: [
+            { name: "limit", in: "query", required: false, schema: { type: "integer", minimum: 1, maximum: 10000, default: 50 } },
+          ],
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    required: ["activity", "count", "limit"],
+                    properties: {
+                      activity: { type: "array", items: { type: "object" } },
+                      count: { type: "integer", minimum: 0 },
+                      limit: { type: "integer", minimum: 1, maximum: 10000 },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
       "/v1/dependencies": {
         get: {
           operationId: "listDependencies",
           summary: "List dependency edges with storage-bounded pagination",
           description:
-            "Send limit and offset for a storage-bounded page. The authority applies LIMIT/OFFSET before materializing rows and returns an authoritative total plus continuation evidence. Omitting both parameters retains the legacy complete response for compatibility and may be expensive; new clients should always send a bounded page.",
+            "The authority always applies a maximum 500-row LIMIT/OFFSET before materializing edges. Omitting both parameters uses limit=500 and offset=0 only when that window is complete; a larger graph returns 426 so an old client cannot mistake a partial page for the whole graph.",
           parameters: [
             {
               name: "limit",
               in: "query",
               required: false,
-              description: "Maximum edges to materialize for this page. Providing either paging parameter activates the bounded contract.",
+              description: "Maximum edges to materialize. Omission defaults to the bounded 500-row legacy window.",
               schema: { type: "integer", minimum: 1, maximum: 500, default: 500 },
             },
             {
@@ -3919,6 +4155,7 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
           responses: {
             "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/DependencyPage" } } } },
             "400": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+            "426": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
             "501": { content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
           },
         },

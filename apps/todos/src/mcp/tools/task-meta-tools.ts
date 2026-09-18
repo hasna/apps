@@ -189,7 +189,7 @@ export function registerTaskMetaTools(server: McpServer, ctx: TaskMetaContext) {
             bulk_create_tasks: "bulk_create_tasks — Create multiple tasks. Params: tasks[]",
             bulk_delete_tasks: "bulk_delete_tasks — Delete multiple tasks. Params: task_ids[], force",
             archive_completed: "archive_completed — Auto-archive old completed tasks. Params: days, project_id",
-            get_archived_tasks: "get_archived_tasks — List archived tasks. Params: project_id, limit",
+            get_archived_tasks: "get_archived_tasks — List archived tasks. Params: project_id, limit, offset",
             unarchive_task: "unarchive_task — Restore archived task. Params: task_id",
             auto_assign_task: "auto_assign_task — Auto-assign based on capabilities. Params: task_id",
             get_my_workload: "get_my_workload — Get agent workload stats. Params: agent_id",
