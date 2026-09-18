@@ -6,13 +6,14 @@
  * SQLite or PostgreSQL. No client path may fall through to local storage.
  */
 
-import { createHash } from "node:crypto";
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { PgAdapter, type DbAdapter } from "../storage.js";
 import { getDatabase, now } from "./database.js";
 import { isApiMode, apiJson, toQuery } from "./api-mode.js";
 import { MementosApiProtocolError } from "./api-response-contract.js";
 import {
   AUDIT_CURSOR_VERSION,
+  AUDIT_DEFAULT_LIMIT,
   AUDIT_EXPORT_CONTRACT,
   AUDIT_OPERATIONS,
   AUDIT_STATS_CONTRACT,
@@ -50,10 +51,12 @@ export interface AuditExportOptions extends AuditPageOptions {
 type AuditDatabase = DbAdapter & { query(sql: string): { get(...params: unknown[]): unknown; all(...params: unknown[]): unknown[] } };
 type QueryBinding = string | number | Date | null;
 
-const DEFAULT_TRAIL_LIMIT = 50;
-const DEFAULT_EXPORT_LIMIT = 50;
+const DEFAULT_TRAIL_LIMIT = AUDIT_DEFAULT_LIMIT;
+const DEFAULT_EXPORT_LIMIT = AUDIT_DEFAULT_LIMIT;
 const MAX_AUDIT_LIMIT = 1000;
 const MAX_CURSOR_BYTES = 4096;
+const PROCESS_CURSOR_SECRET = randomBytes(32).toString("base64url");
+const CURSOR_MAC_DOMAIN = "mementos.audit.cursor.v1\0";
 
 function protocol(operation: string, error: unknown): never {
   if (error instanceof MementosApiProtocolError) throw error;
@@ -101,15 +104,37 @@ function filterFingerprint(filters: AuditFilters): string {
   return createHash("sha256").update(JSON.stringify(filters), "utf8").digest("hex");
 }
 
-function cursorChecksum(payload: AuditCursorPayload): string {
-  return createHash("sha256").update(JSON.stringify(payload), "utf8").digest("hex");
+function auditCursorSecret(): string {
+  // Bearer API keys are deliberately excluded: callers know those values and
+  // could otherwise forge a cursor. Hosted replicas share a server-only
+  // signing secret; local servers fall back to one process-private key.
+  return (
+    process.env["MEMENTOS_AUDIT_CURSOR_SECRET"]?.trim() ||
+    process.env["API_KEY_SIGNING_SECRET"]?.trim() ||
+    process.env["HASNA_MEMENTOS_API_SIGNING_KEY"]?.trim() ||
+    process.env["HASNA_API_SIGNING_KEY"]?.trim() ||
+    PROCESS_CURSOR_SECRET
+  );
 }
 
-function encodeAuditCursor(payload: AuditCursorPayload): string {
-  return Buffer.from(JSON.stringify({ ...payload, checksum: cursorChecksum(payload) }), "utf8").toString("base64url");
+function cursorMac(payload: AuditCursorPayload, secret: string): Buffer {
+  return createHmac("sha256", secret)
+    .update(CURSOR_MAC_DOMAIN, "utf8")
+    .update(JSON.stringify(payload), "utf8")
+    .digest();
 }
 
-function decodeAuditCursor(cursor: string, filters: AuditFilters): AuditCursorPayload {
+function encodeAuditCursor(payload: AuditCursorPayload, secret: string): string {
+  const mac = cursorMac(payload, secret).toString("base64url");
+  return Buffer.from(JSON.stringify({ ...payload, mac }), "utf8").toString("base64url");
+}
+
+function decodeAuditCursor(
+  cursor: string,
+  contract: AuditPageContract,
+  filters: AuditFilters,
+  secret: string,
+): AuditCursorPayload {
   if (!cursor || Buffer.byteLength(cursor, "utf8") > MAX_CURSOR_BYTES || !/^[A-Za-z0-9_-]+$/.test(cursor)) {
     throw new AuditContractError("cursor is not a valid bounded audit cursor");
   }
@@ -123,7 +148,7 @@ function decodeAuditCursor(cursor: string, filters: AuditFilters): AuditCursorPa
   const object = raw as Record<string, unknown>;
   const keys = Object.keys(object).sort();
   const expectedKeys = [
-    "after_created_at", "after_id", "checksum", "consumed", "filter_fingerprint",
+    "after_created_at", "after_id", "consumed", "contract", "filter_fingerprint", "mac",
     "snapshot_created_at", "snapshot_id", "snapshot_total", "v",
   ].sort();
   if (JSON.stringify(keys) !== JSON.stringify(expectedKeys)) throw new AuditContractError("cursor payload fields are invalid");
@@ -135,6 +160,9 @@ function decodeAuditCursor(cursor: string, filters: AuditFilters): AuditCursorPa
   };
   const payload: AuditCursorPayload = {
     v: object.v === AUDIT_CURSOR_VERSION ? AUDIT_CURSOR_VERSION : (() => { throw new AuditContractError("unsupported cursor version"); })(),
+    contract: object.contract === AUDIT_TRAIL_CONTRACT || object.contract === AUDIT_EXPORT_CONTRACT
+      ? object.contract
+      : (() => { throw new AuditContractError("cursor contract is invalid"); })(),
     snapshot_created_at: timestamp(object.snapshot_created_at, "cursor.snapshot_created_at"),
     snapshot_id: identifier(object.snapshot_id, "cursor.snapshot_id"),
     after_created_at: timestamp(object.after_created_at, "cursor.after_created_at"),
@@ -147,11 +175,19 @@ function decodeAuditCursor(cursor: string, filters: AuditFilters): AuditCursorPa
       : (() => { throw new AuditContractError("cursor.consumed must be a non-negative safe integer"); })(),
     filter_fingerprint: typeof object.filter_fingerprint === "string" ? object.filter_fingerprint : "",
   };
+  const encodedMac = object.mac;
+  if (typeof encodedMac !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(encodedMac)) {
+    throw new AuditContractError("cursor authentication code is invalid");
+  }
+  const providedMac = Buffer.from(encodedMac, "base64url");
+  const expectedMac = cursorMac(payload, secret);
   if (
-    !payload.filter_fingerprint || payload.filter_fingerprint !== filterFingerprint(filters) ||
-    typeof object.checksum !== "string" || object.checksum !== cursorChecksum(payload)
+    providedMac.length !== expectedMac.length ||
+    !timingSafeEqual(providedMac, expectedMac) ||
+    payload.contract !== contract ||
+    payload.filter_fingerprint !== filterFingerprint(filters)
   ) {
-    throw new AuditContractError("cursor does not belong to these audit filters or was modified");
+    throw new AuditContractError("cursor authentication or query binding failed");
   }
   if (!payload.snapshot_created_at || !payload.snapshot_id || !payload.after_created_at || !payload.after_id) {
     throw new AuditContractError("continuation cursor is missing its snapshot or ordering boundary");
@@ -243,7 +279,8 @@ function readAuditPage(
 ): AuditPage {
   const limit = safeLimit(options.limit, contract === AUDIT_TRAIL_CONTRACT ? DEFAULT_TRAIL_LIMIT : DEFAULT_EXPORT_LIMIT);
   const requestedCursor = options.cursor ?? null;
-  const continuation = requestedCursor ? decodeAuditCursor(requestedCursor, filters) : null;
+  const secret = auditCursorSecret();
+  const continuation = requestedCursor ? decodeAuditCursor(requestedCursor, contract, filters, secret) : null;
 
   return db.transaction(() => {
     const base = buildFilterSql(filters, db);
@@ -302,6 +339,7 @@ function readAuditPage(
     const nextCursor = hasMore && last && snapshotCreatedAt && snapshotId
       ? encodeAuditCursor({
           v: AUDIT_CURSOR_VERSION,
+          contract,
           snapshot_created_at: snapshotCreatedAt,
           snapshot_id: snapshotId,
           after_created_at: last.created_at,
@@ -309,7 +347,7 @@ function readAuditPage(
           snapshot_total: total,
           consumed,
           filter_fingerprint: filterFingerprint(filters),
-        })
+        }, secret)
       : null;
     const page: AuditPage = {
       contract,
@@ -326,7 +364,7 @@ function readAuditPage(
       filters,
       sort: { field: "created_at", direction: "desc", tie_breaker: "id" },
     };
-    return validateAuditPage(page, { contract, cursor: requestedCursor, filters });
+    return validateAuditPage(page, { contract, cursor: requestedCursor, filters, limit });
   });
 }
 
@@ -336,12 +374,12 @@ function hostedAuditPage(
   filters: AuditFilters,
   options: AuditPageOptions,
 ): AuditPage {
-  safeLimit(options.limit, contract === AUDIT_TRAIL_CONTRACT ? DEFAULT_TRAIL_LIMIT : DEFAULT_EXPORT_LIMIT);
+  const limit = safeLimit(options.limit, contract === AUDIT_TRAIL_CONTRACT ? DEFAULT_TRAIL_LIMIT : DEFAULT_EXPORT_LIMIT);
   const cursor = options.cursor ?? null;
   const operation = `GET ${path.split("?")[0]}`;
   const { data } = apiJson<unknown>("GET", path);
   try {
-    return validateAuditPage(data, { contract, cursor, filters });
+    return validateAuditPage(data, { contract, cursor, filters, limit });
   } catch (error) {
     return protocol(operation, error);
   }
@@ -387,7 +425,7 @@ export function exportAuditLogPage(
 }
 
 /** Backward-compatible first-page helper. Prefer getMemoryAuditTrailPage. */
-export function getMemoryAuditTrail(memoryId: string, limit = DEFAULT_TRAIL_LIMIT, db?: AuditDatabase): AuditEntry[] {
+export function getMemoryAuditTrail(memoryId: string, limit: number = DEFAULT_TRAIL_LIMIT, db?: AuditDatabase): AuditEntry[] {
   return getMemoryAuditTrailPage(memoryId, { limit }, db).entries;
 }
 

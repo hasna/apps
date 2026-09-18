@@ -10,6 +10,7 @@ export const AUDIT_TRAIL_CONTRACT = "mementos.audit.trail.v1" as const;
 export const AUDIT_EXPORT_CONTRACT = "mementos.audit.export.v1" as const;
 export const AUDIT_STATS_CONTRACT = "mementos.audit.stats.v1" as const;
 export const AUDIT_CURSOR_VERSION = 1 as const;
+export const AUDIT_DEFAULT_LIMIT = 50 as const;
 
 export const AUDIT_OPERATIONS = [
   "create",
@@ -75,6 +76,7 @@ export interface AuditStats {
 
 export interface AuditCursorPayload {
   v: typeof AUDIT_CURSOR_VERSION;
+  contract: AuditPageContract;
   snapshot_created_at: string | null;
   snapshot_id: string | null;
   after_created_at: string | null;
@@ -220,7 +222,7 @@ function compareEntryOrder(left: AuditEntry, right: AuditEntry): number {
 
 export function validateAuditPage(
   value: unknown,
-  expected: { contract: AuditPageContract; cursor: string | null; filters: AuditFilters },
+  expected: { contract: AuditPageContract; cursor: string | null; filters: AuditFilters; limit: number },
 ): AuditPage {
   const page = object(value, "audit page");
   exactKeys(page, PAGE_KEYS, "audit page");
@@ -231,6 +233,8 @@ export function validateAuditPage(
   const count = integer(page.count, "count");
   const total = integer(page.total, "total");
   const limit = integer(page.limit, "limit", 1);
+  const requestedLimit = integer(expected.limit, "requested limit", 1);
+  if (limit !== requestedLimit) throw new AuditContractError("limit receipt does not match the request");
   const consumed = integer(page.consumed, "consumed");
   const cursor = cursorString(page.cursor, "cursor");
   const nextCursor = cursorString(page.next_cursor, "next_cursor");
@@ -244,12 +248,18 @@ export function validateAuditPage(
     throw new AuditContractError("sort must be created_at desc with id tie-breaker");
   }
   if (cursor !== expected.cursor) throw new AuditContractError("cursor receipt does not match the request");
-  if (JSON.stringify(filters) !== JSON.stringify(expected.filters)) throw new AuditContractError("filter receipt does not match the request");
+  for (const key of ["memory_id", "since", "until", "operation", "agent_id"] as const) {
+    if (filters[key] !== expected.filters[key]) {
+      throw new AuditContractError(`filters.${key} receipt does not match the request`);
+    }
+  }
   if (count !== entries.length || count > limit || total < count || consumed < count || consumed > total) {
     throw new AuditContractError("count/limit/consumed/total fields are inconsistent");
   }
   if (hasMore !== (consumed < total)) throw new AuditContractError("has_more does not match consumed/total");
   if (hasMore !== (nextCursor !== null)) throw new AuditContractError("next_cursor does not match has_more");
+  if (total > 0 && count === 0) throw new AuditContractError("non-empty audit result must make progress on every page");
+  if (hasMore && nextCursor === cursor) throw new AuditContractError("next_cursor must advance beyond the request cursor");
   const shouldBeComplete = cursor === null && !hasMore && consumed === total;
   if (complete !== shouldBeComplete) throw new AuditContractError("complete is not truthful for this page");
   if (cursor === null && consumed !== count) throw new AuditContractError("initial page consumed must equal count");

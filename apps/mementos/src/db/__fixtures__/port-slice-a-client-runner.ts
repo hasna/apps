@@ -255,7 +255,20 @@ const scenarios: Record<string, () => Promise<void>> = {
     const { getMemoryAuditTrailPage } = await import("../audit.js");
     await expectProtocolRefusal(() => getMemoryAuditTrailPage("mem-1", { limit: 10 }));
   },
+  "false-empty-audit-trail": async () => {
+    const { getMemoryAuditTrail, getMemoryAuditTrailPage } = await import("../audit.js");
+    await expectProtocolRefusal(() => getMemoryAuditTrailPage("mem-1", { limit: 10 }));
+    await expectProtocolRefusal(() => getMemoryAuditTrail("mem-1", 10));
+  },
   "malformed-audit-export": async () => {
+    const { exportAuditLogPage } = await import("../audit.js");
+    await expectProtocolRefusal(() => exportAuditLogPage({ operation: "update", limit: 10 }));
+  },
+  "limit-mismatch-audit-export": async () => {
+    const { exportAuditLogPage } = await import("../audit.js");
+    await expectProtocolRefusal(() => exportAuditLogPage({ operation: "update", limit: 10 }));
+  },
+  "filter-mismatch-audit-export": async () => {
     const { exportAuditLogPage } = await import("../audit.js");
     await expectProtocolRefusal(() => exportAuditLogPage({ operation: "update", limit: 10 }));
   },

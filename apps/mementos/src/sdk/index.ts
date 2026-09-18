@@ -46,6 +46,7 @@
  */
 
 import {
+  AUDIT_DEFAULT_LIMIT,
   AUDIT_EXPORT_CONTRACT,
   AUDIT_STATS_CONTRACT,
   AUDIT_TRAIL_CONTRACT,
@@ -1873,14 +1874,15 @@ export class MementosClient {
     const operation = "GET /v1/memories/:id/audit-trail";
     try {
       const filters = sdkAuditFilters({ memory_id: memoryId });
-      const limit = sdkAuditLimit(options.limit);
+      const requestedLimit = sdkAuditLimit(options.limit);
+      const limit = requestedLimit ?? AUDIT_DEFAULT_LIMIT;
       const requestedCursor = sdkAuditCursor(options.cursor);
       const cursor = requestedCursor ?? null;
       const response = await this.get<unknown>(
         `/api/memories/${encodeURIComponent(filters.memory_id!)}/audit-trail`,
-        { limit, cursor: requestedCursor },
+        { limit: requestedLimit, cursor: requestedCursor },
       );
-      return validateAuditPage(response, { contract: AUDIT_TRAIL_CONTRACT, cursor, filters });
+      return validateAuditPage(response, { contract: AUDIT_TRAIL_CONTRACT, cursor, filters, limit });
     } catch (error) {
       return auditSdkError(operation, error);
     }
@@ -1897,7 +1899,8 @@ export class MementosClient {
     const operation = "GET /v1/audit/export";
     try {
       const filters = sdkAuditFilters(options);
-      const limit = sdkAuditLimit(options.limit);
+      const requestedLimit = sdkAuditLimit(options.limit);
+      const limit = requestedLimit ?? AUDIT_DEFAULT_LIMIT;
       const requestedCursor = sdkAuditCursor(options.cursor);
       const cursor = requestedCursor ?? null;
       const response = await this.get<unknown>("/api/audit/export", {
@@ -1905,10 +1908,10 @@ export class MementosClient {
         until: filters.until ?? undefined,
         operation: filters.operation ?? undefined,
         agent_id: filters.agent_id ?? undefined,
-        limit,
+        limit: requestedLimit,
         cursor: requestedCursor,
       });
-      return validateAuditPage(response, { contract: AUDIT_EXPORT_CONTRACT, cursor, filters });
+      return validateAuditPage(response, { contract: AUDIT_EXPORT_CONTRACT, cursor, filters, limit });
     } catch (error) {
       return auditSdkError(operation, error);
     }

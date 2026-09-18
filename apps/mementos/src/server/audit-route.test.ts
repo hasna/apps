@@ -1,7 +1,9 @@
 process.env["MEMENTOS_DB_PATH"] = ":memory:";
 process.env["HOME"] = "/tmp/mementos-audit-route-home";
+process.env["MEMENTOS_AUDIT_CURSOR_SECRET"] = "unit-test-audit-cursor-key";
 
 import { beforeEach, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { AUDIT_EXPORT_CONTRACT, AUDIT_STATS_CONTRACT, AUDIT_TRAIL_CONTRACT } from "../audit-contract.js";
 import { getDatabase, resetDatabase } from "../db/database.js";
 import { createMemory, updateMemory } from "../db/memories.js";
@@ -19,6 +21,27 @@ async function call(path: string): Promise<{ status: number; data: Record<string
   const response = await match!.handler(request, new URL(request.url), match!.params);
   const text = await response.text();
   return { status: response.status, data: text ? JSON.parse(text) : {} };
+}
+
+function cursorWithPublicChecksum(
+  cursor: string,
+  mutate: (payload: Record<string, any>) => void,
+): string {
+  const payload = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as Record<string, any>;
+  mutate(payload);
+  delete payload.mac;
+  payload.mac = createHash("sha256").update(JSON.stringify(payload), "utf8").digest("base64url");
+  return Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+}
+
+function auditFilterFingerprint(memoryId: string): string {
+  return createHash("sha256").update(JSON.stringify({
+    memory_id: memoryId,
+    since: null,
+    until: null,
+    operation: null,
+    agent_id: null,
+  }), "utf8").digest("hex");
 }
 
 function seed(): string {
@@ -68,6 +91,59 @@ describe("hosted immutable audit routes", () => {
     const third = await call(`/api/memories/memory-page/audit-trail?limit=1&cursor=${encodeURIComponent(second.data.next_cursor)}`);
     expect(third.data.entries[0].id).toBe("audit-a");
     expect(third.data).toMatchObject({ total: 3, consumed: 3, has_more: false, complete: false, next_cursor: null });
+  });
+
+  test("server-secret cursor authentication rejects recomputation, skipped entries, and cross-query snapshots", async () => {
+    const db = getDatabase();
+    for (const id of ["forge-c", "forge-b", "forge-a"]) {
+      db.run(
+        `INSERT INTO memory_audit_log
+         (id, memory_id, memory_key, operation, agent_id, old_value_hash, new_value_hash, changes, created_at)
+         VALUES (?, 'memory-forge', 'page', 'read', NULL, NULL, NULL, '{}', '2026-09-18 07:00:00')`,
+        id,
+      );
+    }
+    for (const id of ["forge-2", "forge-1", "forge-0"]) {
+      db.run(
+        `INSERT INTO memory_audit_log
+         (id, memory_id, memory_key, operation, agent_id, old_value_hash, new_value_hash, changes, created_at)
+         VALUES (?, 'memory-other', 'page', 'read', NULL, NULL, NULL, '{}', '2026-09-18 07:00:00')`,
+        id,
+      );
+    }
+
+    const first = await call("/api/memories/memory-forge/audit-trail?limit=1");
+    expect(first.data.entries[0].id).toBe("forge-c");
+
+    const skipCursor = cursorWithPublicChecksum(first.data.next_cursor, (payload) => {
+      payload.after_id = "forge-b";
+      payload.consumed = 2;
+    });
+    const skipped = await call(`/api/memories/memory-forge/audit-trail?limit=1&cursor=${encodeURIComponent(skipCursor)}`);
+    expect(skipped.status).toBe(400);
+    expect(skipped.data.error).toContain("authentication");
+
+    const snapshotCursor = cursorWithPublicChecksum(first.data.next_cursor, (payload) => {
+      payload.snapshot_id = "forge-b";
+      payload.snapshot_total = 2;
+      payload.consumed = 0;
+    });
+    expect((await call(
+      `/api/memories/memory-forge/audit-trail?limit=1&cursor=${encodeURIComponent(snapshotCursor)}`,
+    )).status).toBe(400);
+
+    const crossQueryCursor = cursorWithPublicChecksum(first.data.next_cursor, (payload) => {
+      payload.filter_fingerprint = auditFilterFingerprint("memory-other");
+    });
+    expect((await call(
+      `/api/memories/memory-other/audit-trail?limit=1&cursor=${encodeURIComponent(crossQueryCursor)}`,
+    )).status).toBe(400);
+
+    const legitimate = await call(
+      `/api/memories/memory-forge/audit-trail?limit=1&cursor=${encodeURIComponent(first.data.next_cursor)}`,
+    );
+    expect(legitimate.status).toBe(200);
+    expect(legitimate.data.entries[0].id).toBe("forge-b");
   });
 
   test("cursor refuses same-timestamp append drift instead of silently changing the snapshot", async () => {

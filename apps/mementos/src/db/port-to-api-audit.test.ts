@@ -64,11 +64,18 @@ describe("hosted immutable audit transport", () => {
     expect([...trail, ...exported, ...stats].some((line) => line.includes("/v1/v1/"))).toBe(false);
   });
 
-  test.each(["malformed-audit-trail", "malformed-audit-export", "malformed-audit-stats"])(
+  test.each([
+    "malformed-audit-trail",
+    "false-empty-audit-trail",
+    "malformed-audit-export",
+    "limit-mismatch-audit-export",
+    "filter-mismatch-audit-export",
+    "malformed-audit-stats",
+  ])(
     "%s refuses malformed 2xx without fallback",
     async (name) => {
       const lines = await scenario(name, name);
-      expect(lines.length).toBe(1);
+      expect(lines.length).toBe(name === "false-empty-audit-trail" ? 2 : 1);
     },
   );
 });

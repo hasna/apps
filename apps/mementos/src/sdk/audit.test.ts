@@ -81,8 +81,36 @@ describe("MementosClient immutable audit API", () => {
     { ...page(MEMENTOS_AUDIT_TRAIL_CONTRACT, { memory_id: "memory-1", since: null, until: null, operation: null, agent_id: null }), count: 0 },
     { ...page(MEMENTOS_AUDIT_TRAIL_CONTRACT, { memory_id: "other", since: null, until: null, operation: null, agent_id: null }) },
     { ...page(MEMENTOS_AUDIT_TRAIL_CONTRACT, { memory_id: "memory-1", since: null, until: null, operation: null, agent_id: null }), entries: [{ ...entry, operation: "bad" }] },
+    { ...page(MEMENTOS_AUDIT_TRAIL_CONTRACT, { memory_id: "memory-1", since: null, until: null, operation: null, agent_id: null }), entries: [], count: 0, total: 1, consumed: 0, has_more: true, next_cursor: "next", complete: false },
+    { ...page(MEMENTOS_AUDIT_TRAIL_CONTRACT, { memory_id: "memory-1", since: null, until: null, operation: null, agent_id: null }), limit: 999 },
   ])("refuses malformed trail success %#", async (response) => {
     await expect(clientWith([response]).getMemoryAuditTrail("memory-1", { limit: 1 })).rejects.toThrow("malformed 2xx response");
+  });
+
+  test("refuses every mismatched export filter receipt", async () => {
+    const options = {
+      since: "2026-09-18T06:00:00.000Z",
+      until: "2026-09-18T08:00:00.000Z",
+      operation: "create" as const,
+      agent_id: "agent-1",
+      limit: 1,
+    };
+    const requested = { memory_id: null, ...options };
+    delete (requested as Record<string, unknown>).limit;
+    const matching = {
+      ...page(MEMENTOS_AUDIT_EXPORT_CONTRACT, requested),
+      entries: [{ ...entry, agent_id: "agent-1" }],
+    };
+    for (const [key, value] of [
+      ["memory_id", "memory-1"],
+      ["since", "2026-09-18T05:00:00.000Z"],
+      ["until", "2026-09-18T09:00:00.000Z"],
+      ["operation", "read"],
+      ["agent_id", "agent-2"],
+    ] as const) {
+      const response = { ...matching, filters: { ...requested, [key]: value } };
+      await expect(clientWith([response]).exportAuditLog(options), key).rejects.toThrow("malformed 2xx response");
+    }
   });
 
   test("refuses success-shaped empty stats and invalid client inputs before dispatch", async () => {
