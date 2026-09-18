@@ -37,6 +37,11 @@ class DeployTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "MIGRATION_EXECUTION_DISABLED"):
             d.execute(SOURCE, Path("unused"), Path("unused"))
 
+    def test_prepare_is_disabled_before_inputs_or_aws(self):
+        with patch.object(p, "aws", side_effect=AssertionError("AWS call must not occur")):
+            with self.assertRaisesRegex(ValueError, "MIGRATION_PREPARE_DISABLED"):
+                d.prepare(SOURCE, Path("unused"), IMAGE, Path("unused"))
+
     def test_reconcile_binds_historical_failures_to_old_anchor_and_kms_to_live_anchor(self):
         historical = {"family": p.SERVICE, "containerDefinitions": [{"name": "emails", "image": p.REPOSITORY + "@" + OLD_IMAGE, "environment": [{"name": "X", "value": "same"}]}]}
         baseline = copy.deepcopy(historical)
