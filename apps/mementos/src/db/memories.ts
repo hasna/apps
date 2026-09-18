@@ -884,7 +884,9 @@ function buildMemoryListConditions(
       conditions.push("status = 'active'");
     }
     if (filter.project_id) {
-      conditions.push("project_id = ?");
+      conditions.push(filter.include_unassigned_project === true
+        ? "(project_id = ? OR project_id IS NULL)"
+        : "project_id = ?");
       params.push(filter.project_id);
     }
     if (filter.agent_id) {
@@ -992,6 +994,7 @@ export function listMemoriesPage(filter?: MemoryFilter, db?: Database): MemoryLi
       pinned: f.pinned,
       agent_id: f.agent_id,
       project_id: f.project_id,
+      include_unassigned_project: f.project_id && f.include_unassigned_project === true ? true : undefined,
       session_id: f.session_id,
       machine_id: f.machine_id,
       visible_to_machine_id: f.visible_to_machine_id,

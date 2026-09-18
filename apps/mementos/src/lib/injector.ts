@@ -1,6 +1,7 @@
 import { SqliteAdapter as Database } from "../storage.js";
 import type { Memory, MemoryCategory, MementosConfig } from "../types/index.js";
 import { listMemories, touchMemory, semanticSearch } from "../db/memories.js";
+import { getProject } from "../db/projects.js";
 import { loadConfig } from "./config.js";
 import { generateEmbedding, cosineSimilarity, deserializeEmbedding } from "./embeddings.js";
 import { computeDecayScore } from "./decay.js";
@@ -84,6 +85,12 @@ export interface SmartInjectionResult {
   detected_tools: string[];
 }
 
+function validateInjectionProject(projectId: string | undefined, db?: Database): void {
+  if (projectId !== undefined && !getProject(projectId, db)) {
+    throw new Error(`Project not found: ${projectId}`);
+  }
+}
+
 export class MemoryInjector {
   private config: MementosConfig;
   private injectedIds: Set<string> = new Set();
@@ -98,6 +105,7 @@ export class MemoryInjector {
    * Token-budget aware.
    */
   getInjectionContext(options: InjectionOptions = {}): string {
+    validateInjectionProject(options.project_id, options.db);
     const maxTokens = options.max_tokens || this.config.injection.max_tokens;
     const minImportance =
       options.min_importance || this.config.injection.min_importance;
@@ -139,7 +147,8 @@ export class MemoryInjector {
       allMemories.push(...sharedMems);
     }
 
-    // Private memories — agent-scoped
+    // Unassigned private memories remain agent context across projects. Apply
+    // project eligibility in the store before the candidate limit.
     if (options.agent_id) {
       const privateMems = listMemories(
         {
@@ -148,6 +157,8 @@ export class MemoryInjector {
           min_importance: minImportance,
           status: "active",
           agent_id: options.agent_id,
+          project_id: options.project_id,
+          include_unassigned_project: true,
           ...visibleToMachineFilter(visibleMachineId),
           limit: 100,
         },
@@ -293,6 +304,7 @@ export class MemoryInjector {
    * Falls back to default strategy if no embeddings exist or no query is provided.
    */
   async getSmartInjectionContext(options: InjectionOptions = {}): Promise<string> {
+    validateInjectionProject(options.project_id, options.db);
     // Fall back to default if no query provided
     if (!options.query) {
       return this.getInjectionContext(options);
@@ -345,6 +357,8 @@ export class MemoryInjector {
           min_importance: minImportance,
           status: "active",
           agent_id: options.agent_id,
+          project_id: options.project_id,
+          include_unassigned_project: true,
           ...visibleToMachineFilter(visibleMachineId),
           limit: 100,
         },
@@ -609,7 +623,8 @@ function collectVisibleMemories(
     );
   }
 
-  // Private memories (agent-scoped)
+  // Retain unassigned agent-private context, but exclude other projects before
+  // applying the candidate limit.
   if (options.agent_id) {
     allMemories.push(
       ...listMemories({
@@ -617,6 +632,8 @@ function collectVisibleMemories(
         min_importance: minImportance,
         status: "active",
         agent_id: options.agent_id,
+        project_id: options.project_id,
+        include_unassigned_project: true,
         ...visibleToMachineFilter(visibleMachineId),
         limit: 100,
       }, db)
@@ -671,6 +688,8 @@ function formatMemoryLine(m: Memory): string {
  * no tool mentions -> skip tool guides.
  */
 export async function smartInject(options: SmartInjectionOptions): Promise<SmartInjectionResult> {
+  // Validate before profile synthesis, which can read and cache memories.
+  validateInjectionProject(options.project_id, options.db);
   const config = loadConfig();
   const maxTokens = options.max_tokens || config.injection.max_tokens;
   const minImportance = options.min_importance ?? config.injection.min_importance;

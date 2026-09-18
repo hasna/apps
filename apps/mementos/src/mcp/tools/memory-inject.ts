@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { listMemories, touchMemory, semanticSearch, getMemoryEmbeddings } from "../../db/memories.js";
+import { getProject } from "../../db/projects.js";
 import { getSubscriptionNotifications } from "../../db/subscriptions.js";
 import { hookRegistry } from "../../lib/hooks.js";
 import {
@@ -32,6 +33,10 @@ export function registerMemoryInjectTools(server: McpServer): void {
     },
     async (args) => {
       try {
+        // Reject unresolved explicit scope before any profile or memory work.
+        if (args.project_id !== undefined && !getProject(args.project_id)) {
+          throw new Error(`Project not found: ${args.project_id}`);
+        }
         // Smart strategy: delegate to full smartInject pipeline (skip for hints mode — fall through to hints handler below)
         if (args.strategy === "smart" && args.task_context && args.mode !== "hints") {
           const { smartInject } = await import("../../lib/injector.js");
@@ -81,7 +86,8 @@ export function registerMemoryInjectTools(server: McpServer): void {
           allMemories.push(...sharedMems);
         }
 
-        // Private memories (agent-scoped)
+        // Include unassigned agent-private context across projects, applying
+        // project eligibility in the store before the candidate limit.
         if (args.agent_id) {
           const privateMems = listMemories({
             scope: "private",
@@ -89,6 +95,8 @@ export function registerMemoryInjectTools(server: McpServer): void {
             min_importance: minImportance,
             status: "active",
             agent_id: args.agent_id,
+            project_id: args.project_id,
+            include_unassigned_project: true,
             ...visibleToMachineFilter(visibleMachineId),
             limit: 50,
           });

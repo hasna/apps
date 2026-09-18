@@ -135,6 +135,9 @@ export interface MemoryFilter {
   source?: MemorySource | MemorySource[];
   status?: MemoryStatus | MemoryStatus[];
   project_id?: string;
+  /** With project_id, include unassigned memories before pagination. Without
+   * project_id this has no effect; the default remains an exact project match. */
+  include_unassigned_project?: boolean;
   agent_id?: string;
   session_id?: string;
   machine_id?: string | null;

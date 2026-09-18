@@ -1,4 +1,5 @@
 import { listMemories, createMemory, cleanExpiredMemories, touchMemory, getMemoryBriefing, listLowTrustMemories } from "../../db/memories.js";
+import { getProject } from "../../db/projects.js";
 import { getDbPath, loadConfig } from "../../lib/config.js";
 import { runCleanup } from "../../lib/retention.js";
 import {
@@ -157,6 +158,9 @@ addRoute("GET", "/api/inject", (req, url) => {
   const gate = isAuthenticated(req) ? null : checkWriteOriginOrHost(req);
   if (gate) return gate;
   const q = getSearchParams(url);
+  if (q["project_id"] !== undefined && (!q["project_id"].trim() || !getProject(q["project_id"]))) {
+    return errorResponse("Project not found", 404);
+  }
   const maxTokens = q["max_tokens"] ? parseInt(q["max_tokens"], 10) : 500;
   const minImportance = 3;
   const categories: MemoryCategory[] = [
@@ -203,6 +207,7 @@ addRoute("GET", "/api/inject", (req, url) => {
       min_importance: minImportance,
       status: "active",
       agent_id: q["agent_id"],
+      project_id: q["project_id"],
       ...visibleToMachineFilter(visibleMachineId),
       limit: 50,
     });
