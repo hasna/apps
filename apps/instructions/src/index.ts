@@ -162,6 +162,7 @@ export {
   configAssetDigest,
   configAssetLocator,
   normalizeProfileAssetBinding,
+  renderNativeAgentContent,
   resolveAssetDestination,
   selectAssetCapability,
 } from "./lib/asset-plan.js";

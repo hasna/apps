@@ -271,6 +271,18 @@ Codex custom-agent file loading remains unsupported. A generated file is not
 proof that a running provider loaded the role; verify the native consumer and
 keep existing sessions intact.
 
+Canonical role prose can use explicit `nativeAgent: { name, description }` asset
+binding metadata. The adapter prepends a quoted native YAML header while preserving
+every byte of the canonical body. To retain existing native restrictions, supply
+`nativeAgent.frontmatter` containing the complete reviewed newline-terminated
+header. Its flat scalar fields must be unique, and its name/description must match
+the explicit metadata. The header is preserved exactly; complex or ambiguous YAML
+is refused. The name must match the destination filename. Metadata, header bytes
+and source digest participate in the asset plan digest and ownership manifest.
+Do not drop existing tools, model or permission restrictions when adopting a role;
+preserve the reviewed header or refuse adoption. A source that already includes
+frontmatter uses the existing byte-preserving path without `nativeAgent` metadata.
+
 Session profiles contain reviewed instruction prose: `rules` records in Markdown
 or text, with templates resolved before injection. Compiling a mixed machine
 profile fails if it selects scripts, settings, execution policies, retired

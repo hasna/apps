@@ -8,6 +8,7 @@ import type {
   ConfigAgent,
   ProfileAssetBinding,
   ProfileAssetBindingSpec,
+  NativeAgentMetadata,
 } from "../types/index.js";
 import {
   ASSET_DESTINATION_STRATEGIES,
@@ -82,6 +83,7 @@ export interface AssetPlanItem {
     root: "target-home" | "project-root";
     relativePath: string;
   };
+  nativeAgent?: NativeAgentMetadata;
   support: AssetSupport;
   action: AssetAction;
   mutationMode: AssetPlanMode;
@@ -263,6 +265,10 @@ export function normalizeProfileAssetBinding(value: unknown): ProfileAssetBindin
   if (!ASSET_UNINSTALL_POLICIES.includes(uninstall)) throw new Error(`Invalid asset uninstall policy: ${String(uninstall)}`);
   const rollback = record["rollback"] as ProfileAssetBindingSpec["rollback"];
   if (!ASSET_ROLLBACK_POLICIES.includes(rollback)) throw new Error(`Invalid asset rollback policy: ${String(rollback)}`);
+  const nativeAgent = record["nativeAgent"] === undefined ? undefined : normalizeNativeAgentMetadata(record["nativeAgent"]);
+  if (nativeAgent && (kind !== "custom-agent" || strategy !== "emit-file" || !["claude", "sumi", "opencode"].includes(provider))) {
+    throw new Error("nativeAgent metadata requires a supported emitted custom-agent definition.");
+  }
   return {
     schema: PROFILE_ASSET_BINDING_SCHEMA,
     assetKey,
@@ -282,6 +288,7 @@ export function normalizeProfileAssetBinding(value: unknown): ProfileAssetBindin
       root,
       relativePath: nonEmptyString(destinationRecord["relativePath"], "destination.relativePath"),
     },
+    ...(nativeAgent ? { nativeAgent } : {}),
     uninstall,
     rollback,
   };
@@ -352,6 +359,7 @@ export function compileAssetPlan(input: CompileAssetPlanInput): AssetPlan {
         allowed: binding.source.allowed,
       },
       destination: binding.destination,
+      ...(binding.nativeAgent ? { nativeAgent: binding.nativeAgent } : {}),
       support,
       action,
       mutationMode: input.mode,
@@ -422,12 +430,20 @@ function validateAssetSourceAndDestination(
   // explicit provider home. Never let a role binding become an always-loaded
   // rules file or infer a provider home from a project-root destination.
   if (pathSafe && binding.kind === "custom-agent" && binding.destination.strategy === "emit-file"
-    && (binding.selector.provider === "claude" || binding.selector.provider === "sumi")
+    && (binding.selector.provider === "claude" || binding.selector.provider === "sumi" || binding.nativeAgent)
     && (binding.destination.root !== "target-home"
       || !/^agents\/[A-Za-z0-9][A-Za-z0-9_-]*\.md$/.test(safeRelativePath(binding.destination.relativePath)))) {
     pathSafe = false;
     diagnostics.push(diagnostic("error", "ASSET_CUSTOM_AGENT_DESTINATION_UNSUPPORTED", binding.assetKey,
       "Native custom-agent definitions require agents/<name>.md beneath an explicit target-home."));
+  }
+  if (binding.nativeAgent) {
+    if (posix.basename(binding.destination.relativePath, ".md") !== binding.nativeAgent.name) {
+      diagnostics.push(diagnostic("error", "ASSET_NATIVE_AGENT_NAME_MISMATCH", binding.assetKey, "Native role name must match its destination filename."));
+    }
+    if (/^\uFEFF?---[ \t]*\r?\n/.test(bundle.content)) {
+      diagnostics.push(diagnostic("error", "ASSET_NATIVE_AGENT_DOUBLE_HEADER", binding.assetKey, "Canonical role prose must not already contain frontmatter when nativeAgent metadata is supplied."));
+    }
   }
   const expectedLocator = bundle.locator;
   if (!binding.source.immutable || binding.source.locator !== expectedLocator) {
@@ -479,6 +495,42 @@ function safeRelativePath(value: string): string {
     throw new Error(`Asset relative path escapes its destination root: ${value}`);
   }
   return normalized;
+}
+
+function normalizeNativeAgentMetadata(value: unknown): NativeAgentMetadata {
+  const record = objectRecord(value, "nativeAgent");
+  if (Object.keys(record).some((key) => !["name", "description", "frontmatter"].includes(key))) throw new Error("Unknown nativeAgent metadata field.");
+  const name = nonEmptyString(record["name"], "nativeAgent.name");
+  const description = nonEmptyString(record["description"], "nativeAgent.description");
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(name) || name.length > 128) throw new Error("Invalid nativeAgent.name.");
+  if (description.length > 4096 || /[\r\n\0]/.test(description)) throw new Error("Invalid nativeAgent.description.");
+  if (record["frontmatter"] === undefined) return { name, description };
+  const frontmatter = record["frontmatter"];
+  if (typeof frontmatter !== "string" || frontmatter.length > 16384 || frontmatter.includes("\0")) throw new Error("Invalid nativeAgent.frontmatter.");
+  const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n$/.exec(frontmatter);
+  if (!match) throw new Error("nativeAgent.frontmatter requires one complete newline-terminated YAML header.");
+  const fields = new Map<string, string>();
+  for (const line of match[1]!.split(/\r?\n/)) {
+    if (!line.trim() || line.startsWith("#")) continue;
+    const field = /^([A-Za-z][A-Za-z0-9_-]*):[ \t]+(.+)$/.exec(line);
+    if (!field || fields.has(field[1]!) || /^[|>&*!{\[]/.test(field[2]!)) throw new Error("nativeAgent.frontmatter requires unambiguous, unique flat scalar fields.");
+    fields.set(field[1]!, field[2]!);
+  }
+  const scalar = (key: string): string | undefined => {
+    const raw = fields.get(key);
+    if (raw?.startsWith('"')) { try { const parsed: unknown = JSON.parse(raw); return typeof parsed === "string" ? parsed : undefined; } catch { return undefined; } }
+    return raw && /^[A-Za-z0-9][A-Za-z0-9 _.,:;()/?@+-]*$/.test(raw) ? raw : undefined;
+  };
+  if (scalar("name") !== name || scalar("description") !== description) throw new Error("nativeAgent.frontmatter name and description must match explicit metadata.");
+  return { name, description, frontmatter };
+}
+
+/** Compose native metadata without changing any canonical instruction bytes. */
+export function renderNativeAgentContent(content: string, metadata?: NativeAgentMetadata): string {
+  if (!metadata) return content;
+  const value = normalizeNativeAgentMetadata(metadata);
+  if (/^\uFEFF?---[ \t]*\r?\n/.test(content)) throw new Error("Canonical role prose already contains frontmatter.");
+  return (value.frontmatter ?? `---\nname: ${JSON.stringify(value.name)}\ndescription: ${JSON.stringify(value.description)}\n---\n`) + content;
 }
 
 function diagnostic(severity: AssetPlanDiagnostic["severity"], code: string, assetKey: string | null, message: string): AssetPlanDiagnostic {

@@ -341,6 +341,14 @@ export interface AssetDestinationSpec {
   relativePath: string;
 }
 
+/** Native role metadata is separate from the canonical instruction body. */
+export interface NativeAgentMetadata {
+  name: string;
+  description: string;
+  /** Optional complete reviewed flat YAML header, preserved byte-for-byte. */
+  frontmatter?: string;
+}
+
 export interface ProfileAssetBindingSpec {
   schema: typeof PROFILE_ASSET_BINDING_SCHEMA;
   assetKey: string;
@@ -350,6 +358,7 @@ export interface ProfileAssetBindingSpec {
   selector: AssetProviderSelector;
   source: AssetSourceSpec;
   destination: AssetDestinationSpec;
+  nativeAgent?: NativeAgentMetadata;
   uninstall: AssetUninstallPolicy;
   rollback: AssetRollbackPolicy;
 }

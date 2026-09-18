@@ -29,7 +29,7 @@ import { isRetiredOrUnsupportedConfigAgent } from "./config-agents.js";
 import { instructionSourceRejection } from "./instruction-source-policy.js";
 import { applyTransform } from "./transforms.js";
 import { providerVersionSatisfies } from "./provider-version.js";
-import { configAssetDigest, resolveAssetDestination, type AssetPlan } from "./asset-plan.js";
+import { configAssetDigest, renderNativeAgentContent, resolveAssetDestination, type AssetPlan } from "./asset-plan.js";
 import {
   detectCursorAuthorityConflicts,
   observeCursorGlobalAuthority,
@@ -445,6 +445,7 @@ export interface SessionRenderManifest {
       mutationMode: string;
       destination: AssetPlan["assets"][number]["destination"];
       digest: string;
+      nativeAgent?: AssetPlan["assets"][number]["nativeAgent"];
       exactOnceKey: string;
     }>;
   };
@@ -1962,12 +1963,13 @@ function buildAssetFiles(input: SessionRenderInput, targetHome: string, blocked:
     if (!relativePath || relativePath === ".." || relativePath.startsWith("../") || isAbsolute(relativePath)) {
       throw new Error(`Asset ${item.assetKey} is outside the session snapshot root; use a project-scoped session plan for atomic application.`);
     }
+    const renderedContent = renderNativeAgentContent(content, item.nativeAgent);
     return {
       path,
       relativePath: assertSafeRelativePath(relativePath),
       role: "asset" as const,
-      content,
-      sha256: sha256(content),
+      content: renderedContent,
+      sha256: sha256(renderedContent),
       sourceIds: [item.sourceConfigId, item.assetId],
     };
   });
@@ -2361,6 +2363,7 @@ export function planSessionRender(input: SessionRenderInput): SessionRenderPlan 
             mutationMode: item.mutationMode,
             destination: item.destination,
             digest: item.source.digest,
+            ...(item.nativeAgent ? { nativeAgent: item.nativeAgent } : {}),
             exactOnceKey: item.exactOnceKey,
           })),
         },
