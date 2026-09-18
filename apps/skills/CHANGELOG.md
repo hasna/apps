@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.8.10
+
+### Patch Changes
+
+- Add explicit native Codex hook trust enrollment with exact managed-hook checks, versioned configuration writes, and preservation of unrelated settings and trust.
+- Preserve each agent's existing hook executable and selection profile when reinstalling without explicit overrides. Keep normal defaults for new agents.
+- Add reviewed Claude plugin admission through private versioned Skills bundles. Remove native skill and command prompts while preserving ordinary plugin components, and keep admissions stable across unrelated profile changes with fresh authorization and exact content verification.
+- Bind reviewed plugin admission to the exact profile revision, aliases, triggers, authenticated owner/account identity, and routing-evidence digest. Revalidate the stable principal before and after resolution, reject cross-principal receipt reuse, and refuse legacy vulnerable receipt schemas, and execute only the digest-verified resolver inode.
+- Expose credential scopes and effective publication/profile permissions in the
+  CLI and SDK. Refuse explicit permission denials before uploading a bundle or
+  writing a profile, while preserving older servers without permission metadata.
+- Admit immutable plugin archives without a declared vendor version, with explicit reviewed documentation witnesses, and certify Claude 2.1.276 command sources.
+
 ## 0.8.9
 
 ### Patch Changes
