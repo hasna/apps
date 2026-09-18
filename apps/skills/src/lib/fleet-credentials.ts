@@ -222,11 +222,33 @@ export function isSkillsFleetCredentialError(error: unknown): error is SkillsFle
  * unhandled exception where the structured refusal was the whole point.
  *
  * The seam's message already names what was attempted and never carries a
- * credential value, so it is kept verbatim.
+ * credential value. Pointer-completion messages can still carry the selected
+ * vault item identifier, so that exact identifier is removed before the error
+ * reaches any user-visible surface.
  */
-function asSkillsFleetCredentialError(error: unknown): SkillsFleetCredentialError | null {
+export const REDACTED_VAULT_REFERENCE = "[redacted vault reference]";
+
+/**
+ * Vault item identifiers are credential-routing material. They are not secret
+ * values, but exposing them still reveals namespace, application and lifecycle
+ * layout in shell logs, JSON error payloads and MCP diagnostics. Replace only
+ * the exact pointer selected for this resolution; ordinary filesystem paths and
+ * the shared resolver's generic examples remain useful and unchanged.
+ */
+function redactVaultReference(message: string, vaultReference?: string | null): string {
+  if (!vaultReference) return message;
+  return message.split(vaultReference).join(REDACTED_VAULT_REFERENCE);
+}
+
+function asSkillsFleetCredentialError(
+  error: unknown,
+  vaultReference?: string | null,
+): SkillsFleetCredentialError | null {
   if (!isCredentialResolutionError(error)) return null;
-  return new SkillsFleetCredentialError((error as Error).message, "MISSING_API_CREDENTIAL");
+  return new SkillsFleetCredentialError(
+    redactVaultReference((error as Error).message, vaultReference),
+    "MISSING_API_CREDENTIAL",
+  );
 }
 
 /**
@@ -563,7 +585,7 @@ export async function resolveSkillsConnection(
     // original ambient context so the normal Keychain tier remains enabled.
     completed = await completePointerCredential(SKILLS_APP, pointer, env);
   } catch (error) {
-    const translated = asSkillsFleetCredentialError(error);
+    const translated = asSkillsFleetCredentialError(error, pointer.pointerVaultKey);
     if (translated) throw translated;
     throw error;
   }
