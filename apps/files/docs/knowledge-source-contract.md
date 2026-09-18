@@ -151,9 +151,20 @@ files knowledge outbox ack open-knowledge <cursor> --json
 
 MCP exposes `export_knowledge_manifest`, `doctor_knowledge_sources`,
 `resolve_knowledge_source`, `resolve_extracted_text`, `poll_knowledge_outbox`, and
-`ack_knowledge_outbox`. Doctor and resolver operations use the hosted Files API when selected; manifest and outbox operations remain on-box. Manifest, doctor, resolve, extraction, and polling are read-only. Acknowledging the outbox updates a consumer checkpoint and therefore
-requires the MCP `mutations` capability. None of these tools grants write access
-to source-file bytes.
+`ack_knowledge_outbox`. Manifest, doctor, and resolver operations use the hosted
+Files API when selected. The hosted manifest uses signed tenant-bound global
+change cursors; local per-file `sync_version` cursors are not accepted by the
+hosted route. Polling and acknowledging the legacy outbox remain on-box.
+Manifest, doctor, resolve, extraction, and polling are read-only. Acknowledging
+the outbox updates a consumer checkpoint and therefore requires the MCP
+`mutations` capability. None of these tools grants write access to source-file
+bytes.
+
+Hosted manifests deliberately omit station identity, filesystem paths, and S3
+coordinates. They mark extraction available only when a materialized extraction
+matches the current revision. Filtered full snapshots are supported; filtered
+deltas refuse until membership-exit tombstones have their own versioned
+contract. Use the returned signed `delta_cursor` for hosted incremental reads.
 
 The doctor is a read-only readiness diagnostic for agents before sync. It checks
 refs through the same resolver contract used by manifests and returns stable
@@ -230,63 +241,66 @@ or local path is revealed to an agent.
 
 ## Manifest Export
 
-`exportKnowledgeSourceManifest` in `src/lib/knowledge-manifest.ts` provides the
-core manifest export for `open-knowledge`. It supports file selection by source,
-collection, tag, project, status, modified range, stable opaque cursor, and
-sync-version delta cursor. It also supports optional evidence asset rows. Output
-can be returned in memory, formatted as JSON or JSONL, or written as a local
-artifact or to a configured S3 source for remote indexing jobs.
+`exportKnowledgeSourceManifest` in `src/lib/knowledge-manifest.ts` remains the
+explicit local-store exporter. It supports source, collection, tag, project,
+status, and modified-range selection, local `(sync_version, file_id)` cursors,
+optional evidence rows, JSON/JSONL rendering, and local or configured S3
+artifacts.
 
-The manifest prefers revision refs when `file_versions` has a row for the
-current file state:
+On the hosted transport, the CLI and MCP tool call
+`GET /v1/knowledge/manifest`. That route has a separate, stricter contract:
+
+- `filter_contract: files.knowledge.manifest.v1`;
+- `cursor_contract: files.knowledge.manifest.change.v1`;
+- lossless decimal global change cursors;
+- signed page cursors bound to the authenticated tenant and exact query;
+- immutable snapshots pinned to one high watermark;
+- no station identity, filesystem/source paths, S3 bucket/prefix/region/object
+  keys, or internal object IDs;
+- extraction availability only from a materialized extraction matching the
+  current revision.
+
+A hosted item is shaped like:
 
 ```json
 {
-  "cursor": "next-cursor",
-  "items": [
-    {
-      "source_ref": "open-files://file/f_123",
-      "revision_ref": "open-files://file/f_123/revision/rev_456",
-      "revision_id": "rev_456",
-      "s3_object_id": "s3obj_abc",
-      "sync_version": 42,
-      "source_revision_hash": "sha256:<hex>",
-      "file_id": "f_123",
-      "source_id": "src_abc",
-      "path": "Team Drive/Notes/Q2 plan.md",
-      "name": "Q2 plan.md",
-      "mime": "text/markdown",
-      "size": 12345,
-      "hash": "sha256:<hex>",
-      "status": "active",
-      "tombstone": false,
-      "updated_at": "2026-06-08T00:00:00.000Z"
-    }
-  ]
+  "change_cursor": "42",
+  "source_ref": "open-files://file/f_123",
+  "revision_ref": "open-files://file/f_123/revision/rev_456",
+  "revision_id": "rev_456",
+  "source_revision_hash": "sha256:<hex>",
+  "file_id": "f_123",
+  "source_id": "src_abc",
+  "source_type": "s3",
+  "name": "Q2 plan.md",
+  "mime": "text/markdown",
+  "size": 12345,
+  "hash": "sha256:<hex>",
+  "status": "active",
+  "deleted": false,
+  "tags": ["planning"],
+  "open_files_root": {
+    "open_files_root": "open-files://source/src_abc",
+    "source_id": "src_abc",
+    "source_type": "s3",
+    "evidence_hash": "sha256:<hex>"
+  },
+  "storage": { "provider": "s3", "source_id": "src_abc" },
+  "extraction": { "text_available": false, "status": "unavailable" }
 }
 ```
 
-Manifest paging uses a high watermark and `(sync_version, file_id)` cursor
-rather than offset-only paging, so large-corpus scans have stable page
-boundaries while files continue to change. Every manifest includes a
-`delta_cursor` representing the current high watermark. Later calls can pass
-that cursor as `since_cursor` with `delta: true` to export only changed rows.
-Soft-deleted files are included as tombstones in delta mode.
+Every hosted manifest returns a signed `delta_cursor` for its high watermark.
+Use it as `since_cursor` with `delta: true` for the next unfiltered delta.
+Hosted `since_sync_version` is refused because a per-file counter is not a
+global checkpoint. Filtered deltas are also refused until membership exits have
+a separate tombstone contract; use a filtered full snapshot instead. Hard and
+soft file deletions remain represented by immutable tombstone snapshots.
 
-Current manifest rows also include storage descriptors, extraction availability,
-read-only permission labels, tags, deleted/tombstone state, source revision
-hashes, sync versions, allowed-purpose metadata, and optional ACL summaries or
-evidence asset storage/link metadata. Evidence asset rows include stable
-`source_ref`, `revision_ref`, `revision_id`, `source_revision_hash`,
-`permissions`, and `redaction` fields so downstream tools can cite private
-evidence without receiving raw inventory bytes or writable storage handles. File rows include `open_files_root`
-evidence with the stable `open-files://source/{source_id}` root, source type,
-source path, machine id/host metadata, and local or S3 root descriptors such as
-local source path or S3 bucket/prefix/region. The root evidence includes a
-stable SHA-256 evidence hash and intentionally excludes source config values,
-credentials, raw file bytes, embeddings, and writable handles. Manifest export
-is metadata-only: it does not read source file bytes, create embeddings, or
-write knowledge artifacts.
+The local manifest intentionally retains its richer on-box evidence and legacy
+cursor contract. Hosted and local cursors are not interchangeable. Both modes
+remain metadata-only: they do not copy source bytes, create embeddings, or
+write knowledge artifacts unless an explicit output artifact was requested.
 
 ## Private Fleet Manifests
 

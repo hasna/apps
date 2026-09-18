@@ -9,59 +9,32 @@ import { getFileTags } from "../db/tags.js";
 import { getSource } from "../db/sources.js";
 import { uploadBufferToS3 } from "./s3.js";
 import { buildOpenFilesAssetRef, buildOpenFilesAssetRevisionRef, buildOpenFilesFileRef } from "./source-ref.js";
+import {
+  buildManifestCursor,
+  buildManifestEnvelope,
+  buildManifestFileItem,
+  formatKnowledgeSourceManifest,
+  MANIFEST_ALLOWED_PURPOSES,
+  MANIFEST_DEFAULT_LIMIT,
+  normalizeManifestLimit,
+  parseManifestCursor,
+  type ManifestFileRow,
+} from "./knowledge-manifest-shared.js";
+
+export { formatKnowledgeSourceManifest } from "./knowledge-manifest-shared.js";
 import { resolveKnowledgeSourceRef } from "./knowledge-resolver.js";
 import type {
   FileAsset,
-  FileStatus,
   KnowledgeSourceManifest,
   KnowledgeSourceManifestArtifact,
   KnowledgeSourceManifestEvidenceAssetItem,
   KnowledgeSourceManifestFileItem,
-  KnowledgeSourceManifestFormat,
   KnowledgeSourceManifestItem,
   KnowledgeSourceManifestOptions,
   KnowledgeSourceManifestOutput,
-  SourceType,
 } from "../types/index.js";
 
-const DEFAULT_LIMIT = 100;
-const MAX_LIMIT = 1000;
-const DEFAULT_ALLOWED_PURPOSES = ["knowledge_index", "knowledge_answer", "agent_context"];
 type ManifestAclSummary = NonNullable<KnowledgeSourceManifestFileItem["acl_summary"]>;
-
-interface ManifestFileRow {
-  id: string;
-  source_id: string;
-  path: string;
-  name: string;
-  size: number;
-  mime: string;
-  hash: string | null;
-  status: string;
-  indexed_at: string;
-  modified_at: string | null;
-  sync_version: number;
-  source_name: string;
-  source_type: string;
-  source_machine_id: string;
-  source_root_path: string | null;
-  source_bucket: string | null;
-  source_prefix: string | null;
-  source_region: string | null;
-  source_enabled: number;
-  file_machine_id: string;
-  machine_name: string | null;
-  machine_hostname: string | null;
-  machine_platform: string | null;
-  machine_arch: string | null;
-  machine_is_current: number | null;
-}
-
-interface ManifestCursor {
-  sync_version: number;
-  file_id: string;
-  high_watermark: number;
-}
 
 interface AclSummaryRow {
   id: string;
@@ -88,7 +61,7 @@ export async function exportKnowledgeSourceManifest(
   const pageAfter = cursor
     ? { sync_version: cursor.sync_version, file_id: cursor.file_id }
     : { sync_version: sinceSyncVersion ?? -1, file_id: "" };
-  const limit = normalizeLimit(opts.limit);
+  const limit = normalizeManifestLimit(opts.limit);
   const fileRows = listManifestFileRows({ ...opts, pageAfter, highWatermark, limit: limit + 1 });
   const hasNext = fileRows.length > limit;
   const rows = hasNext ? fileRows.slice(0, limit) : fileRows;
@@ -103,42 +76,20 @@ export async function exportKnowledgeSourceManifest(
         high_watermark: highWatermark,
       })
     : undefined;
-  const deltaCursor = buildManifestCursor({
-    sync_version: highWatermark,
-    file_id: "",
-    high_watermark: highWatermark,
-  });
-
-  const manifest: KnowledgeSourceManifest = {
-    manifest_id: buildManifestId(generatedAt, opts, items),
+  const manifest = buildManifestEnvelope({
     generated_at: generatedAt,
     format,
-    filters: manifestFilters(opts),
-    item_count: items.length,
-    cursor: opts.cursor,
-    next_cursor: nextCursor,
-    delta: Boolean(opts.delta || opts.since_cursor || opts.since_sync_version !== undefined),
-    high_watermark: highWatermark,
-    delta_cursor: deltaCursor,
-    tombstone_count: fileItems.filter((item) => item.tombstone).length,
+    opts,
     items,
-  };
+    high_watermark: highWatermark,
+    next_cursor: nextCursor,
+  });
 
   if (opts.output) {
     manifest.artifact = await writeKnowledgeSourceManifestArtifact(manifest, opts.output);
   }
 
   return manifest;
-}
-
-export function formatKnowledgeSourceManifest(
-  manifest: KnowledgeSourceManifest,
-  format: KnowledgeSourceManifestFormat = manifest.format,
-): string {
-  if (format === "jsonl") {
-    return manifest.items.map((item) => JSON.stringify(item)).join("\n") + (manifest.items.length ? "\n" : "");
-  }
-  return JSON.stringify(manifest, null, 2);
 }
 
 export async function writeKnowledgeSourceManifestArtifact(
@@ -263,60 +214,29 @@ async function buildFileItem(
   purpose: string,
   opts: KnowledgeSourceManifestOptions,
 ): Promise<KnowledgeSourceManifestFileItem> {
-  const sourceRef = buildOpenFilesFileRef(row.id);
   const version = getLatestFileVersion(row.id);
-  const tags = getFileTags(row.id).map((tag) => tag.name);
-  const resolution = await resolveKnowledgeSourceRef(sourceRef, {
+  const resolution = await resolveKnowledgeSourceRef(buildOpenFilesFileRef(row.id), {
     mode: "metadata",
     purpose,
     allowed_purposes: [purpose],
   });
-  const textAvailable = resolution.content.text_available;
-  const storage = resolution.storage;
-  const hash = formatHash(version?.content_hash_algorithm, version?.content_hash ?? row.hash ?? undefined);
-
-  return {
-    kind: "file",
-    source_ref: sourceRef,
+  return buildManifestFileItem(row, {
     revision_ref: version?.source_ref,
     revision_id: version?.id,
     s3_object_id: version?.s3_object_id,
-    sync_version: row.sync_version,
-    source_revision_hash: buildSourceRevisionHash(row, version?.id, hash),
-    file_id: row.id,
-    source_id: row.source_id,
-    source_name: row.source_name,
-    source_type: row.source_type as SourceType,
-    path: row.path,
-    name: row.name,
-    mime: row.mime,
-    size: row.size,
-    hash,
-    status: row.status as FileStatus,
-    updated_at: row.modified_at ?? row.indexed_at,
-    deleted: row.status === "deleted",
-    tombstone: row.status === "deleted" ? true : undefined,
-    tags,
-    open_files_root: buildOpenFilesRootEvidence(row),
-    storage,
-    extraction: {
-      text_available: textAvailable,
-      status: textAvailable ? "available" : "unsupported",
-      extracted_text_ref: resolution.content.extracted_text_ref,
-    },
-    permissions: {
-      mode: "read_only",
-      allowed_purposes: DEFAULT_ALLOWED_PURPOSES,
-    },
+    content_hash_algorithm: version?.content_hash_algorithm,
+    content_hash: version?.content_hash,
+    tags: getFileTags(row.id).map((tag) => tag.name),
+    text_available: resolution.content.text_available,
+    storage: resolution.storage,
     acl_summary: opts.include_acl_summary ? getAclSummary(row.id) : undefined,
-    permission_labels: buildFilePermissionLabels(row, storage?.provider),
-  };
+  });
 }
 
 function buildEvidenceItems(opts: KnowledgeSourceManifestOptions): KnowledgeSourceManifestEvidenceAssetItem[] {
   return listFileAssets({
     ...opts.evidence,
-    limit: opts.evidence?.limit ?? DEFAULT_LIMIT,
+    limit: opts.evidence?.limit ?? MANIFEST_DEFAULT_LIMIT,
     offset: opts.evidence?.offset ?? 0,
   }).map(toEvidenceItem);
 }
@@ -353,7 +273,7 @@ function toEvidenceItem(asset: FileAsset): KnowledgeSourceManifestEvidenceAssetI
     links: listFileLinks(asset.id),
     permissions: {
       mode: "read_only",
-      allowed_purposes: DEFAULT_ALLOWED_PURPOSES,
+      allowed_purposes: MANIFEST_ALLOWED_PURPOSES,
       write: false,
     },
     redaction: {
@@ -366,60 +286,6 @@ function toEvidenceItem(asset: FileAsset): KnowledgeSourceManifestEvidenceAssetI
     },
     permission_labels: buildEvidencePermissionLabels(asset),
   };
-}
-
-function buildOpenFilesRootEvidence(row: ManifestFileRow): KnowledgeSourceManifestFileItem["open_files_root"] {
-  const machineId = row.file_machine_id || row.source_machine_id;
-  const evidence = {
-    open_files_root: `open-files://source/${encodeURIComponent(row.source_id)}`,
-    source_id: row.source_id,
-    source_type: row.source_type as SourceType,
-    source_path: row.path,
-    machine: {
-      machine_id: machineId,
-      name: row.machine_name ?? undefined,
-      hostname: row.machine_hostname ?? undefined,
-      platform: row.machine_platform ?? undefined,
-      arch: row.machine_arch ?? undefined,
-      is_current: row.machine_is_current === null ? undefined : row.machine_is_current === 1,
-    },
-    local: row.source_root_path ? { path: row.source_root_path } : undefined,
-    s3: row.source_bucket ? {
-      bucket: row.source_bucket,
-      prefix: row.source_prefix ?? undefined,
-      region: row.source_region ?? undefined,
-    } : undefined,
-    evidence_hash: "",
-  };
-  return {
-    ...evidence,
-    evidence_hash: buildRootEvidenceHash(evidence),
-  };
-}
-
-function buildRootEvidenceHash(evidence: Omit<KnowledgeSourceManifestFileItem["open_files_root"], "evidence_hash">): string {
-  return `sha256:${createHash("sha256").update(JSON.stringify({
-    open_files_root: evidence.open_files_root,
-    source_id: evidence.source_id,
-    source_type: evidence.source_type,
-    source_path: evidence.source_path,
-    machine_id: evidence.machine.machine_id,
-    hostname: evidence.machine.hostname,
-    local_path: evidence.local?.path,
-    s3_bucket: evidence.s3?.bucket,
-    s3_prefix: evidence.s3?.prefix,
-    s3_region: evidence.s3?.region,
-  })).digest("hex")}`;
-}
-
-function buildFilePermissionLabels(row: ManifestFileRow, storageProvider: string | undefined): string[] {
-  return [
-    "read_only",
-    row.source_enabled === 1 ? "source_enabled" : "source_disabled",
-    `source_type:${row.source_type}`,
-    `storage:${storageProvider ?? "unknown"}`,
-    `status:${row.status}`,
-  ];
 }
 
 function buildEvidencePermissionLabels(asset: FileAsset): string[] {
@@ -469,96 +335,10 @@ function buildEvidenceAssetRevisionHash(asset: FileAsset, revisionId: string): s
   })).digest("hex")}`;
 }
 
-function manifestFilters(opts: KnowledgeSourceManifestOptions): Record<string, unknown> {
-  return {
-    source_id: opts.source_id,
-    collection_id: opts.collection_id,
-    tag: opts.tag,
-    project_id: opts.project_id,
-    status: opts.status ?? (opts.include_deleted ? "all" : "active"),
-    delta: opts.delta ?? false,
-    since_cursor: opts.since_cursor,
-    since_sync_version: opts.since_sync_version,
-    include_acl_summary: opts.include_acl_summary ?? false,
-    after: opts.after,
-    before: opts.before,
-    include_evidence_assets: opts.include_evidence_assets ?? false,
-    evidence: opts.evidence,
-  };
-}
-
-function parseManifestCursor(cursor: string | undefined): ManifestCursor | null {
-  if (!cursor) return null;
-  try {
-    const parsed = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
-    const syncVersion = Number((parsed as { sync_version?: unknown }).sync_version);
-    const fileId = String((parsed as { file_id?: unknown }).file_id ?? "");
-    const highWatermark = Number((parsed as { high_watermark?: unknown }).high_watermark ?? syncVersion);
-    if (!Number.isInteger(syncVersion) || syncVersion < 0) return null;
-    if (!Number.isInteger(highWatermark) || highWatermark < 0) return null;
-    return { sync_version: syncVersion, file_id: fileId, high_watermark: highWatermark };
-  } catch {
-    return null;
-  }
-}
-
-function buildManifestCursor(cursor: ManifestCursor): string {
-  return Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url");
-}
-
-function normalizeLimit(value: number | undefined): number {
-  if (!Number.isFinite(value ?? DEFAULT_LIMIT)) return DEFAULT_LIMIT;
-  const normalized = Math.floor(value ?? DEFAULT_LIMIT);
-  if (normalized <= 0) return DEFAULT_LIMIT;
-  return Math.min(normalized, MAX_LIMIT);
-}
-
-function buildManifestId(
-  generatedAt: string,
-  opts: KnowledgeSourceManifestOptions,
-  items: KnowledgeSourceManifestItem[],
-): string {
-  return `manifest_${createHash("sha256")
-    .update(JSON.stringify({ generatedAt, filters: manifestFilters(opts), item_ids: itemIds(items) }))
-    .digest("hex")
-    .slice(0, 24)}`;
-}
-
-function itemIds(items: KnowledgeSourceManifestItem[]): string[] {
-  return items.map((item) => item.kind === "file" ? item.file_id : item.asset_id);
-}
-
-function formatHash(algorithm: string | undefined, hash: string | undefined): string | undefined {
-  if (!hash) return undefined;
-  if (!algorithm || algorithm === "unknown") return hash;
-  return `${algorithm}:${hash}`;
-}
-
 function getManifestHighWatermark(): number {
   return getDb().query<{ max_sync_version: number }, []>(
     "SELECT COALESCE(MAX(sync_version), 0) AS max_sync_version FROM files",
   ).get()?.max_sync_version ?? 0;
-}
-
-function buildSourceRevisionHash(row: ManifestFileRow, revisionId: string | undefined, hash: string | undefined): string {
-  return `sha256:${createHash("sha256").update(JSON.stringify({
-    file_id: row.id,
-    source_id: row.source_id,
-    path: row.path,
-    revision_id: revisionId,
-    hash,
-    size: row.size,
-    mime: row.mime,
-    status: row.status,
-    sync_version: row.sync_version,
-    source_machine_id: row.source_machine_id,
-    file_machine_id: row.file_machine_id,
-    source_root_path: row.source_root_path,
-    source_bucket: row.source_bucket,
-    source_prefix: row.source_prefix,
-    source_region: row.source_region,
-  })).digest("hex")}`;
 }
 
 function getAclSummary(fileId: string): KnowledgeSourceManifestFileItem["acl_summary"] {

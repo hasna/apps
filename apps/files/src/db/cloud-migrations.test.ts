@@ -193,6 +193,20 @@ describe("cloud migration compatibility", () => {
     );
   });
 
+  test("appends the transactional global manifest clock without changing historical migrations", () => {
+    const migration = CLOUD_MIGRATIONS.find(({ id }) => id === "files-knowledge-manifest-0001-global-change-log");
+    expect(migration).toBeDefined();
+    expect(migration!.sql).toContain("files_knowledge_manifest_clock");
+    expect(migration!.sql).toContain("UPDATE files_knowledge_manifest_clock");
+    expect(migration!.sql).toContain("manifest_snapshot JSONB");
+    expect(migration!.sql).toContain("files_manifest_file_tags_change");
+    expect(migration!.sql).toContain("files_manifest_project_files_change");
+    expect(migration!.sql).toContain("files_manifest_collection_files_change");
+    expect(migration!.sql).toContain("files_manifest_file_versions_change");
+    expect(migration!.sql).toContain("files_manifest_search_documents_change");
+    expect(migration!.sql).not.toContain("nextval(");
+  });
+
   test("still rejects a genuinely unknown applied migration after the current lineage", async () => {
     await expect(
       ledgerWith([

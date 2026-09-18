@@ -382,7 +382,7 @@ function fileItem(input: {
   const status = input.status ?? "active";
   const textAvailable = Boolean(input.text);
   const machineName = input.machine ?? "linux-node-a";
-  const machine = FIXTURE_MACHINES[machineName];
+  const machine = FIXTURE_MACHINES[machineName]!;
   const sourceId = machineName === "linux-node-a" ? SOURCE_ID_NODE_A : SOURCE_ID_NODE_B;
   return {
     kind: "file",

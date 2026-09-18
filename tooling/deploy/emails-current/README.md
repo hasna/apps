@@ -12,8 +12,9 @@ Normal sequence:
    `emails-search-reconciled/reconciled.json`.
 3. Dispatch `emails-current-server-deploy` on `main` with that reconciliation
    run id and the SHA-256 of the exact `reconciled.json` bytes.
-4. The workflow rechecks exact-main CI and reconciliation before and after the
-   production boundary, proves the migration source is byte-identical to the
+4. The caller rechecks exact-main CI and reconciliation, then delegates to the
+   IAM trust-bound `emails-search-promotion-execute` reusable workflow. That
+   sanctioned production job rechecks the same evidence, proves the migration source is byte-identical to the
    reconciled live source, exercises the full amd64 image against isolated
    PostgreSQL, rejects HIGH/CRITICAL image findings, pushes one immutable tag,
    and registers an image-only clone of the reconciled task.

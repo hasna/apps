@@ -25,6 +25,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createFilesClientFromEnv, resolveFilesSdkTransport, FILES_APP_NAME, FILES_SDK_AUTHORITY_PIN_MESSAGE } from "./index.js";
+import type { KnowledgeManifest } from "./client.js";
 import type { FilesKeychainCommandRunner, FilesKeychainOptions } from "../store/client-types.js";
 
 const KEY_ENV = "hasna_files_env_key_00000000001";
@@ -150,6 +151,45 @@ describe("SDK credential resolution (hermetic: fake HOME/HASNA_HOME, injected se
     const diskOverEnv = capturedClient(fakeHomeEnv({ HASNA_FILES_API_KEY: KEY_ENV }));
     await diskOverEnv.files.listSources();
     expect(diskOverEnv.requests[0]!.xApiKey).toBe(KEY_DISK);
+  });
+
+  test("typed manifest calls use the canonical single-/v1 route and refresh the credential", async () => {
+    writeDiskCredential("hasna_files_manifest_old_key");
+    const requests: Array<{ url: string; key: string | null }> = [];
+    const response: KnowledgeManifest = {
+      filter_contract: "files.knowledge.manifest.v1",
+      cursor_contract: "files.knowledge.manifest.change.v1",
+      manifest_id: "manifest_sdk",
+      generated_at: "2026-09-17T00:00:00.000Z",
+      format: "json",
+      filters: { status: "active", delta: false },
+      item_count: 0,
+      has_more: false,
+      complete: true,
+      delta: false,
+      high_watermark: "0",
+      delta_cursor: "checkpoint",
+      tombstone_count: 0,
+      items: [],
+    };
+    const captureFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push({ url: String(input), key: new Headers(init?.headers).get("x-api-key") });
+      return Response.json(response);
+    }) as typeof fetch;
+    const files = createFilesClientFromEnv(fakeHomeEnv(), { fetch: captureFetch });
+    const first: KnowledgeManifest = await files.exportKnowledgeManifest({ limit: 2 });
+    expect(first.filter_contract).toBe("files.knowledge.manifest.v1");
+    expect(requests[0]).toEqual({
+      url: "https://api.hasna.com/files/v1/knowledge/manifest?limit=2",
+      key: "hasna_files_manifest_old_key",
+    });
+
+    writeDiskCredential("hasna_files_manifest_new_key");
+    await files.exportKnowledgeManifest({ cursor: "signed-page" });
+    expect(requests[1]).toEqual({
+      url: "https://api.hasna.com/files/v1/knowledge/manifest?cursor=signed-page",
+      key: "hasna_files_manifest_new_key",
+    });
   });
 
   test("per-request freshness: a rotation in the credential file heals the NEXT request", async () => {

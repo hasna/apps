@@ -23,5 +23,7 @@ describe("Files MCP profiles", () => {
     expect(shouldRegisterFilesMcpTool({ name: "add_source", profile: "full", capabilityAvailable: false, transport: "api" })).toBe(true);
     expect(shouldRegisterFilesMcpTool({ name: "build_context_pack", profile: "standard", capabilityAvailable: true, transport: "api" })).toBe(false);
     expect(shouldRegisterFilesMcpTool({ name: "build_context_pack", profile: "standard", capabilityAvailable: true, transport: "local" })).toBe(true);
+    expect(shouldRegisterFilesMcpTool({ name: "export_knowledge_manifest", profile: "standard", capabilityAvailable: true, transport: "api" })).toBe(false);
+    expect(shouldRegisterFilesMcpTool({ name: "export_knowledge_manifest", profile: "full", capabilityAvailable: true, transport: "api" })).toBe(true);
   });
 });
