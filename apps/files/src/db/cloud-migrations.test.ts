@@ -193,7 +193,7 @@ describe("cloud migration compatibility", () => {
     );
   });
 
-  test("appends the transactional global manifest clock without changing historical migrations", () => {
+  test("appends the transactional global manifest clock and its timestamp repair without changing history", () => {
     const migration = CLOUD_MIGRATIONS.find(({ id }) => id === "files-knowledge-manifest-0001-global-change-log");
     expect(migration).toBeDefined();
     expect(migration!.sql).toContain("files_knowledge_manifest_clock");
@@ -205,6 +205,17 @@ describe("cloud migration compatibility", () => {
     expect(migration!.sql).toContain("files_manifest_file_versions_change");
     expect(migration!.sql).toContain("files_manifest_search_documents_change");
     expect(migration!.sql).not.toContain("nextval(");
+
+    const repair = CLOUD_MIGRATIONS.find(
+      ({ id }) => id === "files-knowledge-manifest-0002-normalize-snapshot-timestamps",
+    );
+    expect(repair).toBeDefined();
+    expect(repair!.sql).toContain("files_manifest_rfc3339");
+    expect(repair!.sql).toContain("files_manifest_snapshot_timestamp_normalize");
+    expect(repair!.sql).toContain("SECURITY DEFINER");
+    expect(repair!.sql).toContain("SET search_path TO pg_catalog, public");
+    expect(repair!.sql).toContain("SET manifest_snapshot = manifest_snapshot");
+    expect(CLOUD_MIGRATIONS.indexOf(repair!)).toBe(CLOUD_MIGRATIONS.indexOf(migration!) + 1);
   });
 
   test("still rejects a genuinely unknown applied migration after the current lineage", async () => {
