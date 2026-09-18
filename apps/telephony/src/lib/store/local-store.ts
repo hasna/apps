@@ -160,6 +160,9 @@ export class SqliteLocalStore implements TelephonyStore {
   async listMessages(filters?: MessageFilters) {
     return dbMessages.listMessages(filters);
   }
+  async listMessagesPage(filters?: MessageFilters) {
+    return { items: dbMessages.listMessages(filters), total: null };
+  }
   async searchMessages(query: string, limit?: number) {
     return dbMessages.searchMessages(query, limit);
   }
@@ -183,6 +186,9 @@ export class SqliteLocalStore implements TelephonyStore {
   }
   async listCalls(filters?: CallFilters) {
     return dbCalls.listCalls(filters);
+  }
+  async listCallsPage(filters?: CallFilters) {
+    return { items: dbCalls.listCalls(filters), total: null };
   }
 
   // Voicemails

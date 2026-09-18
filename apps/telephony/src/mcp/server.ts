@@ -18,6 +18,27 @@ import { transcribe } from "../lib/stt.js";
 import { generateSchedule, generateMessage, analyzeIncomingMessage } from "../lib/cerebras.js";
 import { setGreeting } from "../lib/voicemail.js";
 import { tick } from "../lib/scheduler.js";
+import {
+  collectionPage,
+  windowPage,
+  compactAgent,
+  compactCall,
+  compactContact,
+  compactMessage,
+  compactPhoneNumber,
+  compactProject,
+  compactSchedule,
+  compactVoicemail,
+  compactWebhook,
+} from "../lib/compact-output.js";
+
+const collectionSchema = {
+  limit: z.number().int().positive().max(100).optional().describe("Max returned rows (default 20)"),
+  cursor: z.number().int().nonnegative().optional().describe("Zero-based row offset"),
+  verbose: z.boolean().optional().describe("Return full fields within the selected page"),
+  full: z.boolean().optional().describe("Return the legacy response shape"),
+};
+const text = (value: unknown) => ({ content: [{ type: "text" as const, text: typeof value === "string" ? value : JSON.stringify(value) }] });
 
 export function buildServer(): McpServer {
   const server = new McpServer({ name: "telephony", version: pkg.version });
@@ -29,8 +50,11 @@ export function buildServer(): McpServer {
   }, async (args) => ({ content: [{ type: "text" as const, text: JSON.stringify(await getStore().registerAgent(args), null, 2) }] }));
 
   server.tool("telephony_list_agents", "List registered agents", {
-    project_id: z.string().optional(),
-  }, async (args) => ({ content: [{ type: "text" as const, text: JSON.stringify(await getStore().listAgents(args.project_id), null, 2) }] }));
+    project_id: z.string().optional(), ...collectionSchema,
+  }, async (args) => {
+    const rows = await getStore().listAgents(args.project_id);
+    return text(args.full ? rows : collectionPage("agents", rows, args, compactAgent));
+  });
 
   server.tool("telephony_get_agent", "Get agent by ID or name", { id: z.string() }, async (args) => {
     const agent = (await getStore().getAgent(args.id)) || (await getStore().getAgentByName(args.id));
@@ -45,8 +69,10 @@ export function buildServer(): McpServer {
     name: z.string(), path: z.string(), description: z.string().optional(),
   }, async (args) => ({ content: [{ type: "text" as const, text: JSON.stringify(await getStore().createProject(args), null, 2) }] }));
 
-  server.tool("telephony_list_projects", "List projects", {}, async () =>
-    ({ content: [{ type: "text" as const, text: JSON.stringify(await getStore().listProjects(), null, 2) }] }));
+  server.tool("telephony_list_projects", "List projects", collectionSchema, async (args) => {
+    const rows = await getStore().listProjects();
+    return text(args.full ? rows : collectionPage("projects", rows, args, compactProject));
+  });
 
   // --- SMS ---
   server.tool("telephony_send_sms", "Send an SMS message", {
@@ -65,16 +91,31 @@ export function buildServer(): McpServer {
 
   // --- Messages ---
   server.tool("telephony_list_messages", "List messages", {
-    agent_id: z.string().optional(), project_id: z.string().optional(), limit: z.number().optional(),
-  }, async (args) => ({ content: [{ type: "text" as const, text: JSON.stringify(await getStore().listMessages(args), null, 2) }] }));
+    agent_id: z.string().optional(), project_id: z.string().optional(), ...collectionSchema,
+  }, async (args) => {
+    if (args.full) return text(await getStore().listMessages({ agent_id: args.agent_id, project_id: args.project_id, limit: 50 }));
+    const limit = args.limit ?? 20; const cursor = args.cursor ?? 0;
+    const page = await getStore().listMessagesPage({ agent_id: args.agent_id, project_id: args.project_id, limit: limit + 1, offset: cursor });
+    return text(windowPage("messages", page.items, { limit, cursor, verbose: args.verbose, total: page.total }, compactMessage));
+  });
 
   server.tool("telephony_search_messages", "Search messages by text", {
-    query: z.string(), limit: z.number().optional(),
-  }, async (args) => ({ content: [{ type: "text" as const, text: JSON.stringify(await getStore().searchMessages(args.query, args.limit), null, 2) }] }));
+    query: z.string(), ...collectionSchema,
+  }, async (args) => {
+    if (args.full) return text(await getStore().searchMessages(args.query, 50));
+    if ((args.cursor ?? 0) !== 0) return { ...text("Search does not support cursor pagination; refine the query or use full=true."), isError: true };
+    const limit = args.limit ?? 20; const rows = await getStore().searchMessages(args.query, limit + 1);
+    return text(windowPage("messages", rows, { limit, cursor: 0, verbose: args.verbose }, compactMessage));
+  });
 
   server.tool("telephony_get_conversation", "Get conversation with a phone number", {
-    phone_number: z.string(), limit: z.number().optional(),
-  }, async (args) => ({ content: [{ type: "text" as const, text: JSON.stringify(await getStore().getConversation(args.phone_number, args.limit), null, 2) }] }));
+    phone_number: z.string(), ...collectionSchema,
+  }, async (args) => {
+    if (args.full) return text(await getStore().getConversation(args.phone_number, 50));
+    if ((args.cursor ?? 0) !== 0) return { ...text("Conversation does not support cursor pagination; use full=true for the legacy response."), isError: true };
+    const limit = args.limit ?? 20; const rows = await getStore().getConversation(args.phone_number, limit + 1);
+    return text(windowPage("messages", rows, { limit, cursor: 0, verbose: args.verbose }, compactMessage));
+  });
 
   // --- Calls ---
   server.tool("telephony_make_call", "Make an outbound call", {
@@ -82,8 +123,13 @@ export function buildServer(): McpServer {
   }, async (args) => ({ content: [{ type: "text" as const, text: JSON.stringify(await makeCall(args), null, 2) }] }));
 
   server.tool("telephony_list_calls", "List call log", {
-    agent_id: z.string().optional(), project_id: z.string().optional(), limit: z.number().optional(),
-  }, async (args) => ({ content: [{ type: "text" as const, text: JSON.stringify(await getStore().listCalls(args), null, 2) }] }));
+    agent_id: z.string().optional(), project_id: z.string().optional(), ...collectionSchema,
+  }, async (args) => {
+    if (args.full) return text(await getStore().listCalls({ agent_id: args.agent_id, project_id: args.project_id, limit: 50 }));
+    const limit = args.limit ?? 20; const cursor = args.cursor ?? 0;
+    const page = await getStore().listCallsPage({ agent_id: args.agent_id, project_id: args.project_id, limit: limit + 1, offset: cursor });
+    return text(windowPage("calls", page.items, { limit, cursor, verbose: args.verbose, total: page.total }, compactCall));
+  });
 
   // --- Phone Numbers ---
   server.tool("telephony_search_available_numbers", "Search available phone numbers to buy", {
@@ -98,8 +144,8 @@ export function buildServer(): McpServer {
     async (args) => { await releaseNumber(args.number); return { content: [{ type: "text" as const, text: "Number released." }] }; });
 
   server.tool("telephony_list_numbers", "List provisioned phone numbers", {
-    agent_id: z.string().optional(), project_id: z.string().optional(),
-  }, async (args) => ({ content: [{ type: "text" as const, text: JSON.stringify(await getStore().listPhoneNumbers(args), null, 2) }] }));
+    agent_id: z.string().optional(), project_id: z.string().optional(), ...collectionSchema,
+  }, async (args) => { const rows = await getStore().listPhoneNumbers(args); return text(args.full ? rows : collectionPage("numbers", rows, args, compactPhoneNumber)); });
 
   server.tool("telephony_assign_number", "Assign phone number to agent/project", {
     id: z.string(), agent_id: z.string().optional(), project_id: z.string().optional(),
@@ -122,8 +168,8 @@ export function buildServer(): McpServer {
 
   // --- Voicemail ---
   server.tool("telephony_list_voicemails", "List voicemails", {
-    agent_id: z.string().optional(), project_id: z.string().optional(),
-  }, async (args) => ({ content: [{ type: "text" as const, text: JSON.stringify(await getStore().listVoicemails(args), null, 2) }] }));
+    agent_id: z.string().optional(), project_id: z.string().optional(), ...collectionSchema,
+  }, async (args) => { const rows = await getStore().listVoicemails(args); return text(args.full ? rows : collectionPage("voicemails", rows, args, compactVoicemail)); });
 
   server.tool("telephony_set_greeting", "Set voicemail greeting using TTS", {
     agent_id: z.string(), text: z.string(), voice_id: z.string().optional(),
@@ -136,11 +182,11 @@ export function buildServer(): McpServer {
   }, async (args) => ({ content: [{ type: "text" as const, text: JSON.stringify(await getStore().createContact(args), null, 2) }] }));
 
   server.tool("telephony_list_contacts", "List contacts", {
-    agent_id: z.string().optional(), project_id: z.string().optional(),
-  }, async (args) => ({ content: [{ type: "text" as const, text: JSON.stringify(await getStore().listContacts(args), null, 2) }] }));
+    agent_id: z.string().optional(), project_id: z.string().optional(), ...collectionSchema,
+  }, async (args) => { const rows = await getStore().listContacts(args); return text(args.full ? rows : collectionPage("contacts", rows, args, compactContact)); });
 
-  server.tool("telephony_search_contacts", "Search contacts", { query: z.string() },
-    async (args) => ({ content: [{ type: "text" as const, text: JSON.stringify(await getStore().searchContacts(args.query), null, 2) }] }));
+  server.tool("telephony_search_contacts", "Search contacts", { query: z.string(), ...collectionSchema },
+    async (args) => { const rows = await getStore().searchContacts(args.query); return text(args.full ? rows : collectionPage("contacts", rows, args, compactContact)); });
 
   // --- Schedules ---
   server.tool("telephony_create_schedule", "Create a cron schedule", {
@@ -159,8 +205,8 @@ export function buildServer(): McpServer {
   });
 
   server.tool("telephony_list_schedules", "List schedules", {
-    agent_id: z.string().optional(), project_id: z.string().optional(),
-  }, async (args) => ({ content: [{ type: "text" as const, text: JSON.stringify(await getStore().listSchedules(args), null, 2) }] }));
+    agent_id: z.string().optional(), project_id: z.string().optional(), ...collectionSchema,
+  }, async (args) => { const rows = await getStore().listSchedules(args); return text(args.full ? rows : collectionPage("schedules", rows, args, compactSchedule)); });
 
   server.tool("telephony_run_schedules", "Run all due schedules now", {}, async () =>
     ({ content: [{ type: "text" as const, text: JSON.stringify(await tick(), null, 2) }] }));
@@ -178,8 +224,9 @@ export function buildServer(): McpServer {
     url: z.string(), events: z.array(z.string()).optional(), secret: z.string().optional(),
   }, async (args) => ({ content: [{ type: "text" as const, text: JSON.stringify(await getStore().createWebhook(args), null, 2) }] }));
 
-  server.tool("telephony_list_webhooks", "List webhooks", {}, async () =>
-    ({ content: [{ type: "text" as const, text: JSON.stringify(await getStore().listWebhooks(), null, 2) }] }));
+  server.tool("telephony_list_webhooks", "List webhooks", collectionSchema, async (args) => {
+    const rows = await getStore().listWebhooks(); return text(args.full ? rows : collectionPage("webhooks", rows, args, compactWebhook));
+  });
 
   // --- Meta ---
   server.tool("telephony_describe_tools", "List all available telephony tools", {}, async () => {
