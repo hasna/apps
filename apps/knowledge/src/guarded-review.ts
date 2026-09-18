@@ -57,6 +57,7 @@ export interface KnowledgePrivateReviewEnvelope {
 export interface KnowledgePrivateReviewAuthorization {
   schema: typeof KNOWLEDGE_PRIVATE_REVIEW_TOKEN_SCHEMA;
   request_digest: string;
+  reviewer_actor: string;
   expires_at: string;
   token: string;
 }
@@ -118,6 +119,7 @@ interface KnowledgePrivateReviewTokenPayload {
   expected_version: number;
   expected_content_sha256: string;
   expected_binding_state: KnowledgeReviewBindingState;
+  reviewer_actor: string;
   expires_at: string;
   nonce: string;
 }
@@ -173,7 +175,9 @@ export function issueKnowledgePrivateReviewAuthorization(
   secret: string,
   request: KnowledgePrivateReviewRequest,
   requestDigest: string,
+  reviewerActor: string,
 ): KnowledgePrivateReviewAuthorization {
+  assertBoundText(reviewerActor, 'reviewer_actor');
   const payload: KnowledgePrivateReviewTokenPayload = {
     schema: KNOWLEDGE_PRIVATE_REVIEW_TOKEN_SCHEMA,
     request_digest: requestDigest,
@@ -182,12 +186,14 @@ export function issueKnowledgePrivateReviewAuthorization(
     expected_version: request.expected_version,
     expected_content_sha256: request.expected_content_sha256,
     expected_binding_state: request.expected_binding_state,
+    reviewer_actor: reviewerActor,
     expires_at: request.expires_at,
     nonce: randomUUID(),
   };
   return deepFreeze({
     schema: KNOWLEDGE_PRIVATE_REVIEW_TOKEN_SCHEMA,
     request_digest: requestDigest,
+    reviewer_actor: reviewerActor,
     expires_at: request.expires_at,
     token: signedToken(payload, secret),
   });
@@ -200,14 +206,17 @@ export function verifyKnowledgePrivateReviewAuthorization(
 ): KnowledgePrivateReviewTokenPayload {
   const payload = verifiedToken<KnowledgePrivateReviewTokenPayload>(authorization?.token, secret);
   try {
-    if (!authorization || !same(Object.keys(authorization).sort(), ['expires_at', 'request_digest', 'schema', 'token'])) throw new Error();
+    if (!authorization || !same(Object.keys(authorization).sort(), ['expires_at', 'request_digest', 'reviewer_actor', 'schema', 'token'])) throw new Error();
     if (authorization.schema !== KNOWLEDGE_PRIVATE_REVIEW_TOKEN_SCHEMA || payload.schema !== KNOWLEDGE_PRIVATE_REVIEW_TOKEN_SCHEMA) throw new Error();
-    if (authorization.request_digest !== payload.request_digest || authorization.expires_at !== payload.expires_at) throw new Error();
+    if (authorization.request_digest !== payload.request_digest
+      || authorization.reviewer_actor !== payload.reviewer_actor
+      || authorization.expires_at !== payload.expires_at) throw new Error();
     if (!/^[a-f0-9]{64}$/.test(payload.request_digest) || !/^[a-f0-9]{64}$/.test(payload.expected_content_sha256)) throw new Error();
     assertKnowledgeGuardedBinding(payload.binding);
     assertBoundText(payload.target_id, 'target_id');
     if (!Number.isSafeInteger(payload.expected_version) || payload.expected_version < 1) throw new Error();
     if (!['legacy_unbound', 'bound_to_requested'].includes(payload.expected_binding_state)) throw new Error();
+    assertBoundText(payload.reviewer_actor, 'reviewer_actor');
     if (!Number.isFinite(Date.parse(payload.expires_at)) || Date.parse(payload.expires_at) <= Date.now()) throw new Error();
     assertBoundText(payload.nonce, 'nonce');
     return payload;
@@ -235,6 +244,7 @@ export function issueKnowledgePrivateEditApprovalGrant(options: {
     schema: KNOWLEDGE_PRIVATE_EDIT_APPROVAL_SCHEMA,
     approval_id: `kpea_${randomUUID()}`,
     review_request_digest: options.review.request_digest,
+    review_nonce_sha256: knowledgeGuardedContentSha256(options.review.nonce),
     mutation_deterministic_key: options.deterministicKey,
     binding_digest: options.descriptor.binding_digest,
     target_id: options.descriptor.target_id,
@@ -257,13 +267,13 @@ export function verifyKnowledgePrivateEditApprovalGrant(
     if (!grant || !same(Object.keys(grant).sort(), [
       'approval_id', 'approved_actor', 'approved_by', 'binding_digest', 'contract',
       'expected_content_sha256', 'expected_version', 'expires_at', 'mutation_deterministic_key',
-      'review_request_digest', 'schema', 'target_id', 'token',
+      'review_nonce_sha256', 'review_request_digest', 'schema', 'target_id', 'token',
     ])) throw new Error();
     const comparable = { ...grant } as Partial<KnowledgePrivateEditApprovalGrant>;
     delete comparable.token;
     if (!same(payload, comparable)) throw new Error();
     if (payload.contract !== KNOWLEDGE_GUARDED_WRITE_CONTRACT || payload.schema !== KNOWLEDGE_PRIVATE_EDIT_APPROVAL_SCHEMA) throw new Error();
-    for (const digest of [payload.review_request_digest, payload.binding_digest, payload.expected_content_sha256]) {
+    for (const digest of [payload.review_request_digest, payload.review_nonce_sha256, payload.binding_digest, payload.expected_content_sha256]) {
       if (!/^[a-f0-9]{64}$/.test(digest)) throw new Error();
     }
     if (!/^fcame1_[a-f0-9]{64}$/.test(payload.mutation_deterministic_key)) throw new Error();
@@ -362,6 +372,7 @@ async function readKnowledgePrivateReview(
       || knowledgeGuardedContentSha256(response.item.content) !== request.expected_content_sha256
       || !authorization || authorization.schema !== KNOWLEDGE_PRIVATE_REVIEW_TOKEN_SCHEMA
       || authorization.request_digest !== requestDigest || authorization.expires_at !== request.expires_at
+      || typeof authorization.reviewer_actor !== 'string' || !authorization.reviewer_actor
       || typeof authorization.token !== 'string' || authorization.token.length < 32) throw new Error();
   } catch {
     throw new KnowledgePrivateReviewError('private_review_response_invalid');
@@ -463,6 +474,7 @@ export async function approveKnowledgePrivateEdit(
     schema: grant.schema,
     approval_id: grant.approval_id,
     review_request_digest: grant.review_request_digest,
+    review_nonce_sha256: grant.review_nonce_sha256,
     mutation_deterministic_key: grant.mutation_deterministic_key,
     binding_digest: grant.binding_digest,
     target_id: grant.target_id,

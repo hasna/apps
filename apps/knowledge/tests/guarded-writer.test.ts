@@ -350,6 +350,124 @@ test('forged private edit approval tokens fail closed without returning or apply
   expect((await writer().readback(id)).item.content).toBe(originalBody);
 });
 
+test('review and edit capabilities are principal-bound and the review nonce is consumed once', async () => {
+  const id = 'private-review-principal-and-replay';
+  const originalBody = 'PRIVATE-TWO-KEY-ORIGINAL';
+  const replacement = 'PRIVATE-TWO-KEY-APPROVED';
+  await writer().executePrivate(createKnowledgePrivateInputDescriptor({
+    operation_id: 'private-two-key', step_id: 'create', verb: 'create', target_id: id,
+    binding: BINDING, precondition: { kind: 'absent' }, payload: { title: 'Two key review', content: originalBody },
+  }));
+  const mintedA = mintApiKey({
+    app: 'knowledge', scopes: ['knowledge:read', 'knowledge:write'], tid: TENANT,
+    agent: 'shared-reviewer-label', signingSecret: SIGNING,
+  });
+  const mintedB = mintApiKey({
+    app: 'knowledge', scopes: ['knowledge:read', 'knowledge:write'], tid: TENANT,
+    agent: 'shared-reviewer-label', signingSecret: SIGNING,
+  });
+  const keyA = mintedA.token;
+  const keyB = mintedB.token;
+  const observed = await writer().readBindingState(id);
+  const review = createKnowledgePrivateReviewDescriptor({
+    operation_id: 'private-two-key', step_id: 'review', binding: BINDING, target_id: id,
+    expected_version: observed.item_version!, expected_content_sha256: observed.content_sha256!,
+    expected_binding_state: 'bound_to_requested',
+  });
+  const edit = createKnowledgePrivateInputDescriptor({
+    operation_id: 'private-two-key', step_id: 'update', verb: 'update', target_id: id,
+    binding: BINDING, precondition: { kind: 'version', expected_version: 1 },
+    payload: { content: replacement },
+  });
+  const reviewBounds = DEFAULT_KNOWLEDGE_GUARDED_LIMITS.readback;
+  const headers = (apiKey: string, bounds = reviewBounds) => ({
+    'x-api-key': apiKey,
+    'content-type': 'application/json',
+    'x-knowledge-tenant-id': TENANT,
+    'x-knowledge-max-calls': String(bounds.max_calls),
+    'x-knowledge-max-items': String(bounds.max_items),
+    'x-knowledge-max-bytes': String(bounds.max_bytes),
+    'x-knowledge-wall-time-ms': String(bounds.wall_time_ms),
+  });
+  const reviewed = await fetch(`http://127.0.0.1:${server.port}/v1/guarded-writes/reviews`, {
+    method: 'POST', headers: headers(keyA), body: JSON.stringify({ descriptor: review.toJSON(), limits: reviewBounds }),
+  });
+  expect(reviewed.status).toBe(200);
+  const reviewReadback = await reviewed.json() as {
+    review_authorization: Record<string, unknown>;
+    item: { content: string };
+  };
+  expect(reviewReadback.item.content).toBe(originalBody);
+  const deterministicKey = keyFor(edit);
+  const approvalBody = JSON.stringify({
+    review_authorization: reviewReadback.review_authorization,
+    descriptor: edit.toJSON(),
+    deterministic_key: deterministicKey,
+    approved_by: 'annotation-only:not-authenticated-authority',
+    limits: reviewBounds,
+  });
+
+  const transferredReview = await fetch(
+    `http://127.0.0.1:${server.port}/v1/guarded-writes/review-approvals`,
+    { method: 'POST', headers: headers(keyB), body: approvalBody },
+  );
+  expect(transferredReview.status).toBe(403);
+  expect(await transferredReview.text()).not.toContain(originalBody);
+
+  const approved = await fetch(
+    `http://127.0.0.1:${server.port}/v1/guarded-writes/review-approvals`,
+    { method: 'POST', headers: headers(keyA), body: approvalBody },
+  );
+  expect(approved.status).toBe(201);
+  const grant = await approved.json() as Record<string, unknown>;
+  expect(grant.approved_actor).toBe(`key:${mintedA.kid}`);
+  expect(grant.approved_by).toBe('annotation-only:not-authenticated-authority');
+
+  const replay = await fetch(
+    `http://127.0.0.1:${server.port}/v1/guarded-writes/review-approvals`,
+    { method: 'POST', headers: headers(keyA), body: approvalBody },
+  );
+  expect(replay.status).toBe(409);
+  expect(await replay.text()).not.toContain(originalBody);
+
+  const submissionBounds = DEFAULT_KNOWLEDGE_GUARDED_LIMITS.submission;
+  const writeBody = JSON.stringify({
+    contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+    descriptor: edit.toJSON(),
+    deterministic_key: deterministicKey,
+    limits: DEFAULT_KNOWLEDGE_GUARDED_LIMITS,
+    payload: { content: replacement },
+    review_approval: grant,
+  });
+  const transferredGrant = await fetch(`http://127.0.0.1:${server.port}/v1/guarded-writes`, {
+    method: 'POST',
+    headers: { ...headers(keyB, submissionBounds), 'idempotency-key': deterministicKey },
+    body: writeBody,
+  });
+  expect(transferredGrant.status).toBe(403);
+  expect(await transferredGrant.text()).not.toContain(replacement);
+  expect((await writer().readback(id)).item.content).toBe(originalBody);
+
+  const executed = await fetch(`http://127.0.0.1:${server.port}/v1/guarded-writes`, {
+    method: 'POST',
+    headers: { ...headers(keyA, submissionBounds), 'idempotency-key': deterministicKey },
+    body: writeBody,
+  });
+  expect(executed.status).toBe(201);
+  await executed.arrayBuffer();
+  expect((await writer().readback(id)).item.content).toBe(replacement);
+  const consumptions = await db.query<Record<string, unknown>>(
+    `SELECT reviewer_actor, mutation_deterministic_key
+       FROM knowledge_private_review_nonce_consumptions
+      WHERE mutation_deterministic_key = $1`,
+    [deterministicKey],
+  );
+  expect(consumptions.rows).toEqual([{
+    reviewer_actor: `key:${mintedA.kid}`,
+    mutation_deterministic_key: deterministicKey,
+  }]);
+});
+
 test('tenant-null legacy ownership is explicit and denies a separately authenticated other tenant', async () => {
   const id = 'private-review-owner-boundary';
   const content = 'SYNTHETIC-LEGACY-OWNER-CONTENT';

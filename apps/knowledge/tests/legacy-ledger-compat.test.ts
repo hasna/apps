@@ -71,7 +71,7 @@ test('migration list defines every prod-ledger legacy id with the exact pinned c
   }
 });
 
-test('the full prod ledger is recognized; only the search stage-2 pair is pending', async () => {
+test('the full prod ledger is recognized; only append-only search and review-nonce migrations are pending', async () => {
   const db = new PGlite();
   const client = pgliteClient(db);
   const migrations = buildKnowledgePostgresMigrations();
@@ -92,8 +92,16 @@ test('the full prod ledger is recognized; only the search stage-2 pair is pendin
   const result = await ledger.migrate({ dryRun: true });
 
   const pending = result.plan.filter((item) => item.state === 'pending').map((item) => item.migration.id);
-  expect(pending).toEqual(['knowledge_pg_130', 'knowledge_pg_131']);
-  expect(result.plan.length - pending.length).toBe(migrations.length - 2);
+  expect(pending).toEqual([
+    'knowledge_pg_130',
+    'knowledge_pg_131',
+    'knowledge_pg_132',
+    'knowledge_pg_133',
+    'knowledge_pg_134',
+    'knowledge_pg_135',
+    'knowledge_pg_136',
+  ]);
+  expect(result.plan.length - pending.length).toBe(migrations.length - pending.length);
 });
 
 test('the downgrade guard still refuses a genuinely unknown ledger row', async () => {

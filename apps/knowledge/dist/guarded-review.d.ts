@@ -36,6 +36,7 @@ export interface KnowledgePrivateReviewEnvelope {
 export interface KnowledgePrivateReviewAuthorization {
     schema: typeof KNOWLEDGE_PRIVATE_REVIEW_TOKEN_SCHEMA;
     request_digest: string;
+    reviewer_actor: string;
     expires_at: string;
     token: string;
 }

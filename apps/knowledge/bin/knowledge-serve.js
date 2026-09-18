@@ -2604,7 +2604,8 @@ function verifiedToken(token, secret) {
     throw new KnowledgePrivateReviewError("private_review_authorization_invalid");
   }
 }
-function issueKnowledgePrivateReviewAuthorization(secret, request, requestDigest) {
+function issueKnowledgePrivateReviewAuthorization(secret, request, requestDigest, reviewerActor) {
+  assertBoundText2(reviewerActor, "reviewer_actor");
   const payload = {
     schema: KNOWLEDGE_PRIVATE_REVIEW_TOKEN_SCHEMA,
     request_digest: requestDigest,
@@ -2613,12 +2614,14 @@ function issueKnowledgePrivateReviewAuthorization(secret, request, requestDigest
     expected_version: request.expected_version,
     expected_content_sha256: request.expected_content_sha256,
     expected_binding_state: request.expected_binding_state,
+    reviewer_actor: reviewerActor,
     expires_at: request.expires_at,
     nonce: randomUUID2()
   };
   return deepFreeze({
     schema: KNOWLEDGE_PRIVATE_REVIEW_TOKEN_SCHEMA,
     request_digest: requestDigest,
+    reviewer_actor: reviewerActor,
     expires_at: request.expires_at,
     token: signedToken(payload, secret)
   });
@@ -2626,11 +2629,11 @@ function issueKnowledgePrivateReviewAuthorization(secret, request, requestDigest
 function verifyKnowledgePrivateReviewAuthorization(secret, authorization) {
   const payload = verifiedToken(authorization?.token, secret);
   try {
-    if (!authorization || !same(Object.keys(authorization).sort(), ["expires_at", "request_digest", "schema", "token"]))
+    if (!authorization || !same(Object.keys(authorization).sort(), ["expires_at", "request_digest", "reviewer_actor", "schema", "token"]))
       throw new Error;
     if (authorization.schema !== KNOWLEDGE_PRIVATE_REVIEW_TOKEN_SCHEMA || payload.schema !== KNOWLEDGE_PRIVATE_REVIEW_TOKEN_SCHEMA)
       throw new Error;
-    if (authorization.request_digest !== payload.request_digest || authorization.expires_at !== payload.expires_at)
+    if (authorization.request_digest !== payload.request_digest || authorization.reviewer_actor !== payload.reviewer_actor || authorization.expires_at !== payload.expires_at)
       throw new Error;
     if (!/^[a-f0-9]{64}$/.test(payload.request_digest) || !/^[a-f0-9]{64}$/.test(payload.expected_content_sha256))
       throw new Error;
@@ -2640,6 +2643,7 @@ function verifyKnowledgePrivateReviewAuthorization(secret, authorization) {
       throw new Error;
     if (!["legacy_unbound", "bound_to_requested"].includes(payload.expected_binding_state))
       throw new Error;
+    assertBoundText2(payload.reviewer_actor, "reviewer_actor");
     if (!Number.isFinite(Date.parse(payload.expires_at)) || Date.parse(payload.expires_at) <= Date.now())
       throw new Error;
     assertBoundText2(payload.nonce, "nonce");
@@ -2655,6 +2659,7 @@ function issueKnowledgePrivateEditApprovalGrant(options) {
     schema: KNOWLEDGE_PRIVATE_EDIT_APPROVAL_SCHEMA,
     approval_id: `kpea_${randomUUID2()}`,
     review_request_digest: options.review.request_digest,
+    review_nonce_sha256: knowledgeGuardedContentSha256(options.review.nonce),
     mutation_deterministic_key: options.deterministicKey,
     binding_digest: options.descriptor.binding_digest,
     target_id: options.descriptor.target_id,
@@ -2679,6 +2684,7 @@ function verifyKnowledgePrivateEditApprovalGrant(secret, grant) {
       "expected_version",
       "expires_at",
       "mutation_deterministic_key",
+      "review_nonce_sha256",
       "review_request_digest",
       "schema",
       "target_id",
@@ -2691,7 +2697,7 @@ function verifyKnowledgePrivateEditApprovalGrant(secret, grant) {
       throw new Error;
     if (payload.contract !== KNOWLEDGE_GUARDED_WRITE_CONTRACT || payload.schema !== KNOWLEDGE_PRIVATE_EDIT_APPROVAL_SCHEMA)
       throw new Error;
-    for (const digest of [payload.review_request_digest, payload.binding_digest, payload.expected_content_sha256]) {
+    for (const digest of [payload.review_request_digest, payload.review_nonce_sha256, payload.binding_digest, payload.expected_content_sha256]) {
       if (!/^[a-f0-9]{64}$/.test(digest))
         throw new Error;
     }
@@ -3409,7 +3415,7 @@ class GuardedWriteRepo {
       limits
     };
   }
-  async reviewPrivate(envelope) {
+  async reviewPrivate(envelope, reviewerActor) {
     const { descriptor: d, limits } = envelope;
     const b = d.binding;
     const row = await this.client.get(`SELECT * FROM knowledge_items WHERE id = $1 AND (
@@ -3439,8 +3445,37 @@ class GuardedWriteRepo {
       request_digest: requestDigest,
       item,
       limits,
-      review_authorization: issueKnowledgePrivateReviewAuthorization(this.reviewApprovalSecret, d, requestDigest)
+      review_authorization: issueKnowledgePrivateReviewAuthorization(this.reviewApprovalSecret, d, requestDigest, reviewerActor)
     };
+  }
+  async approvePrivateEdit(envelope, review, approvedActor) {
+    if (!this.reviewApprovalSecret)
+      throw new HttpError(503, "private_review_approval_authority_unconfigured");
+    return this.client.transaction(async (tx) => {
+      const nonceSha256 = knowledgeGuardedContentSha256(review.nonce);
+      const consumed = await tx.get(`INSERT INTO knowledge_private_review_nonce_consumptions (
+           nonce_sha256, review_request_digest, reviewer_actor,
+           mutation_deterministic_key, consumed_at
+         ) VALUES ($1,$2,$3,$4,$5)
+         ON CONFLICT (nonce_sha256) DO NOTHING
+         RETURNING nonce_sha256`, [
+        nonceSha256,
+        review.request_digest,
+        review.reviewer_actor,
+        envelope.deterministic_key,
+        new Date().toISOString()
+      ]);
+      if (consumed?.nonce_sha256 !== nonceSha256)
+        return null;
+      return issueKnowledgePrivateEditApprovalGrant({
+        secret: this.reviewApprovalSecret,
+        review,
+        descriptor: envelope.descriptor,
+        deterministicKey: envelope.deterministic_key,
+        approvedBy: envelope.approved_by,
+        approvedActor
+      });
+    });
   }
   async executeAdoption(envelope, actor) {
     const binding = envelope.binding;
@@ -5475,7 +5510,7 @@ function knowledgeOpenApi(version) {
         post: {
           operationId: "approveReviewedPrivateKnowledgeEdit",
           summary: "Exchange exact reviewed-revision evidence for one mutation-bound approval",
-          description: "Requires knowledge:write. Returns a short-lived server-signed grant bound to the authenticated actor, reviewer label, reviewed version/content digest, update binding digest, and mutation deterministic key. No private body is accepted or returned.",
+          description: "Requires knowledge:write by the same authenticated principal that obtained the signed review token. Transactionally consumes the review nonce exactly once and returns a short-lived grant bound to that principal, reviewed version/content digest, update binding digest, and mutation deterministic key. approved_by is annotation only. No private body is accepted or returned.",
           requestBody: { required: true, content: { "application/json": { schema: {
             type: "object",
             required: ["review_authorization", "descriptor", "deterministic_key", "approved_by", "limits"],
@@ -5484,7 +5519,8 @@ function knowledgeOpenApi(version) {
           responses: {
             "201": { description: "Metadata-only exact-mutation approval grant." },
             "400": { description: "Review token, revision, descriptor, mutation key, or bounds mismatch." },
-            "403": { description: "Wrong authority or tenant." }
+            "403": { description: "Wrong authority, tenant, or authenticated reviewer principal." },
+            "409": { description: "The signed review nonce was already consumed." }
           }
         }
       },
@@ -5792,7 +5828,7 @@ function validatePrivateEditApprovalEnvelope(value, headerBounds, authority, sec
     throw new HttpError(400, "private_edit_approval_invalid");
   }
 }
-function validateGuardedEnvelope(value, headerBounds, authority, idempotencyKey, reviewApprovalSecret) {
+function validateGuardedEnvelope(value, headerBounds, authority, idempotencyKey, reviewApprovalSecret, executionActor) {
   try {
     if (!value || typeof value !== "object")
       throw new Error("guarded write envelope is required.");
@@ -5884,6 +5920,9 @@ function validateGuardedEnvelope(value, headerBounds, authority, idempotencyKey,
       const approval = verifyKnowledgePrivateEditApprovalGrant(reviewApprovalSecret, envelope.review_approval);
       if (approval.mutation_deterministic_key !== expectedKey || approval.binding_digest !== descriptor.binding_digest || approval.target_id !== descriptor.target_id || descriptor.precondition.kind !== "version" || approval.expected_version !== descriptor.precondition.expected_version) {
         throw new Error("private_edit_approval_mismatch");
+      }
+      if (approval.approved_actor !== executionActor) {
+        throw new HttpError(403, "private_edit_approval_principal_mismatch");
       }
     }
     if (knowledgeGuardedUtf8Bytes(envelope) > headerBounds.max_bytes) {
@@ -6112,6 +6151,9 @@ function validateGuardedManifestEnvelope(value, bounds, authority, idempotencyKe
 function principalActor(principal) {
   return principal.agent ? `agent:${principal.agent}` : `key:${principal.kid}`;
 }
+function principalApprovalIdentity(principal) {
+  return `key:${principal.kid}`;
+}
 function parseExpectedVersion(req, body) {
   const header = req.headers.get("if-match");
   if (header != null && header.trim() !== "" && header.trim() !== "*") {
@@ -6201,7 +6243,7 @@ function createServeHandler(deps) {
         const tenantId = req.headers.get("x-knowledge-tenant-id");
         if (!tenantId)
           throw new HttpError(400, "x-knowledge-tenant-id is required.");
-        await authOrThrow(req, ["knowledge:read"], tenantId);
+        const principal = await authOrThrow(req, ["knowledge:read"], tenantId);
         const bounds = guardedBoundsFromHeaders(req);
         const raw = await readBoundedJson(req, bounds, startedAt);
         let envelope;
@@ -6220,7 +6262,7 @@ function createServeHandler(deps) {
         assertConfiguredAuthority(envelope.descriptor.binding, guardedRepo.authority);
         if (envelope.descriptor.binding.tenant_id !== tenantId)
           throw new HttpError(403, "private_review_tenant_mismatch");
-        const result = await guardedRepo.reviewPrivate(envelope);
+        const result = await guardedRepo.reviewPrivate(envelope, principalApprovalIdentity(principal));
         const response = result ? boundedJson(result, 200, bounds, startedAt) : boundedJson({ error: "not_found" }, 404, bounds, startedAt);
         response.headers.set("cache-control", "no-store");
         return response;
@@ -6244,14 +6286,14 @@ function createServeHandler(deps) {
         if (envelope.descriptor.binding.tenant_id !== tenantId) {
           throw new HttpError(403, "private_edit_approval_tenant_mismatch");
         }
-        const grant = issueKnowledgePrivateEditApprovalGrant({
-          secret: deps.reviewApprovalSecret,
-          review,
-          descriptor: envelope.descriptor,
-          deterministicKey: envelope.deterministic_key,
-          approvedBy: envelope.approved_by,
-          approvedActor: principalActor(principal)
-        });
+        const actor = principalApprovalIdentity(principal);
+        if (review.reviewer_actor !== actor) {
+          throw new HttpError(403, "private_review_principal_mismatch");
+        }
+        const grant = await guardedRepo.approvePrivateEdit(envelope, review, actor);
+        if (!grant) {
+          throw new HttpError(409, "private_review_authorization_replayed");
+        }
         const response = boundedJson(grant, 201, bounds, startedAt);
         response.headers.set("cache-control", "no-store");
         return response;
@@ -6376,7 +6418,7 @@ function createServeHandler(deps) {
         const principal = await authOrThrow(req, ["knowledge:write"], tenantId);
         const bounds = guardedBoundsFromHeaders(req);
         const raw = await readBoundedJson(req, bounds, startedAt);
-        const envelope = validateGuardedEnvelope(raw, bounds, guardedRepo.authority, req.headers.get("idempotency-key"), deps.reviewApprovalSecret?.trim() || null);
+        const envelope = validateGuardedEnvelope(raw, bounds, guardedRepo.authority, req.headers.get("idempotency-key"), deps.reviewApprovalSecret?.trim() || null, principalApprovalIdentity(principal));
         if (envelope.descriptor.binding.tenant_id !== tenantId) {
           throw new HttpError(403, "descriptor tenant does not match the authenticated request tenant.");
         }

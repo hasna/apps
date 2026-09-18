@@ -343,11 +343,14 @@ export interface KnowledgePrivateEditApprovalGrant {
   schema: typeof KNOWLEDGE_PRIVATE_EDIT_APPROVAL_SCHEMA;
   approval_id: string;
   review_request_digest: string;
+  /** Digest of the one-time signed review nonce; the raw bearer nonce is never persisted. */
+  review_nonce_sha256: string;
   mutation_deterministic_key: string;
   binding_digest: string;
   target_id: string;
   expected_version: number;
   expected_content_sha256: string;
+  /** Caller annotation only. Authority comes exclusively from approved_actor. */
   approved_by: string;
   /** Authenticated key/agent identity stamped by the server, never caller supplied. */
   approved_actor: string;

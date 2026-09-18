@@ -342,10 +342,12 @@ const proof = await guarded.reviewPrivate(review, async (item) => {
 For an unmanifested guarded **edit**, review alone is deliberately insufficient.
 Use `approvePrivateEdit` and return the exact package-created update descriptor
 from the trusted callback. The authority exchanges its signed review token for
-a second short-lived grant bound to the authenticated actor, reviewer label,
-review request digest, exact old version/content SHA-256, update binding digest,
-and final mutation deterministic key. The token stays in a module-private
-handle; JSON and log serialization contain metadata only:
+a second short-lived grant bound to the exact authenticated principal that read,
+approved, and must execute the edit, plus the review request digest, exact old
+version/content SHA-256, update binding digest, and final mutation deterministic
+key. `approved_by` is an audit annotation only; it is not identity or authority.
+The token stays in a module-private handle; JSON and log serialization contain
+metadata only:
 
 ```ts
 const approval = await guarded.approvePrivateEdit(
@@ -367,10 +369,15 @@ const result = await guarded.executeApproved(approval);
 `execute(...)` and `executePrivate(...)` refuse an unmanifested update without
 this grant. Manifest-bound updates retain their separate immutable ordered-plan
 authorization. A cloned approval handle, altered payload/binding/key, expired
-grant, changed row version, or changed raw content digest fails closed before an
-effect. The server verifies the HMAC grant and checks the approved revision again
-inside the locked update transaction. The approval token is never accepted in
-argv, environment variables, stdout/stderr, or ordinary JSON result surfaces.
+grant, different same-tenant key/agent, changed row version, or changed raw
+content digest fails closed before an effect. Review tokens are signed for the
+authenticated reviewer principal and are not transferable. Their nonce digest
+is transactionally inserted into an immutable consumption table while minting
+the grant; concurrent or later replay receives no second grant. The raw nonce,
+review token, private body, and credential are never persisted. The server
+checks the approved principal and revision again for execution. Approval tokens
+are never accepted in argv, environment variables, stdout/stderr, or ordinary
+JSON result surfaces.
 
 The authenticated `POST /v1/guarded-writes/reviews` route requires a tenant-bound
 `knowledge:read` credential, the service's exact authority, a full record ID,

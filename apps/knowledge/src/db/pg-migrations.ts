@@ -1509,7 +1509,7 @@ export const PG_MIGRATIONS: string[] = [
   // content = B) plus a GIN index so the serve layer can use
   // websearch_to_tsquery + ts_rank_cd, matching the local SQLite FTS behavior.
   //
-  // THIS BLOCK MUST STAY AT THE END OF THE ARRAY (O15-00684): the prod ledger
+  // THIS BLOCK MUST STAY AT POSITIONS 130..131 (O15-00684): the prod ledger
   // pins knowledge_pg_001..129 to the rc.6 schema program byte-for-byte, and
   // these two statements are the only ones the current build adds on top — so
   // they are knowledge_pg_130..131. Inserting anything before them — or before
@@ -1523,4 +1523,32 @@ export const PG_MIGRATIONS: string[] = [
      ) STORED`,
   `CREATE INDEX IF NOT EXISTS idx_knowledge_items_search_vector
      ON knowledge_items USING GIN (search_vector)`,
+
+  // A signed review token is one-principal and one-approval only. Persist only
+  // the nonce digest and metadata proof; never the token or private record.
+  // The unique primary key makes concurrent replay attempts race safely inside
+  // the approval transaction: exactly one INSERT can mint a mutation grant.
+  `CREATE TABLE IF NOT EXISTS knowledge_private_review_nonce_consumptions (
+     nonce_sha256 TEXT PRIMARY KEY CHECK (nonce_sha256 ~ '^[0-9a-f]{64}$'),
+     review_request_digest TEXT NOT NULL CHECK (review_request_digest ~ '^[0-9a-f]{64}$'),
+     reviewer_actor TEXT NOT NULL,
+     mutation_deterministic_key TEXT NOT NULL CHECK (
+       mutation_deterministic_key ~ '^fcame1_[0-9a-f]{64}$'
+     ),
+     consumed_at TEXT NOT NULL
+   )`,
+  `CREATE OR REPLACE FUNCTION knowledge_private_review_nonce_immutable()
+   RETURNS TRIGGER AS $knowledge_private_review_nonce_immutable$
+   BEGIN
+     RAISE EXCEPTION 'knowledge private review nonce consumptions are immutable'
+       USING ERRCODE = 'restrict_violation';
+   END
+   $knowledge_private_review_nonce_immutable$ LANGUAGE plpgsql`,
+  `DROP TRIGGER IF EXISTS trg_knowledge_private_review_nonce_immutable
+     ON knowledge_private_review_nonce_consumptions`,
+  `CREATE TRIGGER trg_knowledge_private_review_nonce_immutable
+     BEFORE UPDATE OR DELETE ON knowledge_private_review_nonce_consumptions
+     FOR EACH ROW EXECUTE FUNCTION knowledge_private_review_nonce_immutable()`,
+  `ALTER TABLE knowledge_private_review_nonce_consumptions
+     ENABLE ALWAYS TRIGGER trg_knowledge_private_review_nonce_immutable`,
 ];
