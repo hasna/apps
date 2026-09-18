@@ -1,6 +1,9 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { randomUUID } from "node:crypto";
+import { mintApiKey, verifyApiKey } from "@hasna/contracts/auth";
 import { Database } from "bun:sqlite";
 import { runMigrations } from "../db/schema.js";
+import { handleV1Request, type V1RequestDependencies } from "../server/v1.js";
 import { TaskNotFoundError, VersionConflictError, type TaskHistory } from "../types/index.js";
 import { createTodosCloudQueryClient, type TodosCloudQueryClient } from "./cloud-client.js";
 import { createLocalSqliteTodosStorageAdapter } from "./local-sqlite.js";
@@ -95,6 +98,55 @@ for (const backend of ["sqlite", "postgres"] as const) {
       const history = (await store.audit.getTaskHistory(task.id)).filter(row => row.field === "title");
       expect(history).toHaveLength(2);
       expect(JSON.stringify(history)).not.toContain(synthetic);
+    });
+
+    test.skipIf(backend !== "postgres")("signed /v1 PATCH attributes an unassigned task audit to its authenticated actor", async () => {
+      const actor = "signed-postgres-patch-actor";
+      const tenant = "tenant-update-audit";
+      const signingSecret = `${randomUUID()}${randomUUID()}`;
+      const key = mintApiKey({
+        app: "todos",
+        scopes: ["todos:read", "todos:write"],
+        signingSecret,
+        agent: actor,
+        tid: tenant,
+      });
+      const verifier = verifyApiKey({
+        app: "todos",
+        signingSecret,
+        keyStatus: async kid => kid === key.kid ? "active" : "unknown",
+      });
+      const task = await store.tasks.create({ title: "Signed Postgres before" });
+      expect(task).toMatchObject({ assigned_to: null, agent_id: null });
+      const url = new URL(`https://todos.example.test/v1/tasks/${task.id}`);
+      const dependencies: V1RequestDependencies = {
+        getVerifier: () => verifier,
+        getMachineRegistryTenantId: () => tenant,
+        ensureSchema: async () => {},
+        getStorageAdapter: () => store,
+      };
+
+      const response = await handleV1Request(
+        new Request(url, {
+          method: "PATCH",
+          headers: {
+            Authorization: `Bearer ${key.token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ title: "Signed Postgres after", version: task.version }),
+        }),
+        url,
+        dependencies,
+      );
+
+      expect(response?.status).toBe(200);
+      const titleChange = (await store.audit.getTaskHistory(task.id))
+        .find(row => row.action === "update" && row.field === "title");
+      expect(titleChange).toMatchObject({
+        old_value: "Signed Postgres before",
+        new_value: "Signed Postgres after",
+        agent_id: actor,
+      });
     });
 
     test.skipIf(backend !== "postgres")("rolls the task and earlier audit entries back if a later audit insert fails", async () => {

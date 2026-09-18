@@ -1652,7 +1652,7 @@ export async function handleV1Request(
           version: typeof body.version === "number" ? body.version : (current.version as number),
         };
         try {
-          const task = await store.tasks.update(id, patch);
+          const task = await store.tasks.update(id, patch, contextFromPrincipal(principal));
           return task ? json({ task }) : error(404, "task not found");
         } catch (e) {
           const msg = (e as Error).message || "";
