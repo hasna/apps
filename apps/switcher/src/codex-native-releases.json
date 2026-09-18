@@ -1,0 +1,16 @@
+{
+  "darwin:arm64": {
+    "target": "aarch64-apple-darwin",
+    "binarySha256": "5ab793c77c382c6fe3b327f653345d7b5189dfe982074b4ec86fa299ce49202d",
+    "binaryBytes": 297546904,
+    "patchManifestSha256": "90d02f3c26bd6d82d458be9232dd695de97ed341dff192c64fea4c7dbac21ec8",
+    "evidenceSha256": "66e64b3f08c2a76980cd7d787732646e237c3e022de4fec0358bf55406133d77"
+  },
+  "linux:arm64": {
+    "target": "aarch64-unknown-linux-gnu",
+    "binarySha256": "d9738baf6f315e2b4bcfe69e852a013e697d81f4572a2b5e943a10b63a3cded5",
+    "binaryBytes": 1309858400,
+    "patchManifestSha256": "90d02f3c26bd6d82d458be9232dd695de97ed341dff192c64fea4c7dbac21ec8",
+    "evidenceSha256": "3e75ed254504468bf190ba1eba9bde054c233ab43b85b794683f679b70dae144"
+  }
+}

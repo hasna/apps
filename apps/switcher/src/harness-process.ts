@@ -2,13 +2,46 @@ import { spawn, spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { existsSync, openSync, closeSync, writeSync, readSync, constants } from "node:fs";
 import { terminalDescriptorDuplicator } from "./terminal-descriptors";
+import { CommandInterrupted } from "./domain";
+
+/** Launch state must remain available when owned processes cannot be settled. */
+export class HarnessSettlementError extends Error {
+  constructor() { super("Owned harness processes could not be confirmed stopped; launch state was retained."); }
+}
+
+export async function settleHarnessGroup(owned: { exists: () => boolean; signal: (signal: NodeJS.Signals) => void }, timeoutMs = 5000): Promise<void> {
+  for (const signal of ["SIGTERM", "SIGKILL"] as const) {
+    if (!owned.exists()) return;
+    owned.signal(signal);
+    const deadline = performance.now() + timeoutMs;
+    while (owned.exists()) {
+      if (performance.now() >= deadline) break;
+      await new Promise(resolve => setTimeout(resolve, Math.min(25, timeoutMs)));
+    }
+  }
+  if (owned.exists()) throw new HarnessSettlementError();
+}
 
 /** Own a POSIX process group; interactive children get a controlling terminal. */
-export async function runHarnessProcess(options: {executable:string;args:string[];cwd:string;env:NodeJS.ProcessEnv;timeoutMs?:number;silent?:boolean}): Promise<{code:number;interrupted:boolean}> {
+export async function runHarnessProcess(options: {executable:string;args:string[];cwd:string;env:NodeJS.ProcessEnv;timeoutMs?:number;silent?:boolean;beforeSpawn?:()=>Promise<void>}): Promise<{code:number;interrupted:boolean}> {
+  const started = performance.now();
   const tty=[Boolean(process.stdin.isTTY),Boolean(process.stdout.isTTY),Boolean(process.stderr.isTTY)];
   const grouped=process.platform!=="win32",interactive=!options.silent&&grouped&&tty.some(Boolean);
   const redirects=interactive?tty.flatMap((value,index)=>value?[]:[index]):[];
-  const duplicator=redirects.length?await terminalDescriptorDuplicator():undefined;
+  let pendingSignal: CommandInterrupted | undefined;
+  const pendingInt = () => { pendingSignal ??= new CommandInterrupted(130, "Launch cancelled before the native process started."); };
+  const pendingTerm = () => { pendingSignal ??= new CommandInterrupted(143, "Launch interrupted before the native process started."); };
+  const pendingHangup = () => { pendingSignal ??= new CommandInterrupted(129, "Launch interrupted before the native process started."); };
+  process.on("SIGINT", pendingInt); process.on("SIGTERM", pendingTerm); process.on("SIGHUP", pendingHangup);
+  let duplicator: Awaited<ReturnType<typeof terminalDescriptorDuplicator>> | undefined;
+  try {
+    duplicator=redirects.length?await terminalDescriptorDuplicator():undefined;
+    await options.beforeSpawn?.();
+    if (pendingSignal) throw pendingSignal;
+    if (options.timeoutMs !== undefined && performance.now() - started >= options.timeoutMs)
+      throw new CommandInterrupted(143, "Launch timed out before the native process started.");
+  } catch (error) { duplicator?.close(); throw error; }
+  finally { process.off("SIGINT", pendingInt); process.off("SIGTERM", pendingTerm); process.off("SIGHUP", pendingHangup); }
   return new Promise((resolveResult,reject) => {
     const wasRaw=process.stdin.isRaw,wasFlowing=process.stdin.readableFlowing;
     let controllingInput:number|undefined;
@@ -64,7 +97,8 @@ export async function runHarnessProcess(options: {executable:string;args:string[
     };
     const groupExists = () => {
       if (!grouped || !child.pid) return false;
-      try { process.kill(-child.pid,0);return true; } catch { return false; }
+      try { process.kill(-child.pid,0);return true; }
+      catch (error) { return (error as NodeJS.ErrnoException).code !== "ESRCH"; }
     };
     const forward = (signal:NodeJS.Signals) => {
       interruptionExitCode ??= signal === "SIGINT" ? 130 : signal === "SIGHUP" ? 129 : 143;
@@ -81,9 +115,9 @@ export async function runHarnessProcess(options: {executable:string;args:string[
     const onResize=()=>{if(resize)resize();else signalGroup("SIGWINCH");};
     process.on("SIGINT",onInt);process.on("SIGTERM",onTerm);process.on("SIGHUP",onHangup);
     if (grouped) process.on("SIGWINCH",onResize);
-    const timeout=options.timeoutMs?setTimeout(()=>forward("SIGTERM"),options.timeoutMs):undefined;
+    const timeout=options.timeoutMs?setTimeout(()=>forward("SIGTERM"),Math.max(1, options.timeoutMs - (performance.now() - started))):undefined;
     let cleaned=false;
-    const cleanup=()=>{
+    const cleanup=(settled=true)=>{
       if(cleaned)return;cleaned=true;
       let failed=false;
       const attempt=(operation:()=>void)=>{try{operation();}catch{failed=true;}};
@@ -97,19 +131,15 @@ export async function runHarnessProcess(options: {executable:string;args:string[
       if(controllingInput!==undefined)attempt(()=>{closeSync(controllingInput!);controllingInput=undefined;});
       attempt(()=>{terminal?.close();});
       if(controllingOutput!==undefined)attempt(()=>{closeSync(controllingOutput!);controllingOutput=undefined;});
-      if(failed)console.error("switcher: Terminal restoration was incomplete; the owned harness has stopped.");
+      if(failed)console.error(settled ? "switcher: Terminal restoration was incomplete; the owned harness has stopped." : "switcher: Terminal restoration was incomplete; owned harness settlement remains uncertain.");
     };
     child.once("error",()=>{cleanup();reject(new Error("Harness process could not start; check executable and permissions."));});
     child.once("exit",async(code:number|null,signal:string|null)=>{
       // A native CLI may exit while its tool process is still running. Keep
       // bridges/settings alive until that owned group is stopped, even on success.
       if (timeout)clearTimeout(timeout);
-      if (groupExists()) {
-        signalGroup("SIGTERM");
-        const deadline=Date.now()+5000;
-        while (groupExists() && Date.now()<deadline) await new Promise(resolve=>setTimeout(resolve,25));
-        if(groupExists())signalGroup("SIGKILL");
-      }
+      try { await settleHarnessGroup({ exists: groupExists, signal: signalGroup }); }
+      catch { cleanup(false); reject(new HarnessSettlementError()); return; }
       cleanup();
       if(terminalFailure){reject(terminalFailure);return;}
       // Native clients may handle termination and exit zero. A caller's

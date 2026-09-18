@@ -5,6 +5,7 @@ import { childEnvironment } from "./harness-environment";
 import { CommandInterrupted, Fault } from "./domain";
 import type { PreparedLaunch } from "./harness-types";
 import { codexCommandIndex, codexOptionTakesValue } from "./harness-arguments";
+import { HarnessSettlementError, settleHarnessGroup } from "./harness-process";
 
 type Thread = { id: string; name?: string | null; preview?: string; cwd: string };
 type Page = { data: Thread[]; nextCursor: string | null };
@@ -14,16 +15,37 @@ const unavailable = () => new Fault(422, "codex_session_discovery", "Native Code
 
 /** A metadata-only app-server process. Never starts/resumes a thread or sends
  * inference; every page has a finite deadline and the owned process is reaped. */
-export async function listCodexSessions(prepared: PreparedLaunch, cwd: string, query: Query): Promise<Page> {
+export async function listCodexSessions(prepared: PreparedLaunch, cwd: string, query: Query,
+  beforeSpawn?: () => Promise<void>): Promise<Page> {
+  // Every picker page starts a new native process. Revalidate after the user's
+  // input, immediately before that spawn, not just before opening the picker.
+  let cancelled: CommandInterrupted | undefined;
+  const cancel = () => { cancelled ??= new CommandInterrupted(130, "Session discovery was cancelled; no conversation was started."); };
+  const terminateAdmission = () => { cancelled ??= new CommandInterrupted(143, "Session discovery was interrupted; no conversation was started."); };
+  process.on("SIGINT", cancel); process.on("SIGTERM", terminateAdmission); process.on("SIGHUP", terminateAdmission);
+  try { await beforeSpawn?.(); if (cancelled) throw cancelled; }
+  finally { process.off("SIGINT", cancel); process.off("SIGTERM", terminateAdmission); process.off("SIGHUP", terminateAdmission); }
+  const grouped = process.platform !== "win32";
   const child = spawn(prepared.executable, [...prepared.args, "app-server"], {
-    cwd, env: { ...childEnvironment(), ...prepared.env }, stdio: ["pipe", "pipe", "ignore"],
+    cwd, env: { ...childEnvironment(), ...prepared.env }, stdio: ["pipe", "pipe", "ignore"], detached: grouped,
   });
   let done = false, initialized = false, pending = Buffer.alloc(0), responseBytes = 0;
   let killTimer: ReturnType<typeof setTimeout> | undefined;
   let resolvePage!: (page: Page) => void, rejectPage!: (error: Error) => void;
   const result = new Promise<Page>((resolve, reject) => { resolvePage = resolve; rejectPage = reject; });
   const closed = new Promise<void>(resolve => child.once("close", () => resolve()));
-  const stop = () => { child.stdin.destroy(); child.kill("SIGTERM"); killTimer ??= setTimeout(() => child.kill("SIGKILL"), 2000); killTimer.unref(); };
+  const signal = (value: NodeJS.Signals) => {
+    if (!child.pid) return;
+    try { if (grouped) process.kill(-child.pid, value); else child.kill(value); }
+    catch { /* Disappearance is proved separately, never inferred from signalling. */ }
+  };
+  const exists = () => {
+    if (!child.pid) return false;
+    if (!grouped) return child.exitCode === null && child.signalCode === null;
+    try { process.kill(-child.pid, 0); return true; }
+    catch (error) { return (error as NodeJS.ErrnoException).code !== "ESRCH"; }
+  };
+  const stop = () => { child.stdin.destroy(); signal("SIGTERM"); killTimer ??= setTimeout(() => signal("SIGKILL"), 2000); killTimer.unref(); };
   const fail = (error: Error = unavailable()) => { if (!done) { done = true; rejectPage(error); } stop(); };
   const interrupt = () => fail(new CommandInterrupted(130, "Session discovery was cancelled; no conversation was started."));
   const terminate = () => fail(new CommandInterrupted(143, "Session discovery was interrupted; no conversation was started."));
@@ -69,9 +91,23 @@ export async function listCodexSessions(prepared: PreparedLaunch, cwd: string, q
   send({ id: 1, method: "initialize", params: { clientInfo: { name: "switcher_session_discovery", version: "1" }, capabilities: { experimentalApi: true } } });
   try { return await result; }
   finally {
-    clearTimeout(timer); stop(); await closed;
-    if (killTimer) clearTimeout(killTimer);
-    process.off("SIGINT", interrupt); process.off("SIGTERM", terminate); process.off("SIGHUP", terminate);
+    clearTimeout(timer); stop();
+    try {
+      await settleHarnessGroup({ exists, signal });
+      if (killTimer) clearTimeout(killTimer);
+      // Even a settled group can leave pipes held by an escaped descendant.
+      // Do not hang or delete the launch files when pipe closure is uncertain.
+      let closeTimer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([closed, new Promise<never>((_, reject) => {
+          closeTimer = setTimeout(() => reject(new HarnessSettlementError()), 5000);
+        })]);
+      } finally { if (closeTimer) clearTimeout(closeTimer); }
+    } finally {
+      if (killTimer) clearTimeout(killTimer);
+      child.stdin.destroy(); child.stdout.destroy();
+      process.off("SIGINT", interrupt); process.off("SIGTERM", terminate); process.off("SIGHUP", terminate);
+    }
   }
 }
 

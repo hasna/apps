@@ -598,7 +598,7 @@ async function prepareNativeLaunch(input: HarnessLaunchInput, providerBaseUrl = 
     warnings.push("Grok uses a per-launch loopback catalog/auth bridge; native managed model policies still apply.");
     // A leader keeps its original backend configuration; a new profile must
     // own a standalone backend and its current short-lived bridge credentials.
-    return {executable,args:["--model",grokAlias(input,input.model),"--no-leader",...args],env,configPaths,warnings,cleanup:bridge.cleanup};
+    return {executable,args:["--model",grokAlias(input,input.model),"--no-leader",...args],env,configPaths,warnings,closeTransport:bridge.cleanup,cleanup:bridge.cleanup};
   }
   if(input.harness==="pi") {
     if(input.authStyle==="x-api-key"&&input.protocol!=="anthropic-messages") throw new Error("Pi can use x-api-key authentication only with the Anthropic Messages protocol.");
@@ -808,7 +808,7 @@ async function prepareTransportLaunch(input: HarnessLaunchInput): Promise<Prepar
     const bridge=grokBridge({...input,baseUrl:endpoint(input.baseUrl)});
     try {
       const prepared=await prepareKilo({...input,credential:bridge.token},bridge.baseUrl);
-      return {...prepared,cleanup:async()=>{try{await prepared.cleanup?.();}finally{await bridge.cleanup();}}};
+      return {...prepared,closeTransport:async()=>{try{await prepared.closeTransport?.();}finally{await bridge.cleanup();}},cleanup:async()=>{try{await prepared.cleanup?.();}finally{await bridge.cleanup();}}};
     } catch(error) {await bridge.cleanup();throw error;}
   }
   const nativeAuth=input.protocol==="anthropic-messages"?"x-api-key":"bearer";
@@ -820,7 +820,7 @@ async function prepareTransportLaunch(input: HarnessLaunchInput): Promise<Prepar
     const configuration=await validateGeminiConfiguration(input.cwd);
     if(input.credential&&JSON.stringify([configuration.defaults,configuration.user,configuration.system]).includes(input.credential)) throw new Error("Gemini native configuration must not contain the upstream provider credential.");
     const bridge=geminiBridge(input);
-    try {const prepared=await prepareNativeLaunch({...input,baseUrl:bridge.baseUrl,credential:bridge.token});return {...prepared,cleanup:async()=>{try{await prepared.cleanup?.();}finally{await bridge.cleanup();}}};}
+    try {const prepared=await prepareNativeLaunch({...input,baseUrl:bridge.baseUrl,credential:bridge.token});return {...prepared,closeTransport:async()=>{try{await prepared.closeTransport?.();}finally{await bridge.cleanup();}},cleanup:async()=>{try{await prepared.cleanup?.();}finally{await bridge.cleanup();}}};}
     catch(error){await bridge.cleanup();throw error;}
   }
   if(input.harness!=="aider"&&((input.credential&&!adaptAuth)||input.harness==="grok")) return prepareNativeLaunch(input);
@@ -829,7 +829,7 @@ async function prepareTransportLaunch(input: HarnessLaunchInput): Promise<Prepar
   const bridge=grokBridge({...input,baseUrl:endpoint(input.baseUrl)});
   try{
     const prepared=await prepareNativeLaunch({...input,baseUrl:bridge.baseUrl,credential:bridge.token,authStyle:(input.harness==="opencode"||input.harness==="opencode2"||input.harness==="cline"||input.harness==="prime-agent")?nativeAuth:"bearer"},input.providerBaseUrl??input.baseUrl);
-    return {...prepared,cleanup:async()=>{try{await prepared.cleanup?.();}finally{await bridge.cleanup();}}};
+    return {...prepared,closeTransport:async()=>{try{await prepared.closeTransport?.();}finally{await bridge.cleanup();}},cleanup:async()=>{try{await prepared.cleanup?.();}finally{await bridge.cleanup();}}};
   }catch(error){await bridge.cleanup();throw error;}
 }
 
@@ -852,6 +852,6 @@ export async function prepareHarnessLaunch(input: HarnessLaunchInput): Promise<P
   try {
     const nativeAuth=input.protocol==="gemini-generate-content"?"x-api-key":input.harness==="claude"?(input.authStyle==="x-api-key"?"x-api-key":"bearer"):input.protocol==="anthropic-messages"?"x-api-key":"bearer";
     const prepared=await prepareTransportLaunch({...input,providerBaseUrl:input.baseUrl,baseUrl:bridge.baseUrl,credential:bridge.token,authStyle:nativeAuth,compiledPolicy,nativePolicy});
-    return {...prepared,configPaths:[...prepared.configPaths,catalogPath],warnings:[...prepared.warnings,"Switcher injects model guidance into every managed inference request and permits only models authorized by the launch policy, including catalog selection when enabled. The gateway translates the selected credential to the provider authentication header. The full catalog remains discoverable."],cleanup:async()=>{try{await prepared.cleanup?.();}finally{await bridge.cleanup();await rm(catalogPath,{force:true});}}};
+    return {...prepared,configPaths:[...prepared.configPaths,catalogPath],warnings:[...prepared.warnings,"Switcher injects model guidance into every managed inference request and permits only models authorized by the launch policy, including catalog selection when enabled. The gateway translates the selected credential to the provider authentication header. The full catalog remains discoverable."],closeTransport:async()=>{try{await prepared.closeTransport?.();}finally{await bridge.cleanup();}},cleanup:async()=>{try{await prepared.cleanup?.();}finally{await bridge.cleanup();await rm(catalogPath,{force:true});}}};
   }catch(error){await bridge.cleanup();await rm(catalogPath,{force:true});throw error;}
 }

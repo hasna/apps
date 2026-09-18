@@ -23,7 +23,7 @@ installation guidance for every adapter. If a harness is installed outside
 | Harness | Executable and verified version | Install target | Official instructions |
 | --- | --- | --- | --- |
 | Claude Code | `claude`, >=2.1.257 | Claude Code official distribution | [Quickstart](https://code.claude.com/docs/en/quickstart) |
-| Codex CLI | `codex`, >=0.153.0 | OpenAI Codex official distribution | [Project](https://github.com/openai/codex) |
+| Codex CLI | Accepted 0.154.0 build with `--auth-home` for direct launches | Reviewed build of OpenAI Codex | [Project](https://github.com/openai/codex) |
 | Grok Build | `grok`, >=1.0.13 | xAI Grok Build official project | [Project](https://github.com/xai-org/grok-build) |
 | OpenCode (legacy) | `opencode`, >=1.18.0 | `opencode-ai` | [CLI guide](https://github.com/anomalyco/opencode/blob/dev/packages/web/src/content/docs/cli.mdx) |
 | OpenCode 2 | `opencode2`, beta-19157 or newer (including stable >=2.0.0) | OpenCode 2 official distribution | [v2 docs](https://opencode.ai/v2/docs/) |
@@ -67,7 +67,7 @@ Switcher's provider gateway. ChatGPT cloud Chat/Work, Preview Edit and other
 account-only features use their own service and are outside this routing path.
 The classic ChatGPT app (`com.openai.chat`) cannot use this launcher. The current
 unified ChatGPT app and its former Codex name (`com.openai.codex`) are supported;
-the bundled Codex runtime must meet the Codex CLI minimum above.
+the bundled Codex runtime must be at least 0.153.0. Desktop launch uses the existing app adapter; it does not yet use the direct CLI auth-home binding.
 
 Providers must support the Responses protocol and the selected model's tool
 calling. DeepSeek, OpenRouter, OpenAI and other Responses-compatible presets
@@ -137,7 +137,26 @@ that is not an account overlay, then `~/.codex`/`~/.claude`. This preserves the
 corpus when one launcher is nested inside another account's environment.
 Directories must be absolute, owned and free of writable/symlink redirection.
 
-Codex overlays share the sessions, archived sessions, capabilities and
+Direct Codex CLI launches require the exact accepted native installation for
+macOS arm64 or Linux arm64. Switcher checks immutable binary, patch-manifest and
+evidence hashes from its package before starting it; `--executable` can only name
+that same installation. It never downloads a replacement or falls back to a PATH
+binary. A missing or incompatible installation stops the launch before provider
+credentials or private launch state are prepared.
+
+This direct path uses the canonical `CODEX_HOME` for native config, sessions,
+session names, skills and SQLite, with a new private auth-only directory selected
+through `--auth-home`. Provider/model settings remain per-invocation arguments;
+the canonical config and credentials are preserved. The canonical home must
+already exist. Private legacy config, catalogs, histories and index names must
+be reconciled before an older account overlay can be left behind. Launch does
+not perform that migration. Owned processes must settle before their private
+launch directory is removed; uncertain settlement closes the owned gateway and
+retains the files for inspection.
+
+The ChatGPT desktop and Ori adapters retain their existing overlay path; this
+direct CLI change does not establish their support for the accepted auth-home
+runtime. Codex overlays share the sessions, archived sessions, capabilities and
 `thread-writer-locks` directories. The entire SQLite store uses the canonical
 configuration's `sqlite_home`, or the canonical root; inherited account-specific
 `CODEX_SQLITE_HOME` is ignored. There are no per-database or WAL symlinks.

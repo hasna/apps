@@ -13,7 +13,7 @@ const reserved: Record<HarnessId, readonly string[]> = {
   kilo: [],
   aider: [],
   claude: ["--model", "--fallback-model", "--settings", "--setting-sources"],
-  codex: ["--model", "-m", "--profile", "-p", "--oss", "--local-provider", "--remote", "--remote-auth-token-env"],
+  codex: ["--model", "-m", "--profile", "-p", "--oss", "--local-provider", "--remote", "--remote-auth-token-env", "--auth-home", "--daemon"],
   grok: ["--model", "-m", "--oauth", "--leader", "--leader-socket"],
   opencode: ["--model", "-m", "--attach", "--password", "-p", "--username", "-u", "--dir", "--port", "--hostname", "--mdns", "--mdns-domain", "--cors", "--auto"],
   opencode2: ["--model", "-m", "--server"],
@@ -37,7 +37,7 @@ const values: Record<HarnessId, readonly string[]> = {
   kilo: [],
   aider: [],
   claude: ["--system-prompt", "--append-system-prompt", "--agent", "--agents", "--tools", "--allowedTools", "--disallowedTools", "--permission-mode", "--permission-prompts", "--output-format", "--input-format", "--json-schema", "--max-turns", "--max-budget-usd", "--mcp-config", "--session-id", "--plugin-dir"],
-  codex: ["--config", "--image", "--sandbox", "--cd", "--add-dir", "--ask-for-approval", "--output-last-message", "--output-schema", "--color", "--enable", "--disable", "--thread-source"],
+  codex: ["--config", "--image", "--sandbox", "--cd", "--add-dir", "--ask-for-approval", "--output-last-message", "--output-schema", "--color", "--enable", "--disable", "--thread-source", "--auth-home"],
   grok: ["--single", "--print", "--prompt-file", "--prompt-json", "--load", "--cwd", "--agent", "--agents", "--allow", "--allowedTools", "--deny", "--disallowedTools", "--debug-file", "--json-schema", "--max-turns", "--output-format", "--permission-mode", "--reasoning-effort", "--effort", "--rules", "--append-system-prompt", "--system-prompt", "--system-prompt-override", "--session-id", "--sandbox", "--tools", "--disallowed-tools", "--worktree-ref", "--ref"],
   // Native 1.18.29 uses yargs strings/arrays without nargs. A following option
   // stays an option; only an attached value or a non-option token is consumed.
@@ -69,7 +69,7 @@ const short: Partial<Record<HarnessId, { required: string; optional: string; boo
   "prime-agent": { required: "p", optional: "", boolean: "hv" },
   gemini: { required: "mpieo", optional: "rw", boolean: "shvydl" },
 };
-const providerKeys = new Set(["model", "model_provider", "model_providers", "model_catalog_json", "review_model", "agents", "memories", "sqlite_home"]);
+const providerKeys = new Set(["model", "model_provider", "model_providers", "model_catalog_json", "review_model", "agents", "memories", "sqlite_home", "auth_home", "cli_auth_credentials_store", "profile", "profiles", "include"]);
 export function codexOptionTakesValue(option: string): boolean {
   return values.codex.includes(option) || option.length===2 && option[0]==="-" && short.codex!.required.includes(option[1]);
 }
@@ -112,7 +112,7 @@ function codexProviderOverride(value: string): boolean {
   // Match the TOML key syntax, including quoted roots, rather than looking for
   // provider words in unrelated option values such as a custom system prompt.
   try { return codexConfigRoots(key).some(root => providerKeys.has(root)); }
-  catch { return /^(model|model_provider|model_providers|model_catalog_json|review_model|agents|memories|sqlite_home)(?:\s*\.|\s*$)/.test(key); }
+  catch { return /^(model|model_provider|model_providers|model_catalog_json|review_model|agents|memories|sqlite_home|auth_home|cli_auth_credentials_store|profile|profiles|include)(?:\s*\.|\s*$)/.test(key); }
 }
 
 export function assertHarnessArguments(harness: HarnessId, args: readonly string[], options: { additionalReserved?: readonly string[]; reserveCodexConfig?: boolean } = {}): void {
@@ -121,6 +121,16 @@ export function assertHarnessArguments(harness: HarnessId, args: readonly string
   const blocked = new Set([...reserved[harness], ...options.additionalReserved ?? []]);
   if(harness==="antigravity"&&args[0]&&!args[0].startsWith("-"))throw new Error("Antigravity subcommands are outside the managed inference launch; pass prompts with -p.");
   const reject = (): never => { throw new Error("Provider/model configuration arguments are reserved by the launch profile; update the profile instead."); };
+  if (harness === "codex") {
+    const command = codexCommandIndex(args);
+    // These modes forward to a separate process/server whose provider binding
+    // is outside this direct CLI launch. Literal prompts remain untouched.
+    if (command >= 0 && ["app", "cloud", "exec-server", "agents"].includes(args[command])) reject();
+    if (command >= 0 && args[command] === "app-server") {
+      const nested = codexCommandIndex(args.slice(command + 1));
+      if (nested >= 0 && ["daemon", "proxy"].includes(args[command + 1 + nested])) reject();
+    }
+  }
   if (harness === "hermes") {
     // Hermes 0.21.0 scans profile selectors BEFORE argparse with the top-level
     // value grammar, even after `chat`. Mirror that pass: --query does not

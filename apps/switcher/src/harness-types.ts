@@ -14,4 +14,10 @@ export type HarnessLaunchInput = {
   reasoning?:ReasoningEffort; dangerouslyBypassApprovalsAndSandbox?:boolean;
   sharedState?: NativeState;
 };
-export type PreparedLaunch = {executable:string;args:string[];env:Record<string,string>;configPaths:string[];warnings:string[];beforeLaunch?:()=>Promise<void>;cleanup?:()=>Promise<void>};
+export type PreparedLaunch = {
+  executable:string;args:string[];env:Record<string,string>;configPaths:string[];warnings:string[];
+  beforeLaunch?:()=>Promise<void>;
+  /** Close owned network services without deleting files a surviving child may use. */
+  closeTransport?:()=>Promise<void>;
+  cleanup?:()=>Promise<void>;
+};

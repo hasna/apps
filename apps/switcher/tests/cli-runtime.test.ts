@@ -1,5 +1,6 @@
 import { test, expect } from "bun:test";
 import { SQL } from "bun";
+import { createCodexCliPreload } from "./fixtures/codex-native";
 import { mkdir, mkdtemp, writeFile, readFile, readdir, rm, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -13,8 +14,8 @@ const cli = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
 const scratch = process.env.SWITCHER_TEST_ROOT ?? join(homedir(), "Workspace/scratch/switcher-tests");
 async function directory() { await mkdir(scratch, {recursive:true}); return mkdtemp(join(scratch, "cli-runtime-")); }
 const withoutLocalNotice = (stderr: string) => stderr.replace(/^switcher: LOCAL mode [^\n]*\n/, ""); // The opt-in notice is asserted in fail-closed.test.ts; here it would only mask the command's own diagnostics.
-async function command(home: string, args: string[], extra: NodeJS.ProcessEnv = {}) {
-  const child = Bun.spawn([process.execPath, cli, ...args], {cwd: home, env: {
+async function command(home: string, args: string[], extra: NodeJS.ProcessEnv = {}, preload?: string) {
+  const child = Bun.spawn([process.execPath, ...(preload ? ["--preload", preload] : []), cli, ...args], {cwd: home, env: {
     PATH: process.env.PATH, HOME: home, USER: "fixture", HASNA_STATION: "switcher-runtime-fixture", HASNA_SWITCHER_LOCAL: "1", HASNA_SWITCHER_HOME: join(home, "data"), ...extra,
   }, stdout: "pipe", stderr: "pipe", stdin: "ignore"});
   const timer = setTimeout(() => child.kill("SIGKILL"), 20_000);
@@ -157,11 +158,12 @@ process.exit(await child.exited);
 `,{mode:0o700});
     await writeFile(native,`#!${process.execPath}\nif(process.argv.includes('--version'))console.log('codex-cli 0.153.4');else await Bun.write(${JSON.stringify(join(dir,"native-started"))},'started');\n`,{mode:0o700});
     await writeFile(providerFile,JSON.stringify({id:"onboarding-provider",name:"Acme Gateway",baseUrl:upstream.url.origin,protocol:"openai-responses",credentialEnv:"SWITCHER_PROVIDER_ACME",credentialCheck:{method:"GET",path:"auth"}}));
+    const preload=await createCodexCliPreload(dir,native);
     const env={PATH:`${dir}:${process.env.PATH}`,HASNA_SECRETS_API_URL:"https://vault.example",HASNA_SECRETS_API_KEY:"fixture-vault-operator"};
     const created=await command(dir,["providers","add","onboarding-provider","--file",providerFile],env);expect(created.code,created.stderr).toBe(0);
     const args=["launch","codex","--provider","onboarding-provider","--model","fixture-model","--executable",native];
     let output="",selected=false,timedOut=false;
-    const first=Bun.spawn([process.execPath,cli,...args],{cwd:dir,env:{HOME:dir,USER:"fixture",HASNA_STATION:"switcher-onboarding-fixture",HASNA_SWITCHER_LOCAL:"1",HASNA_SWITCHER_HOME:join(dir,"data"),...env},terminal:{cols:120,rows:40,data(terminal,data){output+=new TextDecoder().decode(data);if(!selected&&output.includes("Credential number")){selected=true;terminal.write("1\n");}}}});
+    const first=Bun.spawn([process.execPath,"--preload",preload,cli,...args],{cwd:dir,env:{HOME:dir,USER:"fixture",HASNA_STATION:"switcher-onboarding-fixture",HASNA_SWITCHER_LOCAL:"1",HASNA_SWITCHER_HOME:join(dir,"data"),...env},terminal:{cols:120,rows:40,data(terminal,data){output+=new TextDecoder().decode(data);if(!selected&&output.includes("Credential number")){selected=true;terminal.write("1\n");}}}});
     const timer=setTimeout(()=>{timedOut=true;first.kill("SIGKILL");},20_000);
     try{expect(await first.exited,output).toBe(0);expect(selected,output).toBe(true);expect(timedOut,output).toBe(false);}
     finally{clearTimeout(timer);first.terminal?.close();}
@@ -171,7 +173,7 @@ process.exit(await child.exited);
     expect(paths).toEqual(["/auth","/models"]);expect(await Bun.file(join(dir,"native-started")).exists()).toBe(true);
 
     accepted="fixture-provider-value-two";await writeFile(valueFile,accepted,{mode:0o600});
-    const second=await command(dir,args,env);expect(second.code,second.stderr).toBe(0);
+    const second=await command(dir,args,env,preload);expect(second.code,second.stderr).toBe(0);
     const after=(await readFile(operations,"utf8")).split("\n").filter(Boolean);
     expect(after.filter(line=>line.startsWith("search:")).length).toBe(before.filter(line=>line.startsWith("search:")).length);
     expect(paths).toEqual(["/auth","/models","/auth","/models"]);
@@ -199,8 +201,9 @@ test.skipIf(process.platform === "win32")("owned native process group retains te
   const upstream=Bun.serve({hostname:"127.0.0.1",port:0,fetch:()=>Response.json({data:[{id:"fixture-model"}]})});
   const executable=join(dir,"native-codex");
   await writeFile(executable,`#!${process.execPath}\nif(process.argv.includes('--version')){console.log('codex-cli 0.153.4');process.exit(0);}\nconst {openSync,closeSync,writeSync}=await import('node:fs');closeSync(openSync('/dev/tty','r'));console.log('CONTROLLING_TTY');const {spawnSync}=await import('node:child_process');spawnSync('/bin/stty',['-opost'],{stdio:['inherit','ignore','ignore']});writeSync(1,'RAW_BEGIN:A\\nB:RAW_END\\n');spawnSync('/bin/stty',['opost'],{stdio:['inherit','ignore','ignore']});process.on('SIGINT',()=>{console.log('NATIVE_INT');process.exit(130);});process.on('SIGWINCH',()=>console.log('RESIZED:'+spawnSync('/bin/stty',['size'],{stdio:['inherit','pipe','ignore'],encoding:'utf8'}).stdout.trim()));process.stdin.setEncoding('utf8');process.stdin.on('data',value=>console.log('READ:'+value.trim()));console.log('NATIVE_READY:'+process.pid+':'+process.stdin.isTTY+':'+process.stdout.isTTY);\n`,{mode:0o700});
+  const preload=await createCodexCliPreload(dir,executable);
   let output="",sent=false,interrupted=false,timedOut=false;
-  const child=Bun.spawn([process.execPath,cli,"launch","codex","--provider","generic-openai-responses","--url",upstream.url.origin,"--model","fixture-model","--executable",executable],{
+  const child=Bun.spawn([process.execPath,"--preload",preload,cli,"launch","codex","--provider","generic-openai-responses","--url",upstream.url.origin,"--model","fixture-model","--executable",executable],{
     cwd:dir,env:{PATH:process.env.PATH,HOME:process.env.HOME,USER:process.env.USER,HASNA_SWITCHER_LOCAL:"1",HASNA_SWITCHER_HOME:join(dir,"data")},
     terminal:{cols:80,rows:24,data(terminal,data){
       output+=new TextDecoder().decode(data);
@@ -258,12 +261,13 @@ test.skipIf(process.platform === "win32")("native controlling terminal coexists 
   const upstream=Bun.serve({hostname:"127.0.0.1",port:0,fetch:()=>Response.json({data:[{id:"fixture-model"}]})});
   const literal='literal "quoted" $(touch UNEXPECTED) ;\nline';
   await writeFile(executable,`#!${process.execPath}\nif(process.argv.includes('--version')){console.log('codex-cli 0.153.4');process.exit(0);}\nconst {openSync,writeSync,closeSync,readSync}=await import('node:fs');const fd=openSync('/dev/tty','w');writeSync(fd,'CONTROL_MARKER\\n');closeSync(fd);const tty=[process.stdin.isTTY===true,process.stdout.isTTY===true,process.stderr.isTTY===true];const input=tty[0]?'':await Bun.stdin.text();let keyboard='';if(!tty[0]){const terminal=openSync('/dev/tty','r+');writeSync(terminal,'TTY_READ_READY\\n');const buffer=Buffer.alloc(128);keyboard=buffer.subarray(0,readSync(terminal,buffer)).toString().trim();closeSync(terminal);}console.log('OUT:'+JSON.stringify({tty,input,keyboard,argument:process.argv[process.argv.indexOf('--fixture-argument')+1]}));console.error('ERR_MARKER');\n`,{mode:0o700});
+  const preload=await createCodexCliPreload(dir,executable);
   try {
     for(const redirected of [[2],[1],[1,2],[0],[0,1],[0,2]]) {
       const project=join(dir,redirected.join('-'));await mkdir(project);await writeFile(join(project,"input"),"input-proof");
       const script=redirected.map(fd=>`exec ${fd}${fd===0?"<input":fd===1?">stdout":">stderr"};`).join(" ")+' exec "$@"';
       let output="",timedOut=false,keyboardSent=false;
-      const child=Bun.spawn(["/bin/sh","-c",script,"fixture",process.execPath,cli,"launch","codex","--provider","generic-openai-responses","--url",upstream.url.origin,"--model","fixture-model","--executable",executable,"--","--fixture-argument",literal],{
+      const child=Bun.spawn(["/bin/sh","-c",script,"fixture",process.execPath,"--preload",preload,cli,"launch","codex","--provider","generic-openai-responses","--url",upstream.url.origin,"--model","fixture-model","--executable",executable,"--","--fixture-argument",literal],{
         cwd:project,env:{PATH:process.env.PATH,HOME:process.env.HOME,HASNA_SWITCHER_LOCAL:"1",HASNA_SWITCHER_HOME:join(project,"data")},terminal:{data(terminal,data){output+=new TextDecoder().decode(data);if(!keyboardSent&&output.includes("TTY_READ_READY")){keyboardSent=true;terminal.write("keyboard-proof\n");}}},
       });
       const timer=setTimeout(()=>{timedOut=true;child.kill("SIGKILL");},10_000);
@@ -449,9 +453,10 @@ test("hosted API launch authenticates and discovers locally, then persists only 
   try{
     await writeFile(native,`#!${process.execPath}\nif(process.argv.includes('--version'))console.log('codex-cli 0.153.4');\n`,{mode:0o700});
     await writeFile(providerFile,JSON.stringify({id:"hosted-provider",name:"Hosted provider",baseUrl:upstream.url.origin,protocol:"openai-responses",credentialEnv:"SWITCHER_PROVIDER_HOSTED_TEST",credentialCheck:{method:"GET",path:"auth"}}));
+    const preload=await createCodexCliPreload(dir,native);
     const env={HASNA_SWITCHER_API_URL:service.url,HASNA_SWITCHER_API_KEY:"fixture-hosted-switcher-api-token",SWITCHER_PROVIDER_HOSTED_TEST:providerKey};
     const created=await command(clientDir,["providers","add","hosted-provider","--file",providerFile],env);expect(created.code,created.stderr).toBe(0);
-    const launched=await command(clientDir,["launch","codex","--provider","hosted-provider","--model","hosted-model","--executable",native],env);
+    const launched=await command(clientDir,["launch","codex","--provider","hosted-provider","--model","hosted-model","--executable",native],env,preload);
     expect(launched.code,launched.stderr).toBe(0);expect(paths).toEqual(["/auth","/models"]);
     const client=new SwitcherClient({baseUrl:service.url,apiKey:"fixture-hosted-switcher-api-token"});
     expect((await client.listModels("hosted-provider")).data.map(model=>model.id)).toEqual(["hosted-model"]);

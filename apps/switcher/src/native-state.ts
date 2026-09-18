@@ -3,6 +3,7 @@ import { constants } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { Fault } from "./domain";
 
 export type SharedNativeTool = "codex" | "claude";
@@ -160,6 +161,31 @@ export function nativeStateEnvironment(state: NativeState): Record<string, strin
   return { [state.marker]: state.home, ...(state.sqliteHome ? { CODEX_SQLITE_HOME: state.sqliteHome } : {}) };
 }
 
+/** A new credential-only home must not hide an unreconciled previous corpus or
+ * private config. This is a read-only admission check, never a migration. */
+export async function assertCodexCanonicalLaunch(state: NativeState, previousHome = state.home): Promise<void> {
+  const canonical = await readCodexStateConfig(state.home);
+  if (["auth_home", "profile", "profiles", "include"].some(key => canonical[key] !== undefined))
+    throw new Fault(422, "native_state_config", "Resolve canonical Codex auth/profile/include configuration before using the verified invocation.");
+  previousHome = absolute(previousHome);
+  if (previousHome === state.home) return;
+  await assertNativeInstructionOverlay(state, previousHome);
+  await assertNativeStateProjection(state, previousHome);
+  const local = await readCodexStateConfig(previousHome);
+  // Provider/model routing is explicitly owned by Switcher. Other private
+  // configuration cannot vanish when CODEX_HOME becomes canonical.
+  const routing = new Set(["model", "model_provider", "model_providers", "model_catalog_json", "review_model", "model_reasoning_effort", "cli_auth_credentials_store", "forced_login_method"]);
+  for (const [key, value] of Object.entries(local)) {
+    if (routing.has(key) || (CODEX_INSTRUCTION_KEYS as readonly string[]).includes(key)) continue;
+    if (key === "sqlite_home" && value === state.sqliteHome) continue;
+    if (!isDeepStrictEqual(value, canonical[key]))
+      throw new Fault(409, "native_state_migration_required", "Private Codex configuration has not been reconciled with the canonical corpus. Existing files were preserved.");
+  }
+  const names = await readdir(previousHome);
+  if (names.some(name => name === "session_index.jsonl" || /credential|secret|keyring|mcp|settings/i.test(name)))
+    throw new Fault(409, "native_state_migration_required", "Private native names or capability settings require reconciliation before changing the credential boundary.");
+}
+
 /** A transcript projection cannot reconcile SQLite-only history or metadata. */
 async function assertCodexDatabaseRedirectSafe(state: NativeState, overlayHome: string): Promise<void> {
   if (state.tool !== "codex") return;
@@ -209,8 +235,8 @@ export async function legacyNativeStateWarnings(root: string, state: NativeState
   return pending.map(home => `Legacy native state is preserved at ${home}; migration is pending. Inspect with switcher state import ${state.tool} --from ${JSON.stringify(home)}. A copied snapshot does not retire the original or migrate its SQLite/index metadata.`);
 }
 
-/** Link only the native noncredential corpus. Existing data is never replaced. */
-export async function projectNativeState(state: NativeState, overlayHome: string): Promise<void> {
+/** Read-only collision admission, shared by legacy projection and canonical launches. */
+async function assertNativeStateProjection(state: NativeState, overlayHome: string): Promise<void> {
   overlayHome = absolute(overlayHome);
   await assertNativeStateDirectory(state.home);
   await assertNativeStateDirectory(overlayHome);
@@ -232,6 +258,13 @@ export async function projectNativeState(state: NativeState, overlayHome: string
     if (existing && (!existing.isSymbolicLink() || resolve(dirname(destination), await readlink(destination)) !== target))
       throw new Fault(409, "native_state_migration_required", "This launch profile already contains native state. Preserve and migrate its noncredential state before linking the shared corpus.");
   }
+}
+
+/** Link only the native noncredential corpus. Existing data is never replaced. */
+export async function projectNativeState(state: NativeState, overlayHome: string): Promise<void> {
+  overlayHome = absolute(overlayHome);
+  await assertNativeStateProjection(state, overlayHome);
+  if (overlayHome === state.home) return;
   for (const entry of NATIVE_STATE_ENTRIES[state.tool]) {
     const target = join(state.home, entry.name), destination = join(overlayHome, entry.name);
     await ensureNativeStateDirectory(dirname(target));

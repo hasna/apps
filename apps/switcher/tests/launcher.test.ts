@@ -1,4 +1,4 @@
-import {test,expect} from "bun:test";
+import {test,expect,beforeEach,afterEach} from "bun:test";
 import {spawn} from "node:child_process";
 import {mkdir,mkdtemp,writeFile,readFile,rm,readdir} from "node:fs/promises";
 import {join} from "node:path";
@@ -9,6 +9,14 @@ import {SwitcherError} from "../src/sdk";
 import {providerFromPreset} from "../src/presets";
 import {resolveLaunchProvider} from "../src/direct-launch";
 import {providerCredentialFingerprint} from "../src/provider-credential-onboarding";
+import {mockCodexNative} from "./fixtures/codex-native";
+
+// These launcher lifecycle tests use explicit fake native executables. Give
+// each test an owned canonical corpus and a guarded protocol binding, without
+// treating the fixture as an accepted installed native release.
+let codexFixture: Awaited<ReturnType<typeof mockCodexNative>>;
+beforeEach(async () => { codexFixture = await mockCodexNative(); });
+afterEach(async () => { await codexFixture.cleanup(); });
 test("Gemini auth mismatch is rejected before discovery or credential lookup",async()=>{
   let touched=false;
   const client={
