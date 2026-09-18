@@ -186,7 +186,11 @@ function validatePlan(value: unknown): asserts value is PluginAdmissionPlan {
   pluginNeed(identityDigest(plan) === plan.planDigest, "Plugin receipt immutable identity changed");
 }
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
-export function pluginResolverCommand(binding: PluginAdmissionBinding): string { return `${quote(binding.target.resolver.executable)} integration plugin resolve --binding ${bindingId(binding)}`; }
+const resolverGuard = 'exec 9<"$1"; actual=$(/usr/bin/sha256sum /proc/self/fd/9); actual=${actual%% *}; [ "sha256:$actual" = "$2" ]; exec /proc/self/fd/9 integration plugin resolve --binding "$3"';
+/** The accepted native command opens and hashes one inode, then executes that same descriptor. */
+export function pluginResolverCommand(binding: PluginAdmissionBinding): string {
+  return `${quote("/bin/sh")} -eu -c ${quote(resolverGuard)} plugin-resolver ${quote(binding.target.resolver.executable)} ${quote(binding.target.resolver.digest)} ${quote(bindingId(binding))}`;
+}
 function root(options: PluginAdmissionOptions): string { const path = options.storeRoot ?? pluginAdmissionRoot(); pluginNeed(isAbsolute(path) && resolve(path) === path, "Invalid plugin admission store root"); return path; }
 export function pluginBindingPath(storeRoot: string, id: string): string { pluginNeed(/^[a-f0-9]{64}$/.test(id), "Invalid plugin binding identifier"); return join(storeRoot, "bindings", `${id}.json`); }
 export function pluginReceiptPath(storeRoot: string, id: string, digest: string): string { pluginNeed(/^[a-f0-9]{64}$/.test(id), "Invalid plugin binding identifier"); pluginDigest(digest); return join(storeRoot, "receipts", id, `${digest.slice(7)}.json`); }

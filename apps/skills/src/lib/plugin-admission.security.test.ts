@@ -1,7 +1,7 @@
 import { useDefaultTestTimeout } from "../test-preload.js";
 useDefaultTestTimeout();
 import { afterEach, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -11,7 +11,7 @@ import {
   readPluginAdmissionReceipt,
   resolveAdmittedPlugin,
 } from "./plugin-admission.js";
-import { pluginFixture } from "./plugin-admission.test-fixtures.js";
+import { pluginFixture, putSynthetic } from "./plugin-admission.test-fixtures.js";
 import type { AuthenticatedProfilePrincipal, ProfileClient } from "./profile-client.js";
 
 const roots: string[] = [];
@@ -21,6 +21,24 @@ function fixture() {
   roots.push(root);
   return pluginFixture(root);
 }
+
+test("the accepted resolver command hashes and executes one pinned inode", async () => {
+  const f = fixture();
+  const reviewed = await planPluginAdmission("synthetic-integration", "synthetic-profile", f.target, f.options);
+  const command = reviewed.sourceCommand;
+  expect(command.indexOf("/usr/bin/sha256sum /proc/self/fd/9")).toBeGreaterThan(0);
+  expect(command.indexOf("exec /proc/self/fd/9 integration plugin resolve")).toBeGreaterThan(command.indexOf("/usr/bin/sha256sum /proc/self/fd/9"));
+  expect(command).toContain(f.target.resolver.digest);
+
+  const approved = Bun.spawn(["/bin/sh", "-c", command], { stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  expect(await approved.exited).toBe(91);
+
+  const marker = join(roots.at(-1)!, "unapproved-resolver-ran");
+  putSynthetic(f.target.resolver.executable, `#!/bin/sh\nprintf ran > ${JSON.stringify(marker)}\n`, 0o755);
+  const replaced = Bun.spawn(["/bin/sh", "-c", command], { stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  expect(await replaced.exited).not.toBe(0);
+  expect(existsSync(marker)).toBe(false);
+});
 
 test("a receipt cannot be reused by another principal in the same account", async () => {
   const f = fixture();

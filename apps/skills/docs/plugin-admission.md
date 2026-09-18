@@ -126,7 +126,11 @@ bytes stable.
 
 Configure the private marketplace source using the receipt's exact
 `sourceCommand`, `source: "command"`, `mode: "copy"` and `timeout: 30`.
-The resolver has a 25-second API deadline and prints exactly one absolute
+On certified Linux hosts, that accepted command opens the reviewed resolver,
+hashes `/proc/self/fd/9` with the absolute system SHA-256 utility, and executes
+the same pinned descriptor. A pathname replacement before the open is rejected;
+a replacement after hashing cannot become the executed resolver. The resolver
+has a 25-second API deadline and prints exactly one absolute
 directory path on success. Errors produce sanitized stderr and a nonzero exit.
 Only explicit admission writes artifacts; resolve cannot publish or materialize
 an unapproved revision. Concurrent admission uses a nonwaiting publication lock.
