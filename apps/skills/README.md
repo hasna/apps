@@ -190,6 +190,16 @@ contract and 16 MiB file limit; they are not silently converted into byte hashes
 Directory membership and file bytes are separate witnesses. Neither substitutes
 for reviewing the actual executable, import paths or loader behavior.
 
+For reviewed Claude user settings, `captureClaudeSettings(canonicalSettingsPath)`
+emits an opt-in `claude-settings-v1` witness. It permits a fixed set of typed
+terminal display preferences and recognized built-in model selections to change
+while binding hooks, permissions, native skill protections, plugins,
+marketplaces, environment and every unknown field. Provider mappings, custom
+model values and instruction settings remain bound. Replace the settings source
+in an explicitly reviewed discovery input, then use the normal `skills hook install
+--discovery-inputs <file>` plan/apply flow; existing raw witnesses are never
+automatically converted or refreshed. See [settings witness scope and migration](docs/plugin-admission.md#claude-settings-preferences).
+
 For an explicitly reviewed launcher or interpreter reached through symlinks,
 use `captureDiscoveryPathSources(paths)` and retain `hashMode: "path-bytes"`.
 Its digest binds the canonical input, directory identities, each link's identity

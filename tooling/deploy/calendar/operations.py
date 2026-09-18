@@ -98,6 +98,9 @@ def running(config, service, image_digest):
     c.require(not rows.get('failures') and len(rows.get('tasks', [])) == len(arns), 'RUNNING_TASK_READ')
     verified = []
     for task in rows['tasks']:
+        c.require(task.get('launchType') == 'FARGATE', 'RUNNING_TASK_FARGATE')
+        providers = c.fargate_capacity(service)
+        c.require(task.get('capacityProviderName') in providers if providers else 'capacityProviderName' not in task, 'RUNNING_TASK_CAPACITY_PROVIDER')
         web = [v for v in task.get('containers', []) if v.get('name') == config['web_container']]
         c.require(task.get('taskArn') in arns and task.get('clusterArn') == service['clusterArn']
             and task.get('taskDefinitionArn') == service['taskDefinition'] and task.get('lastStatus') == 'RUNNING'
@@ -288,7 +291,9 @@ def promote(source, candidate_path, candidate_sha, out):
     before = c.task_payload(task); changed = copy.deepcopy(before)
     changed['containerDefinitions'][0]['image'] = config['ecr_repository_url'] + '@' + candidate['image_digest']
     c.require(changed != before, 'CANDIDATE_UNCHANGED')
-    c.validate_task(changed, config)
+    # Keep Describe metadata for eligibility validation; the registration payload
+    # still contains only original request fields, with only the image changed.
+    c.validate_task({**task, **changed}, config)
     save(out, 'register-intent.json', {'source_commit': source, 'candidate_receipt_sha256': candidate_sha,
         'candidate_task_sha256': c.digest(changed), 'baseline_task_sha256': c.digest(before), 'image_digest': candidate['image_digest']})
     request = copy.deepcopy(changed)
@@ -297,7 +302,9 @@ def promote(source, candidate_path, candidate_sha, out):
         c.receipt_time(config['activation_receipt'])
         registered = aws('ecs', 'register-task-definition', body=request)
         arn = c.task_arn(registered.get('taskDefinition', {}).get('taskDefinitionArn'), config)
-        c.require(c.encode(c.task_payload(read_task(arn))) == c.encode(changed), 'REGISTERED_TASK_DRIFT')
+        registered_task = read_task(arn)
+        c.require(c.encode(c.task_payload(registered_task)) == c.encode(changed), 'REGISTERED_TASK_DRIFT')
+        c.validate_task(registered_task, config)
     except Exception:
         save(out, 'reconciliation-required.json', {'source_commit': source, 'candidate_receipt_sha256': candidate_sha,
             'image_digest': candidate['image_digest'], 'phase': 'registration', 'automatic_retry': False, 'automatic_rollback': False})

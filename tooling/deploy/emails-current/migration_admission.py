@@ -182,7 +182,17 @@ def inspect(image_digest, promotion):
     # export routing separately and reject every additional condition.
     inputs[PACKAGE + "#exports/auth"] = promotion.digest(promotion.encode(routing))
     inputs[APP_PACKAGE + "#migration-routing"] = promotion.digest(promotion.encode({"name": "@hasna/emails", "type": "module", "imports": None, "browser": None}))
-    return {"imageDigest": image_digest, "configDigest": manifest["config"]["digest"], "definitionInputs": inputs, "definitionInputsDigest": promotion.digest(promotion.encode(inputs)), "layersVerified": len(manifest["layers"])}
+    labels = config.get("config", {}).get("Labels", {})
+    labels = labels if isinstance(labels, dict) else {}
+    return {
+        "imageDigest": image_digest,
+        "configDigest": manifest["config"]["digest"],
+        "sourceRevision": labels.get("org.opencontainers.image.revision"),
+        "imageVersion": labels.get("org.opencontainers.image.version"),
+        "definitionInputs": inputs,
+        "definitionInputsDigest": promotion.digest(promotion.encode(inputs)),
+        "layersVerified": len(manifest["layers"]),
+    }
 
 
 def admit(deployed_digest, candidate_digest, promotion, receipt_path=None):

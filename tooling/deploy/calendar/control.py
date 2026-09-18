@@ -144,7 +144,16 @@ def validate_task(task, config):
     require(task.get('family') == config['web_task_family'] and task.get('cpu') == config['task_cpu'] and task.get('memory') == config['task_memory'], 'TASK_BUDGET')
     require(task.get('executionRoleArn') == config['execution_role_arn'], 'TASK_EXECUTION_ROLE')
     require((task.get('taskRoleArn') or None) == config['task_role_arn'], 'TASK_ROLE')
-    require(task.get('networkMode') == 'awsvpc' and task.get('requiresCompatibilities') == ['FARGATE'], 'TASK_NETWORK_MODE')
+    require(task.get('networkMode') == 'awsvpc', 'TASK_NETWORK_MODE')
+    if 'requiresCompatibilities' in task:
+        require(task['requiresCompatibilities'] == ['FARGATE'], 'TASK_FARGATE_DECLARATION')
+    else:
+        # DescribeTaskDefinition may omit the optional registration declaration.
+        # Admit only authoritative computed eligibility, never inferred defaults.
+        caps = task.get('compatibilities')
+        require(isinstance(caps, list) and all(isinstance(v, str) for v in caps)
+            and len(caps) == len(set(caps)) and 'FARGATE' in caps
+            and set(caps) <= {'EC2', 'FARGATE', 'EXTERNAL', 'MANAGED_INSTANCES'}, 'TASK_FARGATE_ELIGIBILITY')
     require(task.get('runtimePlatform') == {'cpuArchitecture': 'ARM64', 'operatingSystemFamily': 'LINUX'}, 'TASK_PLATFORM')
     containers = task.get('containerDefinitions')
     require(isinstance(containers, list) and len(containers) == 1 and containers[0].get('name') == config['web_container'], 'TASK_CONTAINER')
@@ -179,14 +188,37 @@ def service_configuration_digest(service):
     return digest(value)
 
 
+def fargate_capacity(value):
+    strategy = value.get('capacityProviderStrategy', [])
+    require(isinstance(strategy, list), 'SERVICE_FARGATE_CAPACITY_STRATEGY')
+    if not strategy:
+        require(value.get('launchType') == 'FARGATE', 'SERVICE_FARGATE_LAUNCH_TYPE')
+        return {}
+    require('launchType' not in value and 1 <= len(strategy) <= 2, 'SERVICE_FARGATE_CAPACITY_STRATEGY')
+    providers = {}
+    for row in strategy:
+        require(isinstance(row, dict) and set(row) <= {'capacityProvider', 'weight', 'base'}, 'SERVICE_FARGATE_CAPACITY_STRATEGY')
+        provider = row.get('capacityProvider')
+        require(isinstance(provider, str) and provider in ('FARGATE', 'FARGATE_SPOT') and provider not in providers, 'SERVICE_FARGATE_CAPACITY_PROVIDER')
+        weight, base = row.get('weight', 0), row.get('base', 0)
+        require(type(weight) is int and 0 <= weight <= 1000 and type(base) is int and 0 <= base <= 100000, 'SERVICE_FARGATE_CAPACITY_VALUES')
+        providers[provider] = (weight, base)
+    require(any(weight > 0 for weight, _ in providers.values())
+        and sum(base > 0 for _, base in providers.values()) <= 1, 'SERVICE_FARGATE_CAPACITY_ALLOCATION')
+    return providers
+
+
 def validate_service(service, config, activation=False, stable=True):
     require(service.get('serviceName') == config['service'] and service.get('status') == 'ACTIVE', 'SERVICE_IDENTITY')
     require(service.get('clusterArn') == f"arn:aws:ecs:{REGION}:{config['account_id']}:cluster/{config['cluster']}" and service.get('serviceArn') == f"arn:aws:ecs:{REGION}:{config['account_id']}:service/{config['cluster']}/{config['service']}", 'SERVICE_RESOURCE_BINDING')
+    capacity = fargate_capacity(service)
     desired = service.get('desiredCount')
     require(type(desired) is int and 0 <= desired <= 100, 'SERVICE_DESIRED_COUNT')
     if stable: require(service.get('runningCount') == desired and service.get('pendingCount') == 0, 'SERVICE_COUNTS')
     task_arn(service.get('taskDefinition'), config)
     deployments = service.get('deployments', [])
+    primary = [row for row in deployments if row.get('status') == 'PRIMARY']
+    require(len(primary) == 1 and fargate_capacity(primary[0]) == capacity, 'SERVICE_FARGATE_PRIMARY_DRIFT')
     if stable: require(len(deployments) == 1 and deployments[0].get('status') == 'PRIMARY' and deployments[0].get('rolloutState') == 'COMPLETED' and deployments[0].get('taskDefinition') == service['taskDefinition'], 'SERVICE_DEPLOYMENT')
     network = service.get('networkConfiguration', {}).get('awsvpcConfiguration', {})
     require(set(network.get('subnets', [])) == set(config['subnets']) and set(network.get('securityGroups', [])) == set(config['security_groups']) and network.get('assignPublicIp') == config['assign_public_ip'], 'SERVICE_NETWORK')
