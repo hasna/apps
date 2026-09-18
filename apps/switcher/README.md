@@ -140,6 +140,8 @@ installation with `--app-path /absolute/path/ChatGPT.app`; native CLI arguments,
 ### Shared native conversations
 
 Sessions, skills and instructions are shared by default across providers and accounts.
+The [state ownership decision](docs/shared-native-state.md) describes this default,
+shared capability behavior and the separate private-authentication boundary.
 `HASNA_CODEX_STATE_HOME` and `HASNA_CLAUDE_STATE_HOME` select a custom common native
 corpus. Switcher also honors `SUBSCRIPTIONS_SHARED_HOME_CODEX` and
 `SUBSCRIPTIONS_SHARED_HOME_CLAUDE`, otherwise using `~/.codex`/`~/.claude`.
