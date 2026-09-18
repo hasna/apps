@@ -414,8 +414,8 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
   },
   {
     member: "hooks",
-    cause: "no_cloud_guard: hasna.contract.json carries a legacy .hasna/cloud runtime-config reference (in-tree kit 1.0.2; first measured failing when validation moved in-tree).",
-    task: "fleet-alignment wave 2026-09-11 (W2 census) — owner: hooks lane (W6); remove the retired location from the manifest",
+    cause: "surface_bindings: serviceSurfaces[3].generatedFrom is required for a supported service SDK (cli-with-store repo shipping hooks-serve; in-tree kit 1.2.1). The recorded no_cloud_guard cause was fixed 2026-09-18 (AGE11-00571): the retired .hasna/cloud literal was removed from the manifest description.",
+    task: "fleet-alignment wave 2026-09-11 (W2 census) — owner: hooks lane (W6); the SDK is hand-written, so generatedFrom can only be declared once the client is generated from the served /openapi.json document",
   },
   {
     member: "logs",
