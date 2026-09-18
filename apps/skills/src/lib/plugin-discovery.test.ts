@@ -15,7 +15,7 @@ async function fixture(versionless = false) {
   const root = mkdtempSync(join(tmpdir(), "skills-plugin-registry-")); roots.push(root);
   const f = pluginFixture(root, { versionless }), registry = join(root, ".claude/plugins/installed_plugins.json");
   f.target.registrations.push({ scope: "project", projectPath: join(root, "project") });
-  async function admit() { const plan = await planPluginAdmission("synthetic-integration", "synthetic-profile", f.target, f.options); return admitPlugin("synthetic-integration", "synthetic-profile", f.target, plan.planDigest, f.options); }
+  async function admit() { const plan = await planPluginAdmission("synthetic-integration", "synthetic-profile", f.target, f.options); return admitPlugin("synthetic-integration", "synthetic-profile", f.target, plan.planDigest, plan.evidenceDigest, f.options); }
   let current: PluginAdmissionReceipt = await admit(); const previous: string[] = [];
   let document: any;
   function install() {

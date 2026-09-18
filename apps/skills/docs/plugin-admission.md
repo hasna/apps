@@ -1,9 +1,9 @@
 # Reviewed plugin admission
 
 `skills integration plugin` prepares a plugin before a coding agent discovers
-it. Projection contracts support schema versions 1 and 2; target and binding
-contracts use schema version 1, and admission plans and receipts use schema
-version 2. Claude command sources use `copy` mode, certified against
+it. Projection contracts support schema versions 1 and 2; targets use schema
+version 1, bindings use schema version 2, and admission plans and receipts use
+schema version 3. Claude command sources use `copy` mode, certified against
 Claude 2.1.274 and 2.1.276 on Linux ARM64. It removes native skill and command prompts while preserving
 reviewed agents, tools, MCP, LSP, hooks and assets. Prompt hooks enforce drift;
 they do not clean an already loaded plugin catalog.
@@ -81,7 +81,7 @@ reviewed canonical file paths. No executable is invoked while planning.
 
 ```sh
 skills integration plugin plan plugin-container --selection-profile integrations --target /absolute/private/target.json
-skills integration plugin admit plugin-container --selection-profile integrations --target /absolute/private/target.json --plan-digest sha256:REVIEWED_DIGEST
+skills integration plugin admit plugin-container --selection-profile integrations --target /absolute/private/target.json --plan-digest sha256:REVIEWED_DIGEST --evidence-digest sha256:REVIEWED_EVIDENCE
 skills integration plugin resolve --binding REVIEWED_BINDING_ID
 ```
 
@@ -90,12 +90,14 @@ witnesses, provenance and hosted payload mappings. Admit refetches the profile
 and exact bundles before accepting that digest. Its owner-only immutable receipt
 binds authority, workspace, profile ID, exact canonical container and mapped
 payload versions/digests, source and projection digests, scope set, executable
-witnesses and resolver command. `planDigest` hashes that stable immutable
-identity. `observation` separately records the freshly observed profile revision
-and relevant resolved selections, including aliases and triggers. `evidenceDigest`
-covers the complete plan and observation. Receipt reads validate both hashes,
-strict field schemas and agreement between mapped and observed identities.
-Schema version 1 review-candidate plans and receipts are refused. Originals remain in the
+witnesses, resolver command, authenticated owner identity, exact profile
+revision, aliases and triggers. `observation` records the same freshly observed
+principal and routing state. `evidenceDigest` hashes that complete authenticated
+evidence snapshot, and `planDigest` hashes the admission identity including the
+evidence digest. Admission requires both reviewed digests. Receipt reads validate
+both hashes, strict field schemas and agreement between mapped and observed
+identities. Legacy binding, plan and receipt schemas are refused rather than
+upgraded implicitly. Originals remain in the
 private hosted bundle; local native materializations contain only the projection.
 
 The owner-local store is `~/.hasna/skills/plugin-admission/`: `bindings/` holds
@@ -104,24 +106,31 @@ content-addressed bindings, `receipts/<binding>/` holds approved plans, and
 resolver freshly authenticates through normal owner credential configuration
 on every call, including exact payload bundle reads. It refuses environment
 authority/local-storage overrides. No `--cached`, API URL/key or local fallback
-option exists. Valid unrelated profile additions/removals, revision increments,
-selection ordering and alias/trigger routing edits preserve admission. These
-changes remain subject to normal Skills profile and session rules. Missing
+option exists. The resolver calls authenticated `whoami` before and after profile,
+bundle and executable verification. The stable user/account identity and required
+`owner` role must remain unchanged, and the account must equal the selected
+workspace. Credential rotation remains valid because receipts never bind a raw
+API-key identifier. Any profile revision, alias or trigger change requires a new
+plan and explicit approval, including edits made after review. Missing
 canonical selections, changed versions/digests, authority/workspace/profile
 changes, revoked API access, changed package content or executable witnesses
 still refuse or require renewed admission. A mapped canonical slug cannot be
 replaced through an alias, even with identical content. Human plan/admit input
 may use an integration alias; the resulting binding uses its canonical slug.
 
-Re-admitting an unchanged immutable identity returns its original receipt
-without rewriting that receipt's observed revision. A new plan reports the
-current evidence. Resolver calls remain write-free. Canonical object keys and
+Re-admitting an unchanged identity and evidence returns its original receipt.
+A new plan reports current principal and routing evidence. Resolver calls remain
+write-free. Canonical object keys and
 registration-set ordering keep binding IDs, plan digests and persisted binding
 bytes stable.
 
 Configure the private marketplace source using the receipt's exact
 `sourceCommand`, `source: "command"`, `mode: "copy"` and `timeout: 30`.
-The resolver has a 25-second API deadline and prints exactly one absolute
+On certified Linux hosts, that accepted command opens the reviewed resolver,
+hashes `/proc/self/fd/9` with the absolute system SHA-256 utility, and executes
+the same pinned descriptor. A pathname replacement before the open is rejected;
+a replacement after hashing cannot become the executed resolver. The resolver
+has a 25-second API deadline and prints exactly one absolute
 directory path on success. Errors produce sanitized stderr and a nonzero exit.
 Only explicit admission writes artifacts; resolve cannot publish or materialize
 an unapproved revision. Concurrent admission uses a nonwaiting publication lock.

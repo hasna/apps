@@ -100,7 +100,7 @@ describe("Mementos MCP profiles", () => {
     expect(core.result.tools).toHaveLength(23);
     expect(Buffer.byteLength(JSON.stringify(core.result))).toBeLessThanOrEqual(16 * 1024);
 
-    expect(full.result.tools).toHaveLength(123);
+    expect(full.result.tools).toHaveLength(124);
     const fullNames = new Set(full.result.tools.map((tool) => tool.name));
     expect(fullNames).toContain("migrate_pg");
     const categorizedNames = new Set(Object.values(MEMENTOS_MCP_PROFILE_TOOLS).flat());
@@ -111,6 +111,7 @@ describe("Mementos MCP profiles", () => {
   test("specialized profiles add their tools to core", async () => {
     const cases: Array<[string, string]> = [
       ["search", "memory_search_semantic"],
+      ["search", "memory_audit_stats"],
       ["graph", "graph_query"],
       ["automation", "memory_auto_process"],
       ["admin", "memory_gdpr_erase"],
@@ -123,7 +124,7 @@ describe("Mementos MCP profiles", () => {
       const names = result.tools.map((tool) => tool.name);
       expect(names).toContain("memory_save");
       expect(names).toContain(expectedTool);
-      expect(names.length).toBeLessThan(123);
+      expect(names.length).toBeLessThan(124);
     }
   });
 

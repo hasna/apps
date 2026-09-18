@@ -21,57 +21,71 @@ function fixture() {
 }
 const canonical = (value: unknown): string => JSON.stringify(value, (_key, item) => item && typeof item === "object" && !Array.isArray(item) ? Object.fromEntries(Object.keys(item).sort().map(key => [key, item[key]])) : item);
 
-test("revision and unrelated selection changes preserve admission while evidence stays fresh and immutable", async () => {
-  const f = fixture(), first = await f.plan();
-  const receipt = await admitPlugin("synthetic-integration", "synthetic-profile", f.target, first.planDigest, f.options);
-  const path = pluginReceiptPath(f.options.storeRoot, first.bindingId, first.planDigest), bytes = readFileSync(path);
+test("profile revision CAS and unrelated profile edits require a new approval", async () => {
   for (const change of ["revision", "addition", "removal", "reordering", "property-order"]) {
+    const f = fixture(), reviewed = await f.plan();
     f.state.revision = `revision-${change}`;
     f.transform(profile => {
       if (change === "addition") profile.selections.push({ ...profile.selections[1]!, slug: "unrelated-skill" });
+      if (change === "removal") profile.selections.push({ ...profile.selections[1]!, slug: "unrelated-skill" });
       if (change === "reordering") profile.selections.reverse();
       if (change === "property-order") profile.selections = profile.selections.map(selection => Object.fromEntries(Object.entries(selection).reverse()) as typeof selection);
       return profile;
     });
-    const next = await f.plan();
-    expect(next.planDigest).toBe(first.planDigest); expect(next.evidenceDigest).not.toBe(first.evidenceDigest);
-    expect(next.observation.profileRevision).toBe(f.state.revision);
-    const before = { profiles: f.state.profileCalls, bundles: f.state.bundleCalls };
-    expect(await resolveAdmittedPlugin(first.bindingId, f.options)).toBe(receipt.materializedPath);
-    expect(f.state.profileCalls - before.profiles).toBe(1); expect(f.state.bundleCalls - before.bundles).toBe(2);
-    expect(await admitPlugin("synthetic-integration", "synthetic-profile", f.target, first.planDigest, f.options)).toEqual(receipt);
-    expect(readFileSync(path)).toEqual(bytes);
+    const current = await f.plan();
+    expect(current.profileRevision).toBe(f.state.revision);
+    expect(current.planDigest).not.toBe(reviewed.planDigest);
+    expect(current.evidenceDigest).not.toBe(reviewed.evidenceDigest);
+    await expect(admitPlugin("synthetic-integration", "synthetic-profile", f.target, reviewed.planDigest, reviewed.evidenceDigest, f.options)).rejects.toThrow("plan changed");
+    const receipt = await admitPlugin("synthetic-integration", "synthetic-profile", f.target, current.planDigest, current.evidenceDigest, f.options);
+    expect(receipt.plan.profileRevision).toBe(f.state.revision);
   }
 });
-test("admission accepts unrelated profile edits between review and materialization", async () => {
-  const f = fixture(), reviewed = await f.plan(); f.state.revision = "r2";
-  const receipt = await admitPlugin("synthetic-integration", "synthetic-profile", f.target, reviewed.planDigest, f.options);
-  expect(receipt.schemaVersion).toBe(2); expect(receipt.plan.schemaVersion).toBe(2);
-  expect(receipt.plan.observation.profileRevision).toBe("r2"); expect(receipt.plan.evidenceDigest).not.toBe(reviewed.evidenceDigest);
-  expect(receipt.plan.planDigest).toBe(reviewed.planDigest);
+test("post-review integration and mapped alias or trigger mutations require new approval", async () => {
+  const cases: Array<{ name: string; prepare?: (profile: ReturnType<ReturnType<typeof fixture>["profile"]>) => void; mutate: (profile: ReturnType<ReturnType<typeof fixture>["profile"]>) => void }> = [
+    { name: "integration alias", mutate: profile => { profile.selections[0]!.aliases = ["integration-alias"]; } },
+    { name: "payload alias", mutate: profile => { profile.selections[1]!.aliases = ["payload-alias"]; } },
+    { name: "keyword", mutate: profile => { profile.selections[0]!.triggers = { keywords: ["changed"] }; } },
+    { name: "path", mutate: profile => { profile.selections[1]!.triggers = { paths: ["**/*.changed"] }; } },
+    { name: "always", mutate: profile => { profile.selections[0]!.triggers = { always: true }; } },
+    { name: "trigger ordering", prepare: profile => { profile.selections[0]!.triggers = { keywords: ["first", "second"] }; }, mutate: profile => { profile.selections[0]!.triggers = { keywords: ["second", "first"] }; } },
+  ];
+  for (const item of cases) {
+    const f = fixture();
+    if (item.prepare) f.transform(profile => { item.prepare!(profile); return profile; });
+    const reviewed = await f.plan();
+    const receipt = await admitPlugin("synthetic-integration", "synthetic-profile", f.target, reviewed.planDigest, reviewed.evidenceDigest, f.options);
+    f.transform(profile => { item.mutate(profile); return profile; });
+    const current = await f.plan();
+    expect(current.profileRevision).toBe(reviewed.profileRevision);
+    expect(current.planDigest, item.name).not.toBe(reviewed.planDigest);
+    expect(current.evidenceDigest, item.name).not.toBe(reviewed.evidenceDigest);
+    await expect(resolveAdmittedPlugin(reviewed.bindingId, f.options)).rejects.toThrow();
+    await expect(admitPlugin("synthetic-integration", "synthetic-profile", f.target, reviewed.planDigest, reviewed.evidenceDigest, f.options)).rejects.toThrow("plan changed");
+    const renewed = await admitPlugin("synthetic-integration", "synthetic-profile", f.target, current.planDigest, current.evidenceDigest, f.options);
+    expect(renewed.plan.planDigest).toBe(current.planDigest);
+    expect(renewed.materializedPath).not.toBe(receipt.materializedPath);
+  }
 });
-test("integration and mapped aliases and triggers are observed routing metadata, not admission identities", async () => {
+test("admission requires explicit approval of both plan and routing evidence digests", async () => {
   const f = fixture(), reviewed = await f.plan();
-  const receipt = await admitPlugin("synthetic-integration", "synthetic-profile", f.target, reviewed.planDigest, f.options);
-  for (const index of [0, 1]) for (const field of ["aliases", "triggers"]) {
-    f.state.revision = `r-${index}-${field}`;
-    f.transform(profile => { if (field === "aliases") profile.selections[index]!.aliases = [`alias-${index}`]; else profile.selections[index]!.triggers = { keywords: ["synthetic"], paths: ["**/*.fixture"], always: true }; return profile; });
-    const next = await f.plan(); expect(next.planDigest).toBe(reviewed.planDigest); expect(next.evidenceDigest).not.toBe(reviewed.evidenceDigest);
-    expect(await resolveAdmittedPlugin(reviewed.bindingId, f.options)).toBe(receipt.materializedPath);
-  }
+  await expect(admitPlugin("synthetic-integration", "synthetic-profile", f.target, reviewed.planDigest, `sha256:${"f".repeat(64)}`, f.options)).rejects.toThrow("routing evidence changed");
+  await expect(admitPlugin("synthetic-integration", "synthetic-profile", f.target, `sha256:${"e".repeat(64)}`, reviewed.evidenceDigest, f.options)).rejects.toThrow("plan changed");
+  const receipt = await admitPlugin("synthetic-integration", "synthetic-profile", f.target, reviewed.planDigest, reviewed.evidenceDigest, f.options);
+  expect(receipt.schemaVersion).toBe(3); expect(receipt.plan.schemaVersion).toBe(3);
 });
 test("target object and registration ordering preserve binding, command and immutable persistence", async () => {
   const f = fixture(); f.target.registrations.push({ scope: "project", projectPath: join(roots.at(-1)!, "project") });
-  const first = await f.plan(), receipt = await admitPlugin("synthetic-integration", "synthetic-profile", f.target, first.planDigest, f.options);
+  const first = await f.plan(), receipt = await admitPlugin("synthetic-integration", "synthetic-profile", f.target, first.planDigest, first.evidenceDigest, f.options);
   const reordered = JSON.parse(JSON.stringify({ resolver: Object.fromEntries(Object.entries(f.target.resolver).reverse()), native: Object.fromEntries(Object.entries(f.target.native).reverse()), registrations: [...f.target.registrations].reverse().map(row => ({ projectPath: row.projectPath, scope: row.scope })), pluginId: f.target.pluginId, schemaVersion: 1 })) as PluginAdmissionTarget;
   const next = await f.plan("synthetic-integration", reordered);
   expect(next.bindingId).toBe(first.bindingId); expect(next.planDigest).toBe(first.planDigest); expect(next.sourceCommand).toBe(first.sourceCommand);
-  expect(await admitPlugin("synthetic-integration", "synthetic-profile", reordered, first.planDigest, f.options)).toEqual(receipt);
+  expect(await admitPlugin("synthetic-integration", "synthetic-profile", reordered, first.planDigest, first.evidenceDigest, f.options)).toEqual(receipt);
 });
 test("human integration aliases bind canonically and neither canonical target can be substituted by an alias", async () => {
   const f = fixture(); f.transform(profile => { profile.selections[0]!.aliases = ["integration-alias"]; return profile; });
   const first = await f.plan("integration-alias"); expect(first.binding.bundleSlug).toBe("synthetic-integration");
-  await admitPlugin("integration-alias", "synthetic-profile", f.target, first.planDigest, f.options);
+  await admitPlugin("integration-alias", "synthetic-profile", f.target, first.planDigest, first.evidenceDigest, f.options);
   for (const index of [0, 1]) {
     const name = index === 0 ? "synthetic-integration" : "synthetic-payload";
     f.bundles.set("replacement@1.0.0", f.bundles.get(`${name}@1.0.0`)!);
@@ -97,7 +111,7 @@ test("unknown authorization metadata, malformed triggers and invalid aliases can
 });
 test("relevant membership, version, digest and authority changes still refuse existing admission", async () => {
   for (const change of ["payload-missing", "payload-version", "payload-digest", "container-version", "workspace", "authority", "profile-id", "revoked", "offline", "timeout"]) {
-    const f = fixture(), first = await f.plan(); await admitPlugin("synthetic-integration", "synthetic-profile", f.target, first.planDigest, f.options);
+    const f = fixture(), first = await f.plan(); await admitPlugin("synthetic-integration", "synthetic-profile", f.target, first.planDigest, first.evidenceDigest, f.options);
     f.transform(profile => {
       if (change === "payload-missing") profile.selections.pop();
       if (change === "payload-version") profile.selections[1]!.version = "1.0.1";
@@ -114,30 +128,32 @@ test("relevant membership, version, digest and authority changes still refuse ex
     await expect(resolveAdmittedPlugin(first.bindingId, options)).rejects.toThrow();
   }
 });
-test("receipt v2 validates both hashes and exact observed identity even when evidence is rehashed", async () => {
-  for (const change of ["schema-v1", "plan-v1", "missing-evidence", "identity", "evidence", "observation-revision", "observed-alias", "observed-slug", "observed-workspace", "observed-authority", "observed-unknown", "observed-trigger", "payload-membership", "duplicate-payload", "unknown-plan", "missing-observation", "mapped-source"]) {
+test("receipt v3 rejects legacy schemas and any rehashed routing or principal mutation", async () => {
+  for (const change of ["receipt-v2", "plan-v2", "binding-v1", "missing-evidence", "identity", "profile-revision", "principal", "observed-alias", "observed-slug", "observed-trigger", "payload-membership", "duplicate-payload", "unknown-plan", "missing-observation", "mapped-source"]) {
     const f = fixture(), plan = await f.plan();
-    await admitPlugin("synthetic-integration", "synthetic-profile", f.target, plan.planDigest, f.options);
+    await admitPlugin("synthetic-integration", "synthetic-profile", f.target, plan.planDigest, plan.evidenceDigest, f.options);
     const path = pluginReceiptPath(f.options.storeRoot, plan.bindingId, plan.planDigest), receipt = JSON.parse(readFileSync(path, "utf8"));
     const p = receipt.plan;
-    if (change === "schema-v1") receipt.schemaVersion = 1;
-    if (change === "plan-v1") p.schemaVersion = 1;
+    if (change === "receipt-v2") receipt.schemaVersion = 2;
+    if (change === "plan-v2") p.schemaVersion = 2;
+    if (change === "binding-v1") p.binding.schemaVersion = 1;
     if (change === "missing-evidence") delete p.evidenceDigest;
     if (change === "identity") p.selection.version = "9.9.9";
-    if (change === "evidence") p.observation.profileRevision = "changed-evidence";
-    if (change === "observation-revision") p.observation.payloads[0].profileRevision = "inconsistent";
-    if (change === "observed-alias") p.observation.payloads[0].aliases = ["synthetic-integration"];
+    if (change === "profile-revision") { p.profileRevision = "changed"; p.observation.profileRevision = "changed"; }
+    if (change === "principal") { p.binding.principal.userId = "other-owner"; p.observation.principal.userId = "other-owner"; }
+    if (change === "observed-alias") { p.selection.aliases = ["new-alias"]; p.observation.integration.aliases = ["new-alias"]; }
     if (change === "observed-slug") p.observation.payloads[0].slug = "replacement";
-    if (change === "observed-workspace") p.observation.payloads[0].workspaceId = "other";
-    if (change === "observed-authority") p.observation.payloads[0].authority = "https://other.example.com/skills/v1";
-    if (change === "observed-unknown") p.observation.payloads[0].permissions = { revoked: true };
-    if (change === "observed-trigger") p.observation.payloads[0].triggers = { always: "true" };
+    if (change === "observed-trigger") { p.payloadSelections[0].triggers = { always: true }; p.observation.payloads[0].triggers = { always: true }; }
     if (change === "payload-membership") p.payloadSelections = [];
     if (change === "duplicate-payload") p.payloadSelections.push(p.payloadSelections[0]);
     if (change === "unknown-plan") p.unknown = true;
     if (change === "missing-observation") delete p.observation;
     if (change === "mapped-source") p.manifest.payloads[0].sourceDigest = `sha256:${"f".repeat(64)}`;
-    if (!["missing-evidence", "evidence"].includes(change)) { const { evidenceDigest: _, ...unsigned } = p; p.evidenceDigest = `sha256:${pluginHash(canonical(unsigned))}`; }
+    if (["profile-revision", "principal", "observed-alias", "observed-trigger"].includes(change)) {
+      p.evidenceDigest = `sha256:${pluginHash(canonical(p.observation))}`;
+      const identity = { ...p }; delete identity.observation; delete identity.planDigest;
+      p.planDigest = `sha256:${pluginHash(canonical(identity))}`;
+    }
     writeFileSync(path, JSON.stringify(receipt));
     expect(() => readPluginAdmissionReceipt(f.options.storeRoot, plan.bindingId, plan.planDigest)).toThrow();
   }
@@ -145,11 +161,11 @@ test("receipt v2 validates both hashes and exact observed identity even when evi
 
 test("canonical JSON receipt roundtrip preserves content identity and immutable replay", async () => {
   const f = fixture(), plan = await f.plan();
-  const receipt = await admitPlugin("synthetic-integration", "synthetic-profile", f.target, plan.planDigest, f.options);
+  const receipt = await admitPlugin("synthetic-integration", "synthetic-profile", f.target, plan.planDigest, plan.evidenceDigest, f.options);
   const path = pluginReceiptPath(f.options.storeRoot, plan.bindingId, plan.planDigest), bytes = canonical(receipt);
   writeFileSync(path, bytes);
   expect(readPluginAdmissionReceipt(f.options.storeRoot, plan.bindingId, plan.planDigest)).toEqual(receipt);
   expect(await resolveAdmittedPlugin(plan.bindingId, f.options)).toBe(receipt.materializedPath);
-  expect(await admitPlugin("synthetic-integration", "synthetic-profile", f.target, plan.planDigest, f.options)).toEqual(receipt);
+  expect(await admitPlugin("synthetic-integration", "synthetic-profile", f.target, plan.planDigest, plan.evidenceDigest, f.options)).toEqual(receipt);
   expect(readFileSync(path, "utf8")).toBe(bytes);
 });

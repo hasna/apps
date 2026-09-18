@@ -16,12 +16,20 @@ import type {
 
 export interface ProfileClient {
   readonly authority: string;
+  /** Stable whoami subject; raw credential/key identities are intentionally excluded. */
+  resolvePrincipal?(): Promise<AuthenticatedProfilePrincipal>;
   resolveProfile(id: string): Promise<ResolvedSkillProfile>;
   recordStation(
     id: string,
     state: StationSkillStateInput,
   ): Promise<StationSkillState>;
   getBundle(slug: string, version: string): Promise<Response | null>;
+}
+export type AuthenticatedProfileRole = "owner" | "admin" | "member" | "viewer";
+export interface AuthenticatedProfilePrincipal {
+  userId: string;
+  accountId: string;
+  role: AuthenticatedProfileRole;
 }
 function object(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
@@ -90,14 +98,14 @@ export class HttpProfileClient implements ProfileClient {
       "",
     );
   }
-  private async request(
-    path: string,
+  private async requestRoute(
+    route: string,
     init: RequestInit = {},
   ): Promise<Response> {
     let response: Response;
     try {
       response = await fetch(
-        skillsApiRequestUrl(this.origin, `/api/v1${path}`),
+        skillsApiRequestUrl(this.origin, route),
         {
           ...init,
           redirect: "error",
@@ -119,6 +127,9 @@ export class HttpProfileClient implements ProfileClient {
       throw new Error(`Skills API request failed (HTTP ${response.status})`);
     }
     return response;
+  }
+  private request(path: string, init: RequestInit = {}): Promise<Response> {
+    return this.requestRoute(`/api/v1${path}`, init);
   }
   private async read(response: Response, limit = MAX_PROFILE_DOCUMENT_BYTES): Promise<unknown> {
     try {
@@ -162,6 +173,27 @@ export class HttpProfileClient implements ProfileClient {
     }
     if (selectionAliasError(result.selections as SkillSelection[])) invalid();
     return result as unknown as ResolvedSkillProfile;
+  }
+  async resolvePrincipal(): Promise<AuthenticatedProfilePrincipal> {
+    const result = await this.read(await this.requestRoute("/api/auth/whoami"), 16 * 1024);
+    if (
+      !object(result) ||
+      Object.keys(result).sort().join(",") !== "organization,user" ||
+      !object(result.user) ||
+      Object.keys(result.user).sort().join(",") !== "email,id,role" ||
+      !object(result.organization) ||
+      Object.keys(result.organization).sort().join(",") !== "id,name,slug" ||
+      !identifier(result.user.id) ||
+      typeof result.user.email !== "string" ||
+      !result.user.email.trim() ||
+      !["owner", "admin", "member", "viewer"].includes(String(result.user.role)) ||
+      !identifier(result.organization.id) ||
+      !identifier(result.organization.slug) ||
+      typeof result.organization.name !== "string" ||
+      !result.organization.name.trim()
+    )
+      invalid();
+    return { userId: result.user.id, accountId: result.organization.id, role: result.user.role as AuthenticatedProfileRole };
   }
   async recordStation(
     id: string,
