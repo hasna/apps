@@ -79,6 +79,7 @@ export function bundleText(binPath: string): { files: string[]; text: string } {
  * get `list`.
  */
 export const HOSTED_READ_COMMANDS: Record<string, string[]> = {
+  attachments: ["status"],
   calendar: ["list"],
   contacts: ["list"],
   conversations: ["read"],
@@ -97,6 +98,7 @@ export const HOSTED_READ_COMMANDS: Record<string, string[]> = {
   projects: ["list"],
   recordings: ["list"],
   secrets: ["items", "list"],
+  shortlinks: ["stats"],
   skills: ["categories"],
   telephony: ["number", "list"],
   todos: ["list"],
