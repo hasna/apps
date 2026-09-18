@@ -1,6 +1,7 @@
 import type { KnowledgeItem } from './store.js';
-import { KNOWLEDGE_GUARDED_WRITE_CONTRACT, type KnowledgeGuardedBinding, type KnowledgeGuardedBounds, type KnowledgePrivateItemProof } from './guarded-write-contract.js';
+import { KNOWLEDGE_GUARDED_WRITE_CONTRACT, type KnowledgeGuardedBinding, type KnowledgeGuardedBounds, type KnowledgePrivateEditApprovalGrant, type KnowledgePrivateInputDescriptor, type KnowledgePrivateItemProof } from './guarded-write-contract.js';
 export declare const KNOWLEDGE_PRIVATE_REVIEW_SCHEMA: "hasna.knowledge.private-review.v1";
+declare const KNOWLEDGE_PRIVATE_REVIEW_TOKEN_SCHEMA: "hasna.knowledge.private-review-token.v1";
 export type KnowledgeReviewBindingState = 'legacy_unbound' | 'bound_to_requested';
 export interface CreateKnowledgePrivateReviewDescriptorOptions {
     operation_id: string;
@@ -32,6 +33,12 @@ export interface KnowledgePrivateReviewEnvelope {
     descriptor: KnowledgePrivateReviewRequest;
     limits: KnowledgeGuardedBounds;
 }
+export interface KnowledgePrivateReviewAuthorization {
+    schema: typeof KNOWLEDGE_PRIVATE_REVIEW_TOKEN_SCHEMA;
+    request_digest: string;
+    expires_at: string;
+    token: string;
+}
 export interface KnowledgePrivateReviewProof {
     contract: typeof KNOWLEDGE_GUARDED_WRITE_CONTRACT;
     kind: 'review';
@@ -41,9 +48,23 @@ export interface KnowledgePrivateReviewProof {
     item: KnowledgePrivateItemProof;
 }
 export type KnowledgePrivateReviewer = (item: Readonly<KnowledgeItem>) => void | Promise<void>;
+export type KnowledgePrivateEditReviewer = (item: Readonly<KnowledgeItem>) => KnowledgePrivateInputDescriptor | Promise<KnowledgePrivateInputDescriptor>;
+export interface KnowledgePrivateEditApprovalEnvelope {
+    review_authorization: KnowledgePrivateReviewAuthorization;
+    descriptor: Omit<KnowledgePrivateInputDescriptor, 'toJSON'>;
+    deterministic_key: string;
+    approved_by: string;
+    limits: KnowledgeGuardedBounds;
+}
+export interface KnowledgePrivateEditApproval extends Readonly<Omit<KnowledgePrivateEditApprovalGrant, 'token'>> {
+    /** Process-private provenance handle. It is not serialized. */
+    readonly descriptor_id: string;
+    toJSON(): Omit<KnowledgePrivateEditApprovalGrant, 'token'>;
+}
 export declare class KnowledgePrivateReviewError extends Error {
     readonly code: string;
     readonly status?: number;
     constructor(code: string, status?: number);
 }
 export declare function createKnowledgePrivateReviewDescriptor(options: CreateKnowledgePrivateReviewDescriptorOptions): KnowledgePrivateReviewDescriptor;
+export {};

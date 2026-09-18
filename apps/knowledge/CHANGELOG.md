@@ -42,7 +42,7 @@
   its existing assertions are unchanged.
 - 5a52e67: Align the exact `@hasna/contracts` pin with the 1.0.2 optional secrets peer release.
 - 225235a: Resolve hosted MCP item stores before creating a project-scoped local workspace, so project-scoped reads using the canonical Knowledge API leave no `config.json`, SQLite, JSON, or workspace-directory residue. Add real published-bin coverage for the canonical 0600 credential file, exact `/knowledge/v1` routing, compact search output, bounded context packs, and complete local-root isolation.
-- Add bounded, exact-version private review callbacks for guarded and legacy records. Review preserves existing data and provenance without adopting or editing a record, and returns digest-only proof while keeping bodies within the authorized reviewer.
+- Add bounded, exact-version private review callbacks for guarded and legacy records. Review preserves existing data and provenance without adopting or editing a record, and returns digest-only proof while keeping bodies within the authorized reviewer. Unmanifested guarded edits now require a second server-signed approval grant bound to the authenticated actor, explicit reviewer label, exact reviewed version/content digest, update binding digest, mutation deterministic key, and expiry; cloned, altered, expired, or stale approvals fail closed.
 
 ## 0.3.2
 

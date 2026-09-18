@@ -1075,6 +1075,8 @@ async function run(argv: string[]): Promise<void> {
         private_review_callback: true,
         private_legacy_review: true,
         private_review_transport: 'in_process_callback',
+        private_edit_approval: 'server_signed_exact_revision_and_mutation',
+        unmanifested_update_requires_approval: true,
       }, flags.json, flags);
       return;
     }

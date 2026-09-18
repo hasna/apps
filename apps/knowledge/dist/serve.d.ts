@@ -179,6 +179,8 @@ export interface ServeDeps {
      * routes keep working and guarded routes fail closed with 503.
      */
     guardedAuthority?: KnowledgeServeGuardedAuthority;
+    /** Server-only HMAC key for revision- and mutation-bound private edit approvals. */
+    reviewApprovalSecret?: string;
     /** Explicit deployment owner of tenant-null legacy rows. Absent denies access
      * to those rows; a request's tenant never establishes their ownership. */
     legacyOwnerTenantId?: string;

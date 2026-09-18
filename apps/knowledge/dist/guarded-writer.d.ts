@@ -1,4 +1,4 @@
-import { type KnowledgePrivateReviewDescriptor, type KnowledgePrivateReviewer, type KnowledgePrivateReviewProof } from './guarded-review.js';
+import { type KnowledgePrivateEditApproval, type KnowledgePrivateEditReviewer, type KnowledgePrivateReviewDescriptor, type KnowledgePrivateReviewer, type KnowledgePrivateReviewProof } from './guarded-review.js';
 import { type CreateKnowledgeGuardedManifestOptions, type KnowledgeGuardedBinding, type KnowledgeGuardedBindingStateReadback, type KnowledgeGuardedBounds, type KnowledgeGuardedAdoptionReconciliation, type KnowledgeGuardedAdoptionReceipt, type KnowledgeGuardedAdoptionResult, type KnowledgeGuardedLegacyAdoptionOptions, type KnowledgeGuardedLegacyRollbackOptions, type KnowledgeGuardedLimits, type KnowledgeGuardedManifestReconciliation, type KnowledgeGuardedManifestSubmission, type KnowledgeGuardedReadback, type KnowledgeGuardedReceipt, type KnowledgeGuardedRollbackResult, type KnowledgeGuardedWriteResult, type KnowledgePrivateInputDescriptor, type KnowledgePrivateQueryBounds, type KnowledgePrivateQueryDescriptor, type KnowledgePrivateResultDescriptor, type KnowledgePrivateTitleLookupDescriptor, type KnowledgeTerminalReconciliation } from './guarded-write-contract.js';
 export interface CreateKnowledgeGuardedWriterOptions {
     binding: KnowledgeGuardedBinding;
@@ -24,6 +24,9 @@ export interface KnowledgeGuardedWriter {
     readback(fullId: string, bounds?: KnowledgeGuardedBounds): Promise<KnowledgeGuardedReadback>;
     readbackPrivate(fullId: string, bounds?: KnowledgeGuardedBounds): Promise<KnowledgePrivateResultDescriptor>;
     reviewPrivate(descriptor: KnowledgePrivateReviewDescriptor, reviewer: KnowledgePrivateReviewer, bounds?: KnowledgeGuardedBounds): Promise<KnowledgePrivateReviewProof>;
+    approvePrivateEdit(descriptor: KnowledgePrivateReviewDescriptor, approvedBy: string, reviewer: KnowledgePrivateEditReviewer, bounds?: KnowledgeGuardedBounds): Promise<KnowledgePrivateEditApproval>;
+    executeApproved(approval: KnowledgePrivateEditApproval): Promise<KnowledgeGuardedWriteResult>;
+    executeApprovedPrivate(approval: KnowledgePrivateEditApproval): Promise<KnowledgePrivateResultDescriptor>;
     readBindingState(fullId: string, bounds?: KnowledgeGuardedBounds): Promise<KnowledgeGuardedBindingStateReadback>;
     adoptLegacy(options: KnowledgeGuardedLegacyAdoptionOptions): Promise<KnowledgeGuardedAdoptionResult>;
     rollbackLegacyAdoption(options: KnowledgeGuardedLegacyRollbackOptions): Promise<KnowledgeGuardedRollbackResult>;

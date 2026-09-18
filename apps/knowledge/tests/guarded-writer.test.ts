@@ -122,6 +122,7 @@ beforeAll(async () => {
     version: '9.9.9',
     guardedAuthority: AUTHORITY,
     legacyOwnerTenantId: TENANT,
+    reviewApprovalSecret: SIGNING,
   });
   server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: handler });
   env = {
@@ -196,6 +197,34 @@ async function reviewDescriptor(id: string, state?: KnowledgeReviewBindingState)
   });
 }
 
+async function approveEdit(
+  input: KnowledgePrivateInputDescriptor,
+  approvedBy = 'reviewer:guarded-writer-test',
+) {
+  const guarded = writer(input.binding);
+  const observed = await guarded.readBindingState(input.target_id);
+  const review = createKnowledgePrivateReviewDescriptor({
+    operation_id: `${input.operation_id}:review`,
+    step_id: `${input.step_id}:review`,
+    binding: input.binding,
+    target_id: input.target_id,
+    expected_version: observed.item_version!,
+    expected_content_sha256: observed.content_sha256!,
+    expected_binding_state: observed.state as KnowledgeReviewBindingState,
+  });
+  return guarded.approvePrivateEdit(review, approvedBy, (item) => {
+    expect(item.id).toBe(input.target_id);
+    expect(item.version).toBe(input.precondition.kind === 'version'
+      ? input.precondition.expected_version
+      : item.version);
+    return input;
+  });
+}
+
+async function executeApprovedEdit(input: KnowledgePrivateInputDescriptor) {
+  return writer(input.binding).executeApproved(await approveEdit(input));
+}
+
 test('private review reads a legacy row without adoption and enables a memory-only reviewed update descriptor', async () => {
   const id = 'private-review-legacy';
   const body = 'PRIVATE-REVIEW-BODY-SENTINEL';
@@ -245,6 +274,25 @@ test('private review handles a bound record and sanitizes callback errors and re
   expect(JSON.stringify(failure)).not.toContain(secretBody);
   const accidentalReturn = await writer().reviewPrivate(descriptor, (() => secretBody) as unknown as () => void);
   expect(JSON.stringify(accidentalReturn)).not.toContain(secretBody);
+
+  const edit = createKnowledgePrivateInputDescriptor({
+    operation_id: 'private-review-tests', step_id: 'approved-bound-edit', verb: 'update', target_id: id,
+    binding: BINDING, precondition: { kind: 'version', expected_version: 1 },
+    payload: { content: 'approved replacement body' },
+  });
+  await expect(writer().execute(edit)).rejects.toMatchObject({ code: 'private_edit_approval_required' });
+  const approval = await writer().approvePrivateEdit(
+    descriptor,
+    'reviewer:private-review-test',
+    () => edit,
+  );
+  expect(JSON.stringify(approval)).not.toContain(secretBody);
+  expect(JSON.stringify(approval)).not.toContain('token');
+  expect(approval.approved_actor).toMatch(/^(agent|key):/);
+  const edited = await writer().executeApproved(approval);
+  expect(edited.readback.item.content).toBe('approved replacement body');
+  expect(() => writer().executeApproved({ ...approval } as typeof approval))
+    .toThrow(/private_edit_approval_invalid/);
 });
 
 test('private review refuses stale version/digest/state and cross-tenant or authority access before callback', async () => {
@@ -268,6 +316,38 @@ test('private review refuses stale version/digest/state and cross-tenant or auth
     .rejects.toMatchObject({status:403});
   await expect(writer().reviewPrivate({...good} as typeof good,callback)).rejects.toMatchObject({code:'private_review_descriptor_invalid'});
   expect(callbacks).toBe(0);
+});
+
+test('forged private edit approval tokens fail closed without returning or applying private content', async () => {
+  const id = 'private-edit-forged-approval';
+  const originalBody = 'PRIVATE-FORGED-APPROVAL-ORIGINAL';
+  const replacement = 'PRIVATE-FORGED-APPROVAL-REPLACEMENT';
+  await writer().executePrivate(createKnowledgePrivateInputDescriptor({
+    operation_id: 'private-edit-forgery', step_id: 'create', verb: 'create', target_id: id,
+    binding: BINDING, precondition: { kind: 'absent' }, payload: { title: 'Forged approval', content: originalBody },
+  }));
+  const edit = createKnowledgePrivateInputDescriptor({
+    operation_id: 'private-edit-forgery', step_id: 'update', verb: 'update', target_id: id,
+    binding: BINDING, precondition: { kind: 'version', expected_version: 1 }, payload: { content: replacement },
+  });
+  const approval = await approveEdit(edit);
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input, init) => {
+    if (String(input).endsWith('/guarded-writes') && typeof init?.body === 'string') {
+      const body = JSON.parse(init.body) as { review_approval?: { token?: string } };
+      if (body.review_approval?.token) body.review_approval.token = `${body.review_approval.token.slice(0, -1)}x`;
+      return originalFetch(input, { ...init, body: JSON.stringify(body) });
+    }
+    return originalFetch(input, init);
+  }) as typeof fetch;
+  let failure: unknown;
+  try { await writer().executeApproved(approval); } catch (error) { failure = error; }
+  finally { globalThis.fetch = originalFetch; }
+  expect(String(failure)).not.toContain(originalBody);
+  expect(String(failure)).not.toContain(replacement);
+  expect(JSON.stringify(failure)).not.toContain(originalBody);
+  expect(JSON.stringify(failure)).not.toContain(replacement);
+  expect((await writer().readback(id)).item.content).toBe(originalBody);
 });
 
 test('tenant-null legacy ownership is explicit and denies a separately authenticated other tenant', async () => {
@@ -308,6 +388,7 @@ test('tenant-null legacy ownership is explicit and denies a separately authentic
   const noOwnerServer = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: createServeHandler({
     client: fixtureClient, store: new ApiKeyStore(fixtureClient), version: '9.9.9',
     guardedAuthority: AUTHORITY,
+    reviewApprovalSecret: SIGNING,
     verifier: verifyApiKey({ app: 'knowledge', signingSecret: SIGNING,
       keyStatus: () => Promise.resolve('active' as const) }),
   }) });
@@ -558,48 +639,15 @@ test('guarded CLI accepts only opaque descriptors and proves create, update, que
     version: 1,
     payload: { content: updatedBody },
   });
-  const updated = await executeKnowledgeGuardedCliWrite(update, { env });
-  expect(updated.proof.items[0]).toMatchObject({
-    id: targetId,
-    version: 2,
-    content_sha256: createHash('sha256').update(updatedBody).digest('hex'),
-  });
-  expect(JSON.stringify(updated)).not.toContain(updatedBody);
-
-  const conflictingBody = 'private conflicting body must not leak';
-  const conflict = descriptor({
-    operation: 'op-private-cli-update',
-    step: 'step-update',
-    target: targetId,
-    verb: 'update',
-    version: 1,
-    payload: { content: conflictingBody },
-  });
-  let caught: unknown;
+  let updateCaught: unknown;
   try {
-    await executeKnowledgeGuardedCliWrite(conflict, { env });
+    await executeKnowledgeGuardedCliWrite(update, { env });
   } catch (error) {
-    caught = error;
+    updateCaught = error;
   }
-  expect(caught).toMatchObject({ code: 'guarded_operation_conflict' });
-  expect(String(caught)).not.toContain(conflictingBody);
-  expect(JSON.stringify(caught)).not.toContain(conflictingBody);
-
-  const fixedMetadataContent = 'anonymous_fd';
-  const fixedMetadataUpdate = descriptor({
-    operation: 'op-private-cli-fixed-metadata-content',
-    step: 'step-fixed-metadata-content',
-    target: targetId,
-    verb: 'update',
-    version: 2,
-    payload: { content: fixedMetadataContent },
-  });
-  const fixedMetadataResult = await executeKnowledgeGuardedCliWrite(fixedMetadataUpdate, { env });
-  expect(fixedMetadataResult.proof.items[0]).toMatchObject({
-    id: targetId,
-    version: 3,
-    content_sha256: createHash('sha256').update(fixedMetadataContent).digest('hex'),
-  });
+  expect(updateCaught).toMatchObject({ code: 'private_edit_approval_required' });
+  expect(String(updateCaught)).not.toContain(updatedBody);
+  expect(JSON.stringify(updateCaught)).not.toContain(updatedBody);
 
   let timeoutCaught: unknown;
   try {
@@ -1453,7 +1501,7 @@ describe('FCAME-1 guarded Knowledge writer', () => {
       expected_version: state.item_version!,
       expected_content_sha256: state.content_sha256!,
     });
-    await writer().execute(descriptor({
+    await executeApprovedEdit(descriptor({
       operation: 'op-adoption-stale-content-update',
       step: 'step-update',
       target: targetId,
@@ -1602,6 +1650,7 @@ describe('FCAME-1 guarded Knowledge writer', () => {
           version: '9.9.9',
           guardedAuthority: AUTHORITY,
           legacyOwnerTenantId: variant.tenantId,
+          reviewApprovalSecret: SIGNING,
         }),
       });
       try {
@@ -1687,6 +1736,7 @@ describe('FCAME-1 guarded Knowledge writer', () => {
           version: '9.9.9',
           guardedAuthority: AUTHORITY,
           legacyOwnerTenantId: variant.tenantId,
+          reviewApprovalSecret: SIGNING,
         }),
       });
       try {
@@ -1944,7 +1994,7 @@ describe('FCAME-1 guarded Knowledge writer', () => {
     ]) {
       await guarded.execute(input);
     }
-    await guarded.execute(descriptor({
+    await executeApprovedEdit(descriptor({
       operation: 'op-private-query-versioned-update',
       step: 'step-update',
       target: versionedId,
@@ -1952,7 +2002,7 @@ describe('FCAME-1 guarded Knowledge writer', () => {
       version: 1,
       payload: { title: 'Private version two', content: 'current body two' },
     }));
-    await guarded.execute(descriptor({
+    await executeApprovedEdit(descriptor({
       operation: 'op-private-query-archive-update',
       step: 'step-update',
       target: archivedId,
@@ -2249,13 +2299,14 @@ describe('FCAME-1 guarded Knowledge writer', () => {
       .toBe(first.receipt.receipt_id);
   });
 
-  test('wrong scope and wrong parent are terminal binding rejections', async () => {
+  test('wrong scope and wrong parent cannot obtain private edit approval', async () => {
     const created = await writer().execute(descriptor({
       operation: 'op-binding-create',
       step: 'step-create',
       target: 'k_fcame_binding_target',
     }));
     expect(created.receipt.result_version).toBe(1);
+    const observed = await writer().readBindingState('k_fcame_binding_target');
 
     for (const [suffix, binding] of [
       ['scope', { ...BINDING, scope: 'project:wrong' }],
@@ -2272,13 +2323,19 @@ describe('FCAME-1 guarded Knowledge writer', () => {
       });
       let caught: unknown = null;
       try {
-        await writer(binding).execute(update);
+        await writer(binding).approvePrivateEdit(createKnowledgePrivateReviewDescriptor({
+          operation_id: `op-binding-${suffix}:review`,
+          step_id: 'step-review',
+          binding,
+          target_id: update.target_id,
+          expected_version: observed.item_version!,
+          expected_content_sha256: observed.content_sha256!,
+          expected_binding_state: 'bound_to_requested',
+        }), 'reviewer:wrong-binding-test', () => update);
       } catch (error) {
         caught = error;
       }
-      expect(caught).toBeInstanceOf(KnowledgeGuardedWriteRejectedError);
-      expect((caught as KnowledgeGuardedWriteRejectedError).receipt.code).toBe('binding_mismatch');
-      expect((caught as KnowledgeGuardedWriteRejectedError).receipt.effect_count).toBe(0);
+      expect(caught).toMatchObject({ code: 'private_review_transport_failed', status: 404 });
     }
     expect((await writer().readback('k_fcame_binding_target')).item.content)
       .not.toContain('must-not-land');
@@ -2291,31 +2348,34 @@ describe('FCAME-1 guarded Knowledge writer', () => {
       target: 'k_fcame_cas_target',
       payload: { title: 'CAS', content: 'v1' },
     }));
-    const accepted = await writer().execute(descriptor({
+    const pass = descriptor({
       operation: 'op-cas-update-pass',
       step: 'step-update',
       target: 'k_fcame_cas_target',
       verb: 'update',
       version: 1,
       payload: { content: 'v2-known-pass' },
-    }));
+    });
+    const stale = descriptor({
+      operation: 'op-cas-update-stale',
+      step: 'step-update',
+      target: 'k_fcame_cas_target',
+      verb: 'update',
+      version: 1,
+      payload: { content: 'v3-must-not-land' },
+    });
+    const staleApproval = await approveEdit(stale, 'reviewer:stale-before-mutation');
+    const accepted = await writer().executeApproved(await approveEdit(pass));
     expect(accepted.receipt.result_version).toBe(2);
 
     let caught: unknown = null;
     try {
-      await writer().execute(descriptor({
-        operation: 'op-cas-update-stale',
-        step: 'step-update',
-        target: 'k_fcame_cas_target',
-        verb: 'update',
-        version: 1,
-        payload: { content: 'v3-must-not-land' },
-      }));
+      await writer().executeApproved(staleApproval);
     } catch (error) {
       caught = error;
     }
     expect(caught).toBeInstanceOf(KnowledgeGuardedWriteRejectedError);
-    expect((caught as KnowledgeGuardedWriteRejectedError).receipt.code).toBe('version_conflict');
+    expect((caught as KnowledgeGuardedWriteRejectedError).receipt.code).toBe('review_approval_stale');
     expect((await writer().readback('k_fcame_cas_target')).item.content).toBe('v2-known-pass');
   });
 

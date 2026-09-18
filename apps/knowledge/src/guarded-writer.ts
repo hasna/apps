@@ -9,7 +9,12 @@
 import type { HasnaStorageClient } from './contracts-types.js';
 import { resolveKnowledgeGuardedTransport } from './http-store.js';
 import {
+  approveKnowledgePrivateEdit,
   executeKnowledgePrivateReview,
+  KnowledgePrivateReviewError,
+  materializeKnowledgePrivateEditApproval,
+  type KnowledgePrivateEditApproval,
+  type KnowledgePrivateEditReviewer,
   type KnowledgePrivateReviewDescriptor,
   type KnowledgePrivateReviewer,
   type KnowledgePrivateReviewProof,
@@ -56,6 +61,7 @@ import {
   type KnowledgeGuardedWriteEnvelope,
   type KnowledgeGuardedWriteResult,
   type KnowledgePrivateInputDescriptor,
+  type KnowledgePrivateEditApprovalGrant,
   type KnowledgePrivateQueryBounds,
   type KnowledgePrivateQueryDescriptor,
   type KnowledgePrivateQueryEnvelope,
@@ -115,6 +121,14 @@ export interface KnowledgeGuardedWriter {
     reviewer: KnowledgePrivateReviewer,
     bounds?: KnowledgeGuardedBounds,
   ): Promise<KnowledgePrivateReviewProof>;
+  approvePrivateEdit(
+    descriptor: KnowledgePrivateReviewDescriptor,
+    approvedBy: string,
+    reviewer: KnowledgePrivateEditReviewer,
+    bounds?: KnowledgeGuardedBounds,
+  ): Promise<KnowledgePrivateEditApproval>;
+  executeApproved(approval: KnowledgePrivateEditApproval): Promise<KnowledgeGuardedWriteResult>;
+  executeApprovedPrivate(approval: KnowledgePrivateEditApproval): Promise<KnowledgePrivateResultDescriptor>;
   readBindingState(
     fullId: string,
     bounds?: KnowledgeGuardedBounds,
@@ -362,6 +376,16 @@ class GuardedWriter implements KnowledgeGuardedWriter {
   }
 
   async execute(descriptor: KnowledgePrivateInputDescriptor): Promise<KnowledgeGuardedWriteResult> {
+    if (descriptor.verb === 'update' && !descriptor.manifest) {
+      throw new KnowledgePrivateReviewError('private_edit_approval_required');
+    }
+    return this.executeDescriptor(descriptor, null);
+  }
+
+  private async executeDescriptor(
+    descriptor: KnowledgePrivateInputDescriptor,
+    reviewApproval: KnowledgePrivateEditApprovalGrant | null,
+  ): Promise<KnowledgeGuardedWriteResult> {
     if (this.require_manifest && !descriptor.manifest) {
       throw new Error(
         'guarded_manifest_required: this writer is configured for multi-step work and refuses an unmanifested write.',
@@ -404,6 +428,7 @@ class GuardedWriter implements KnowledgeGuardedWriter {
       deterministic_key: deterministicKey,
       limits: this.limits,
       payload,
+      review_approval: reviewApproval,
     };
     if (knowledgeGuardedUtf8Bytes(envelope) > this.limits.submission.max_bytes) {
       throw new Error('guarded_write_request_exceeds_submission_byte_cap.');
@@ -1089,6 +1114,36 @@ class GuardedWriter implements KnowledgeGuardedWriter {
     bounds: KnowledgeGuardedBounds = this.limits.readback,
   ): Promise<KnowledgePrivateReviewProof> {
     return executeKnowledgePrivateReview(this.transport, this.binding, descriptor, reviewer, bounds);
+  }
+
+  approvePrivateEdit(
+    descriptor: KnowledgePrivateReviewDescriptor,
+    approvedBy: string,
+    reviewer: KnowledgePrivateEditReviewer,
+    bounds: KnowledgeGuardedBounds = this.limits.readback,
+  ): Promise<KnowledgePrivateEditApproval> {
+    return approveKnowledgePrivateEdit(
+      this.transport,
+      this.binding,
+      descriptor,
+      approvedBy,
+      reviewer,
+      bounds,
+    );
+  }
+
+  executeApproved(approval: KnowledgePrivateEditApproval): Promise<KnowledgeGuardedWriteResult> {
+    const materialized = materializeKnowledgePrivateEditApproval(approval);
+    if (!sameBinding(materialized.descriptor.binding, this.binding)) {
+      throw new KnowledgePrivateReviewError('private_edit_approval_invalid');
+    }
+    return this.executeDescriptor(materialized.descriptor, materialized.grant);
+  }
+
+  async executeApprovedPrivate(
+    approval: KnowledgePrivateEditApproval,
+  ): Promise<KnowledgePrivateResultDescriptor> {
+    return createKnowledgePrivateResultDescriptor({ kind: 'write', value: await this.executeApproved(approval) });
   }
 }
 

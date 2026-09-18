@@ -4,6 +4,7 @@ export declare const KNOWLEDGE_PRIVATE_INPUT_SCHEMA: "hasna.knowledge.private-in
 export declare const KNOWLEDGE_PRIVATE_TITLE_LOOKUP_SCHEMA: "hasna.knowledge.private-title-lookup.v1";
 export declare const KNOWLEDGE_PRIVATE_QUERY_SCHEMA: "hasna.knowledge.private-query.v1";
 export declare const KNOWLEDGE_PRIVATE_RESULT_SCHEMA: "hasna.knowledge.private-result.v1";
+export declare const KNOWLEDGE_PRIVATE_EDIT_APPROVAL_SCHEMA: "hasna.knowledge.private-edit-approval.v1";
 export declare const KNOWLEDGE_RELATIONS_SCHEMA: "hasna.knowledge.relations.v1";
 export declare const KNOWLEDGE_RELATIONS_METADATA_KEY: "hasna_knowledge_relations";
 export type KnowledgeAuthorityClassification = 'user_hosted' | 'hasna_saas';
@@ -293,6 +294,26 @@ export interface KnowledgeGuardedWriteEnvelope {
     deterministic_key: string;
     limits: KnowledgeGuardedLimits;
     payload: KnowledgeGuardedPayload;
+    /** Required for updates and forbidden for creates. The token is server-signed,
+     * exact-mutation scoped, revision/content bound, and short lived. */
+    review_approval: KnowledgePrivateEditApprovalGrant | null;
+}
+export interface KnowledgePrivateEditApprovalGrant {
+    contract: typeof KNOWLEDGE_GUARDED_WRITE_CONTRACT;
+    schema: typeof KNOWLEDGE_PRIVATE_EDIT_APPROVAL_SCHEMA;
+    approval_id: string;
+    review_request_digest: string;
+    mutation_deterministic_key: string;
+    binding_digest: string;
+    target_id: string;
+    expected_version: number;
+    expected_content_sha256: string;
+    approved_by: string;
+    /** Authenticated key/agent identity stamped by the server, never caller supplied. */
+    approved_actor: string;
+    expires_at: string;
+    /** Opaque HMAC capability. It crosses only the authenticated guarded request. */
+    token: string;
 }
 export type KnowledgeGuardedRecoveryStrategy = 'forward_repair' | 'receipt_scoped_compensation';
 export interface KnowledgeGuardedManifestRecovery {
