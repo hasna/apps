@@ -94,12 +94,12 @@ domain API URL/key.
 
 ### Unresolved public integrations — package remains incomplete
 
-**Multi-tenant authorization is NOT established.** The current server checks
-Calendar app scopes but does not bind `principal.tid` to organization queries.
-Adversarial tests reproduce cross-organization reads/deletes. Do not interpret
-HTTPS authentication as tenant isolation or approve this package for a shared
-multi-tenant deployment. See `TENANCY-GAP.md` in the source tree for required
-product/API decisions; no tenant mapping or administrative scope was invented.
+**Existing deployments require an explicit tenant upgrade.** The source now
+binds every hosted domain query to a provisioned authenticated tenant. Existing
+rows and keys are not assigned automatically; deployment remains gated on an
+audited ownership backfill, credential enrollment, and tenant-isolation proof.
+See `TENANCY-GAP.md` and the hosted tenant procedure in `MIGRATION.md`. Per-user
+RBAC and cross-tenant sharing remain unimplemented.
 
 - Embedded `events` and `channels` commands from `@hasna/events` still use
   that package's local event/channel/delivery store. They are distinct from
@@ -442,3 +442,16 @@ bun run src/mcp/index.ts --http --port 8803
 ## License
 
 Apache-2.0. See [LICENSE](./LICENSE).
+
+### Hosted tenant isolation
+
+Hosted requests require a tenant-scoped key and an explicitly provisioned active
+issuer tenant. Every domain record and relationship is isolated by that tenant;
+one issuer tenant can own multiple Calendar organizations. API scopes remain
+read/write authority across that tenant. Membership roles and visibility fields
+do not yet provide per-user RBAC.
+
+Existing installations must review the [tenant upgrade procedure](https://github.com/hasna/apps/blob/main/apps/calendar/MIGRATION.md#hosted-tenant-boundary-upgrade)
+before deploying this release. The migration requires PostgreSQL 16+, does not
+infer ownership of existing records, and does not grant legacy keys a default
+tenant. Unknown ownership fails closed.

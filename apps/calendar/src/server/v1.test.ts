@@ -12,7 +12,7 @@ const createAttendee = mock(async (input: Record<string, unknown>) => ({
 
 const dependencies = {
   getCloudVerifier: () => ({
-    authenticate: async () => ({ ok: true }),
+    authenticate: async () => ({ ok: true, principal: { tid: "calendar-test" } }),
   }) as never,
   getCloudStore: () => ({
     createCalendar,
