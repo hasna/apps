@@ -5,7 +5,7 @@ import { join } from "node:path";
 import type { ProfileClient } from "./profile-client.js";
 import type { ResolvedSkillProfile, ResolvedSkillSelection } from "../types/skill-selection.js";
 import { packSkillBundle } from "./skill-bundle.js";
-import { cacheSelectionBundle, readCachedSelection, readSelectionProfile, selectionBundlePath, type SelectionCacheOptions } from "./selection-cache.js";
+import { cacheSelectionBundle, readCachedSelection, readSelectionProfile, readSkillSession, selectionBundlePath, type SelectionCacheOptions } from "./selection-cache.js";
 import { loadSelectedSkill, syncSelectionProfile } from "./selection-resolver.js";
 import { buildSkillContext } from "./skill-context.js";
 import { parseSkillContextInput } from "../cli/commands/context.js";
@@ -192,6 +192,9 @@ describe("selected prompt context", () => {
     expect(child.selections[0]?.version).toBe("1.0.0");
     expect(child.selections[0]?.reason).toBe("subagent-inherit");
     expect(child.receipt.sessionId).toBe("session-one:child-one");
+    const parentReceipt = readSkillSession("session-one", { cacheDir })!, childReceipt = readSkillSession("session-one:child-one", { cacheDir })!;
+    expect(childReceipt).toMatchObject({ generation: 1, parent: { sessionId: "session-one", generation: parentReceipt.generation } });
+    expect(childReceipt.parent?.receiptSha256).toMatch(/^[a-f0-9]{64}$/);
   });
   test("native hook payloads preserve restore and child identity without storing prompts", () => {
     expect(parseSkillContextInput(JSON.stringify({ prompt: "review code", cwd: "/tmp/project", session_id: "one", agent_id: "child", hook_event_name: "SessionStart", source: "compact" }))).toMatchObject({ prompt: "review code", cwd: "/tmp/project", sessionId: "one", agentId: "child", restore: true });

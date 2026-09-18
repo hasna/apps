@@ -323,7 +323,8 @@ skills sessions reconcile <session-id> \
   --from-profile <old-profile> --from-revision <old-revision> \
   --receipt-sha256 <receipt-sha256> \
   --selection-profile <target-profile> --profile-revision <target-revision> --json
-# After reviewing that exact plan, repeat with --apply --plan-digest <digest>.
+# Within five minutes, repeat with --apply --plan-digest <digest> \
+#   --plan-issued-at <issuedAt> --plan-expires-at <expiresAt>.
 ```
 
 Reconciliation authenticates against the current target profile and refuses a
@@ -333,11 +334,17 @@ the original bytes and prepared replacement under
 receipt atomically. Loaded instructions are retained only when their exact
 authority, workspace, version and bundle digest still match. Existing child
 sessions and project locks keep their own pins; new children inherit the newly
-reviewed parent selection. No agent process is stopped or restarted.
+reviewed parent selection. Each new child receipt privately records the exact
+parent receipt hash and monotonic generation it inherited. Parent and child locks
+are acquired in deterministic path order, and the parent is re-read immediately
+before the child commit; any changed or ABA generation refuses the child write.
+No agent process is stopped or restarted.
 
 Use the same updated Skills installation for every process writing this cache.
 Session writers coordinate with reconciliation and refuse a stale write that
-would restore an earlier pin. A competing writer or surviving lock fails closed;
+would restore an earlier pin. Reviewed reconciliation approvals bind their
+`issuedAt` and `expiresAt` into the digest and expire after five minutes; after
+that replay boundary, prepare and review a new plan. A competing writer or surviving lock fails closed;
 do not delete a lock without reviewing its owning operation. If application
 reports an incomplete outcome, inspect `sessions show` and the preserved
 operation receipt before retrying. The archive contains both original and
@@ -732,7 +739,7 @@ of app folders, and `XDG_CONFIG_HOME` is not consulted at all.
 | `skills context <prompt> --selection-profile <id>` | | Resolve instructions matching the prompt and profile triggers |
 | `skills hook install --agent all --selection-profile <id>` | | Plan one CLI bridge plus supported native hooks; `--apply` installs it, then restart and trust the hooks |
 | `skills sessions show <id> --json` | | Inspect one session's exact profile revision and receipt hash without loading payloads |
-| `skills sessions reconcile <id> --from-profile <id> --from-revision <rev> --receipt-sha256 <sha> --selection-profile <id> --profile-revision <rev>` | | Plan an explicit migration of one live session; `--apply --plan-digest <digest>` preserves its old receipt and applies the reviewed replacement |
+| `skills sessions reconcile <id> --from-profile <id> --from-revision <rev> --receipt-sha256 <sha> --selection-profile <id> --profile-revision <rev>` | | Plan an explicit migration of one live session; `--apply --plan-digest <digest> --plan-issued-at <time> --plan-expires-at <time>` (within five minutes) preserves its old receipt and applies the reviewed replacement |
 | `skills hook agents --json` | | Report maintained adapters and explicit coverage limits |
 | `skills migrate native` | | Inventory native copies; `--apply` archives managed copies, with explicit `--include-unmanaged` and `--include-vendor` retirement options |
 | `skills pull --all --selection-profile <id>` | | With CLI loading active, refresh the selected profile into the verified cache |
