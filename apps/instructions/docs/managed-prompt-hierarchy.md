@@ -42,6 +42,7 @@ continue to map to `repo`; `machine-overlay` maps to `machine`; and
 | `codex` | Flattened `AGENTS.md`. |
 | `cursor` | Project-owned `.cursor/rules/*.mdc`. |
 | `opencode` | `AGENTS.md`, `opencode.json`, and `.hasna/instructions` fragments. |
+| `sumi` | Flattened `AGENTS.md` in the explicit resolved Sumi config directory or project root; no config instruction arrays. |
 | `aicopilot` | `AICOPILOT.md`, with optional `aicopilot.json` instructions in a later pass. |
 | `qwen` | Profile-scoped `QWEN.md` session render/apply output; known sync also tracks `~/.qwen/QWEN.md`, `~/.qwen/settings.json`, project `QWEN.md`, and `.qwen/settings.json`. Native hooks should be represented in settings when verified. |
 | `antigravity` | Project-owned `.agents/rules/*.md`, workspace MCP at `.agents/mcp_config.json`, and Google's current legacy-named global Antigravity files at `~/.gemini/GEMINI.md` and `~/.gemini/config/mcp_config.json`. |
@@ -100,8 +101,8 @@ The managed global prompt must include these rules:
 ## Dangerous Operation Guard
 
 `instructions init` and `bun run seed` also seed
-`dangerous-operation-guard-standard`, the managed rollout source for risky
-operation policy on sustained station01 coding agents.
+`dangerous-operation-guard-standard`, the reusable managed source for risky
+operation policy on explicitly selected supported coding-agent profiles.
 
 The guard covers Codewith, Codex, Claude Code, Qwen Code, OpenCode, Cursor, and
 Google Antigravity. Gemini CLI remains excluded. Codewith and Codex must use
@@ -121,8 +122,8 @@ explicitly managed wrapper/plugin fallback before hard enforcement is claimed.
   is rejected.
 - Codewith remains flattened unless the
   `HASNA_CONFIGS_CODEWITH_NATIVE_IMPORTS` gate or matching CLI flag is active.
-- `global-agent-rules-standard` and `dangerous-operation-guard-standard` are
-  seeded reference configs.
+- Reusable standard records are seeded without being implicitly bound to prompt
+  profiles; profile membership remains an explicit scope decision.
 - Tests cover layer ordering, provider output paths, Antigravity's
   12,000-character file limit, target coverage, and seeded policy content.
 

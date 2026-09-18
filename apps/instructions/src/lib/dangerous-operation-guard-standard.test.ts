@@ -153,12 +153,12 @@ describe("dangerous operation guard standard", () => {
     expect(antigravity.files[0]?.content).toContain("wrapper/plugin fallback");
   });
 
-  test("platform profiles link the guard standard when present", async () => {
+  test("platform profiles do not implicitly link the guard standard", async () => {
     const standard = await ensureDangerousOperationGuardStandardConfig(new LocalConfigStore(db));
     const profiles = await ensurePlatformProfiles(new LocalConfigStore(db));
 
     for (const profile of profiles) {
-      expect(getProfileConfigs(profile.id, db).map((config) => config.id)).toContain(standard.id);
+      expect(getProfileConfigs(profile.id, db).map((config) => config.id)).not.toContain(standard.id);
     }
   });
 });

@@ -34,7 +34,7 @@ async function captureError(work: Promise<unknown>): Promise<unknown> {
 describe("CalendarPgStore required foreign keys", () => {
   test.each([undefined, 42])("rejects invalid calendar org_id %p before querying Postgres", async (orgId) => {
     const calls: string[] = [];
-    const store = new CalendarPgStore(rejectingClient(calls));
+    const store = new CalendarPgStore(rejectingClient(calls), "calendar-test");
     const input = { name: "No org", org_id: orgId } as unknown as CreateCalendarInput;
 
     const thrown = await captureError(store.createCalendar(input));
@@ -46,7 +46,7 @@ describe("CalendarPgStore required foreign keys", () => {
 
   test.each([undefined, 42])("rejects invalid attendee event_id %p before querying Postgres", async (eventId) => {
     const calls: string[] = [];
-    const store = new CalendarPgStore(rejectingClient(calls));
+    const store = new CalendarPgStore(rejectingClient(calls), "calendar-test");
     const input = { email: "person@example.com", event_id: eventId } as unknown as CreateAttendeeInput;
 
     const thrown = await captureError(store.createAttendee(input));
@@ -69,7 +69,7 @@ describe("CalendarPgStore required calendar text columns", () => {
     "rejects invalid calendar name %p before querying Postgres",
     async (name) => {
       const calls: string[] = [];
-      const store = new CalendarPgStore(rejectingClient(calls));
+      const store = new CalendarPgStore(rejectingClient(calls), "calendar-test");
       const input = { name, org_id: "org-1" } as unknown as CreateCalendarInput;
 
       const thrown = await captureError(store.createCalendar(input));
@@ -85,7 +85,7 @@ describe("CalendarPgStore required calendar text columns", () => {
   // back to the slugified name.
   test.each([[42], [{}], [[]]])("rejects a non-string calendar slug %p before querying Postgres", async (slug) => {
     const calls: string[] = [];
-    const store = new CalendarPgStore(rejectingClient(calls));
+    const store = new CalendarPgStore(rejectingClient(calls), "calendar-test");
     const input = { name: "Has slug", org_id: "org-1", slug } as unknown as CreateCalendarInput;
 
     const thrown = await captureError(store.createCalendar(input));

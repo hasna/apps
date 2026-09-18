@@ -16,7 +16,7 @@ const TOOL_DOCS: Record<string, string> = {
   list_configs: "List configs. Params: category?, agent?, kind?, search?, limit?, cursor?, verbose?. Defaults to a paged compact envelope without content; use get_config for full content.",
   get_config: "Get a config by id or slug. Returns full config including content.",
   create_config: "Create a new config. Required: name, content, category. Optional: agent, target_path, outputs, kind, format, tags, description, is_template. Refuses when target_path is already tracked by another config (one target path, one row) — use update_config on the owning row, or delete_config first. kind:'reference' owns no target path and is exempt from that check, but is instead refused when its name (or a case/punctuation variant of it) already tracks another reference config.",
-  update_config: "Update a config by id or slug. Optional: content, name, tags, description, category, agent, target_path, outputs.",
+  update_config: "Update a config by id or slug. Optional: content, name, tags, description, category, agent, target_path, outputs, expected_version (positive integer; a mismatch refuses without changing the config or snapshots).",
   apply_config: "Apply a config through the shared ownership gate. Params: id_or_slug, dry_run?, verbose?. Returns results plus session-renderer-owned targets that were skipped.",
   sync_directory: "Sync a directory with the DB. Params: dir, direction ('from_disk'|'to_disk'). Returns sync result.",
   list_profiles: "List profiles. Params: limit?, cursor?, verbose?. Defaults to a paged compact envelope.",
@@ -46,7 +46,7 @@ const ALL_LEAN_TOOLS = [
   { name: "list_configs", inputSchema: { type: "object", properties: { category: { type: "string" }, agent: { type: "string" }, kind: { type: "string" }, search: { type: "string" }, limit: { type: "number" }, cursor: { type: "number" }, verbose: { type: "boolean" } } } },
   { name: "get_config", inputSchema: { type: "object", properties: { id_or_slug: { type: "string" } }, required: ["id_or_slug"] } },
   { name: "create_config", inputSchema: { type: "object", properties: { name: { type: "string" }, content: { type: "string" }, category: { type: "string" }, agent: { type: "string" }, target_path: { type: "string" }, outputs: { type: "array", items: { type: "object" } }, kind: { type: "string" }, format: { type: "string" }, tags: { type: "array", items: { type: "string" } }, description: { type: "string" }, is_template: { type: "boolean" } }, required: ["name", "content", "category"] } },
-  { name: "update_config", inputSchema: { type: "object", properties: { id_or_slug: { type: "string" }, content: { type: "string" }, name: { type: "string" }, tags: { type: "array", items: { type: "string" } }, description: { type: "string" }, category: { type: "string" }, agent: { type: "string" }, target_path: { type: "string" }, outputs: { type: "array", items: { type: "object" } } }, required: ["id_or_slug"] } },
+  { name: "update_config", inputSchema: { type: "object", properties: { id_or_slug: { type: "string" }, content: { type: "string" }, name: { type: "string" }, tags: { type: "array", items: { type: "string" } }, description: { type: "string" }, category: { type: "string" }, agent: { type: "string" }, target_path: { type: "string" }, outputs: { type: "array", items: { type: "object" } }, expected_version: { type: "integer", minimum: 1 } }, required: ["id_or_slug"] } },
   { name: "delete_config", inputSchema: { type: "object", properties: { id_or_slug: { type: "string" } }, required: ["id_or_slug"] } },
   { name: "apply_config", inputSchema: { type: "object", properties: { id_or_slug: { type: "string" }, dry_run: { type: "boolean" }, verbose: { type: "boolean" } }, required: ["id_or_slug"] } },
   { name: "sync_directory", inputSchema: { type: "object", properties: { dir: { type: "string" }, direction: { type: "string" } }, required: ["dir"] } },
@@ -205,6 +205,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       }
       case "update_config": {
         const c = await store.updateConfig(args["id_or_slug"] as string, {
+          expected_version: args["expected_version"] as number | undefined,
           content: args["content"] as string | undefined,
           name: args["name"] as string | undefined,
           tags: args["tags"] as string[] | undefined,

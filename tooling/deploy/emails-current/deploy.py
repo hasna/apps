@@ -8,8 +8,17 @@ import json
 import os
 from pathlib import Path
 import re
+import subprocess
 
 ROOT = Path(__file__).resolve().parent
+RELEVANT_PATHS = (
+    "apps/emails/**",
+    ".github/workflows/emails-current-server-deploy.yml",
+    ".github/workflows/emails-search-promotion.yml",
+    ".github/workflows/emails-search-promotion-execute.yml",
+    "tooling/deploy/emails-current/**",
+    "tooling/deploy/emails-search/**",
+)
 SEARCH = ROOT.parent / "emails-search" / "promotion.py"
 spec = importlib.util.spec_from_file_location("emails_search_promotion", SEARCH)
 promotion = importlib.util.module_from_spec(spec)
@@ -26,7 +35,10 @@ def read_reconciled(path, expected_sha, source):
     raw = path.read_bytes()
     require(hashlib.sha256(raw).hexdigest() == expected_sha, "RECONCILED_DIGEST")
     value = json.loads(raw)
-    require(value.get("schema") == "emails.promotion-reconciliation.v1" and value.get("sourceCommit") == source, "RECONCILED_SOURCE")
+    reconciliation_source = value.get("sourceCommit")
+    require(value.get("schema") == "emails.promotion-reconciliation.v1" and re.fullmatch(r"[0-9a-f]{40}", reconciliation_source or ""), "RECONCILED_SOURCE")
+    require(subprocess.run(["git", "merge-base", "--is-ancestor", reconciliation_source, source], stdin=subprocess.DEVNULL, capture_output=True, timeout=30).returncode == 0, "RECONCILED_SOURCE_NOT_ANCESTOR")
+    require(subprocess.run(["git", "diff", "--quiet", reconciliation_source, source, "--", *RELEVANT_PATHS], stdin=subprocess.DEVNULL, capture_output=True, timeout=30).returncode == 0, "RECONCILED_SCOPE_DRIFT")
     require(value.get("state") == "descendant_overlay_live_stable", "RECONCILED_STATE")
     descendant = value.get("descendant")
     service = value.get("service")

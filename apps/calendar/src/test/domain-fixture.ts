@@ -8,15 +8,15 @@ export function installDomainFixture(): () => void {
   const oldUrl = process.env.HASNA_CALENDAR_API_URL;
   const oldKey = process.env.HASNA_CALENDAR_API_KEY;
   process.env.HASNA_CALENDAR_API_URL = "https://calendar.example.test";
-  process.env.HASNA_CALENDAR_API_KEY = "fixture-key";
+  process.env.HASNA_CALENDAR_API_KEY = "example-fixture-key";
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const req = new Request(input, init);
     const url = new URL(req.url);
     if (url.origin !== "https://calendar.example.test") return original(input, init);
-    if (req.headers.get("x-api-key") !== "fixture-key" || init?.redirect !== "error") throw new Error("Fixture requires bound HTTPS auth.");
+    if (req.headers.get("x-api-key") !== "example-fixture-key" || init?.redirect !== "error") throw new Error("Fixture requires bound HTTPS auth.");
     return await handleV1Request(req, url, {
       getCloudStore: () => new LocalStore(),
-      getCloudVerifier: () => ({ authenticate: async () => ({ ok: true }) }),
+      getCloudVerifier: () => ({ authenticate: async () => ({ ok: true, principal: { tid: "calendar-test" } }) }),
     } as never) ?? new Response(null, { status: 404 });
   }) as typeof fetch;
   return () => {

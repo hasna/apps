@@ -1,4 +1,5 @@
 import type { CreateProfileInput, Profile, ProfileSelector, ProfileVariables } from "../types/index.js";
+import { ProfileNotFoundError } from "../types/index.js";
 import { resolveConfigStore, type ConfigStore } from "../data/config-store.js";
 import { PROJECT_DASHBOARD_PROFILE_VARIABLES } from "./project-dashboard-standard.js";
 
@@ -13,10 +14,9 @@ function profileHasSelectors(profile: Pick<Profile, "selectors">): boolean {
 export const PLATFORM_PROFILE_PRESETS: CreateProfileInput[] = [
   {
     name: "linux-arm64",
-    description: "Default Linux arm64 profile for linux-node-a/linux-node-b-style machines",
-    selectors: { os: ["linux"], arch: ["arm64"], hostnames: ["linux-node-a", "linux-node-b", "station01"] },
+    description: "Default reviewed instruction profile for Linux arm64",
+    selectors: { os: ["linux"], arch: ["arm64"] },
     variables: {
-      WORKSPACE_ROOT: "{{HOME_DIR}}/workspace",
       BUN_BIN_DIR: "{{HOME_DIR}}/.bun/bin",
       BUN_PATH: "{{BUN_BIN_DIR}}/bun",
       PATH_PREFIX: "{{BUN_BIN_DIR}}",
@@ -25,10 +25,9 @@ export const PLATFORM_PROFILE_PRESETS: CreateProfileInput[] = [
   },
   {
     name: "macos-arm64",
-    description: "Default macOS arm64 profile for macos-node-a/macos-node-b-style machines",
-    selectors: { os: ["macos"], arch: ["arm64"], hostnames: ["macos-node-a", "macos-node-b"] },
+    description: "Default reviewed instruction profile for macOS arm64",
+    selectors: { os: ["macos"], arch: ["arm64"] },
     variables: {
-      WORKSPACE_ROOT: "{{HOME_DIR}}/Workspace",
       BUN_BIN_DIR: "{{HOME_DIR}}/.bun/bin",
       BUN_PATH: "/opt/homebrew/bin/bun",
       PATH_PREFIX: "/opt/homebrew/bin:{{BUN_BIN_DIR}}",
@@ -38,13 +37,20 @@ export const PLATFORM_PROFILE_PRESETS: CreateProfileInput[] = [
 ];
 
 export async function ensurePlatformProfiles(store: ConfigStore = resolveConfigStore()): Promise<Profile[]> {
-  const configs = await store.listConfigs();
   const ensured: Profile[] = [];
 
-  for (const preset of PLATFORM_PROFILE_PRESETS) {
+  // Resolve all profile reads before writing; a failed hosted lookup is not
+  // evidence that a profile is absent or permission to create a replacement.
+  const existingProfiles = await Promise.all(PLATFORM_PROFILE_PRESETS.map(async (preset) => {
+    try { return await store.getProfile(preset.name); }
+    catch (error) { if (error instanceof ProfileNotFoundError) return null; throw error; }
+  }));
+
+  for (const [index, preset] of PLATFORM_PROFILE_PRESETS.entries()) {
     let profile: Profile;
-    try {
-      profile = await store.getProfile(preset.name);
+    const existing = existingProfiles[index];
+    if (existing) {
+      profile = existing;
       const selectors = mergeProfileSelectors(preset.selectors, profile.selectors);
       const variables = mergeProfileVariables(preset.variables, profile.variables);
       if (
@@ -57,13 +63,13 @@ export async function ensurePlatformProfiles(store: ConfigStore = resolveConfigS
           variables,
         });
       }
-    } catch {
+    } else {
       profile = await store.createProfile(preset);
     }
 
-    for (const config of configs) {
-      await store.addConfigToProfile(profile.id, config.id);
-    }
+    // Source membership is an explicit review decision. Initialization must
+    // not promote provider, project or role rules into global defaults.
+    // Existing reviewed memberships are retained without adding any source.
     ensured.push(profile);
   }
 

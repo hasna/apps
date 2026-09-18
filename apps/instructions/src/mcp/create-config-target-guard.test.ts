@@ -96,6 +96,24 @@ function touch(path: string): void {
 }
 
 describe("MCP create_config duplicate-target-path guard", () => {
+  it("passes expected_version to the real update handler and preserves row/history after conflict", async () => {
+    await withClient(async (call) => {
+      const created = await call("create_config", { name: "MCP Conditional", category: "rules", content: "initial", kind: "reference" });
+      const id = JSON.parse(created.text).id;
+      const accepted = await call("update_config", { id_or_slug: id, content: "accepted", expected_version: 1 });
+      expect(accepted.isError).toBe(false);
+      expect(JSON.parse(accepted.text).version).toBe(2);
+      const store = resolveConfigStore();
+      const row = await store.getConfig(id);
+      const snapshots = await store.listSnapshots(id);
+      const rejected = await call("update_config", { id_or_slug: id, content: "rejected", expected_version: 1 });
+      expect(rejected.isError).toBe(true);
+      expect(rejected.text).toContain("version conflict");
+      expect(await store.getConfig(id)).toEqual(row);
+      expect(await store.listSnapshots(id)).toEqual(snapshots);
+    });
+  });
+
   it("refuses a second row on a target path an existing row already owns", async () => {
     await withClient(async (call) => {
       const first = await call("create_config", {

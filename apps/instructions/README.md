@@ -83,6 +83,24 @@ envelope. Its top-level fields are `configs`, `profiles`, `drift`, `secrets`,
 `secrets.policy` is `redacted_on_ingest`. Run `instructions report` without
 `--json` for the human-readable report.
 
+### Conditional config updates
+
+Read the current config version before preparing an edit, then pass that
+`expected_version` to `updateConfig` (store/public SDK), `update_config` (MCP), or:
+
+```bash
+instructions add ./rule.md --kind reference --name example-rule --update --expected-version 7
+```
+
+Guarded clients use `POST /v1/configs/:id/conditional-update`, which requires
+`expected_version`. The generated SDK also exposes `conditionalUpdateConfig` for
+this operation. An older server returns 404 without mutation; clients never fall
+back to an unconditional update. A version mismatch returns HTTP 409 with code
+`CONFIG_VERSION_CONFLICT`, changing neither the config nor its snapshots. Refresh
+and review the newer version before trying again. Calls without a precondition
+retain their existing behavior. New servers also accept `expected_version` on
+PATCH/PUT; use the dedicated conditional route when server capabilities are unknown.
+
 ## Package-Manager Secret Guard
 
 `instructions package-manager-scan` blocks package-manager credential ingress without
@@ -361,12 +379,19 @@ upgrade.
 
 `instructions session plan` and `instructions session apply` render
 OpenIdentities and instruction sources into provider-native files for Claude,
-Codex, Cursor, OpenCode, Codewith, Qwen, aicopilot, and Google Antigravity.
+Codex, Cursor, OpenCode, Sumi, Codewith, Qwen, aicopilot, and Google Antigravity.
 The old Google agent target is removed; Antigravity is the only Google coding
 agent render target. Antigravity workspace rules are rendered to
 `.agents/rules/*.md`; its current global rules and MCP files use Google's
 legacy-named `~/.gemini/GEMINI.md` and `~/.gemini/config/mcp_config.json`
 paths but remain owned by the `antigravity` target.
+
+Sumi renders one flattened `AGENTS.md`. Pass its actual config directory from
+`sumi debug paths config` as `--target-home`, or use `--project-root` for
+repository instructions. Global plans return `SUMI_CONFIG_DIR`; project plans
+do not change the global config environment. No OpenCode config or fragment
+imports are written. See [session rendering](docs/session-rendering.md) for
+capability limits and examples.
 
 Qwen Code session rendering writes `QWEN.md` instructional context with
 `QWEN_HOME` pointing at the rendered profile home. Known config sync also
@@ -536,14 +561,16 @@ and prior on-box-only evidence must be explicitly reconciled before use.
 
 ## Machine-aware Profiles
 
-`instructions init` seeds two platform profiles:
+`instructions init` seeds two empty platform profiles:
 
-- `linux-arm64` for `linux-node-a` / `linux-node-b`
-- `macos-arm64` for `macos-node-a` / `macos-node-b`
+- `linux-arm64` for Linux arm64
+- `macos-arm64` for macOS arm64
 
-These profiles resolve machine variables like `{{WORKSPACE_ROOT}}`,
-`{{BUN_BIN_DIR}}`, `{{BUN_PATH}}`, and `{{PATH_PREFIX}}`, so synced configs can be
-portable across Linux and macOS arm64 machines.
+The public presets contain no fleet hostnames or workspace paths. They resolve
+portable tool variables such as `{{BUN_BIN_DIR}}`, `{{BUN_PATH}}`, and
+`{{PATH_PREFIX}}`. Instruction membership is never bulk-copied from the config
+registry; bind reviewed provider/project/role sources explicitly before compiling
+a prompt profile.
 
 They also include the project channel variable used by agent-managed project
 workflows:

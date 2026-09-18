@@ -12,7 +12,7 @@
  *
  * Opt in by pointing `CALENDAR_TEST_DATABASE_URL` at a THROWAWAY database:
  *
- *   CALENDAR_TEST_DATABASE_URL=postgres://user@localhost:5432/calendar_test?sslmode=verify-full \
+ *   CALENDAR_TEST_DATABASE_URL=postgres://example_user@localhost:5432/calendar_test?sslmode=verify-full \
  *     bun test src/server/v1.pg.test.ts
  *
  * Skipped when the variable is absent so `bun test` stays runnable with no
@@ -49,9 +49,10 @@ describe.skipIf(!DSN)("/v1 foreign keys against a real Postgres", () => {
   beforeAll(async () => {
     client = createCalendarCloudQueryClient(DSN!, { max: 2 });
     for (const stmt of schemaStatements()) await client.query(stmt);
-    const store = new CalendarPgStore(client);
+    await client.query("INSERT INTO calendar_tenants(id) VALUES ('calendar-test') ON CONFLICT DO NOTHING");
+    const store = new CalendarPgStore(client, "calendar-test");
     dependencies = {
-      getCloudVerifier: () => ({ authenticate: async () => ({ ok: true }) }) as never,
+      getCloudVerifier: () => ({ authenticate: async () => ({ ok: true, principal: { tid: "calendar-test" } }) }) as never,
       getCloudStore: () => store as never,
     };
   });

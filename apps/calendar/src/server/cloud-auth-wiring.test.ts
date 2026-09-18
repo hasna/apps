@@ -33,7 +33,7 @@
  * a keyless request must fail closed through it.
  */
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import type { ApiKeyVerifier, ApiKeyStore } from "@hasna/contracts/auth";
+import { mintApiKey, type ApiKeyVerifier, type ApiKeyStore } from "@hasna/contracts/auth";
 import { closeCloud, getCloudVerifier, resolveSigningSecret, type CalendarApiKeyVerifier, type CalendarApiKeyStore } from "./cloud.js";
 
 // Structural conformance (hasna/apps#1782): the local spellings this package
@@ -103,6 +103,15 @@ describe("real /v1 verifier wiring (src/server/cloud.ts)", () => {
   it("refuses to construct without a database URL (fail-closed)", () => {
     process.env.API_KEY_SIGNING_SECRET = TEST_SIGNING_SECRET;
     expect(() => getCloudVerifier()).toThrow(/database url/i);
+  });
+
+  it("the real verifier rejects an untenanted key before a database lookup", async () => {
+    setConfiguredCloudEnv();
+    const key = mintApiKey({ app: "calendar", scopes: ["calendar:*"], signingSecret: TEST_SIGNING_SECRET });
+    const decision = await getCloudVerifier().authenticate({ "x-api-key": key.token });
+    expect(decision.ok).toBe(false);
+    expect(decision.status).toBe(403);
+    if (!decision.ok) expect(decision.reason).toBe("tenant_required");
   });
 
   it("a keyless /v1 request fails closed with 401 through the real verifier", async () => {

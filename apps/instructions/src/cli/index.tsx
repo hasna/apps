@@ -15,9 +15,12 @@ import { importConfigs } from "../lib/import.js";
 import { extractTemplateVars } from "../lib/template.js";
 import { detectMachineContext, resolveProfileVariables } from "../lib/machine.js";
 import { applySessionRender, restoreSessionRenderSnapshot } from "../lib/session-apply.js";
+import { assertHostedProfileBindings, normalizeSessionHostedProfileSelector, refreshSessionRender } from "../lib/session-refresh.js";
 import type { ClaudeOwnedAuthority } from "../lib/session-authority.js";
-import { normalizeSessionInstructionSourceId, planSessionRender, resolveSessionPath, sourceFromConfig, sourceFromFilePath, sourcesFromIdentityExport, SESSION_INSTRUCTION_LAYERS, SESSION_RENDER_TOOLS, type SessionInstructionLayer, type SessionInstructionSource, type SessionRenderFile, type SessionRenderPlan, type SessionRenderTool } from "../lib/session-render.js";
+import { normalizeSessionInstructionSourceId, planSessionRender, resolveSessionPath, sourceFromConfig, sourceFromFilePath, sourcesFromIdentityExport, CODEWITH_NATIVE_IMPORTS_ENV, SESSION_INSTRUCTION_LAYERS, SESSION_RENDER_TOOLS, type SessionInstructionLayer, type SessionInstructionSource, type SessionRenderFile, type SessionRenderPlan, type SessionRenderTool } from "../lib/session-render.js";
 import { getRawStoreRoot } from "../lib/raw-store-root.js";
+import { assertInstructionSource } from "../lib/instruction-source-policy.js";
+import { ConfigNotFoundError, ProfileNotFoundError } from "../types/index.js";
 import { selectsInstructionsLocalStore } from "../lib/local-opt-in.js";
 import { normalizeProfileAssetBinding } from "../lib/asset-plan.js";
 import { normalizeProfileConfigBinding, planProfileSessionRender, type InstructionGraphRenderPlan } from "../lib/instruction-graph.js";
@@ -61,6 +64,7 @@ import {
 } from "../lib/provider-context.js";
 import { DEFAULT_LIST_LIMIT, paginate, parseLimit, truncateMiddle, truncateText } from "../lib/compact-output.js";
 import type { BoundedReadPage, Config, ConfigAgent, ConfigCategory, ConfigFormat, ConfigIdentity, ConfigKind, ConfigSummary, Profile, ProfileSelector, ProfileVariables } from "../types/index.js";
+import { validateExpectedConfigVersion } from "../types/index.js";
 
 import { createRequire } from "node:module";
 const pkg = createRequire(import.meta.url)("../../package.json") as { version: string };
@@ -287,7 +291,9 @@ async function collectSessionSources(
 
   for (const value of opts.config ?? []) {
     const { layer, id } = parseLayeredReference(value);
-    sources.push(sourceFromConfig(await store.getConfig(id), sources.length, layer));
+    const config = await store.getConfig(id);
+    assertInstructionSource(config);
+    sources.push(sourceFromConfig(config, sources.length, layer));
   }
 
   for (const value of opts.identityExport ?? []) {
@@ -343,6 +349,7 @@ async function buildSessionRenderPlan(
     assetSurface?: string;
     assetScope?: "global" | "project" | "session";
     allowAssetInstallers?: boolean;
+    checkGlobalCoverage?: boolean;
     /** Inject the cached station-profile source (default true; --no-station-profile disables). */
     stationProfile?: boolean;
   },
@@ -374,8 +381,9 @@ async function buildSessionRenderPlan(
   }
   const profile = await store.getProfile(opts.compileProfile);
   const configs = await store.getProfileConfigs(profile.id);
-  const bindings = await store.getProfileConfigBindings(profile.id);
-  const assetBindings = await store.getProfileAssetBindings(profile.id);
+  const bindings = await store.getProfileConfigBindings(profile.id, { requireExplicit: store.mode === "api" });
+  if (store.mode === "api") assertHostedProfileBindings(profile.id, configs, bindings);
+  const assetBindings = await store.getProfileAssetBindings(profile.id, { requireExplicit: store.mode === "api" });
   const assetConfigs = await Promise.all(
     [...new Set(assetBindings.map((binding) => binding.source_config_id))].map((id) => store.getConfigById(id)),
   );
@@ -387,6 +395,24 @@ async function buildSessionRenderPlan(
     targetHome: opts.targetHome,
     projectRoot: opts.projectRoot,
     sessionId: opts.sessionId,
+    ...(store.mode === "api" && store.v1BaseUrl ? {
+      refreshSelector: normalizeSessionHostedProfileSelector({
+        schema: "hasna.instructions.hosted-profile-selector/v1",
+        authority: store.v1BaseUrl,
+        profileId: profile.id,
+        providerVersion: opts.providerVersion,
+        ...(opts.providerVariant ? { providerVariant: opts.providerVariant } : {}),
+        ...(opts.model ? { model: opts.model } : {}),
+        ...(opts.path ? { path: opts.path } : {}),
+        manual: opts.manual ?? [],
+        codewithNativeImports: opts.codewithNativeImports === true || process.env[CODEWITH_NATIVE_IMPORTS_ENV] === "1" || process.env[CODEWITH_NATIVE_IMPORTS_ENV] === "true",
+        allowEmptySources: opts.allowEmptySources === true,
+        stationProfile: opts.stationProfile !== false,
+        checkGlobalCoverage: opts.checkGlobalCoverage === true,
+        ...(opts.assetSurface ? { assetSurface: opts.assetSurface } : {}),
+        ...(opts.assetScope ? { assetScope: opts.assetScope } : {}),
+      }),
+    } : {}),
     codewithNativeImports: opts.codewithNativeImports,
     allowEmptySources: opts.allowEmptySources,
     configs,
@@ -892,7 +918,13 @@ program
   .option("-k, --kind <kind>", "kind: file|reference", "file")
   .option("--template", "mark as template (has {{VAR}} placeholders)")
   .option("--update", "if a config already owns this path, update that row in place instead of refusing")
+  .option("--expected-version <version>", "with --update, require the stored version to match atomically")
   .action(async (filePath, opts) => {
+    const expectedVersion = opts.expectedVersion === undefined ? undefined : Number(opts.expectedVersion);
+    validateExpectedConfigVersion(expectedVersion);
+    if (expectedVersion !== undefined && !opts.update) {
+      throw new Error("--expected-version requires --update");
+    }
     const abs = resolve(filePath);
     if (!existsSync(abs)) {
       console.error(chalk.red(`File not found: ${abs}`));
@@ -987,10 +1019,13 @@ program
       // instead, so a content edit via `add --update` is recoverable via
       // `instructions snapshot list/restore` even before anything is ever
       // applied or rendered again.
-      if (content !== target!.content) {
+      // Conditional updates must not create a snapshot before the atomic predicate
+      // succeeds. The store writes the accepted version's snapshot in that operation.
+      if (content !== target!.content && expectedVersion === undefined) {
         await store.createSnapshot(target!.id, target!.content, target!.version);
       }
       config = await store.updateConfig(target!.id, {
+        expected_version: expectedVersion,
         content,
         format: storedFmt,
         is_template: (opts.template ?? false) || isTemplate,
@@ -1008,6 +1043,9 @@ program
       return;
     }
 
+    if (expectedVersion !== undefined) {
+      throw new Error("--expected-version requires an existing config; no config was created");
+    }
     config = await store.createConfig({
       name,
       kind: (opts.kind as ConfigKind) ?? "file",
@@ -1681,7 +1719,7 @@ sessionCmd.command("plan")
   .description("Produce a dry-run render plan for profile-scoped instruction injection")
   .requiredOption("--tool <tool>", `target tool (${SESSION_RENDER_TOOLS.join("|")})`)
   .requiredOption("--profile <profile>", "account/profile name that owns the rendered instruction home")
-  .option("--target-home <path>", "native instruction home; Grok: GROK_HOME, Devin: user config directory (global AGENTS.md unless --project-root is set)")
+  .option("--target-home <path>", "native instruction home; Sumi: resolved config from `sumi debug paths config`; Grok: GROK_HOME; Devin: user config directory (global AGENTS.md unless --project-root is set)")
   .option("--project-root <path>", "repository root for project-scoped adapters such as Cursor")
   .option("--session-id <id>", "session id to include in the manifest")
   .option("--source <layer:id=path>", `instruction source file; layers: ${SESSION_SOURCE_LAYER_HELP}`, collectOption, [])
@@ -1762,7 +1800,7 @@ sessionCmd.command("apply")
   .description("Write a session render plan to its managed target home or explicit project root")
   .requiredOption("--tool <tool>", `target tool (${SESSION_RENDER_TOOLS.join("|")})`)
   .requiredOption("--profile <profile>", "account/profile name that owns the rendered instruction home")
-  .option("--target-home <path>", "native instruction home; Grok: GROK_HOME, Devin: user config directory (global AGENTS.md unless --project-root is set)")
+  .option("--target-home <path>", "native instruction home; Sumi: resolved config from `sumi debug paths config`; Grok: GROK_HOME; Devin: user config directory (global AGENTS.md unless --project-root is set)")
   .option("--project-root <path>", "repository root for project-scoped adapters such as Cursor")
   .option("--session-id <id>", "session id to include in the manifest")
   .option("--source <layer:id=path>", `instruction source file; layers: ${SESSION_SOURCE_LAYER_HELP}`, collectOption, [])
@@ -1783,6 +1821,9 @@ sessionCmd.command("apply")
   .option("--no-station-profile", "do not inject the cached station-profile source")
   .option("--dry-run", "preview writes and conflicts without writing")
   .option("--force", "overwrite existing unmanaged files")
+  .option("--adopt-file <relativepath=sha256>", "adopt one reviewed unmanaged generated target only at its exact observed SHA256; repeatable", collectOption, [])
+  .option("--reconcile-file <relativepath=sha256>", "reconcile one reviewed managed drifted target at its exact observed SHA256; requires --expected-manifest-sha256", collectOption, [])
+  .option("--expected-manifest-sha256 <sha256>", "require the previously reviewed manifest preimage to match exactly before applying")
   .option("--json", "output apply JSON")
   .action(async (opts) => {
     try {
@@ -1822,7 +1863,14 @@ sessionCmd.command("apply")
         return;
       }
       const ownedClaudeAuthorities = tool === "claude" ? await loadOwnedClaudeAuthorities(store) : undefined;
-      const result = applySessionRender(plan, { dryRun: opts.dryRun, force: opts.force, ownedClaudeAuthorities });
+      const parsePreimages = (values: string[], option: string) => values.map((value) => {
+        const separator = value.lastIndexOf("=");
+        if (separator <= 0) throw new Error(`${option} requires relativepath=sha256.`);
+        return { relativePath: value.slice(0, separator), sha256: value.slice(separator + 1) };
+      });
+      const adoptFiles = parsePreimages(opts.adoptFile as string[], "--adopt-file");
+      const reconcileFiles = parsePreimages(opts.reconcileFile as string[], "--reconcile-file");
+      const result = applySessionRender(plan, { dryRun: opts.dryRun, force: opts.force, adoptFiles, reconcileFiles, expectedManifestSha256: opts.expectedManifestSha256, ownedClaudeAuthorities });
       if (opts.json) {
         printJson({
           ...result,
@@ -1857,12 +1905,36 @@ sessionCmd.command("apply")
         if (globalCoverage.complete) console.log(chalk.dim(`global source coverage: ${globalCoverage.expectedSlugs.length}/${globalCoverage.expectedSlugs.length} complete`));
       }
       if (result.conflicts.length > 0) {
-        console.error(chalk.red(`Conflicts: ${result.conflicts.length}. Re-run with --force to overwrite unmanaged files.`));
+        console.error(chalk.red(`Conflicts: ${result.conflicts.length}. Review and import existing instructions before adopting each exact preimage with --adopt-file.`));
         process.exitCode = 1;
       }
     } catch (e) {
       console.error(chalk.red(formatCliError(e)));
       process.exit(1);
+    }
+  });
+
+sessionCmd.command("refresh")
+  .description("Fetch the recorded hosted profile, recompile and safely update a managed target; unchanged output is not rewritten")
+  .requiredOption("--target-home <path>", "existing managed global or project target containing its hosted profile selector")
+  .option("--dry-run", "fetch authoritative sources and preview without writing")
+  .option("--json", "output refresh receipt without instruction content")
+  .action(async (opts) => {
+    try {
+      const result = await refreshSessionRender({ targetHome: resolveSessionPath(opts.targetHome), store: resolveConfigStore(), dryRun: opts.dryRun });
+      if (opts.json) printJson(result);
+      else {
+        console.log(`${result.status}: ${result.targetHome}`);
+        console.log(`hosted profile: ${result.selector.profileId}`);
+        console.log(`source hash: ${result.sourceHash}`);
+        if (result.apply.snapshotPath) console.log(`snapshot: ${result.apply.snapshotPath}`);
+      }
+      if (result.status === "blocked") process.exitCode = 1;
+    } catch (error) {
+      const message = formatCliError(error);
+      if (opts.json) printJson({ status: "failed", error: message });
+      else console.error(chalk.red(message));
+      process.exitCode = 1;
     }
   });
 
@@ -2716,8 +2788,9 @@ program
 // ── init ──────────────────────────────────────────────────────────────────────
 program
   .command("init")
-  .description("First-time setup: sync all known configs, create default profile")
+  .description("First-time setup: create default profiles; local file import into a hosted authority is explicit")
   .option("--force", "delete existing DB and start fresh")
+  .option("--import-local", "explicitly import known local config files into the configured hosted authority")
   .action(async (opts) => {
     const store = resolveConfigStore();
     if (opts.force) {
@@ -2740,20 +2813,22 @@ program
     }
     console.log(chalk.bold("@hasna/instructions — initializing\n"));
 
-    // Sync known configs
-    const result = await syncKnown({ store });
-    console.log(chalk.green("✓") + ` Synced: +${result.added} updated:${result.updated} unchanged:${result.unchanged}`);
-    if (result.skipped.length > 0) {
-      console.log(chalk.dim("  skipped: " + result.skipped.join(", ")));
+    if (store.mode === "local" || opts.importLocal) {
+      const result = await syncKnown({ store });
+      console.log(chalk.green("✓") + ` Synced: +${result.added} updated:${result.updated} unchanged:${result.unchanged}`);
+      if (result.skipped.length > 0) console.log(chalk.dim("  skipped: " + result.skipped.join(", ")));
+    } else {
+      console.log(chalk.dim("Hosted authority retained; use --import-local for an intentional local-file migration."));
     }
 
     // Add reference docs
     const refs = [
-      { slug: "workspace-structure", name: "Workspace Structure", category: "workspace" as const, content: "# Workspace Structure\n\nSee ~/.claude/rules/workspace.md for full conventions.", desc: "~/Workspace/ hierarchy and naming" },
-      { slug: "secrets-schema", name: "Secrets Schema", category: "secrets_schema" as const, content: "# .secrets Schema\n\nLocation: ~/.secrets (sourced by ~/.zshrc)\nFormat: export KEY_NAME=\"value\"\n\nKeys: ANTHROPIC_API_KEY, OPENAI_API_KEY, EXA_API_KEY, NPM_TOKEN, GITHUB_TOKEN", desc: "Shape of ~/.secrets (no values)" },
+      { slug: "workspace-structure", name: "Workspace Structure", category: "workspace" as const, content: "# Workspace Structure\n\nResolve repositories and task worktrees through the configured repository manager. Use the configured scratch workspace for temporary execution artifacts. Keep durable project records in their owning application and follow the current project conventions.", desc: "Repository, worktree, and execution scratch responsibilities" },
+      { slug: "secrets-schema", name: "Secrets Schema", category: "secrets_schema" as const, content: "# Credential References\n\nStore credential values in the configured Secrets authority. Application configuration records contain credential names and supported resolver references only. Resolve values through the approved consuming application at execution time; never embed values in instruction content, generated prompts, or shell profiles.", desc: "Secret reference and runtime resolution conventions; no credential values" },
     ];
     for (const ref of refs) {
-      try { await store.getConfig(ref.slug); } catch {
+      try { await store.getConfig(ref.slug); } catch (error) {
+        if (!(error instanceof ConfigNotFoundError)) throw error;
         await store.createConfig({ name: ref.name, category: ref.category, agent: "global", format: "markdown", content: ref.content, kind: "reference", description: ref.desc });
       }
     }
@@ -2763,11 +2838,10 @@ program
     await ensureProjectDashboardStandardConfig(store);
 
     // Create default profile
-    try { await store.getProfile("my-setup"); } catch {
-      const p = await store.createProfile({ name: "my-setup", description: "Default profile with all known configs" });
-      const allConfigs = await store.listConfigs();
-      for (const c of allConfigs) await store.addConfigToProfile(p.id, c.id);
-      console.log(chalk.green("✓") + ` Created profile "my-setup" with ${allConfigs.length} configs`);
+    try { await store.getProfile("my-setup"); } catch (error) {
+      if (!(error instanceof ProfileNotFoundError)) throw error;
+      await store.createProfile({ name: "my-setup", description: "Instruction profile; add explicitly reviewed and scoped source bindings" });
+      console.log(chalk.green("✓") + ' Created empty profile "my-setup"; bind reviewed instruction sources explicitly.');
     }
 
     const machineProfiles = await ensurePlatformProfiles(store);

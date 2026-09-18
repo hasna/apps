@@ -3,7 +3,7 @@
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { verifyApiKey, ApiKeyStore, type ApiKeyVerifier, type AuthQueryClient } from "@hasna/contracts/auth";
+import { verifyApiKey, ApiKeyStore, type ApiKeyVerifier, type AuthQueryClient, canonicalizeTenantId, isValidTenantId } from "@hasna/contracts/auth";
 import { createCalendarCloudQueryClient, type CalendarCloudQueryClient } from "./cloud-client.js";
 import { CalendarPgStore } from "./pg-store.js";
 import { validateDatabaseUrl, readPostgresCa } from "./database-config.js";
@@ -107,7 +107,6 @@ export function resolveSigningSecret(env: NodeJS.ProcessEnv = process.env): stri
 }
 
 let cachedClient: CalendarCloudQueryClient | null = null;
-let cachedStore: CalendarPgStore | null = null;
 let cachedKeyStore: ApiKeyStore | null = null;
 let cachedVerifier: ApiKeyVerifier | null = null;
 let schemaEnsured: Promise<void> | null = null;
@@ -126,10 +125,18 @@ function getClient(): CalendarCloudQueryClient {
 }
 
 /** The Postgres store backing every `/v1` handler. */
-export function getCloudStore(): CalendarPgStore {
-  if (cachedStore) return cachedStore;
-  cachedStore = new CalendarPgStore(getClient());
-  return cachedStore;
+export async function getCloudStore(tenantId: string): Promise<CalendarPgStore | null> {
+  return resolveCalendarTenantStore(getClient(), tenantId);
+}
+
+/** Active tenant resolution shared by the hosted wiring and PostgreSQL tests. */
+export async function resolveCalendarTenantStore(client: CalendarCloudQueryClient, tenantId: string): Promise<CalendarPgStore | null> {
+  if (!isValidTenantId(tenantId)) return null;
+  const tid = canonicalizeTenantId(tenantId);
+  const provisioned = await client.query(
+    "SELECT id FROM calendar_tenants WHERE id=$1 AND enabled=TRUE", [tid],
+  );
+  return provisioned.rows.length === 1 ? new CalendarPgStore(client, tid) : null;
 }
 
 /** Bridge the repo-native `{ rows }` client to the contracts kit's AuthQueryClient. */
@@ -177,6 +184,7 @@ export function getCloudVerifier(): CalendarApiKeyVerifier {
     // 0.3.6 /v1 503 incident (row I38-00755, deploy-oss-fleet-0823a confirm
     // 725517) was exactly that throw surfacing as 503 on every business route.
     keyStatus: store.keyStatus,
+    requireTenant: true,
   });
   return cachedVerifier;
 }
@@ -185,10 +193,10 @@ function migrationsDir(): string {
   return join(dirname(fileURLToPath(import.meta.url)), "..", "..", "migrations");
 }
 
-/** The committed relational schema SQL (split into individual statements). */
+/** Baseline statements followed by one atomic ownership migration unit. */
 export function schemaStatements(): string[] {
   const sql = readFileSync(join(migrationsDir(), "0001_calendar_schema.sql"), "utf8");
-  return splitSqlStatements(sql);
+  return [...splitSqlStatements(sql), readFileSync(join(migrationsDir(), "0003_tenant_boundary.sql"), "utf8")];
 }
 
 function splitSqlStatements(sql: string): string[] {
@@ -200,8 +208,8 @@ function splitSqlStatements(sql: string): string[] {
 
 /**
  * Ensure the remote schema exists: the calendar relational tables plus the
- * contracts api-keys table. Idempotent (CREATE ... IF NOT EXISTS); run once per
- * process and by the migration runner. NEVER drops or rewrites existing tables.
+ * contracts api-keys table. Explicit and repeatable; the ownership migration
+ * adds constraints atomically without assigning or rewriting existing rows.
  */
 export async function ensureCloudSchema(): Promise<void> {
   if (schemaEnsured) return schemaEnsured;
@@ -225,7 +233,6 @@ export async function pingCloud(): Promise<boolean> {
 export async function closeCloud(): Promise<void> {
   if (cachedClient) await cachedClient.close();
   cachedClient = null;
-  cachedStore = null;
   cachedKeyStore = null;
   cachedVerifier = null;
   schemaEnsured = null;

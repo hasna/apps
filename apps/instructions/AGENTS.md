@@ -1,133 +1,82 @@
-# AGENTS.md — How AI Agents Should Use @hasna/instructions
+# Working with Instructions
 
-## MCP Setup
+Follow the repository root AGENTS.md and its release rules. This package stores
+versioned configuration and renders reviewed instruction sources into native
+provider files. Stored settings, scripts, execution policies and instruction
+prose are different surfaces; a complete machine profile is not a prompt profile.
 
-```bash
-configs mcp install --claude --profile standard  # 13 tools
-configs mcp install --claude --profile minimal    # 3 tools (lowest context cost)
+## Authority and changes
+
+Use the installed `instructions` CLI, command-based `instructions-mcp --stdio`,
+or the generated `@hasna/instructions/sdk` client. Resolve the configured
+hosted authority through the shared credential provider. Never print credentials.
+An authentication or reachability failure must not switch a managed deployment
+to a local database. Explicit local mode exists for isolated OSS use and tests;
+it does not authorize a managed-fleet fallback.
+
+Read the full current record before editing it. Preserve its immutable identity,
+metadata, version history and scoped output targets. Export the complete domain
+before a migration; a backup does not replace an atomic version precondition.
+Do not automatically sync changed disk files into the hosted authority: disk
+changes can be stale, generated, or owned by another process. Review and reconcile
+source changes explicitly.
+
+## Prompt generation
+
+Create curated profiles containing reviewed `rules` in text or Markdown format.
+Resolve templates before injection. Retired records, executable settings and
+provider execution policies must stay out of prompt bodies. Declare provider,
+role, project, path and activation scope; do not promote a finance or other
+project rule to global merely because its source appeared on one station.
+
+Use `instructions session plan` and `instructions session apply --dry-run`
+before activation. The graph compiler validates source eligibility, provider
+capabilities, dependencies, replacements and conditional fallbacks. Existing
+ownership manifests, exact preimage checks, drift detection and snapshots protect
+unrelated files. Never use a blanket force overwrite to resolve unknown drift.
+Generated files are projections of hosted sources, not a second source of truth.
+
+Sumi uses flattened `AGENTS.md` in its actual resolved configuration directory
+or repository. Supply an explicit target. A global render can emit
+`SUMI_CONFIG_DIR`; a project render must not reroute its global configuration.
+Do not assume that OpenCode's config instruction array is consumed by Sumi.
+Preserve the harness's built-in system prompt and dynamic tool guidance.
+Prove the native loader or actual assembled request; a file existing is not
+proof that a running session adopted it. Preserve active sessions.
+
+## Commands and reference
+
+Use current `--help` rather than historical command or tool counts:
+
+```sh
+instructions list --help
+instructions show --help
+instructions add --help
+instructions profile --help
+instructions session --help
+instructions export --help
+instructions package-manager-scan --fail-on-findings .
 ```
 
-## Quick Reference — MCP Tools
+See [CLI](docs/cli.md), [MCP](docs/mcp.md), [HTTP API](docs/http-api.md),
+[session rendering](docs/session-rendering.md), and
+[storage](docs/storage-and-sync.md). `configs` is a compatibility alias; prefer
+`instructions` in new documentation.
 
-| Tool | Profile | What it does |
-|------|---------|-------------|
-| `get_status` | minimal | Orientation: total configs, drifted count, templates, DB path |
-| `get_config` | minimal | Get full config content by id or slug |
-| `sync_known` | minimal | Pull known configs from disk into DB |
-| `list_configs` | standard | List configs with category/agent/kind/search filters |
-| `create_config` | standard | Store a new config |
-| `update_config` | standard | Update content/tags/metadata |
-| `apply_config` | standard | Write config to its target_path on disk |
-| `render_template` | standard | Fill {{VAR}} placeholders with real values |
-| `scan_secrets` | standard | Audit for unredacted secrets (optionally fix) |
-| `list_profiles` | standard | List named config bundles |
-| `apply_profile` | standard | Apply all configs in a profile to disk |
-| `search_tools` | standard | Keyword search across tool descriptions |
-| `describe_tools` | standard | Get full docs for specific tools |
-| `delete_config` | full | Delete a config by id or slug |
-| `sync_directory` | full | Sync an arbitrary directory (legacy) |
-| `sync_project` | full | Sync curated project-scoped config files |
-| `get_snapshot` | full | Get historical version of a config |
-| `register_agent`, `heartbeat`, `set_focus`, `list_agents` | full | Ephemeral in-process agent state |
-| `send_feedback` | full | Store feedback through the active store |
+## Engineering and verification
 
-## Workflows
+Core types live in `src/types`; store adapters in `src/lib`; isolated SQLite
+compatibility in `src/db`; authenticated PostgreSQL routes in `src/server`;
+CLI/MCP in their respective directories; generated SDK in `src/sdk`.
+The hosted server never falls back to SQLite. Backups are a recovery plane,
+not an authority selector.
 
-### Session Start — Check Config Health
-```
-1. get_status → check drifted count
-2. If drifted > 0: sync_known → pull latest from disk
-3. get_config("agent-workflow-template") → load canonical workflow
-```
+Use the root-pinned Bun version. Run the affected tests, package typecheck and
+build, then the root-required checks for the final release head. Tests must use
+isolated synthetic data and never a fleet credential or live application store.
+Preserve path confinement, symlink refusal, ownership, drift and restore tests.
+Keep secrets and private operational prompt payloads out of source and tarballs.
 
-### Restore Secrets on New Machine
-```
-1. Import backup: configs import backup.tar.gz (CLI)
-2. Keep ~/.npmrc env-backed: //registry.npmjs.org/:_authToken=${NPM_TOKEN}
-3. Load NPM_TOKEN from the shell, CI secret store, or an approved vault at runtime
-4. Run configs package-manager-scan --home --fail-on-findings before committing
-```
-
-Do not render or write a literal npm token into `~/.npmrc`. The safe home
-credential flow stores only the scoped registry line plus `${NPM_TOKEN}` and
-keeps the token value in the runtime environment or secret manager.
-
-### Sync Project Configs
-```
-1. sync_known(agent="claude") → sync all Claude Code configs
-2. Or via CLI: configs sync --project /path/to/repo
-```
-
-### Audit for Leaked Secrets
-```
-1. scan_secrets() → returns findings with var names and line numbers
-2. scan_secrets(fix=true) → redacts in-place, converts to templates
-```
-
-## Config Categories
-
-| Category | What's stored |
-|----------|--------------|
-| `agent` | settings.json, keybindings.json, config.toml |
-| `rules` | CLAUDE.md, AGENTS.md, AICOPILOT.md, .agents/rules/*.md, rules/*.md |
-| `mcp` | ~/.claude.json (MCP server entries) |
-| `shell` | .zshrc |
-| `git` | .gitconfig |
-| `tools` | .npmrc |
-| `secrets_schema` | Shape of .secrets (keys only, no values) |
-| `workspace` | Directory structure conventions |
-
-## Environment Variables
-
-| Var | Default | Purpose |
-|-----|---------|---------|
-| `HASNA_INSTRUCTIONS_API_KEY` | unset | Client API key — resolved through the shared `@hasna/contracts` chain (tier 5, below the Keychain item `hasna.credentials.instructions.api-key` and `~/.hasna/instructions/config/credentials`) |
-| `HASNA_INSTRUCTIONS_API_URL` | unset | Client `/v1` base URL — tier above the Keychain `api-url` item and the credentials file; defaults to the fleet gateway `https://api.hasna.com/instructions` once a credential resolves |
-| `HASNA_INSTRUCTIONS_LOCAL` | unset | Explicit opt-in for the on-box SQLite store (`1`); honoured only when no authority/credential is configured, and every local run says `local mode` on stderr |
-| `HASNA_INSTRUCTIONS_DB_PATH` | `~/.hasna/instructions/instructions.db` | Local SQLite location (explicit override) |
-| `HASNA_INSTRUCTIONS_S3_BUCKET` | unset | Optional private bucket for immutable export backups; never selects a DB or client transport |
-| `HASNA_INSTRUCTIONS_S3_PREFIX` | `instructions/` | Traversal-safe object prefix |
-| `HASNA_INSTRUCTIONS_AWS_REGION` | `us-east-1` | S3 region |
-| `HASNA_INSTRUCTIONS_S3_ENDPOINT` | unset | Optional HTTPS S3-compatible origin (HTTP loopback only) |
-| `INSTRUCTIONS_PROFILE` | `full` | MCP tool profile (minimal/standard/full) |
-| `MCP_HTTP_PORT` | `8853` | Loopback MCP HTTP port |
-| `INSTRUCTIONS_PORT` | `3457` | HTTP API server port (`PORT` takes priority) |
-| `INSTRUCTIONS_HOST` | `localhost` | HTTP API bind address (`HOST` takes priority) |
-| `HASNA_CONFIGS_HOME` | `~/.hasna/configs` | Session-render storage root |
-
-## Secret Redaction
-
-Configs automatically redacts secrets before storing. Patterns detected:
-- Key names: `*_API_KEY`, `*_TOKEN`, `*_SECRET`, `*_PASSWORD`, `*_CREDENTIAL`, `*_AUTH*`
-- Value patterns: npm tokens, GitHub tokens, Anthropic/OpenAI keys, AWS keys, JWTs, Slack tokens
-
-Redacted values become `{{VAR_NAME}}` template placeholders, except `.npmrc`
-auth tokens, which are converted to npm's `${NPM_TOKEN}` environment reference
-so home and repo package-manager configs do not store literal tokens.
-
-## Package-Manager Secret Guard
-
-Use `configs package-manager-scan --fail-on-findings .` in repo CI or
-pre-commit hooks. Add `--home` for local operator checks. The guard scans repo
-`.npmrc`, home `.npmrc`, Bun config, lockfiles, and shell profiles, and prints
-only paths, line numbers, rule names, surfaces, and tracked status.
-
-Bun release-age quarantine must remain enabled. `minimumReleaseAgeExcludes`
-should contain only exact `@hasna/<package>` names; do not use wildcard or
-third-party excludes.
-
-## Constraints
-
-- Local DB is SQLite at `~/.hasna/instructions/instructions.db` by default.
-- Known sync uses a curated set of files and rule directories, not a recursive
-  home-directory walk.
-- MCP HTTP binds to `127.0.0.1`; `instructions-serve` binds to localhost unless
-  configured otherwise.
-- `instructions-serve` exposes authenticated `/v1`, not the removed `/api`
-  surface, and does not mount MCP. Without PostgreSQL it reports an
-  unconfigured backend and `/ready` returns 503; it never serves local SQLite.
-- S3 is an adjunct immutable backup plane. `instructions storage ...` never
-  changes SQLite/PostgreSQL/HTTP authority selection.
-- `instructions migrate-legacy --confirm-local` is a dry-run by default;
-  `--apply` creates an owner-only destination backup and migrates transactionally.
-- Session/project renderers reject path escapes and symlinked managed paths.
+Publish only through the root's changeset, task-worktree, PR and per-package npm
+release process. The SDK ships in the same package; do not invent a separate
+SDK release or use `bun publish`. Public scope and artifact scans still apply.

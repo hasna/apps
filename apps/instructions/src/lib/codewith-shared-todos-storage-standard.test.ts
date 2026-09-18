@@ -83,7 +83,7 @@ describe("Codewith shared Todos storage standard", () => {
     expect(stored.version).toBe(2);
   });
 
-  test("repairs missing policy links on every existing operational profile", async () => {
+  test("does not broaden the policy into existing profiles without an explicit binding", async () => {
     const store = new LocalConfigStore(db);
     const profiles = await Promise.all([
       store.createProfile({ name: "live-codewith" }),
@@ -94,17 +94,18 @@ describe("Codewith shared Todos storage standard", () => {
     const standard = await ensureCodewithSharedTodosStorageStandardConfig(store);
 
     for (const profile of profiles) {
-      expect(getProfileConfigs(profile.id, db).map((config) => config.id)).toContain(standard.id);
+      expect(getProfileConfigs(profile.id, db).map((config) => config.id)).not.toContain(standard.id);
     }
   });
 
-  test("applies and independently verifies a fresh live-codewith session render", async () => {
+  test("applies and independently verifies a fresh explicitly bound live-codewith session render", async () => {
     const store = new LocalConfigStore(db);
     const profile = await store.createProfile({
       name: "live-codewith",
       description: "Fresh live Codewith policy verification fixture",
     });
-    await ensureCodewithSharedTodosStorageStandardConfig(store);
+    const standard = await ensureCodewithSharedTodosStorageStandardConfig(store);
+    await store.addConfigToProfile(profile.id, standard.id);
 
     const selection = selectProfileConfigsForSessionRender(getProfileConfigs(profile.id, db), "codewith");
     expect(selection.sources[0]?.nonOverridable).toBe(true);
@@ -153,12 +154,12 @@ describe("Codewith shared Todos storage standard", () => {
     });
   });
 
-  test("platform profiles link the managed Codewith storage standard", async () => {
+  test("platform profiles do not implicitly link the managed Codewith storage standard", async () => {
     const standard = await ensureCodewithSharedTodosStorageStandardConfig(new LocalConfigStore(db));
     const profiles = await ensurePlatformProfiles(new LocalConfigStore(db));
 
     for (const profile of profiles) {
-      expect(getProfileConfigs(profile.id, db).map((config) => config.id)).toContain(standard.id);
+      expect(getProfileConfigs(profile.id, db).map((config) => config.id)).not.toContain(standard.id);
     }
   });
 });

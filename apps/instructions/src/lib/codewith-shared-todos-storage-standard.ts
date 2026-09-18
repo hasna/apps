@@ -1,3 +1,5 @@
+import { ConfigNotFoundError } from "../types/index.js";
+import { isRetiredInstructionSource } from "./instruction-source-policy.js";
 import type { Config } from "../types/index.js";
 import { resolveConfigStore, type ConfigStore } from "../data/config-store.js";
 
@@ -69,6 +71,7 @@ export async function ensureCodewithSharedTodosStorageStandardConfig(
   let config: Config;
   try {
     const existing = await store.getConfig(CODEWITH_SHARED_TODOS_STORAGE_STANDARD_SLUG);
+    if (isRetiredInstructionSource(existing)) return existing;
     if (
       existing.content !== input.content
       || existing.description !== input.description
@@ -82,14 +85,13 @@ export async function ensureCodewithSharedTodosStorageStandardConfig(
     } else {
       config = existing;
     }
-  } catch {
+  } catch (error) {
+    if (!(error instanceof ConfigNotFoundError)) throw error;
     config = await store.createConfig(input);
   }
 
-  // Unlike optional references, this policy must follow every operational profile.
-  // Provider filtering keeps it out of non-Codewith renders after profile selection.
-  for (const profile of await store.listProfiles()) {
-    await store.addConfigToProfile(profile.id, config.id);
-  }
+  // Profile membership is a separate authorization decision. Seeding or
+  // refreshing a reusable source must not silently broaden it into every
+  // Codewith profile. Callers bind the reviewed source explicitly.
   return config;
 }

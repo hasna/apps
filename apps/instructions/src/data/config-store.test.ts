@@ -414,6 +414,25 @@ describe("CloudConfigStore CRUD mapping (over the contracts transport)", () => {
     expect(m.calls[0].body).toEqual({ content: "new" });
   });
 
+  test("conditional update forwards expected_version and does not retry a conflict", async () => {
+    const m = fakeStorageClient(() => ({ status: 409, json: { error: "version conflict", code: "CONFIG_VERSION_CONFLICT" } }));
+    const store = new CloudConfigStore(m.client);
+    await expect(store.updateConfig("demo", { content: "new", expected_version: 1 })).rejects.toMatchObject({ status: 409 });
+    expect(m.calls).toHaveLength(1);
+    expect(m.calls[0]).toMatchObject({ method: "POST", path: "/configs/demo/conditional-update" });
+    expect(m.calls[0].body).toEqual({ content: "new", expected_version: 1 });
+  });
+
+  test("conditional update fails closed against an older server without PATCH fallback", async () => {
+    const m = fakeStorageClient((call) => call.path.endsWith("/conditional-update")
+      ? { status: 404, json: { error: "unknown config action" } }
+      : { json: { config: { ...SAMPLE, content: "unconditional mutation" } } });
+    const store = new CloudConfigStore(m.client);
+    await expect(store.updateConfig("demo", { content: "new", expected_version: 1 })).rejects.toMatchObject({ status: 404 });
+    expect(m.calls).toHaveLength(1);
+    expect(m.calls[0]).toMatchObject({ method: "POST", path: "/configs/demo/conditional-update" });
+  });
+
   test("deleteConfig -> DELETE; 404 -> throws", async () => {
     const m = fakeStorageClient((c) => (c.path.endsWith("/gone") ? { status: 404 } : { json: { deleted: true } }));
     const store = new CloudConfigStore(m.client);

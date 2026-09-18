@@ -9,6 +9,8 @@ import {
   type BoundedProfileIdentityPage,
   type BoundedProfilePage,
   type BoundedSnapshotPage,
+  type Config,
+  type UpdateConfigInput,
   type ConfigIdentity,
   type ConfigSummary,
   type ConfigSnapshot,
@@ -168,6 +170,20 @@ function normalizeLegacyPage<T>(
 export class InstructionsV1Client extends GeneratedInstructionsV1Client {
   constructor(options: GeneratedInstructionsV1ClientOptions) {
     super(options);
+  }
+
+  override async updateConfig(id: string, body: UpdateConfigInput, init?: RequestInit): Promise<{ config?: Config }> {
+    if (body.expected_version !== undefined) {
+      return this.conditionalUpdateConfig(id, { ...body, expected_version: body.expected_version }, init);
+    }
+    return super.updateConfig(id, body, init);
+  }
+
+  override async putConfig(id: string, body: UpdateConfigInput, init?: RequestInit): Promise<{ config?: Config }> {
+    if (body.expected_version !== undefined) {
+      return this.conditionalUpdateConfig(id, { ...body, expected_version: body.expected_version }, init);
+    }
+    return super.putConfig(id, body, init);
   }
 
   override async listConfigs(
