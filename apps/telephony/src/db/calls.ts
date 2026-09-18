@@ -42,7 +42,7 @@ export function getCall(id: string, db?: Database): Call | null {
 }
 
 export function listCalls(
-  filters?: { agent_id?: string; project_id?: string; direction?: CallDirection; limit?: number },
+  filters?: { agent_id?: string; project_id?: string; direction?: CallDirection; limit?: number; offset?: number },
   db?: Database,
 ): Call[] {
   const d = db || getDatabase();
@@ -54,7 +54,9 @@ export function listCalls(
   if (filters?.direction) { clauses.push("direction = ?"); params.push(filters.direction); }
 
   const where = clauses.length ? ` WHERE ${clauses.join(" AND ")}` : "";
-  return (d.prepare(`SELECT * FROM calls${where} ORDER BY created_at DESC LIMIT ?`).all(...params, filters?.limit || 50) as CallRow[]).map(rowToCall);
+  const limit = filters?.limit || 50;
+  const offset = filters?.offset || 0;
+  return (d.prepare(`SELECT * FROM calls${where} ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`).all(...params, limit, offset) as CallRow[]).map(rowToCall);
 }
 
 export function updateCallStatus(id: string, status: CallStatus, extra?: { duration?: number; recording_url?: string; transcription?: string; object_key?: string | null; sha256?: string | null }, db?: Database): void {

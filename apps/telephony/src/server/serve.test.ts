@@ -412,6 +412,24 @@ describe("REST and Twilio safety gates", () => {
   });
 });
 
+describe("local call pagination", () => {
+  it("applies limit and offset with stable non-overlapping pages", async () => {
+    startIsolatedServer();
+    const { createCall } = await import("../db/calls.js");
+    for (let i = 0; i < 45; i += 1) createCall({ direction: "inbound", from_number: `+1000000${String(i).padStart(4, "0")}`, to_number: "+12222222222" });
+    const { createServer } = await import("./serve.js");
+    server = createServer(0);
+    const read = async (offset: number) => {
+      const response = await fetch(`http://127.0.0.1:${server!.port}/api/calls?limit=20&offset=${offset}`, { headers: authHeaders() });
+      expect(response.status).toBe(200);
+      return await response.json() as Array<{ id: string }>;
+    };
+    const first = await read(0); const second = await read(20); const third = await read(40);
+    expect(first).toHaveLength(20); expect(second).toHaveLength(20); expect(third).toHaveLength(5);
+    expect(new Set([...first, ...second, ...third].map((call) => call.id)).size).toBe(45);
+  });
+});
+
 describe("server-backed read routing", () => {
   const apiUrlEnv = ["HASNA", "TELEPHONY", "API", "URL"].join("_");
   const apiKeyEnv = ["HASNA", "TELEPHONY", "API", "KEY"].join("_");
