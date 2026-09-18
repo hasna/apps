@@ -1,9 +1,12 @@
+import { useDefaultTestTimeout } from "../test-preload.js";
 import { expect, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { registerRemoteCustomerTools } from "./remote-customer-tools.js";
 import { listMcpToolContracts } from "../lib/mcp-contracts.js";
+
+useDefaultTestTimeout();
 
 test("MCP checkout schema and protocol retain the caller key across explicit recovery only", async () => {
   const savedFetch = globalThis.fetch;

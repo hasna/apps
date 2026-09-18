@@ -1,5 +1,8 @@
+import { useDefaultTestTimeout } from "../test-preload.js";
 import { afterEach, expect, test } from "bun:test";
 import { RemoteCreditCheckoutError, RemoteRequestError, RemoteSkillsClient } from "./remote-client.js";
+
+useDefaultTestTimeout();
 const original = globalThis.fetch;
 afterEach(() => { globalThis.fetch = original; });
 const key = "checkout-request-0001", packId = "credits_100";
