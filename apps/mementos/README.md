@@ -1,9 +1,8 @@
 # @hasna/mementos
 
 Persistent memory for AI agents, available as a CLI, MCP server, REST service,
-and TypeScript library. Mementos stores memories in local SQLite by default and
-can route clients to a self-hosted PostgreSQL-backed service over an authenticated
-HTTP API.
+and TypeScript library. Hosted clients use the authenticated Mementos HTTP API;
+local SQLite is available only through an explicit local-mode opt-in.
 
 [![npm](https://img.shields.io/npm/v/@hasna/mementos)](https://www.npmjs.com/package/@hasna/mementos)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
@@ -28,10 +27,11 @@ The package installs three binaries:
 
 ## Quick start
 
-Local mode needs no service or database configuration. The first command creates
+Local mode must be selected explicitly. The first command after the opt-in creates
 and migrates `~/.hasna/mementos/mementos.db`.
 
 ```bash
+export HASNA_MEMENTOS_LOCAL=1
 mementos save project-stack "Bun, TypeScript, SQLite" \
   --scope shared --category fact
 mementos recall project-stack
@@ -62,18 +62,25 @@ Human-readable list and search commands are compact and paginated by default.
 Use `--limit` with `--cursor` or `--offset`, `--verbose` for wider snippets, and
 `mementos show <id>` for a full record.
 
-JSON `list` and `history` are also bounded by default. They emit minified
-`{ memories, _meta }` page receipts: list returns 20 compact rows, history
-returns 10, `_meta.next_cursor` continues without overlap, and the default byte
-budget is 32 KiB. Add `--full` for full objects on a bounded page. Complete
-traversal requires `--all` (optionally combined with `--full`) and fails closed
-above 5,000 rows or 1 MiB.
+Historical `--json` and `--format json` collection reads remain compatible:
+they emit full bare arrays and, without `--limit`, traverse the complete result.
+Use explicit `--agent-json` when a token-bounded page receipt is wanted. Agent
+JSON defaults to 20 compact list rows or 10 compact history rows, includes
+`_meta.next_cursor`, and has a 32 KiB byte budget. `--full`, `--all`, and
+`--max-bytes` are receipt-mode controls and require `--agent-json`; exhaustive
+mode fails closed above 5,000 rows or 1 MiB.
+
+Agent JSON uses offset pagination. Stable ID tie-breakers prevent overlap for
+equal timestamps and importance while the result set is unchanged; writes
+between page requests can shift offsets, so restart traversal when a stable
+snapshot is required.
 
 ```bash
-mementos list --format json
-mementos list --format json --cursor 20
-mementos list --format json --full --limit 5
-mementos history --json --all
+mementos list --json                         # compatible full bare array
+mementos list --agent-json                   # bounded receipt page
+mementos list --agent-json --cursor 20
+mementos list --agent-json --full --limit 5
+mementos history --agent-json --all
 mementos search "deploy" --verbose
 mementos storage mode --json
 ```

@@ -135,8 +135,7 @@ describe("mementos list never leaks credential-shaped keys on stdout", () => {
 
     const { stdout, exitCode } = await runCli(env, "list", "--format", "json");
     expect(exitCode).toBe(0);
-    const payload = JSON.parse(stdout) as { memories: Array<Record<string, unknown>> };
-    const parsed = payload.memories;
+    const parsed = JSON.parse(stdout) as Array<Record<string, unknown>>;
     expect(Array.isArray(parsed)).toBe(true);
 
     // The credential-shaped keys must NEVER reach stdout.

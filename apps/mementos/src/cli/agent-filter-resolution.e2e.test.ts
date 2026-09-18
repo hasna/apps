@@ -138,7 +138,7 @@ describe("list --agent resolves a registered NAME, not only an id", () => {
     const byName = await runCli("--json", "list", "--agent", AGENT_A);
     expect(byId.exitCode).toBe(0);
     expect(byName.exitCode).toBe(0);
-    const ids = (j: string) => (JSON.parse(j) as { memories: Array<{ id: string }> }).memories.map((m) => m.id).sort();
+    const ids = (j: string) => (JSON.parse(j) as Array<{ id: string }>).map((m) => m.id).sort();
     expect(ids(byName.stdout)).toEqual(ids(byId.stdout));
     expect(ids(byName.stdout).length).toBeGreaterThan(0);
   }, TEST_TIMEOUT_MS);
@@ -186,8 +186,7 @@ describe("an unresolvable --agent is announced instead of returning a silent zer
     const r = await runCli("--json", "list", "--agent", BOGUS_AGENT);
     expect(r.exitCode).toBe(0);
     expect(() => JSON.parse(r.stdout)).not.toThrow();
-    expect((JSON.parse(r.stdout) as { memories: unknown[]; _meta: { complete: boolean } }).memories).toEqual([]);
-    expect((JSON.parse(r.stdout) as { _meta: { complete: boolean } })._meta.complete).toBe(true);
+    expect(JSON.parse(r.stdout)).toEqual([]);
     expect(r.stderr.toLowerCase()).toContain("no agent named");
   }, TEST_TIMEOUT_MS);
 });
@@ -207,8 +206,8 @@ describe("NEGATIVE CONTROL: resolution must not widen the query", () => {
     const unfiltered = await runCli("--json", "list");
     expect(filtered.exitCode).toBe(0);
     expect(unfiltered.exitCode).toBe(0);
-    const nFiltered = (JSON.parse(filtered.stdout) as { memories: unknown[] }).memories.length;
-    const nUnfiltered = (JSON.parse(unfiltered.stdout) as { memories: unknown[] }).memories.length;
+    const nFiltered = (JSON.parse(filtered.stdout) as unknown[]).length;
+    const nUnfiltered = (JSON.parse(unfiltered.stdout) as unknown[]).length;
     expect(nUnfiltered).toBeGreaterThan(0); // the comparison is meaningful
     expect(nFiltered).toBe(0);
   }, TEST_TIMEOUT_MS);

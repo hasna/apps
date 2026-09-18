@@ -4,6 +4,7 @@ import { listMemoryHistoryPage } from "../../db/memories.js";
 import { redactMemoryForOutput } from "../../lib/redact.js";
 import {
   DEFAULT_SEARCH_LIMIT,
+  outputJson,
   colorScope,
   colorCategory,
   makeHandleError,
@@ -13,6 +14,7 @@ import {
   truncateText,
   collectPagedRows,
   getOutputFormat,
+  type GlobalOpts,
 } from "../helpers.js";
 import {
   STRUCTURED_PAGE_MAX_ROWS,
@@ -29,19 +31,25 @@ export function registerHistoryCommand(program: Command): void {
   program
     .command("history")
     .description("List memories sorted by most recently accessed")
-    .option("--limit <n>", `Max results (default: ${DEFAULT_SEARCH_LIMIT}, JSON hard page max: ${STRUCTURED_PAGE_MAX_ROWS})`, parseInt)
+    .option("--limit <n>", `Max results (agent JSON page max: ${STRUCTURED_PAGE_MAX_ROWS})`, parseInt)
     .option("--offset <n>", "Offset for pagination", parseInt)
     .option("--cursor <n>", "Cursor offset for the next page", parseInt)
     .option("--verbose", "Show wider memory snippets")
-    .option("--all", `Exhaust JSON results from offset zero (hard max: ${STRUCTURED_ALL_MAX_ROWS} rows)`)
-    .option("--full", "Emit full memory objects in JSON instead of compact projections")
-    .option("--max-bytes <n>", `JSON response byte ceiling (hard max: ${STRUCTURED_ALL_MAX_BYTES})`, parseInt)
+    .option("--agent-json", "Output a bounded, receipt-bearing JSON page")
+    .option("--all", `Exhaust agent JSON results from offset zero (hard max: ${STRUCTURED_ALL_MAX_ROWS} rows)`)
+    .option("--full", "Emit full memory objects in agent JSON instead of compact projections")
+    .option("--max-bytes <n>", `Agent JSON response byte ceiling (hard max: ${STRUCTURED_ALL_MAX_BYTES})`, parseInt)
     .action((opts) => {
       try {
+        const globalOpts = program.opts<GlobalOpts>();
         const format = getOutputFormat(program);
+        const receiptMode = Boolean(opts.agentJson);
         const isJson = format === "json";
-        if (!isJson && (opts.all || opts.full || opts.maxBytes !== undefined)) {
-          throw new Error("--all, --full, and --max-bytes require JSON output");
+        if (!receiptMode && (opts.all || opts.full || opts.maxBytes !== undefined)) {
+          throw new Error("--all, --full, and --max-bytes require --agent-json receipt mode");
+        }
+        if (receiptMode && globalOpts.format !== undefined && globalOpts.format !== "json") {
+          throw new Error("--agent-json cannot be combined with a non-JSON --format");
         }
         if (opts.all && opts.limit !== undefined) {
           throw new Error("--all cannot be combined with --limit");
@@ -51,11 +59,18 @@ export function registerHistoryCommand(program: Command): void {
         const all = Boolean(opts.all);
         const detail: StructuredMemoryDetail = opts.full ? "full" : "compact";
         const limit = requestedLimit === undefined
-          ? DEFAULT_SEARCH_LIMIT
-          : positiveIntOrDefault(requestedLimit, DEFAULT_SEARCH_LIMIT);
-        if (isJson && limit > STRUCTURED_PAGE_MAX_ROWS) {
+          ? receiptMode
+            ? DEFAULT_SEARCH_LIMIT
+            : isJson
+              ? undefined
+              : DEFAULT_SEARCH_LIMIT
+          : positiveIntOrDefault(
+              requestedLimit,
+              receiptMode ? DEFAULT_SEARCH_LIMIT : isJson ? 20 : DEFAULT_SEARCH_LIMIT,
+            );
+        if (receiptMode && limit !== undefined && limit > STRUCTURED_PAGE_MAX_ROWS) {
           throw new Error(
-            `--limit cannot exceed the hard page ceiling of ${STRUCTURED_PAGE_MAX_ROWS}; use --all for a bounded exhaustive read`,
+            `--limit cannot exceed the agent JSON page ceiling of ${STRUCTURED_PAGE_MAX_ROWS}; use --all for a bounded exhaustive read`,
           );
         }
         const offset = cursorOrOffset(opts.cursor, opts.offset) ?? 0;
@@ -81,25 +96,30 @@ export function registerHistoryCommand(program: Command): void {
             `Exhaustive structured output exceeds the hard safety limit of ${STRUCTURED_ALL_MAX_ROWS} rows; use paginated JSON output instead`,
           );
         }
-        const memories = collected.slice(0, target);
+        const memories = target === undefined ? collected : collected.slice(0, target);
 
         // Read-path redaction (todos e12c7659): project the display copy once
         // before JSON or human output so stored credential-shaped text cannot
         // reach stdout while coordination metadata remains usable.
         const sanitized = memories.map(redactMemoryForOutput);
 
-        if (isJson) {
+        if (receiptMode) {
           process.stdout.write(structuredMemoryOutput({
             memories: sanitized,
             receipt: "mementos.history.page.v1",
             offset,
-            limit,
+            limit: limit ?? DEFAULT_SEARCH_LIMIT,
             sourceHasMore: hasMore,
             all,
             detail,
             maxBytes: structuredMaxBytes(opts.maxBytes, { all, detail }),
             history: true,
           }));
+          return;
+        }
+
+        if (isJson) {
+          outputJson(sanitized);
           return;
         }
 
@@ -127,11 +147,11 @@ export function registerHistoryCommand(program: Command): void {
         }
         printPageHint({
           shown: sanitized.length,
-          limit,
+          limit: limit ?? sanitized.length,
           offset,
           hasMore,
           command: "mementos history",
-          detailHint: "use mementos show <id> for full details or --json --full for full objects",
+          detailHint: "use mementos show <id> for full details, --json for the compatible full array, or --agent-json for a bounded receipt",
         });
       } catch (e) {
         handleError(e);

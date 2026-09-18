@@ -8,6 +8,7 @@ import { redactMemoryForOutput } from "../../lib/redact.js";
 import {
   resolveAgentFilter,
   DEFAULT_COMPACT_LIMIT,
+  outputJson,
   outputYaml,
   getOutputFormat,
   formatMemoryLine,
@@ -46,6 +47,7 @@ interface StructuredPageMeta {
   truncation_reason: "limit" | "cursor" | "max_bytes" | null;
   omitted_from_page: number;
   next_arguments: Record<string, unknown> | null;
+  continuation_scope: "unchanged_snapshot";
 }
 
 interface StructuredPageEnvelope {
@@ -155,10 +157,11 @@ function makeStructuredEnvelope(args: {
         : {
             cursor: nextCursor,
             limit: args.limit,
-            format: "json",
+            agent_json: true,
             ...(args.detail === "full" ? { full: true } : {}),
             max_bytes: args.maxBytes,
           },
+      continuation_scope: "unchanged_snapshot",
     },
   });
 }
@@ -225,9 +228,16 @@ export function structuredMemoryOutput(args: {
   throw new Error(`Structured output metadata exceeds --max-bytes=${args.maxBytes}`);
 }
 
-function assertStructuredFlags(opts: Record<string, unknown>, isJson: boolean): void {
-  if (!isJson && (opts.all || opts.full || opts.maxBytes !== undefined)) {
-    throw new Error("--all, --full, and --max-bytes require JSON output");
+function assertReceiptFlags(
+  opts: Record<string, unknown>,
+  receiptMode: boolean,
+  requestedFormat: string | undefined,
+): void {
+  if (!receiptMode && (opts.all || opts.full || opts.maxBytes !== undefined)) {
+    throw new Error("--all, --full, and --max-bytes require --agent-json receipt mode");
+  }
+  if (receiptMode && requestedFormat !== undefined && requestedFormat !== "json") {
+    throw new Error("--agent-json cannot be combined with a non-JSON --format");
   }
   if (opts.all && opts.limit !== undefined) {
     throw new Error("--all cannot be combined with --limit");
@@ -248,33 +258,41 @@ export function registerListCommand(program: Command): void {
     .option("--agent <name>", "Agent filter")
     .option("--project <path>", "Project filter")
     .option("--session <id>", "Session ID filter")
-    .option("--limit <n>", `Max results (default: ${DEFAULT_COMPACT_LIMIT}, JSON hard page max: ${STRUCTURED_PAGE_MAX_ROWS})`, parseInt)
+    .option("--limit <n>", `Max results (agent JSON page max: ${STRUCTURED_PAGE_MAX_ROWS})`, parseInt)
     .option("--offset <n>", "Offset for pagination", parseInt)
     .option("--cursor <n>", "Cursor offset for the next page", parseInt)
     .option("--status <status>", "Status filter: active, archived, expired")
     .option("--format <fmt>", "Output format: compact (default), json, csv, yaml")
     .option("--verbose", "Show wider memory snippets in human output")
-    .option("--all", `Exhaust JSON results from offset zero (hard max: ${STRUCTURED_ALL_MAX_ROWS} rows)`)
-    .option("--full", "Emit full memory objects in JSON instead of compact projections")
-    .option("--max-bytes <n>", `JSON response byte ceiling (hard max: ${STRUCTURED_ALL_MAX_BYTES})`, parseInt)
+    .option("--agent-json", "Output a bounded, receipt-bearing JSON page")
+    .option("--all", `Exhaust agent JSON results from offset zero (hard max: ${STRUCTURED_ALL_MAX_ROWS} rows)`)
+    .option("--full", "Emit full memory objects in agent JSON instead of compact projections")
+    .option("--max-bytes <n>", `Agent JSON response byte ceiling (hard max: ${STRUCTURED_ALL_MAX_BYTES})`, parseInt)
     .action((opts) => {
       try {
         const globalOpts = program.opts<GlobalOpts>();
+        const requestedFormat = (opts.format as string | undefined) ?? globalOpts.format;
         const fmt = getOutputFormat(program, opts.format as string | undefined);
-        const isJson = fmt === "json";
-        assertStructuredFlags(opts as Record<string, unknown>, isJson);
+        const receiptMode = Boolean(opts.agentJson);
+        const isStructured = fmt === "json" || fmt === "csv" || fmt === "yaml";
+        assertReceiptFlags(opts as Record<string, unknown>, receiptMode, requestedFormat);
 
         const requestedLimit = opts.limit as number | undefined;
         const all = Boolean(opts.all);
         const detail: StructuredMemoryDetail = opts.full ? "full" : "compact";
         const limit = requestedLimit === undefined
-          ? isJson || fmt === "compact"
+          ? receiptMode
             ? DEFAULT_COMPACT_LIMIT
-            : undefined
-          : positiveIntOrDefault(requestedLimit, DEFAULT_COMPACT_LIMIT);
-        if (isJson && limit !== undefined && limit > STRUCTURED_PAGE_MAX_ROWS) {
+            : isStructured
+              ? undefined
+              : DEFAULT_COMPACT_LIMIT
+          : positiveIntOrDefault(
+              requestedLimit,
+              receiptMode ? DEFAULT_COMPACT_LIMIT : isStructured ? 50 : DEFAULT_COMPACT_LIMIT,
+            );
+        if (receiptMode && limit !== undefined && limit > STRUCTURED_PAGE_MAX_ROWS) {
           throw new Error(
-            `--limit cannot exceed the hard page ceiling of ${STRUCTURED_PAGE_MAX_ROWS}; use --all for a bounded exhaustive read`,
+            `--limit cannot exceed the agent JSON page ceiling of ${STRUCTURED_PAGE_MAX_ROWS}; use --all for a bounded exhaustive read`,
           );
         }
         const offset = cursorOrOffset(opts.cursor, opts.offset) ?? 0;
@@ -334,7 +352,7 @@ export function registerListCommand(program: Command): void {
         // before any format branch so every emitted representation is safe.
         const sanitized = memories.map(redactMemoryForOutput);
 
-        if (isJson) {
+        if (receiptMode) {
           process.stdout.write(structuredMemoryOutput({
             memories: sanitized,
             receipt: "mementos.list.page.v1",
@@ -345,6 +363,11 @@ export function registerListCommand(program: Command): void {
             detail,
             maxBytes: structuredMaxBytes(opts.maxBytes, { all, detail }),
           }));
+          return;
+        }
+
+        if (fmt === "json") {
+          outputJson(sanitized);
           return;
         }
 
@@ -380,7 +403,7 @@ export function registerListCommand(program: Command): void {
           offset,
           hasMore,
           command: "mementos list",
-          detailHint: "use mementos show <id> for full details or --format json --full for full objects",
+          detailHint: "use mementos show <id> for full details, --json for the compatible full array, or --agent-json for a bounded receipt",
         });
       } catch (e) {
         handleError(e);

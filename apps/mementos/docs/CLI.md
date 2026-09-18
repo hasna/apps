@@ -34,7 +34,7 @@ Required arguments are shown as `<name>` and optional arguments as `[name]`.
 | `remove <nameOrId>` | Delete by name or ID; compatibility alias | `--agent`, `--scope` |
 | `recall <key>` (alias `get`) | Recall an exact key. Exits 1 if absent; `--fuzzy` returns the nearest record instead and exits 2 | `--scope`, `--agent`, `--project`, `--fuzzy` |
 | `show <id>` | Show the full record; partial IDs work locally | — |
-| `list` | List memories with filters | `--scope`, `--category`, `--tags`, `--importance-min`, `--pinned`, `--agent`, `--project`, `--session`, `--status`, paging/output options, `--all`, `--full`, `--max-bytes` |
+| `list` | List memories with filters | `--scope`, `--category`, `--tags`, `--importance-min`, `--pinned`, `--agent`, `--project`, `--session`, `--status`, paging/output options, `--agent-json`, receipt-only `--all`/`--full`/`--max-bytes` |
 | `search <query>` | Full-text and fuzzy search | scope/category/tag/project/agent/session filters, paging/output options, `--verbose`, `--history`, `--popular` |
 | `pin <keyOrId>` / `unpin <keyOrId>` | Change pin state | `--scope`, `--agent`, `--project` |
 | `archive <keyOrId>` | Hide a memory while retaining its history | `--scope` |
@@ -108,26 +108,32 @@ page hint. Common options are:
 --format <fmt> compact, json, csv, or yaml where advertised
 ```
 
-`list --format json` (or `list --json`) and JSON `history` are bounded,
-minified page envelopes rather than bare arrays:
+Historical `list --json` / `list --format json` and JSON `history` remain
+full-detail bare arrays. An omitted `--limit` keeps the compatibility behavior
+of walking the complete result, while an explicit limit/cursor returns the
+corresponding full-object array slice.
+
+Use `--agent-json` for the bounded, minified page envelope:
 
 ```json
-{"memories":[...],"_meta":{"receipt":"mementos.list.page.v1","count":20,"limit":20,"offset":0,"next_cursor":20,"has_more":true,"complete":false,"detail":"compact","max_bytes":32768,"response_bytes":7342}}
+{"memories":[...],"_meta":{"receipt":"mementos.list.page.v1","count":20,"limit":20,"offset":0,"next_cursor":20,"has_more":true,"complete":false,"detail":"compact","max_bytes":32768,"response_bytes":7342,"continuation_scope":"unchanged_snapshot"}}
 ```
 
-The list default is 20 rows and the history default is 10, matching their
-compact human defaults. Compact JSON projects identity, bounded value/summary,
-coordination fields, and timestamps; add `--full` for complete memory objects
-within the same page. JSON pages have a hard limit of 1,000 rows and a default
-32 KiB byte budget (64 KiB with `--full`). Use `_meta.next_cursor` or
-`_meta.next_arguments` to continue without overlap, and `--max-bytes` to set an
-explicit budget from 1,024 bytes through 1 MiB.
+Agent JSON defaults to 20 list rows or 10 history rows, matching the compact
+human defaults. Compact receipts project identity, bounded value/summary,
+coordination fields, and timestamps. Add `--full` for complete objects within
+the page. Receipt pages have a hard limit of 1,000 rows and a default 32 KiB
+byte budget (64 KiB with `--full`); `--max-bytes` accepts 1,024 bytes through
+1 MiB.
 
-Whole-query traversal is opt-in: `--all` starts at offset zero, walks bounded
-`/v1` pages, and succeeds only if the complete result fits both hard ceilings
-of 5,000 rows and 1 MiB. Combine `--all --full` only when complete full objects
-are required; exceeding either ceiling fails closed instead of returning a
-success-shaped partial result.
+`--all`, `--full`, and `--max-bytes` are receipt-only controls and are rejected
+without `--agent-json`. `--all` starts at offset zero, walks bounded `/v1`
+pages, and succeeds only when the complete result fits 5,000 rows and 1 MiB.
+
+The continuation is offset-based, not a keyset snapshot. The DB ordering ends
+with `id DESC`, so equal-importance/equal-timestamp rows have deterministic,
+non-overlapping pages while the query result remains unchanged. Concurrent
+writes can shift offsets; restart at zero when a stable snapshot is required.
 
 Use `show <id>` for a complete human-readable record.
 
@@ -138,7 +144,7 @@ Use `show <id>` for a complete human-readable record.
 | `stats` | Active-memory counts and breakdowns | `--format compact|json|csv|yaml` |
 | `report` | Activity and top-memory summary | `--days`, `--project`, `--markdown`, `--json` |
 | `stale` | Memories not accessed recently | `--days`, `--project`, `--agent`, paging, `--format`, `--verbose` |
-| `history` | Recently accessed memories | paging, `--verbose`, JSON `--all`, `--full`, `--max-bytes` |
+| `history` | Recently accessed memories | paging, `--verbose`, `--agent-json`, receipt-only `--all`/`--full`/`--max-bytes` |
 | `context [query]` | Prompt-ready relevant memory block | `--max-tokens`, `--min-importance`, `--scope`, `--categories`, `--agent`, `--project`, `--machine` |
 | `clean` | Remove expired memories and enforce configured retention | — |
 | `export` | Write a JSON export to stdout | `--scope`, `--category`, `--agent`, `--project` |
