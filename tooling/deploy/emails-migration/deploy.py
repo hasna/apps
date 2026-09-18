@@ -189,44 +189,77 @@ def running_snapshot(anchor_task, anchor_image, desired):
     return safe, digest(controlled)
 
 
+def require_kms_baseline(historical_payload, current_payload):
+    historical = copy.deepcopy(historical_payload)
+    current = copy.deepcopy(current_payload)
+    old_web = [row for row in historical.get("containerDefinitions", []) if row.get("name") == "emails"]
+    new_web = [row for row in current.get("containerDefinitions", []) if row.get("name") == "emails"]
+    require(len(old_web) == len(new_web) == 1, "KMS_BASELINE_CONTAINER")
+    names = {"EMAILS_PROVIDER_KMS_KEY_ID", "EMAILS_PROVIDER_KMS_REGION"}
+    old_env = old_web[0].get("environment", [])
+    new_env = new_web[0].get("environment", [])
+    require(isinstance(old_env, list) and isinstance(new_env, list), "KMS_BASELINE_ENVIRONMENT")
+    require(not any(row.get("name") in names for row in old_env), "HISTORICAL_KMS_BINDING")
+    require(not any(row.get("name") in names for row in old_web[0].get("secrets", [])), "HISTORICAL_KMS_SECRET")
+    require(not any(row.get("name") in names for row in new_web[0].get("secrets", [])), "KMS_BASELINE_SECRET")
+    added = [row for row in new_env if row.get("name") in names]
+    require(len(added) == 2 and {row.get("name") for row in added} == names, "KMS_BASELINE_PAIR")
+    values = {row["name"]: row.get("value") for row in added}
+    require(isinstance(values["EMAILS_PROVIDER_KMS_KEY_ID"], str) and values["EMAILS_PROVIDER_KMS_KEY_ID"].strip(), "KMS_BASELINE_KEY")
+    require(values["EMAILS_PROVIDER_KMS_REGION"] == promotion.REGION, "KMS_BASELINE_REGION")
+    new_web[0]["environment"] = [row for row in new_env if row.get("name") not in names]
+    require(current == historical, "KMS_BASELINE_TASK_DRIFT")
+
+
 def reconcile_state(anchor_value, failed):
-    anchor_task = anchor_value["service"]["taskDefinition"]
+    historical_task = anchor_value["service"]["taskDefinition"]
     anchor_image = anchor_value["descendant"]["imageDigest"]
     desired = anchor_value["service"]["desiredCount"]
-    require(TASK_PATTERN.fullmatch(anchor_task or "") and DIGEST_PATTERN.fullmatch(anchor_image or ""), "ANCHOR_IDENTITY")
-    anchor_definition = promotion.task_read(anchor_task)
-    anchor_payload = task_payload(anchor_definition)
-    require(task_image(anchor_payload) == anchor_image, "ANCHOR_IMAGE_DRIFT")
+    require(TASK_PATTERN.fullmatch(historical_task or "") and DIGEST_PATTERN.fullmatch(anchor_image or ""), "ANCHOR_IDENTITY")
+    historical_payload = task_payload(promotion.task_read(historical_task))
+    require(task_image(historical_payload) == anchor_image, "HISTORICAL_IMAGE_DRIFT")
+    require(promotion.digest(promotion.encode(historical_payload)) == anchor_value["descendant"]["digest"], "HISTORICAL_TASK_DRIFT")
     candidates = []
-    known = {anchor_task}
+    known = {historical_task}
     for item in failed:
-        require(item["taskBefore"] == anchor_task, "FAILED_ANCHOR_DRIFT")
+        require(item["taskBefore"] == historical_task, "FAILED_ANCHOR_DRIFT")
         definition = promotion.task_read(item["taskDefinition"])
         payload = task_payload(definition)
         require(task_image(payload) == item["imageDigest"], "FAILED_IMAGE_DRIFT")
         normalized = copy.deepcopy(payload)
         next(row for row in normalized["containerDefinitions"] if row.get("name") == "emails")["image"] = promotion.REPOSITORY + "@" + anchor_image
-        require(normalized == anchor_payload, "FAILED_TASK_CONFIGURATION_DRIFT")
+        require(normalized == historical_payload, "FAILED_TASK_CONFIGURATION_DRIFT")
         candidates.append({**item, "taskPayloadDigest": digest(payload)})
         known.add(item["taskDefinition"])
     service = promotion.current_service()
     controlled = controlled_service(service)
     require(service.get("serviceName") == promotion.SERVICE and service.get("status") == "ACTIVE", "SERVICE_IDENTITY")
     require(service.get("desiredCount") == desired and service.get("runningCount") == desired and service.get("pendingCount") == 0, "SERVICE_COUNTS")
-    require(service.get("taskDefinition") in known, "SERVICE_TASK_FOREIGN")
+    anchor_task = service.get("taskDefinition")
+    require(TASK_PATTERN.fullmatch(anchor_task or "") and anchor_task not in known, "KMS_BASELINE_IDENTITY")
+    anchor_payload = task_payload(promotion.task_read(anchor_task))
+    require(task_image(anchor_payload) == anchor_image, "KMS_BASELINE_IMAGE_DRIFT")
+    require_kms_baseline(historical_payload, anchor_payload)
+    known.add(anchor_task)
     deployments = service.get("deployments", [])
-    require(1 <= len(deployments) <= 3 and all(row.get("taskDefinition") in known for row in deployments), "SERVICE_DEPLOYMENTS")
+    require(1 <= len(deployments) <= 4 and all(row.get("taskDefinition") in known for row in deployments), "SERVICE_DEPLOYMENTS")
     running, running_digest = running_snapshot(anchor_task, anchor_image, desired)
     require(digest(controlled_service(promotion.current_service())) == digest(controlled), "SERVICE_RACE")
     running_again, running_digest_again = running_snapshot(anchor_task, anchor_image, desired)
     require(running_again == running and running_digest_again == running_digest, "RUNNING_TASK_RACE")
     return {
+        "historicalAnchor": {
+            "taskDefinition": historical_task,
+            "taskPayloadDigest": digest(historical_payload),
+            "imageDigest": anchor_image,
+        },
         "anchor": {
             "taskDefinition": anchor_task,
             "taskPayloadDigest": digest(anchor_payload),
             "imageDigest": anchor_image,
             "desiredCount": desired,
         },
+        "kmsBaselineConfigured": True,
         "failedCandidates": candidates,
         "service": controlled,
         "serviceDigest": digest(controlled),
@@ -251,6 +284,14 @@ def expected_drift(before_image, candidate_image):
     return evidence
 
 
+def kms_proof_id(source, task_definition, image_digest):
+    return hashlib.sha256(encode({"source": source, "task": task_definition, "image": image_digest})).hexdigest()
+
+
+def require_kms_proof(value, proof_id):
+    require(value == {"schema": "emails.migration-kms-proof.v1", "configured": True, "roundTrip": True, "keyMaterialEmitted": False, "proofId": proof_id}, "KMS_PROOF")
+
+
 def reconcile(source, inputs, out):
     anchor = read(inputs / "anchor" / "reconciled.json", "emails.promotion-reconciliation.v1")
     failed = sorted((load_failed(path) for path in inputs.glob("failed-*")), key=lambda row: row["runId"])
@@ -269,7 +310,7 @@ def reconcile(source, inputs, out):
         "migrationAdmission": admission,
         "migrationAdmissionSha256": digest(admission),
         "migrationDefinitionChanged": True,
-        "state": "failed_candidates_reconciled_to_healthy_anchor",
+        "state": "failed_candidates_reconciled_to_historical_anchor_and_live_kms_baseline",
         "awsMutationCalls": 0,
         "automaticRetry": False,
         "automaticRollback": False,
@@ -461,6 +502,21 @@ def prepare(source, inputs, image_digest, out):
         raise
     require(plan.get("databaseMutated") is False and SHA64.fullmatch(plan.get("ledgerSha256", "")) and SHA64.fullmatch(plan.get("planSha256", "")) and SHA64.fullmatch(plan.get("expectedAfterLedgerSha256", "")), "MIGRATION_PLAN_RECEIPT")
     require(any(row.get("state") == "pending" for row in plan.get("plan", [])), "MIGRATION_PLAN_EMPTY")
+    proof_id = kms_proof_id(source, candidate_task, image_digest)
+    try:
+        kms, kms_task = run_receipt_task(service, candidate_task, "kms", {"EMAILS_MIGRATION_PROOF_ID": proof_id}, "emails.migration-kms-proof.v1")
+        require_kms_proof(kms, proof_id)
+    except Exception:
+        promotion.save(out / "kms-reconciliation-required.json", {
+            "schema": "emails.current-migration-kms-reconciliation-required.v1",
+            "candidateTaskDefinition": candidate_task,
+            "candidateImageDigest": image_digest,
+            "serviceUpdated": False,
+            "databaseMutated": False,
+            "automaticRetry": False,
+            "automaticRollback": False,
+        })
+        raise
     receipt = {
         "schema": "emails.current-migration-prepared.v1",
         "sourceCommit": source,
@@ -482,6 +538,8 @@ def prepare(source, inputs, image_digest, out):
         "expectedAfterLedger": plan["expectedAfterLedger"],
         "expectedAfterLedgerSha256": plan["expectedAfterLedgerSha256"],
         "planTask": task_evidence,
+        "kmsProof": kms,
+        "kmsProofTask": kms_task,
         "serviceUpdated": False,
         "databaseMutated": False,
         "automaticRollback": False,
@@ -532,6 +590,10 @@ def execute(source, inputs, out):
             and preflight.get("expectedAfterLedger") == prepared["expectedAfterLedger"],
             "PRODUCTION_PLAN_DRIFT",
         )
+        proof_id = kms_proof_id(source, prepared["candidate"]["taskDefinition"], prepared["candidate"]["imageDigest"])
+        require_kms_proof(prepared["kmsProof"], proof_id)
+        kms, kms_task = run_receipt_task(service, prepared["candidate"]["taskDefinition"], "kms", {"EMAILS_MIGRATION_PROOF_ID": proof_id}, "emails.migration-kms-proof.v1")
+        require_kms_proof(kms, proof_id)
     except Exception:
         promotion.save(out / "preflight-reconciliation-required.json", {
             "schema": "emails.current-migration-preflight-reconciliation-required.v1",
@@ -555,6 +617,8 @@ def execute(source, inputs, out):
         "planSha256": prepared["planSha256"],
         "expectedAfterLedgerSha256": prepared["expectedAfterLedgerSha256"],
         "preflightTask": preflight_task,
+        "preflightKmsProof": kms,
+        "preflightKmsProofTask": kms_task,
         "migrationRunAttempts": 0,
         "serviceUpdateAttempts": 0,
         "automaticRollback": False,
@@ -700,9 +764,9 @@ def finalize(source, inputs, execution, public_proof, out):
         and all(row.get("state") == "already_applied" for row in final_plan.get("plan", [])),
         "FINAL_LEDGER",
     )
-    proof_id = hashlib.sha256(encode({"source": source, "task": prepared["candidate"]["taskDefinition"], "image": prepared["candidate"]["imageDigest"]})).hexdigest()
+    proof_id = kms_proof_id(source, prepared["candidate"]["taskDefinition"], prepared["candidate"]["imageDigest"])
     kms, kms_task = run_receipt_task(service, prepared["candidate"]["taskDefinition"], "kms", {"EMAILS_MIGRATION_PROOF_ID": proof_id}, "emails.migration-kms-proof.v1")
-    require(kms == {"schema": "emails.migration-kms-proof.v1", "configured": True, "roundTrip": True, "keyMaterialEmitted": False, "proofId": proof_id}, "FINAL_KMS")
+    require_kms_proof(kms, proof_id)
     receipt = {
         "schema": "emails.current-migration-final-reconciliation.v1",
         "sourceCommit": source,

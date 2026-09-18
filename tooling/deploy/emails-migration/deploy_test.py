@@ -16,11 +16,45 @@ p = d.promotion
 SOURCE = "a" * 40
 TASK = f"arn:aws:ecs:{p.REGION}:{p.ACCOUNT}:task-definition/{p.SERVICE}:90"
 CANDIDATE = f"arn:aws:ecs:{p.REGION}:{p.ACCOUNT}:task-definition/{p.SERVICE}:93"
+KMS_ANCHOR = f"arn:aws:ecs:{p.REGION}:{p.ACCOUNT}:task-definition/{p.SERVICE}:91"
+FIRST_FAILED = f"arn:aws:ecs:{p.REGION}:{p.ACCOUNT}:task-definition/{p.SERVICE}:92"
 IMAGE = "sha256:" + "b" * 64
 OLD_IMAGE = "sha256:" + "c" * 64
 
 
 class DeployTest(unittest.TestCase):
+    def test_reconcile_binds_historical_failures_to_old_anchor_and_kms_to_live_anchor(self):
+        historical = {"family": p.SERVICE, "containerDefinitions": [{"name": "emails", "image": p.REPOSITORY + "@" + OLD_IMAGE, "environment": [{"name": "X", "value": "same"}]}]}
+        baseline = copy.deepcopy(historical)
+        baseline["containerDefinitions"][0]["environment"].extend([
+            {"name": "EMAILS_PROVIDER_KMS_KEY_ID", "value": "alias/emails-provider-root"},
+            {"name": "EMAILS_PROVIDER_KMS_REGION", "value": p.REGION},
+        ])
+        failed = []
+        definitions = {TASK: historical, KMS_ANCHOR: baseline}
+        for number, task, image in ((1, FIRST_FAILED, IMAGE), (2, CANDIDATE, "sha256:" + "d" * 64)):
+            payload = copy.deepcopy(historical)
+            payload["containerDefinitions"][0]["image"] = p.REPOSITORY + "@" + image
+            definitions[task] = payload
+            failed.append({"runId": number, "taskDefinition": task, "imageDigest": image, "taskBefore": TASK, "sourceCommit": SOURCE})
+        previous = {"service": {"taskDefinition": TASK, "desiredCount": 1}, "descendant": {"imageDigest": OLD_IMAGE, "digest": p.digest(p.encode(historical))}}
+        service = {"serviceName": p.SERVICE, "status": "ACTIVE", "taskDefinition": KMS_ANCHOR, "desiredCount": 1, "runningCount": 1, "pendingCount": 0, "deployments": [{"taskDefinition": KMS_ANCHOR, "status": "PRIMARY", "rolloutState": "COMPLETED"}]}
+        with patch.object(p, "task_read", side_effect=lambda task: definitions[task]), patch.object(p, "current_service", return_value=service), patch.object(d, "running_snapshot", return_value=([], "running")):
+            result = d.reconcile_state(previous, failed)
+        self.assertEqual(result["historicalAnchor"]["taskDefinition"], TASK)
+        self.assertEqual(result["anchor"]["taskDefinition"], KMS_ANCHOR)
+        self.assertTrue(result["kmsBaselineConfigured"])
+        self.assertEqual([row["taskDefinition"] for row in result["failedCandidates"]], [FIRST_FAILED, CANDIDATE])
+
+        without_kms = copy.deepcopy(baseline)
+        without_kms["containerDefinitions"][0]["environment"] = [{"name": "X", "value": "same"}]
+        with self.assertRaisesRegex(ValueError, "KMS_BASELINE_PAIR"):
+            d.require_kms_baseline(historical, without_kms)
+        with_unrelated_change = copy.deepcopy(baseline)
+        with_unrelated_change["cpu"] = "2048"
+        with self.assertRaisesRegex(ValueError, "KMS_BASELINE_TASK_DRIFT"):
+            d.require_kms_baseline(historical, with_unrelated_change)
+
     def test_candidate_changes_only_emails_image(self):
         task = {"family": p.SERVICE, "containerDefinitions": [{"name": "emails", "image": p.REPOSITORY + "@" + OLD_IMAGE, "environment": [{"name": "X", "value": "same"}]}, {"name": "observer", "image": "observer@sha256:" + "d" * 64}]}
         candidate, before = d.image_only_candidate(task, IMAGE)
@@ -79,6 +113,9 @@ class DeployTest(unittest.TestCase):
             "expectedAfterLedgerSha256": after_hash,
             "taskScriptSha256": hashlib.sha256(d.task_script().encode()).hexdigest(),
         }
+        proof_id = d.kms_proof_id(SOURCE, CANDIDATE, IMAGE)
+        kms_proof = {"schema": "emails.migration-kms-proof.v1", "configured": True, "roundTrip": True, "keyMaterialEmitted": False, "proofId": proof_id}
+        prepared["kmsProof"] = kms_proof
         preflight = {"ledger": [], "ledgerSha256": before_hash, "plan": plan_rows, "planSha256": plan_hash, "expectedAfterLedger": ledger, "expectedAfterLedgerSha256": after_hash}
         applied = {"beforeLedger": [], "beforeLedgerSha256": before_hash, "plan": plan_rows, "planSha256": plan_hash, "appliedMigrationIds": ["0001"], "afterLedger": ledger, "afterLedgerSha256": after_hash, "databaseMutated": True, "automaticRollback": False}
         calls = []
@@ -100,15 +137,26 @@ class DeployTest(unittest.TestCase):
             out = root / "out"
             stable = copy.deepcopy(service)
             stable["deploymentConfiguration"]["deploymentCircuitBreaker"]["rollback"] = False
-            with patch.object(d, "require_main_source"), patch.object(d, "service_matches_reconciliation", return_value=service), patch.object(d, "verify_candidate", return_value={}), patch.object(d, "run_receipt_task", side_effect=[(preflight, {"taskArnSha256": "p"}), (applied, {"taskArnSha256": "m"})]) as tasks, patch.object(p, "aws", side_effect=aws), patch.object(p, "current_service", return_value=service), patch.object(d, "wait_roll_forward", return_value=stable), patch.object(d, "running_snapshot", return_value=([], "running")):
+            with patch.object(d, "require_main_source"), patch.object(d, "service_matches_reconciliation", return_value=service), patch.object(d, "verify_candidate", return_value={}), patch.object(d, "run_receipt_task", side_effect=[(preflight, {"taskArnSha256": "p"}), (kms_proof, {"taskArnSha256": "k"}), (applied, {"taskArnSha256": "m"})]) as tasks, patch.object(p, "aws", side_effect=aws), patch.object(p, "current_service", return_value=service), patch.object(d, "wait_roll_forward", return_value=stable), patch.object(d, "running_snapshot", return_value=([], "running")):
                 d.execute(SOURCE, root, out)
-            self.assertEqual([call.args[2] for call in tasks.call_args_list], ["plan", "apply"])
+            self.assertEqual([call.args[2] for call in tasks.call_args_list], ["plan", "kms", "apply"])
             self.assertEqual(calls.count(("ecs", "update-service")), 1)
             self.assertEqual(update_bodies[0]["taskDefinition"], CANDIDATE)
             self.assertFalse(update_bodies[0]["deploymentConfiguration"]["deploymentCircuitBreaker"]["rollback"])
             self.assertTrue((out / "migration-applied.json").is_file())
             self.assertTrue((out / "deployed.json").is_file())
             self.assertFalse((out / "roll-forward-required.json").exists())
+
+            calls.clear()
+            bad_proof = {**kms_proof, "roundTrip": False}
+            refused = root / "refused"
+            with patch.object(d, "service_matches_reconciliation", return_value=service), patch.object(d, "verify_candidate", return_value={}), patch.object(d, "run_receipt_task", side_effect=[(preflight, {"taskArnSha256": "p"}), (bad_proof, {"taskArnSha256": "k"})]) as tasks, patch.object(p, "aws", side_effect=aws):
+                with self.assertRaisesRegex(ValueError, "KMS_PROOF"):
+                    d.execute(SOURCE, root, refused)
+            self.assertEqual([call.args[2] for call in tasks.call_args_list], ["plan", "kms"])
+            self.assertNotIn(("ecs", "update-service"), calls)
+            self.assertTrue((refused / "preflight-reconciliation-required.json").is_file())
+            self.assertFalse((refused / "migration-run-intent.json").exists())
 
 
 if __name__ == "__main__":

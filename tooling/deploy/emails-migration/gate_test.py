@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 import importlib.util
+import hashlib
+import json
 from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -12,6 +15,36 @@ SOURCE = "a" * 40
 
 
 class GateTest(unittest.TestCase):
+    def test_migration_receipt_requires_separate_kms_anchor(self):
+        value = {"schema": "emails.current-migration-reconciliation.v1", "sourceCommit": SOURCE, "migrationDefinitionChanged": True, "awsMutationCalls": 0, "historicalAnchor": {"taskDefinition": "old"}, "anchor": {"taskDefinition": "new"}, "failedCandidates": [{"taskBefore": "old"}, {"taskBefore": "old"}], "kmsBaselineConfigured": True}
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "reconciled.json"
+            def verify(row):
+                path.write_text(json.dumps(row))
+                sha = hashlib.sha256(path.read_bytes()).hexdigest()
+                with patch.object(g, "run_metadata"), patch.object(g, "artifact", return_value=(None, {"reconciled.json": path})):
+                    return g.migration_reconciliation(SOURCE, "123", sha, Path(td))
+            self.assertEqual(verify(value)["anchor"]["taskDefinition"], "new")
+            with self.assertRaisesRegex(ValueError, "KMS_BASELINE_RECONCILIATION"):
+                verify({**value, "anchor": {"taskDefinition": "old"}})
+            with self.assertRaisesRegex(ValueError, "FAILED_HISTORICAL_ANCHOR"):
+                verify({**value, "failedCandidates": [{"taskBefore": "new"}, {"taskBefore": "old"}]})
+
+    def test_prepared_receipt_requires_bound_kms_round_trip(self):
+        candidate = {"taskDefinition": "task-91", "imageDigest": "sha256:" + "b" * 64}
+        proof_id = hashlib.sha256(json.dumps({"source": SOURCE, "task": candidate["taskDefinition"], "image": candidate["imageDigest"]}, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        value = {"schema": "emails.current-migration-prepared.v1", "sourceCommit": SOURCE, "migrationReconciledSha256": "r" * 64, "serviceUpdated": False, "databaseMutated": False, "candidate": candidate, "kmsProof": {"schema": "emails.migration-kms-proof.v1", "configured": True, "roundTrip": True, "keyMaterialEmitted": False, "proofId": proof_id}}
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "prepared.json"
+            def verify(row):
+                path.write_text(json.dumps(row))
+                sha = hashlib.sha256(path.read_bytes()).hexdigest()
+                with patch.object(g, "run_metadata"), patch.object(g, "artifact", return_value=(None, {"prepared.json": path})):
+                    return g.migration_plan(SOURCE, "123", sha, "r" * 64, Path(td))
+            self.assertEqual(verify(value)["kmsProof"]["proofId"], proof_id)
+            with self.assertRaisesRegex(ValueError, "MIGRATION_PLAN_KMS_PROOF"):
+                verify({**value, "kmsProof": {**value["kmsProof"], "proofId": "0" * 64}})
+
     def test_exact_ci_requires_exact_successful_main_push(self):
         row = {"head_sha": SOURCE, "head_branch": "main", "event": "push", "status": "completed", "conclusion": "success", "path": ".github/workflows/ci.yml", "name": "ci"}
         self.assertTrue(g.exact_ci_success([row], SOURCE))

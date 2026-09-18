@@ -135,6 +135,14 @@ def migration_reconciliation(source, run_id, expected_sha, destination):
     value = read(files["reconciled.json"], expected_sha, "MIGRATION_RECONCILIATION_REVIEW_BINDING")
     require(value.get("schema") == "emails.current-migration-reconciliation.v1" and value.get("sourceCommit") == source, "MIGRATION_RECONCILIATION_SCHEMA")
     require(value.get("migrationDefinitionChanged") is True and value.get("awsMutationCalls") == 0, "MIGRATION_RECONCILIATION_STATE")
+    historical = value.get("historicalAnchor")
+    current = value.get("anchor")
+    failed = value.get("failedCandidates")
+    require(isinstance(historical, dict) and isinstance(current, dict) and isinstance(failed, list) and len(failed) == 2, "KMS_BASELINE_RECONCILIATION")
+    historical_task = historical.get("taskDefinition")
+    current_task = current.get("taskDefinition")
+    require(isinstance(historical_task, str) and historical_task and isinstance(current_task, str) and current_task and historical_task != current_task and value.get("kmsBaselineConfigured") is True, "KMS_BASELINE_RECONCILIATION")
+    require(all(isinstance(row, dict) and row.get("taskBefore") == historical_task for row in failed), "FAILED_HISTORICAL_ANCHOR")
     return value
 
 
@@ -146,6 +154,10 @@ def migration_plan(source, run_id, expected_sha, reconciliation_sha, destination
     require(value.get("schema") == "emails.current-migration-prepared.v1" and value.get("sourceCommit") == source, "MIGRATION_PLAN_SCHEMA")
     require(value.get("migrationReconciledSha256") == reconciliation_sha, "MIGRATION_PLAN_RECONCILIATION")
     require(value.get("serviceUpdated") is False and value.get("databaseMutated") is False, "MIGRATION_PLAN_MUTATION_BOUNDARY")
+    candidate = value.get("candidate", {})
+    require(isinstance(candidate, dict), "MIGRATION_PLAN_CANDIDATE")
+    proof_id = hashlib.sha256(json.dumps({"source": source, "task": candidate.get("taskDefinition"), "image": candidate.get("imageDigest")}, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    require(value.get("kmsProof") == {"schema": "emails.migration-kms-proof.v1", "configured": True, "roundTrip": True, "keyMaterialEmitted": False, "proofId": proof_id}, "MIGRATION_PLAN_KMS_PROOF")
     return value
 
 
