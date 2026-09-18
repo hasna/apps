@@ -71,6 +71,34 @@ def has_repo_digest(image, reference):
     return canonical_reference(reference) in [canonical_reference(ref) for ref in refs]
 
 
+def same_execution_config(stored, inspected):
+    """Docker inspect is an API projection, not the original hashed OCI JSON.
+
+    Linux does not use the legacy ArgsEscaped field. Docker may omit it and
+    inject empty container-era attach fields. Compare every execution setting,
+    allowing only those named inert serialization defaults. The raw config
+    bytes must independently hash to the actual local image ID.
+    """
+    require(isinstance(stored, dict) and isinstance(inspected, dict), "IMAGE_CONFIG_DRIFT")
+    fields = {"User", "Env", "Entrypoint", "Cmd", "Volumes", "WorkingDir", "Labels", "ExposedPorts", "Healthcheck", "StopSignal", "OnBuild", "Shell"}
+    defaults = {"Hostname": "", "Domainname": "", "AttachStdin": False, "AttachStdout": False, "AttachStderr": False,
+                "Tty": False, "OpenStdin": False, "StdinOnce": False, "Image": ""}
+    def normalized(field, value):
+        if value is None and field in ("OnBuild", "Shell"):
+            return []
+        return value
+    for field in fields:
+        require(normalized(field, stored.get(field)) == normalized(field, inspected.get(field)), "IMAGE_EXECUTION_CONFIG_DRIFT")
+    for config in (stored, inspected):
+        for field, value in config.items():
+            if field in fields:
+                continue
+            if field == "ArgsEscaped":
+                require(type(value) is bool, "IMAGE_CONFIG_ARGS_ESCAPED")
+            else:
+                require(field in defaults and value == defaults[field], "IMAGE_CONFIG_UNSUPPORTED_FIELD")
+
+
 COMMANDS = {"api": ["src/server/index.ts"], "worker": ["src/server/index.ts", "ingest-worker"]}
 ENTRYPOINT = ["/usr/local/bin/bun"]
 
@@ -115,8 +143,9 @@ def inspected_image(component, expected, rows, manifest_raw, config_raw):
     descriptor = manifest.get("config") or {}
     require(descriptor.get("digest") == digest(config_raw) == image["Id"] and descriptor.get("size") == len(config_raw)
             and descriptor.get("mediaType") == cfg_type, "IMAGE_CONFIG_BYTES")
-    require(isinstance(stored, dict) and stored.get("config") == config and stored.get("os") == "linux"
+    require(isinstance(stored, dict) and stored.get("os") == "linux"
             and stored.get("architecture") == "amd64", "IMAGE_CONFIG_DRIFT")
+    same_execution_config(stored.get("config"), config)
     layers = manifest.get("layers")
     diff_ids = (stored.get("rootfs") or {}).get("diff_ids")
     require(isinstance(layers, list) and 1 <= len(layers) <= 128 and isinstance(diff_ids, list) and len(layers) == len(diff_ids), "IMAGE_LAYER_BOUNDS")

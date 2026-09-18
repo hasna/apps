@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from contract import COMMANDS, ENTRYPOINT, Refused, canonical, digest, has_repo_digest, inspected_container, inspected_image, loads, pair_input
+from contract import COMMANDS, ENTRYPOINT, Refused, canonical, digest, has_repo_digest, inspected_container, inspected_image, loads, pair_input, same_execution_config
 from run import Docker, cleanup_owned_resources, main
 
 
@@ -32,6 +32,15 @@ def fixture(family="oci"):
 
 
 class AdmissionTests(unittest.TestCase):
+    def test_docker_linux_serialization_defaults_do_not_change_execution_config(self):
+        raw = {"User": "1000:1000", "Env": ["NODE_ENV=production"], "Entrypoint": ENTRYPOINT, "Cmd": COMMANDS["api"], "ArgsEscaped": True}
+        inspected = {key: value for key, value in raw.items() if key != "ArgsEscaped"}
+        inspected.update(OnBuild=None, Hostname="", AttachStdin=False)
+        same_execution_config(raw, inspected)
+        for extra in ({"Env": ["NODE_ENV=changed"]}, {"Entrypoint": ["/bin/sh"]}, {"OnBuild": ["unexpected"]},
+                      {"Hostname": "other"}, {"UnknownRuntimeOption": True}, {"ArgsEscaped": "invalid"}):
+            with self.assertRaises(Refused): same_execution_config(raw, {**inspected, **extra})
+
     def test_docker_hub_aliases_preserve_repository_and_exact_digest(self):
         value = digest(b"postgres")
         row = {"RepoDigests": ["postgres@"+value]}

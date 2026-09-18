@@ -64,6 +64,21 @@ def main():
             image = registry_base+"/emails@"+digest(manifest_raw)
             # Resolve the locally pushed immutable ref before entering the no-pull runner.
             d.call("pull", image, timeout=60)
+            stored_config = json.loads(config_raw)["config"]
+            inspected_config = d.json("image", "inspect", image)[0]["Config"]
+            def shape(config, field):
+                if field not in config:
+                    return {"present": False}
+                value = config[field]
+                result = {"present": True, "type": type(value).__name__}
+                if value is None or type(value) is bool or value == "":
+                    result["inert_default"] = value
+                return result
+            projection = {"manifest_digest": digest(manifest_raw), "config_digest": digest(config_raw),
+                          "differences": [{"field": field, "stored": shape(stored_config, field), "inspected": shape(inspected_config, field)}
+                                          for field in sorted(set(stored_config) | set(inspected_config))
+                                          if field not in stored_config or field not in inspected_config or stored_config[field] != inspected_config[field]]}
+            (output / "docker-config-projection.json").write_bytes(canonical(projection))
             (output / "manifest.json").write_bytes(manifest_raw)
             (output / "config.json").write_bytes(config_raw)
             code = 'import {emailsSelfHostedMigrations as m} from "./apps/emails/src/server/self-hosted/migrations.ts";console.log(JSON.stringify(Object.fromEntries(m().map(x=>[x.id,x.checksum]))));'
