@@ -104,7 +104,7 @@ def read(path, expected_sha, code):
 
 
 def anchor_input(source, run_id, expected_sha, destination):
-    run_source = run_metadata(run_id, SEARCH_WORKFLOW, source, exact=False)
+    run_source = run_metadata(run_id, SEARCH_WORKFLOW, source, exact=False, require_same_app=False)
     _, files = artifact(run_id, "emails-search-reconciled", destination)
     require(set(files) == {"reconciled.json"}, "ANCHOR_FILE_SET")
     value = read(files["reconciled.json"], expected_sha, "ANCHOR_REVIEW_BINDING")
@@ -139,7 +139,7 @@ def migration_reconciliation(source, run_id, expected_sha, destination):
     require(set(files) == {"reconciled.json"}, "MIGRATION_RECONCILIATION_FILE_SET")
     value = read(files["reconciled.json"], expected_sha, "MIGRATION_RECONCILIATION_REVIEW_BINDING")
     require(value.get("schema") == "emails.current-migration-reconciliation.v1" and value.get("sourceCommit") == source, "MIGRATION_RECONCILIATION_SCHEMA")
-    require(value.get("migrationDefinitionChanged") is True and value.get("awsMutationCalls") == 0, "MIGRATION_RECONCILIATION_STATE")
+    require(value.get("migrationDefinitionChanged") is True and value.get("awsMutationCalls") == 0 and type(value.get("historicalCandidateAppDiffersFromCurrent")) is bool, "MIGRATION_RECONCILIATION_STATE")
     historical = value.get("historicalAnchor")
     current = value.get("anchor")
     failed = value.get("failedCandidates")
@@ -178,9 +178,8 @@ def validate(args, destination):
     if args.phase == "reconcile":
         anchor_input(source, args.anchor_run, args.anchor_sha256, destination / "anchor")
         require(len(args.failed_run) == 2 and len(set(args.failed_run)) == 2, "FAILED_RUN_SET")
-        failed = [failed_input(source, run_id, destination / f"failed-{run_id}") for run_id in args.failed_run]
-        latest = sorted(failed, key=lambda row: row["runId"])[-1]
-        require(git_ok("diff", "--quiet", latest["sourceCommit"], source, "--", "apps/emails/**"), "LATEST_CANDIDATE_SOURCE_DRIFT")
+        for run_id in args.failed_run:
+            failed_input(source, run_id, destination / f"failed-{run_id}")
     else:
         migration_reconciliation(source, args.migration_reconciliation_run, args.migration_reconciled_sha256, destination / "migration-reconciliation")
         if args.phase == "execute":

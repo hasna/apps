@@ -26,7 +26,7 @@ class GateTest(unittest.TestCase):
                 g.validate(SimpleNamespace(phase="execute"), Path("unused"))
 
     def test_migration_receipt_requires_separate_kms_anchor(self):
-        value = {"schema": "emails.current-migration-reconciliation.v1", "sourceCommit": SOURCE, "migrationDefinitionChanged": True, "awsMutationCalls": 0, "historicalAnchor": {"taskDefinition": "old"}, "anchor": {"taskDefinition": "new"}, "failedCandidates": [{"taskBefore": "old"}, {"taskBefore": "old"}], "kmsBaselineConfigured": True}
+        value = {"schema": "emails.current-migration-reconciliation.v1", "sourceCommit": SOURCE, "migrationDefinitionChanged": True, "awsMutationCalls": 0, "historicalCandidateAppDiffersFromCurrent": True, "historicalAnchor": {"taskDefinition": "old"}, "anchor": {"taskDefinition": "new"}, "failedCandidates": [{"taskBefore": "old"}, {"taskBefore": "old"}], "kmsBaselineConfigured": True}
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / "reconciled.json"
             def verify(row):
@@ -39,6 +39,12 @@ class GateTest(unittest.TestCase):
                 verify({**value, "anchor": {"taskDefinition": "old"}})
             with self.assertRaisesRegex(ValueError, "FAILED_HISTORICAL_ANCHOR"):
                 verify({**value, "failedCandidates": [{"taskBefore": "new"}, {"taskBefore": "old"}]})
+
+    def test_historical_anchor_source_is_authenticated_without_current_app_equality(self):
+        value = {"schema": "emails.promotion-reconciliation.v1", "sourceCommit": "b" * 40, "state": "descendant_overlay_live_stable", "service": {"stable": True, "healthy": True}}
+        with patch.object(g, "run_metadata", return_value="b" * 40) as metadata, patch.object(g, "artifact", return_value=(None, {"reconciled.json": Path("old.json")})), patch.object(g, "read", return_value=value):
+            self.assertEqual(g.anchor_input(SOURCE, "123", "0" * 64, Path("unused"))["sourceCommit"], "b" * 40)
+        self.assertEqual(metadata.call_args.kwargs, {"exact": False, "require_same_app": False})
 
     def test_prepared_receipt_requires_bound_kms_round_trip(self):
         candidate = {"taskDefinition": "task-91", "imageDigest": "sha256:" + "b" * 64}

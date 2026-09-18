@@ -293,6 +293,17 @@ def require_kms_proof(value, proof_id):
     require(value == {"schema": "emails.migration-kms-proof.v1", "configured": True, "roundTrip": True, "keyMaterialEmitted": False, "proofId": proof_id}, "KMS_PROOF")
 
 
+def historical_app_differs_from_current(historical_source, current_source):
+    result = subprocess.run(
+        ["git", "diff", "--quiet", historical_source, current_source, "--", "apps/emails/**"],
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        timeout=60,
+    )
+    require(result.returncode in {0, 1}, "HISTORICAL_APP_DIFF_READ")
+    return result.returncode == 1
+
+
 def reconcile(source, inputs, out):
     anchor = read(inputs / "anchor" / "reconciled.json", "emails.promotion-reconciliation.v1")
     failed = sorted((load_failed(path) for path in inputs.glob("failed-*")), key=lambda row: row["runId"])
@@ -302,6 +313,7 @@ def reconcile(source, inputs, out):
     latest = failed[-1]
     admission = expected_drift(state["anchor"]["imageDigest"], latest["imageDigest"])
     require(admission["candidate"].get("sourceRevision") == latest["sourceCommit"], "FAILED_IMAGE_SOURCE_BINDING")
+    historical_app_differs = historical_app_differs_from_current(latest["sourceCommit"], source)
     receipt = {
         "schema": "emails.current-migration-reconciliation.v1",
         "sourceCommit": source,
@@ -311,6 +323,7 @@ def reconcile(source, inputs, out):
         "migrationAdmission": admission,
         "migrationAdmissionSha256": digest(admission),
         "migrationDefinitionChanged": True,
+        "historicalCandidateAppDiffersFromCurrent": historical_app_differs,
         "state": "failed_candidates_reconciled_to_historical_anchor_and_live_kms_baseline",
         "awsMutationCalls": 0,
         "automaticRetry": False,

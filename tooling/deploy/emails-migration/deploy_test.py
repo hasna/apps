@@ -23,6 +23,16 @@ OLD_IMAGE = "sha256:" + "c" * 64
 
 
 class DeployTest(unittest.TestCase):
+    def test_historical_app_diff_is_recorded_without_requiring_current_byte_equality(self):
+        with patch.object(d.subprocess, "run", return_value=type("Result", (), {"returncode": 1})()) as run:
+            self.assertTrue(d.historical_app_differs_from_current("a" * 40, SOURCE))
+        self.assertEqual(run.call_args.args[0][:3], ["git", "diff", "--quiet"])
+        with patch.object(d.subprocess, "run", return_value=type("Result", (), {"returncode": 0})()):
+            self.assertFalse(d.historical_app_differs_from_current("a" * 40, SOURCE))
+        with patch.object(d.subprocess, "run", return_value=type("Result", (), {"returncode": 128})()):
+            with self.assertRaisesRegex(ValueError, "HISTORICAL_APP_DIFF_READ"):
+                d.historical_app_differs_from_current("a" * 40, SOURCE)
+
     def test_execution_is_disabled_at_the_entrypoint(self):
         with self.assertRaisesRegex(ValueError, "MIGRATION_EXECUTION_DISABLED"):
             d.execute(SOURCE, Path("unused"), Path("unused"))

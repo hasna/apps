@@ -16,8 +16,9 @@ and both failed image-only deployment run IDs. Run it only after a separately
 reviewed KMS key and ECS task-definition baseline has become healthy. It
 performs no AWS mutation. It verifies that:
 
-- each historical source is an ancestor and the latest failed candidate has the
-  same `apps/emails/**` bytes as the current exact-main source;
+- each historical source is an ancestor; differences between the latest failed
+  candidate's `apps/emails/**` bytes and exact main are recorded in the
+  reconciliation receipt, not mistaken for an image-only deployment;
 - the failed receipts bind their exact registered task and immutable image to
   the historical anchor, even though that revision is no longer live;
 - the current healthy task keeps the historical image and task configuration
@@ -36,6 +37,8 @@ scans, and pushes the exact amd64 current image, then:
 
 1. rechecks the reconciled service, task, running image, network and source
    binding;
+   the fresh image's source revision must equal current exact main, and its
+   actual OCI migration inputs are compared with the healthy live image;
 2. registers an image-only candidate cloned from the KMS-enabled task
    definition **without updating the service**;
 3. runs the candidate as a one-shot, read-only production migration planner;
