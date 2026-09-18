@@ -40,6 +40,7 @@ import {
   pruneRegistryRows,
 } from "../db/registry-prune.js";
 import { getDbPath } from "../db/database.js";
+import { REGISTRY_REGISTER_SCHEMA, RegistryRegisterError, registerRepository } from "../db/registry-register.js";
 import {
   ensureWorkspaceBootstrap,
   startAutoIndexWorker,
@@ -679,6 +680,39 @@ for (const [verb, description] of [
 const registry = program
   .command("registry")
   .description("Fail-closed local registry maintenance operations");
+
+registry
+  .command("register <path>")
+  .description("Register one existing standalone checkout without scanning, hooks, catalog sync or row merging")
+  .requiredOption("--expected-remote <host/owner/name>", "Exact credential-free GitHub remote identity")
+  .requiredOption("--expected-head <sha>", "Exact checkout HEAD object ID")
+  .requiredOption("--expected-branch <name>", "Exact current symbolic branch")
+  .option("--expected-database <path>", "Confirm the normally resolved registry path; required for apply")
+  .option("--expected-plan-hash <sha256>", "Plan hash from the dry run; required for apply")
+  .option("--dry-run", "Inspect without writing (default)")
+  .option("--apply", "Insert only the planned catalog row; matching existing rows remain unchanged")
+  .option("--json", "Output the versioned JSON result")
+  .action((path, opts) => {
+    try {
+      if (opts.apply && opts.dryRun) throw new RegistryRegisterError("INVALID_REQUEST");
+      const result = registerRepository({ path, expectedRemote: opts.expectedRemote,
+        expectedHead: opts.expectedHead, expectedBranch: opts.expectedBranch,
+        expectedDatabasePath: opts.expectedDatabase, expectedPlanHash: opts.expectedPlanHash, apply: Boolean(opts.apply) });
+      if (opts.json) printJson(result);
+      else if (result.already_registered) console.log(chalk.green("Checkout already registered; no row changed."));
+      else if (result.applied) console.log(chalk.green(`Registered checkout as repo ${result.repo_id}.`));
+      else {
+        console.log(`Registry: ${result.plan.database}`);
+        console.log(`Plan: ${result.plan.plan_hash}`);
+        console.log("Dry run complete; apply requires this database and plan hash.");
+      }
+    } catch (error) {
+      const code = error instanceof RegistryRegisterError ? error.code : "REGISTRATION_FAILED";
+      if (opts.json) printJson({ schema: REGISTRY_REGISTER_SCHEMA, ok: false, error: { code } });
+      else console.error(chalk.red(`Registration refused: ${code}`));
+      process.exitCode = 1;
+    }
+  });
 
 registry
   .command("relocate-primary")
