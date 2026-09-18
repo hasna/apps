@@ -2623,6 +2623,74 @@ suite("PostgresLoopStorage (live)", () => {
     expect(await storage.countWorkflows()).toBe(1);
   });
 
+  test("migration import rejects orphan run references before any PostgreSQL write", async () => {
+    const workflow: WorkflowSpec = {
+      id: "pg-before-orphan",
+      name: "pg-before-orphan",
+      version: 1,
+      status: "active",
+      steps: [{ id: "step", target: { type: "command", command: "true" } }],
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+    const orphan: LoopRun = {
+      id: "pg-orphan-run",
+      loopId: "missing-pg-loop",
+      loopName: "missing-pg-loop",
+      scheduledFor: "2026-01-01T00:00:00.000Z",
+      attempt: 1,
+      status: "succeeded",
+      finishedAt: "2026-01-01T00:00:01.000Z",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:01.000Z",
+    };
+    await expect(storage.importMigrationRows({ workflows: [workflow], loops: [], runs: [orphan] }))
+      .rejects.toMatchObject({ code: "MIGRATION_IMPORT_INVALID" });
+    expect(await storage.getWorkflow(workflow.id)).toBeUndefined();
+    expect(await storage.countRuns()).toBe(0);
+  });
+
+  test("migration import rolls back earlier PostgreSQL rows when a later storage write fails", async () => {
+    const workflow = (id: string, name: string): WorkflowSpec => ({
+      id,
+      name,
+      version: 1,
+      status: "active",
+      steps: [{ id: "step", target: { type: "command", command: "true" } }],
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+    await executor.queryClient.execute(`
+      CREATE OR REPLACE FUNCTION pr2173_fail_import_write() RETURNS trigger
+      LANGUAGE plpgsql AS $$
+      BEGIN
+        IF NEW.id = 'pg-forced-failure' THEN
+          RAISE EXCEPTION 'forced postgres migration rollback';
+        END IF;
+        RETURN NEW;
+      END;
+      $$;
+      CREATE TRIGGER pr2173_fail_import_write
+      BEFORE INSERT OR UPDATE ON workflow_specs
+      FOR EACH ROW EXECUTE FUNCTION pr2173_fail_import_write();
+    `);
+    const first = workflow("pg-rollback-first", "pg-rollback-first");
+    const failing = workflow("pg-forced-failure", "pg-forced-failure");
+    try {
+      await expect(storage.importMigrationRows({
+        workflows: [first, failing],
+        loops: [],
+        runs: [],
+        replace: true,
+      })).rejects.toThrow("forced postgres migration rollback");
+      expect(await storage.getWorkflow(first.id)).toBeUndefined();
+      expect(await storage.getWorkflow(failing.id)).toBeUndefined();
+    } finally {
+      await executor.queryClient.execute("DROP TRIGGER IF EXISTS pr2173_fail_import_write ON workflow_specs");
+      await executor.queryClient.execute("DROP FUNCTION IF EXISTS pr2173_fail_import_write()");
+    }
+  });
+
   test("fleet-union import tolerates secondary-unique collisions (skips, never aborts)", async () => {
     // Baseline: one loop, one run occupying a schedule slot, one active workflow.
     await storage.upsertMigrationLoop({

@@ -8,6 +8,7 @@ import { parseIntOption } from "./args.js";
 import chalk from "chalk";
 import {
   listRepos,
+  listReposStablePage,
   listAllRepos,
   getRepo,
   listCommits,
@@ -56,6 +57,7 @@ import {
   type CheckoutHealth,
 } from "../lib/checkout-health.js";
 import { printError, printJson, printJsonLine, printLine } from "./stdout.js";
+import { decodeRepoListCursor, encodeRepoListCursor } from "../lib/repo-list-cursor.js";
 import { syncGithubPRs, syncAllGithubPRs, fetchRepoMetadata } from "../lib/github.js";
 import { runPrMonitor } from "../lib/pr-monitor-run.js";
 import { enumerateGithubRepoCatalog } from "../lib/github-catalog.js";
@@ -525,11 +527,12 @@ program
   .option("--education", "Filter by hasnaeducation org (shorthand)")
   .option("--family", "Filter by hasnafamily org (shorthand)")
   .option("-q, --query <query>", "Filter by name")
-  .option("-n, --limit <n>", "Max results (default: 20 human, 50 JSON)")
+  .option("-n, --limit <n>", "Max results (default: 20; --full defaults to 50)")
   .option("-o, --offset <n>", "Skip first N results", "0")
-  .option("--cursor <n>", "Pagination cursor from a previous page")
+  .option("--cursor <cursor>", "Opaque snapshot cursor from a previous compact page")
   .option("--verbose", "Show descriptions and full paths")
-  .option("--json", "Output as JSON")
+  .option("--json", "Output bounded compact JSON")
+  .option("--full", "Return the legacy full-record JSON array")
   .action((opts) => {
     const alias = opts.filter ? getFilterAlias(opts.filter) : undefined;
     if (opts.filter && !alias) {
@@ -538,33 +541,64 @@ program
     }
     const org = alias?.org ?? (opts.oss ? "hasna" : opts.xyz ? "hasnaxyz" : opts.studio ? "hasnastudio" : opts.tools ? "hasnatools" : opts.ai ? "hasnaai" : opts.education ? "hasnaeducation" : opts.family ? "hasnafamily" : (opts.org ? ORG_ALIASES[opts.org] ?? opts.org : undefined));
     const query = alias?.query ?? opts.query;
-    const limit = resolveLimit(opts, COMPACT_LIMIT, 50);
-    const offset = resolveOffset(opts);
-    const repos = listRepos({ org, query, limit, offset });
-    const total = countRepos({ org, query });
-    if (opts.json) {
-      printJson(repos);
-      warnIfTruncated({ shown: repos.length, total, limit, offset, noun: "repo(s)" });
-    } else {
+    const limit = resolveLimit(opts, COMPACT_LIMIT, opts.full ? 50 : COMPACT_LIMIT);
+    if (!opts.json || opts.full) {
+      const offset = resolveOffset(opts);
+      const repos = listRepos({ org, query, limit, offset });
+      const total = countRepos({ org, query });
+      if (opts.json) {
+        printJson(repos);
+        warnIfTruncated({ shown: repos.length, total, limit, offset, noun: "repo(s)" });
+        return;
+      }
       if (repos.length === 0) { console.log(chalk.dim("No repos found. Run: repos scan")); return; }
-      for (const r of repos) {
-        const org = r.org ? chalk.blue(`[${r.org}]`) : "";
-        console.log(`${chalk.bold(r.name)} ${org} ${chalk.dim(`${r.commit_count} commits, ${r.branch_count} branches, ${r.tag_count} tags`)}`);
+      for (const repo of repos) {
+        const orgLabel = repo.org ? chalk.blue(`[${repo.org}]`) : "";
+        console.log(`${chalk.bold(repo.name)} ${orgLabel} ${chalk.dim(`${repo.commit_count} commits, ${repo.branch_count} branches, ${repo.tag_count} tags`)}`);
         if (opts.verbose) {
-          console.log(chalk.dim(`  ${compactText(r.path, 140)}`));
-          if (r.description) console.log(chalk.dim(`  ${compactText(r.description, 140)}`));
+          console.log(chalk.dim(`  ${compactText(repo.path, 140)}`));
+          if (repo.description) console.log(chalk.dim(`  ${compactText(repo.description, 140)}`));
         }
       }
-      printCompactHint({
-        count: repos.length,
-        noun: "repo(s)",
-        limit,
-        offset,
-        pageable: true,
-        verbose: opts.verbose,
-        detail: `${total} match this filter. Use \`repos show <name>\` for repo details`,
-      });
+      printCompactHint({ count: repos.length, noun: "repo(s)", limit, offset, pageable: true, verbose: opts.verbose, detail: `${total} match this filter. Use repos show <name> for repo details` });
+      return;
     }
+    if (opts.offset !== undefined && String(opts.offset) !== "0") {
+      console.error(chalk.red("--offset is legacy-only; use the opaque --cursor for compact pages or add --full."));
+      process.exit(1);
+    }
+    const decoded = opts.cursor ? decodeRepoListCursor(String(opts.cursor), { org, query }) : undefined;
+    const page = listReposStablePage({ org, query, limit, afterId: decoded?.after_id, snapshotMaxId: decoded?.snapshot_max_id });
+    const repos = page.repos;
+    const total = decoded?.total ?? page.total;
+    const lastId = repos.at(-1)?.id ?? decoded?.after_id ?? 0;
+    const nextCursor = page.hasMore ? encodeRepoListCursor({
+      after_id: lastId,
+      snapshot_max_id: page.snapshotMaxId,
+      total,
+      ...(org ? { org } : {}),
+      ...(query ? { query } : {}),
+    }) : null;
+    printJson({
+      repos: repos.map((repo) => ({
+        id: repo.id,
+        name: repo.name,
+        org: repo.org,
+        default_branch: repo.default_branch,
+        counts: { commits: repo.commit_count, branches: repo.branch_count, tags: repo.tag_count },
+        description: compactText(repo.description, 120),
+      })),
+      count: repos.length,
+      total,
+      limit,
+      cursor: opts.cursor ?? null,
+      snapshot_max_id: page.snapshotMaxId,
+      next_cursor: nextCursor,
+      has_more: page.hasMore,
+      compact: true,
+      sort: { fields: ["id"], directions: ["asc"] },
+      hint: "Use repos show <name> for details; pass --full for the legacy full-record array and numeric offsets.",
+    });
   });
 
 /**

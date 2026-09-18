@@ -100,6 +100,13 @@ function serveHosted(options: {
     fetch(request) {
       const url = new URL(request.url);
       paths.push(`${request.method} ${url.pathname}${url.search}`);
+      if (request.method === "GET" && url.pathname === "/v1/loops/count") {
+        const status = url.searchParams.get("status");
+        return Response.json({
+          ok: true,
+          count: options.loops.filter((loop) => (status ? loop.status === status : true)).length,
+        });
+      }
       if (request.method === "GET" && url.pathname === "/v1/loops") {
         if (options.loopsEnvelope !== undefined) return Response.json(options.loopsEnvelope);
         const status = url.searchParams.get("status");
@@ -153,14 +160,13 @@ function expectMalformedHealthError(result: CliResult): void {
 describe("hosted stuck-detector CLI boundary", () => {
   test("health scan rejects a malformed hosted loops envelope instead of manufacturing a clean result", async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-hosted-scan-malformed-loops-"));
-    const { server, paths } = serveHosted({ loops: [], runs: [], loopsEnvelope: { ok: true } });
+    const { server, paths } = serveHosted({ loops: [hostedLoop("loop-malformed")], runs: [], loopsEnvelope: { ok: true } });
     try {
       const result = await runCli(dataDir, ["--json", "health", "scan"], hostedEnv(server.port));
       expectMalformedHealthError(result);
-      expect(paths).toEqual([
-        "GET /v1/loops?status=active&limit=200",
-        "GET /v1/loops?status=paused&limit=200",
-      ]);
+      expect(paths).toContain("GET /v1/loops/count?status=active");
+      expect(paths).toContain("GET /v1/loops/count?status=paused");
+      expect(paths.some((path) => path.startsWith("GET /v1/loops?status=active&limit=1"))).toBe(true);
     } finally {
       server.stop(true);
       rmSync(dataDir, { recursive: true, force: true });

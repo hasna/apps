@@ -107,8 +107,14 @@ describe("compact CLI output", () => {
     expect(details).toContain("Path: /tmp/workspaces/very/deep/private/path/alpha-repo");
   });
 
-  test("JSON output preserves full records while human commits truncate by default", () => {
+  test("list JSON is compact by default while --full preserves legacy records", () => {
     const dbPath = seedDb();
+
+    const repoPage = JSON.parse(runCli(dbPath, ["repos", "--query", "alpha", "--json"])) as any;
+    expect(repoPage).toMatchObject({ count: 1, total: 1, compact: true, has_more: false });
+    expect(repoPage.repos[0].path).toBeUndefined();
+    const legacyRepos = JSON.parse(runCli(dbPath, ["repos", "--query", "alpha", "--json", "--full"])) as any[];
+    expect(legacyRepos[0].path).toContain("alpha-repo");
 
     const compact = runCli(dbPath, ["commits", "--repo", "alpha-repo", "--limit", "1"]);
     expect(compact).toContain("Implement a very long");

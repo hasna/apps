@@ -1071,7 +1071,12 @@ async function run(argv: string[]): Promise<void> {
         private_transport_body_output: false,
         private_cli_descriptor_transport: true,
         private_cli_transport: 'process_ipc',
-        guarded_actions: ['create', 'update', 'query', 'readback'],
+        guarded_actions: ['create', 'update', 'query', 'readback', 'review'],
+        private_review_callback: true,
+        private_legacy_review: true,
+        private_review_transport: 'in_process_callback',
+        private_edit_approval: 'server_signed_exact_revision_and_mutation',
+        unmanifested_update_requires_approval: true,
       }, flags.json, flags);
       return;
     }

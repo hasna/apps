@@ -77,7 +77,8 @@ describe("calendar MCP HTTP transport", () => {
       expect(compactPayload.items).toHaveLength(20);
       expect(compactPayload.next_cursor).toBe(20);
       expect(compactPayload.items[0].description).toBeUndefined();
-      expect(compactPayload.hint).toContain("verbose=true");
+      expect(compactPayload.hint).toContain("expanded preview");
+      expect(compactPayload.hint).not.toContain("full records");
 
       const verbose = await client.callTool({ name: "list_events", arguments: { calendar_id: calendar.id, limit: 1, verbose: true } });
       const verbosePayload = JSON.parse((verbose.content?.[0] as { type: "text"; text: string }).text);

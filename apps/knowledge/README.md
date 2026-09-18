@@ -310,6 +310,112 @@ second effect. Ordinary `/v1/notes`, `knowledge update --if-version`, SQLite,
 and raw SQL do not create an adoption claim and cannot substitute for this
 path.
 
+### Private review before an edit or legacy adoption
+
+`reviewPrivate` reads one complete record into a trusted in-process reviewer.
+It supports existing guarded records and legacy records **without adopting or
+editing them**. Obtain exact binding-state evidence first; freeze its version,
+raw content SHA-256 and binding state in a package-created review descriptor:
+
+```ts
+import { createKnowledgePrivateReviewDescriptor } from '@hasna/knowledge';
+
+const observed = await guarded.readBindingState(fullId);
+if (observed.state === 'bound_elsewhere') throw new Error('binding conflict');
+const review = createKnowledgePrivateReviewDescriptor({
+  operation_id: reviewedOperationId,
+  step_id: 'review-existing',
+  binding,
+  target_id: fullId,
+  expected_version: observed.item_version!,
+  expected_content_sha256: observed.content_sha256!,
+  expected_binding_state: observed.state,
+});
+const proof = await guarded.reviewPrivate(review, async (item) => {
+  // The complete, deeply frozen item is available only inside this process.
+  // Review content and preserve title, URL, tags, metadata and provenance.
+  await authorizedPrivateReviewer(item);
+});
+// Only identifiers, versions and hashes are returned. Do not log item bodies.
+```
+
+For an unmanifested guarded **edit**, review alone is deliberately insufficient.
+Use `approvePrivateEdit` and return the exact package-created update descriptor
+from the trusted callback. The authority exchanges its signed review token for
+a second short-lived grant bound to the exact authenticated principal that read,
+approved, and must execute the edit, plus the review request digest, exact old
+version/content SHA-256, update binding digest, and final mutation deterministic
+key. `approved_by` is an audit annotation only; it is not identity or authority.
+The token stays in a module-private handle; JSON and log serialization contain
+metadata only:
+
+```ts
+const approval = await guarded.approvePrivateEdit(
+  review,
+  'reviewer:owner-approved-flow',
+  async (item) => createKnowledgePrivateInputDescriptor({
+    operation_id: reviewedOperationId,
+    step_id: 'apply-reviewed-edit',
+    verb: 'update',
+    target_id: item.id,
+    binding,
+    precondition: { kind: 'version', expected_version: item.version! },
+    payload: buildApprovedPrivatePatch(item),
+  }),
+);
+const result = await guarded.executeApproved(approval);
+```
+
+`execute(...)` and `executePrivate(...)` refuse an unmanifested update without
+this grant. Manifest-bound updates retain their separate immutable ordered-plan
+authorization. A cloned approval handle, altered payload/binding/key, expired
+grant, different same-tenant key/agent, changed row version, or changed raw
+content digest fails closed before an effect. Review tokens are signed for the
+authenticated reviewer principal and are not transferable. Their nonce digest
+is transactionally inserted into an immutable consumption table while minting
+the grant; concurrent or later replay receives no second grant. The raw nonce,
+review token, private body, and credential are never persisted. The server
+checks the approved principal and revision again for execution. Approval tokens
+are never accepted in argv, environment variables, stdout/stderr, or ordinary
+JSON result surfaces.
+
+The authenticated `POST /v1/guarded-writes/reviews` route requires a tenant-bound
+`knowledge:read` credential, the service's exact authority, a full record ID,
+the expected stored binding state and the exact version/content digest. One
+producer SELECT checks and returns the same row snapshot. Positive call, item,
+byte and wall-time caps apply; stale records fail closed. The response is
+`no-store`. The route creates no note, history snapshot, adoption or receipt.
+Client transport errors and reviewer exceptions are sanitized; reviewer return
+values are discarded rather than placed on the result surface.
+
+Tenant-null legacy records are inaccessible through guarded binding-state,
+review and adoption by default. A deployment with a verified single legacy
+owner can set `HASNA_KNOWLEDGE_LEGACY_OWNER_TENANT_ID` to that exact tenant ID.
+This server-only setting never comes from request headers or descriptors;
+credentials for another tenant remain unable to access those records.
+Legacy rows with an existing tenant ID retain their own tenant boundary.
+Do not set one owner for a corpus with mixed or unresolved legacy ownership.
+
+The callback is trusted application code, not an isolation sandbox. It may
+perform a human or agent review using an explicitly authorized private review
+renderer, with bounded output and owner-only artifact permissions. The package
+does not write any artifact automatically. Such a review artifact is source
+review evidence, not a serialized input descriptor or an alternative mutation
+transport. Keep credentials, private bodies and private review payloads out of
+process arguments, environment variables, stdout/stderr and shared logs. A
+plain `reviewPrivate` success is still evidence only; only the explicit
+`approvePrivateEdit` exchange authorizes its exact returned descriptor. A legacy
+row still needs separate explicit adoption before guarded mutation. No model
+call, external transmission or paid generation happens as a side effect of
+review.
+
+Guarded producers intentionally isolate credentials supplied for one authority
+from ambient profile, disk and override tiers. Supply their authenticated
+transport environment through an approved credential consumer; the guarded
+transport consumes `HASNA_KNOWLEDGE_API_KEY` and the matching API URL. Never
+print or persist the supplied value. This explicit guarded path does not
+change the ordinary CLI's shared owner-file credential resolution.
+
 For any workflow touching multiple records or authorities, construct all
 descriptors first. Derive the manifest ID with
 `computeKnowledgeGuardedManifestId(maintainerBinding, workflowOperationId)`;

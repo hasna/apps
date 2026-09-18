@@ -1,0 +1,165 @@
+{
+  "schema": "knowledge.reviewed-migrations.v1",
+  "policy": "reviewed-additive-nonce-v1",
+  "ledger": {
+    "schema": "public",
+    "table": "schema_migrations"
+  },
+  "migrations": [
+    {
+      "id": "knowledge_pg_132",
+      "checksum": "sha256:895902aae4b943317d499ee818e40b1e5298409fca6b371b00d4d0fc6f896526"
+    },
+    {
+      "id": "knowledge_pg_133",
+      "checksum": "sha256:11b22663ba3ec761ac1217e4cdb4b91ed7afb7f6327f20a4bb99c735d1fe98e5"
+    },
+    {
+      "id": "knowledge_pg_134",
+      "checksum": "sha256:261969fb532e0919b0ac5c213af5b34b7f44a8fbe4fa57cf9e2b0d927920cc1b"
+    },
+    {
+      "id": "knowledge_pg_135",
+      "checksum": "sha256:f1eb667c965d2a60ad9871ae268a3b363cb33e4b67f0239b5638086b4e18bbda"
+    },
+    {
+      "id": "knowledge_pg_136",
+      "checksum": "sha256:496a8060ace38362cf6ea3e93eb0769449807278c9b13df908765844fc32398d"
+    }
+  ],
+  "added_table": {
+    "schema": "public",
+    "name": "knowledge_private_review_nonce_consumptions",
+    "shape": {
+      "kind": "r",
+      "persistence": "p",
+      "row_security": false,
+      "force_row_security": false,
+      "replica_identity": "d",
+      "options": null,
+      "columns": [
+        {
+          "name": "nonce_sha256",
+          "type": "text",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": null,
+          "collation": "\"default\""
+        },
+        {
+          "name": "review_request_digest",
+          "type": "text",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": null,
+          "collation": "\"default\""
+        },
+        {
+          "name": "reviewer_actor",
+          "type": "text",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": null,
+          "collation": "\"default\""
+        },
+        {
+          "name": "mutation_deterministic_key",
+          "type": "text",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": null,
+          "collation": "\"default\""
+        },
+        {
+          "name": "consumed_at",
+          "type": "text",
+          "not_null": true,
+          "identity": "",
+          "generated": "",
+          "default_expression": null,
+          "collation": "\"default\""
+        }
+      ],
+      "constraints": [
+        {
+          "name": "knowledge_private_review_nonce_cons_review_request_digest_check",
+          "type": "c",
+          "definition": "CHECK ((review_request_digest ~ '^[0-9a-f]{64}$'::text))",
+          "validated": true,
+          "deferrable": false,
+          "initially_deferred": false
+        },
+        {
+          "name": "knowledge_private_review_nonce_consumptions_nonce_sha256_check",
+          "type": "c",
+          "definition": "CHECK ((nonce_sha256 ~ '^[0-9a-f]{64}$'::text))",
+          "validated": true,
+          "deferrable": false,
+          "initially_deferred": false
+        },
+        {
+          "name": "knowledge_private_review_nonce_consumptions_pkey",
+          "type": "p",
+          "definition": "PRIMARY KEY (nonce_sha256)",
+          "validated": true,
+          "deferrable": false,
+          "initially_deferred": false
+        },
+        {
+          "name": "knowledge_private_review_nonce_mutation_deterministic_key_check",
+          "type": "c",
+          "definition": "CHECK ((mutation_deterministic_key ~ '^fcame1_[0-9a-f]{64}$'::text))",
+          "validated": true,
+          "deferrable": false,
+          "initially_deferred": false
+        }
+      ],
+      "indexes": [
+        {
+          "name": "knowledge_private_review_nonce_consumptions_pkey",
+          "definition": "CREATE UNIQUE INDEX knowledge_private_review_nonce_consumptions_pkey ON public.knowledge_private_review_nonce_consumptions USING btree (nonce_sha256)",
+          "valid": true,
+          "ready": true,
+          "live": true
+        }
+      ],
+      "triggers": [
+        {
+          "name": "trg_knowledge_private_review_nonce_immutable",
+          "definition": "CREATE TRIGGER trg_knowledge_private_review_nonce_immutable BEFORE DELETE OR UPDATE ON public.knowledge_private_review_nonce_consumptions FOR EACH ROW EXECUTE FUNCTION knowledge_private_review_nonce_immutable()",
+          "enabled": "A"
+        }
+      ],
+      "policies": []
+    }
+  },
+  "added_function": {
+    "schema": "public",
+    "name": "knowledge_private_review_nonce_immutable",
+    "shape": {
+      "schema": "public",
+      "name": "knowledge_private_review_nonce_immutable",
+      "arguments": "",
+      "kind": "f",
+      "definition": "CREATE OR REPLACE FUNCTION public.knowledge_private_review_nonce_immutable()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\n   BEGIN\n     RAISE EXCEPTION 'knowledge private review nonce consumptions are immutable'\n       USING ERRCODE = 'restrict_violation';\n   END\n   $function$\n",
+      "source": "\n   BEGIN\n     RAISE EXCEPTION 'knowledge private review nonce consumptions are immutable'\n       USING ERRCODE = 'restrict_violation';\n   END\n   ",
+      "binary": null,
+      "return_type": "trigger",
+      "language": "plpgsql",
+      "volatility": "v",
+      "strict": false,
+      "security_definer": false,
+      "leakproof": false,
+      "parallel": "u",
+      "config": null
+    }
+  },
+  "runtime_required_privileges": [
+    "SELECT",
+    "INSERT"
+  ]
+}

@@ -20,8 +20,9 @@
  * Three assertions:
  *   CENSUS   — `prepare:ordered` names EXACTLY the prepare members and their
  *              transitive workspace build dependencies. A dependency without
- *              prepare still needs its dist on a clean checkout (Skills now
- *              bundles the Secrets SDK, which has no prepare script).
+ *              prepare still needs its dist on a clean checkout. A member that
+ *              removed prepare because prepack owns a standalone frozen build
+ *              (Skills) must stay OUT or install would replace verified bytes.
  *   ORDER    — every workspace build dependency precedes its consumer.
  *   CI SHAPE — every `Install` step in .github/workflows/ci.yml runs
  *              `bun install --frozen-lockfile --ignore-scripts` and
@@ -209,6 +210,18 @@ describe("standard-adherence: install ordering", () => {
     const problems = prepareBuildViolations(chain, graph);
     expect(problems, `install-ordering violations:\n${problems.join("\n")}`).toEqual([]);
     expect(chain.length, "prepare:ordered chain must not be empty").toBeGreaterThan(0);
+  });
+
+  test("install preparation cannot rebuild or replace Skills standalone release artifacts", () => {
+    const rootPkg = JSON.parse(fs.readFileSync(ROOT_PKG_PATH, "utf8"));
+    const skillsPkg = JSON.parse(
+      fs.readFileSync(path.join(REPO_ROOT, "apps", "skills", "package.json"), "utf8"),
+    ) as { scripts?: Record<string, string> };
+    const chain = orderedPrepareMembers(rootPkg);
+
+    expect(skillsPkg.scripts?.prepare).toBeUndefined();
+    expect(skillsPkg.scripts?.prepack).toContain("verify:generated");
+    expect(chain).not.toContain("@hasna/skills");
   });
 
   test("dependency census includes SDKs without prepare, recursively, and rejects omissions, inversions and extras", () => {

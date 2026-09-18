@@ -195,6 +195,7 @@ export {
   createRemoteSkillsClient,
   RemoteRouteUnsupportedError,
   RemoteRequestError,
+  RemoteCreditCheckoutError,
   RemoteQuoteUnavailableError,
   type RemoteQuoteUnavailableCode,
   RemoteWorkspaceMemberError,
@@ -523,3 +524,5 @@ export { captureClaudeMarketplaceRegistry } from "./lib/claude-marketplace-regis
 export { buildPluginProjection, pluginTreeDigest, type PluginProjectionManifest, type PluginPayloadMapping, type PluginFileWitness } from "./lib/plugin-projection.js";
 export { planPluginAdmission, admitPlugin, resolveAdmittedPlugin, pluginResolverCommand, type PluginAdmissionTarget, type PluginAdmissionBinding, type PluginAdmissionPrincipal, type PluginAdmissionPlan, type PluginAdmissionIdentity, type PluginBundleIdentity, type PluginRoutingIdentity, type PluginAdmissionReceipt } from "./lib/plugin-admission.js";
 export { captureManagedPluginRegistry, type ManagedPluginRegistrationWitness } from "./lib/plugin-discovery.js";
+
+export type { RemoteCreditCheckoutOptions, RemoteCreditCheckout, RemoteCreditCheckoutErrorCode } from "./lib/remote-credit-checkout.js";

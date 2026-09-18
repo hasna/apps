@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import {
   listRepos,
+  listReposStablePage,
   getRepo,
   resolveIdOrName,
   AmbiguousRemoteError,
@@ -38,6 +39,8 @@ import {
 import { getDb } from "../db/database.js";
 import { getCliVersion } from "../cli/version.js";
 import { sanitizeRemoteOutput } from "../lib/remote-identity.js";
+import { decodeRepoListCursor, encodeRepoListCursor } from "../lib/repo-list-cursor.js";
+import { ReposToolCatalog, createProfiledReposServer, resolveReposMcpProfile, type ReposMcpProfile } from "./profile.js";
 
 export const MCP_NAME = "repos";
 export const VERSION = getCliVersion();
@@ -94,11 +97,38 @@ export function compactPage<T, U>(
   };
 }
 
-export function buildServer(): McpServer {
-  const server = new McpServer({
+function registerReposDiscoveryTools(server: McpServer, catalog: ReposToolCatalog): void {
+  const searchSchema = {
+    query: z.string().optional(),
+    limit: z.number().int().positive().max(100).optional(),
+    cursor: z.number().int().nonnegative().optional(),
+  };
+  catalog.record("search_tools", "Search the complete Repos MCP inventory.", searchSchema);
+  server.tool("search_tools", "Search the complete Repos MCP inventory.", searchSchema, async ({ query, limit, cursor }) => {
+    const matches = catalog.search(query);
+    const effectiveLimit = limit ?? 20;
+    const effectiveCursor = cursor ?? 0;
+    const items = matches.slice(effectiveCursor, effectiveCursor + effectiveLimit);
+    const nextCursor = effectiveCursor + items.length < matches.length ? effectiveCursor + items.length : null;
+    return textResponse({ items, count: items.length, total: matches.length, cursor: effectiveCursor, next_cursor: nextCursor, has_more: nextCursor !== null, complete_inventory: true });
+  });
+
+  const describeSchema = { names: z.array(z.string()).max(20) };
+  catalog.record("describe_tools", "Describe selected Repos tools from the complete inventory.", describeSchema);
+  server.tool("describe_tools", "Describe selected Repos tools from the complete inventory.", describeSchema, async ({ names }) => {
+    const described = catalog.describe(names);
+    return textResponse({ ...described, count: described.items.length, requested: names.length, complete: described.missing.length === 0 });
+  });
+}
+
+export function buildServer(profile: ReposMcpProfile = resolveReposMcpProfile()): McpServer {
+  const rawServer = new McpServer({
     name: MCP_NAME,
     version: VERSION,
-  });
+  }, { instructions: `Active MCP profile: ${profile}. The default core profile keeps tool discovery bounded; use search_tools/describe_tools or set HASNA_REPOS_MCP_PROFILE=full for the complete operational inventory.` });
+  const catalog = new ReposToolCatalog();
+  registerReposDiscoveryTools(rawServer, catalog);
+  const server = createProfiledReposServer(rawServer, profile, catalog);
 
 function jsonText(value: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(sanitizeRemoteOutput(value)) }] };
@@ -122,24 +152,45 @@ function todosArgs(args: {
 
 // ── Repos ──
 
-server.tool("list_repos", "List all tracked repositories", {
+server.tool("list_repos", "List tracked repositories with a stable identity snapshot cursor", {
   limit: limitArg("Max results (default 20 compact, 50 verbose)"),
-  offset: offsetArg(),
+  cursor: z.string().optional().describe("Opaque repos-list-v1 snapshot cursor for compact output"),
+  offset: offsetArg("Legacy numeric offset; valid only with verbose=true"),
   org: z.string().optional().describe("Filter by GitHub org"),
   query: z.string().optional().describe("Filter by name/description"),
-  verbose: z.boolean().optional().describe("Return full repo records instead of compact summaries"),
+  verbose: z.boolean().optional().describe("Return full repo records in legacy updated_at order"),
 }, async (args) => {
   const limit = compactLimit(args, 50);
-  const repos = listRepos({ ...args, limit });
-  if (args.verbose) return textResponse(repos);
-  return textResponse(compactPage("repos", repos, { ...args, limit, pageable: true }, (repo) => ({
-    id: repo.id,
-    name: repo.name,
-    org: repo.org,
-    default_branch: repo.default_branch,
-    counts: { commits: repo.commit_count, branches: repo.branch_count, tags: repo.tag_count },
-    description: compactText(repo.description, 120),
-  }), "Call get_repo with the repo id/name for path, remote, authors, and commits"));
+  if (args.verbose) {
+    if (args.cursor) return textResponse({ error: "cursor is for compact snapshot pages; use offset with verbose=true" });
+    return textResponse(listRepos({ ...args, limit }));
+  }
+  if (args.offset !== undefined) return textResponse({ error: "offset is legacy-only; use cursor for compact pages or verbose=true" });
+  const decoded = args.cursor ? decodeRepoListCursor(args.cursor, { org: args.org, query: args.query }) : undefined;
+  const page = listReposStablePage({ org: args.org, query: args.query, limit, afterId: decoded?.after_id, snapshotMaxId: decoded?.snapshot_max_id });
+  const total = decoded?.total ?? page.total;
+  const lastId = page.repos.at(-1)?.id ?? decoded?.after_id ?? 0;
+  const nextCursor = page.hasMore ? encodeRepoListCursor({ after_id: lastId, snapshot_max_id: page.snapshotMaxId, total, ...(args.org ? { org: args.org } : {}), ...(args.query ? { query: args.query } : {}) }) : null;
+  return textResponse({
+    kind: "repos",
+    output: "compact",
+    count: page.repos.length,
+    total,
+    limit,
+    cursor: args.cursor ?? null,
+    snapshot_max_id: page.snapshotMaxId,
+    next_cursor: nextCursor,
+    has_more: page.hasMore,
+    items: page.repos.map((repo) => ({
+      id: repo.id,
+      name: repo.name,
+      org: repo.org,
+      default_branch: repo.default_branch,
+      counts: { commits: repo.commit_count, branches: repo.branch_count, tags: repo.tag_count },
+      description: compactText(repo.description, 120),
+    })),
+    hint: "Call get_repo for details; continue with next_cursor. Set verbose=true for legacy updated_at-ordered records.",
+  });
 });
 
 server.tool("get_repo", "Get a repo by ID, path, or name", {
@@ -792,7 +843,7 @@ server.tool("list_agents", "List registered agents", {
   });
 });
 
-  return server;
+  return rawServer;
 }
 
 export async function prepareMcpLifecycle(): Promise<{ stop: () => void }> {

@@ -44,6 +44,8 @@ import {
   DuplicateWorkflowEventError,
   LegacyWorkflowRunProvenanceError,
   LoopArchivedError,
+  MigrationImportConflictError,
+  MigrationImportInvalidError,
   LoopMutationConflictError,
   LoopNotFoundError,
   LoopVersionNotFoundError,
@@ -949,6 +951,19 @@ export interface StoreMigrationRowsOptions {
 
 export interface StoreMigrationUpsertOptions {
   replace?: boolean;
+}
+
+export interface StoreMigrationImportInput {
+  workflows: WorkflowSpec[];
+  loops: Loop[];
+  runs: LoopRun[];
+  replace?: boolean;
+}
+
+export interface StoreMigrationImportResult {
+  importedIds: { workflows: string[]; loops: string[]; runs: string[] };
+  skippedRunningIds: string[];
+  skippedExistingIds: { workflows: string[]; loops: string[]; runs: string[] };
 }
 
 export interface RecordGoalEventInput {
@@ -6237,6 +6252,116 @@ export class Store {
     return imported;
   }
 
+  /**
+   * Apply one validated migration batch atomically.
+   *
+   * Reference and collision preflight runs inside the same BEGIN IMMEDIATE as
+   * the writes, so a malformed/orphan batch writes nothing and a later storage
+   * conflict rolls every earlier row back.
+   */
+  importMigrationRows(input: StoreMigrationImportInput): StoreMigrationImportResult {
+    return this.transact(() => {
+      const replace = input.replace === true;
+      const importedIds = { workflows: [] as string[], loops: [] as string[], runs: [] as string[] };
+      const skippedExistingIds = { workflows: [] as string[], loops: [] as string[], runs: [] as string[] };
+      const skippedRunningIds: string[] = [];
+      const uniqueIds = (rows: Array<{ id: string }>): boolean => new Set(rows.map((row) => row.id)).size === rows.length;
+      if (!uniqueIds(input.workflows) || !uniqueIds(input.loops) || !uniqueIds(input.runs)) {
+        throw new MigrationImportInvalidError();
+      }
+      const incomingWorkflows = new Map(input.workflows.map((row) => [row.id, row]));
+      const incomingLoops = new Map(input.loops.map((row) => [row.id, row]));
+      const existingWorkflows = new Map(input.workflows.map((row) => [row.id, this.getWorkflow(row.id)]));
+      const existingLoops = new Map(input.loops.map((row) => [row.id, this.getLoop(row.id)]));
+
+      for (const loop of input.loops) {
+        if (loop.target.type !== "workflow") continue;
+        const incoming = incomingWorkflows.get(loop.target.workflowId);
+        const existing = existingWorkflows.get(loop.target.workflowId) ?? this.getWorkflow(loop.target.workflowId);
+        const effective = incoming && (replace || !existing) ? incoming : existing;
+        if (!effective || (loop.goal && effective.goal)) throw new MigrationImportInvalidError();
+      }
+      for (const run of input.runs) {
+        if (!incomingLoops.has(run.loopId) && !this.getLoop(run.loopId)) throw new MigrationImportInvalidError();
+      }
+
+      const skippedWorkflowIds = new Set<string>();
+      for (const workflow of input.workflows) {
+        if (!replace && existingWorkflows.get(workflow.id)) {
+          skippedWorkflowIds.add(workflow.id);
+          skippedExistingIds.workflows.push(workflow.id);
+        }
+      }
+      const skippedLoopIds = new Set<string>();
+      for (const loop of input.loops) {
+        if (!replace && existingLoops.get(loop.id)) {
+          skippedLoopIds.add(loop.id);
+          skippedExistingIds.loops.push(loop.id);
+        }
+      }
+      const activeWorkflowNames = new Set<string>();
+      for (const workflow of input.workflows) {
+        if (skippedWorkflowIds.has(workflow.id) || workflow.status !== "active") continue;
+        if (activeWorkflowNames.has(workflow.name)) throw new MigrationImportConflictError();
+        activeWorkflowNames.add(workflow.name);
+        const owner = this.findWorkflowByName(workflow.name);
+        if (owner && owner.id !== workflow.id) throw new MigrationImportConflictError();
+      }
+      const skippedRunIds = new Set<string>();
+      const slots = new Set<string>();
+      for (const run of input.runs) {
+        const slotKey = `${run.loopId}\u0000${run.scheduledFor}`;
+        if (slots.has(slotKey)) throw new MigrationImportInvalidError();
+        slots.add(slotKey);
+        if (run.status === "running") {
+          skippedRunIds.add(run.id);
+          skippedRunningIds.push(run.id);
+          continue;
+        }
+        const existing = this.getRun(run.id);
+        if (existing?.status === "running") throw new MigrationImportConflictError();
+        if (!replace && existing) {
+          skippedRunIds.add(run.id);
+          skippedExistingIds.runs.push(run.id);
+          continue;
+        }
+        const occupant = this.getRunBySlot(run.loopId, run.scheduledFor);
+        if (occupant && occupant.id !== run.id) throw new MigrationImportConflictError();
+      }
+
+      const write = <T extends { id: string }>(expectedId: string, fn: () => T): T => {
+        try {
+          const stored = fn();
+          if (stored.id !== expectedId) throw new MigrationImportConflictError();
+          return stored;
+        } catch (error) {
+          if (error instanceof MigrationImportInvalidError || error instanceof MigrationImportConflictError) throw error;
+          const code = error && typeof error === "object" && "code" in error
+            ? String((error as { code?: unknown }).code ?? "")
+            : "";
+          if (code.startsWith("SQLITE_CONSTRAINT")) throw new MigrationImportConflictError();
+          throw error;
+        }
+      };
+      for (const workflow of input.workflows) {
+        if (skippedWorkflowIds.has(workflow.id)) continue;
+        write(workflow.id, () => this.upsertMigrationWorkflow(workflow, { replace }));
+        importedIds.workflows.push(workflow.id);
+      }
+      for (const loop of input.loops) {
+        if (skippedLoopIds.has(loop.id)) continue;
+        write(loop.id, () => this.upsertMigrationLoop(loop, { replace }));
+        importedIds.loops.push(loop.id);
+      }
+      for (const run of input.runs) {
+        if (skippedRunIds.has(run.id)) continue;
+        write(run.id, () => this.upsertMigrationRun(run, { replace }));
+        importedIds.runs.push(run.id);
+      }
+      return { importedIds, skippedRunningIds, skippedExistingIds };
+    });
+  }
+
   upsertMigrationLoop(loop: Loop, opts: StoreMigrationUpsertOptions = {}): Loop {
     const existing = this.getLoop(loop.id);
     if (existing && !opts.replace) return existing;
@@ -6245,10 +6370,10 @@ export class Store {
       .query(
         `INSERT INTO loops (id, name, description, labels_json, status, archived_at, archived_from_status, schedule_json, target_json,
           goal_json, machine_json, next_run_at, retry_scheduled_for, catch_up, catch_up_limit, overlap, max_attempts,
-          retry_delay_ms, lease_ms, expires_at, expires_after_runs, created_at, updated_at)
+          retry_delay_ms, lease_ms, expires_at, expires_after_runs, bundle_name, bundle_pinned_version, created_at, updated_at)
          VALUES ($id, $name, $description, $labels, $status, $archivedAt, $archivedFromStatus, $schedule, $target,
           $goal, $machine, $nextRun, $retrySlot, $catchUp, $catchUpLimit, $overlap, $maxAttempts,
-          $retryDelay, $leaseMs, $expiresAt, $expiresAfterRuns, $created, $updated)
+          $retryDelay, $leaseMs, $expiresAt, $expiresAfterRuns, $bundleName, $bundlePinnedVersion, $created, $updated)
          ON CONFLICT(id) DO UPDATE SET
            name=$name,
            description=$description,
@@ -6270,6 +6395,8 @@ export class Store {
            lease_ms=$leaseMs,
            expires_at=$expiresAt,
            expires_after_runs=$expiresAfterRuns,
+           bundle_name=$bundleName,
+           bundle_pinned_version=$bundlePinnedVersion,
            created_at=$created,
            updated_at=$updated`,
       )
@@ -6295,6 +6422,8 @@ export class Store {
         $leaseMs: loop.leaseMs,
         $expiresAt: loop.expiresAt ?? null,
         $expiresAfterRuns: loop.expiresAfterRuns ?? null,
+        $bundleName: loop.bundleName ?? null,
+        $bundlePinnedVersion: loop.bundlePinnedVersion ?? null,
         $created: loop.createdAt,
         $updated: loop.updatedAt,
       });

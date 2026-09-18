@@ -69,6 +69,18 @@ try {
   }, files: ["consumer.ts"] }));
   await writeFile(join(workspace, "consumer.ts"), `
 import { createRunService, runAdmissionSchema, runTerminalSchema, type SkillsProductStore, RemoteCapabilityUnavailableError, RemoteRequestError } from "@hasna/skills/sdk";
+import { RemoteSkillsClient as CheckoutClient, RemoteCreditCheckoutError, type RemoteCreditCheckoutOptions, type RemoteCreditCheckout } from "@hasna/skills/sdk";
+import { RemoteCreditCheckoutError as RootCheckoutError, type RemoteCreditCheckoutOptions as RootCheckoutOptions } from "@hasna/skills";
+declare const checkoutClient: CheckoutClient;
+const checkoutOptions: RemoteCreditCheckoutOptions = { idempotencyKey: "caller-checkout-001" };
+const rootCheckoutOptions: RootCheckoutOptions = checkoutOptions;
+const checkout: Promise<RemoteCreditCheckout> = checkoutClient.createCreditCheckout("credits_100", checkoutOptions);
+const legacyCheckoutCall: Promise<{ url: string }> = checkoutClient.createCreditCheckout("credits_100");
+declare const checkoutError: RemoteCreditCheckoutError;
+const sameCheckoutError: RootCheckoutError = checkoutError;
+const checkoutRecoveryKey: string = checkoutError.requestIdempotencyKey;
+// @ts-expect-error Request keys must be strings.
+checkoutClient.createCreditCheckout("credits_100", { idempotencyKey: 123 });
 import { inspectSkillSession, reconcileSkillSession, type SessionReconciliationInput, type SessionReconciliationOptions } from "@hasna/skills/sdk";
 import { reconcileSkillSession as reconcileFromRoot } from "@hasna/skills";
 declare const sessionReconciliation: SessionReconciliationInput;

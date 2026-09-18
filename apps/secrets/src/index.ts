@@ -48,14 +48,14 @@ Commands:
   restore <key> --version <N> --reason <text> [--expect-current <N>]
                               append-only restore: copies a historical value server-side
                               into a new current version; the history is never rewound
-  items list [kind] [--json]  list structured vault items
-  items search <query> [--json]  search structured vault item metadata
+  items list [kind] [--limit <n>] [--cursor <n>] [--json] [--full]  list structured vault items
+  items search <query> [--limit <n>] [--cursor <n>] [--json] [--full]  search structured vault item metadata
   items get <id> [--show]     show a structured vault item; redacted unless --show is passed
   items delete <id>           delete a structured vault item
   items add-login --title <title> --url <url> --username <user> --password <pass>
   items add-address --title <title> [--name <name>] [--line1 <line>] [--city <city>]
-  list [namespace] [--json]
-  search <query> [--json]
+  list [namespace] [--limit <n>] [--cursor <n>] [--json] [--full]
+  search <query> [--limit <n>] [--cursor <n>] [--json] [--full]
   export [--show|--plaintext] [--pretty]  export redacted compact JSON by default
   scan workspace [path] [--limit <n>] [--cursor <cursor>] [--max-bytes <n>] [--max-files <n>] [--max-scan-bytes <n>] [--timeout-ms <n>] [--pretty]
   scan history [path] [--limit <n>] [--cursor <cursor>] [--max-commits <n>] [--timeout-ms <n>] [--pretty]
@@ -67,11 +67,11 @@ Commands:
   import <json-file>
   status                      show metadata-only secret reference health
   gc                          prune expired secrets
-  audit [key] [--json]        show audit log
+  audit [key] [--limit <n>] [--cursor <n>] [--json] [--full]  show audit log
   events                      emit, list, and replay Hasna events
   webhooks                    manage Hasna event webhook subscriptions
 
-  users list [--type human|agent] [--json]
+  users list [--type human|agent] [--limit <n>] [--cursor <n>] [--json] [--full]
   users register <id> <name> [--type human|agent]
   users delete <id>
 
@@ -310,6 +310,7 @@ const BOOLEAN_FLAGS = new Set([
   "fix-permissions",
   "rotation",
   "verify",
+  "full",
 ]);
 
 function parseArgs(args: string[]): { flags: Record<string, string>; positional: string[] } {
@@ -329,6 +330,45 @@ function parseArgs(args: string[]): { flags: Record<string, string>; positional:
     }
   }
   return { flags, positional };
+}
+
+
+const DEFAULT_LIST_LIMIT = 20;
+const MAX_LIST_LIMIT = 200;
+
+function listWindow(flags: Record<string, string>, total: number, legacyDefault = 50) {
+  const full = flags.full === "true";
+  const rawLimit = flags.limit === undefined ? (full ? Math.max(1, total || legacyDefault) : DEFAULT_LIST_LIMIT) : Number(flags.limit);
+  const rawCursor = flags.cursor === undefined ? 0 : Number(flags.cursor);
+  if (!Number.isInteger(rawLimit) || rawLimit < 1) throw new Error("--limit must be a positive integer");
+  if (!Number.isInteger(rawCursor) || rawCursor < 0) throw new Error("--cursor must be a non-negative integer");
+  const limit = full ? rawLimit : Math.min(rawLimit, MAX_LIST_LIMIT);
+  const cursor = rawCursor;
+  const end = Math.min(total, cursor + limit);
+  return { full, limit, cursor, end, hasMore: end < total, nextCursor: end < total ? end : null };
+}
+
+function compactListEnvelope<T, U>(
+  items: T[],
+  flags: Record<string, string>,
+  map: (item: T) => U,
+  noun: string,
+  sort?: { fields: string[]; directions: string[] },
+) {
+  const window = listWindow(flags, items.length);
+  const selected = items.slice(window.cursor, window.end);
+  return {
+    items: selected.map(map),
+    count: selected.length,
+    total: items.length,
+    limit: window.limit,
+    cursor: window.cursor,
+    next_cursor: window.nextCursor,
+    has_more: window.hasMore,
+    compact: true as const,
+    ...(sort ? { sort } : {}),
+    hint: `Continue with --cursor when has_more is true; pass --full for legacy ${noun} records.`,
+  };
 }
 
 function parseTtl(ttl: string): string {
@@ -1002,15 +1042,23 @@ switch (command) {
   case "list": {
     const [namespace] = positional;
     const entries = await store().listSecretMetadata(namespace);
+    const page = compactListEnvelope(entries, flags, (entry) => ({
+      key: entry.key,
+      type: entry.type,
+      label: entry.label ?? null,
+      expires_at: entry.expires_at ?? null,
+      updated_at: entry.updated_at,
+    }), "secret metadata");
     if ("json" in flags) {
-      await writeStdout(JSON.stringify(entries, null, 2) + "\n");
+      await writeStdout(JSON.stringify(flags.full === "true" ? entries.slice(page.cursor, page.cursor + page.limit) : page, null, 2) + "\n");
       break;
     }
-    if (entries.length === 0) {
+    const shownEntries = entries.slice(page.cursor, page.cursor + page.limit);
+    if (shownEntries.length === 0) {
       console.log(namespace ? `No secrets in namespace: ${namespace}` : "Vault is empty.");
     } else {
-      for (const e of entries) console.log(formatEntry(e));
-      console.log(`\n${entries.length} secret(s)`);
+      for (const e of shownEntries) console.log(formatEntry(e));
+      console.log(`\n${shownEntries.length} of ${entries.length} secret(s)${page.next_cursor !== null ? `; next cursor: ${page.next_cursor}` : ""}`);
     }
     break;
   }
@@ -1019,14 +1067,18 @@ switch (command) {
     const [query] = positional;
     if (!query) { console.error("Usage: secrets search <query>"); process.exit(1); }
     const results = await store().searchSecretMetadata(query);
+    const page = compactListEnvelope(results, flags, (entry) => ({
+      key: entry.key, type: entry.type, label: entry.label ?? null, expires_at: entry.expires_at ?? null, updated_at: entry.updated_at,
+    }), "secret metadata");
     if ("json" in flags) {
-      await writeStdout(JSON.stringify(results, null, 2) + "\n");
+      await writeStdout(JSON.stringify(flags.full === "true" ? results.slice(page.cursor, page.cursor + page.limit) : page, null, 2) + "\n");
       break;
     }
-    if (results.length === 0) { console.log(`No results for: ${query}`); }
+    const shown = results.slice(page.cursor, page.cursor + page.limit);
+    if (shown.length === 0) { console.log(`No results for: ${query}`); }
     else {
-      for (const e of results) console.log(formatEntry(e));
-      console.log(`\n${results.length} result(s)`);
+      for (const e of shown) console.log(formatEntry(e));
+      console.log(`\n${shown.length} of ${results.length} result(s)${page.next_cursor !== null ? `; next cursor: ${page.next_cursor}` : ""}`);
     }
     break;
   }
@@ -1298,17 +1350,22 @@ switch (command) {
 
   case "audit": {
     const [key] = positional;
-    const limit = flags.limit ? parseInt(flags.limit) : 50;
-    const entries = await store().getAuditLog(key, limit);
+    const requestedLimit = flags.full === "true" ? Number(flags.limit ?? 50) : Math.min(Number(flags.limit ?? DEFAULT_LIST_LIMIT), MAX_LIST_LIMIT);
+    if (!Number.isInteger(requestedLimit) || requestedLimit < 1) throw new Error("--limit must be a positive integer");
+    const cursor = flags.cursor === undefined ? 0 : Number(flags.cursor);
+    if (!Number.isInteger(cursor) || cursor < 0) throw new Error("--cursor must be a non-negative integer");
+    const entries = await store().getAuditLog(key, cursor + requestedLimit + 1);
+    const selected = entries.slice(cursor, cursor + requestedLimit);
+    const hasMore = entries.length > cursor + requestedLimit;
     if ("json" in flags) {
-      await writeStdout(JSON.stringify(entries, null, 2) + "\n");
+      const payload = flags.full === "true" ? selected : { items: selected, count: selected.length, limit: requestedLimit, cursor, next_cursor: hasMore ? cursor + selected.length : null, has_more: hasMore, compact: true, sort: { fields: ["timestamp", "id"], directions: ["desc", "desc"] }, hint: "Continue with --cursor; pass --full for the legacy audit array." };
+      await writeStdout(JSON.stringify(payload, null, 2) + "\n");
       break;
     }
-    if (entries.length === 0) { console.log("No audit entries."); }
+    if (selected.length === 0) { console.log("No audit entries."); }
     else {
-      for (const e of entries) {
-        console.log(`[${e.timestamp}] ${e.action.toUpperCase().padEnd(6)} ${e.key} — ${e.agent}`);
-      }
+      for (const e of selected) console.log(`[${e.timestamp}] ${e.action.toUpperCase().padEnd(6)} ${e.key} — ${e.agent}`);
+      if (hasMore) console.log(`next cursor: ${cursor + selected.length}`);
     }
     break;
   }
@@ -1322,17 +1379,19 @@ switch (command) {
     switch (sub) {
       case "list": {
         const users = await store().listUsers(flags.type as any);
+        const page = compactListEnvelope(users, flags, (user) => ({ id: user.id, name: user.name, type: user.type, last_seen: user.last_seen ?? null }), "user", { fields: ["type", "name", "id"], directions: ["asc", "asc", "asc"] });
         if ("json" in flags) {
-          await writeStdout(JSON.stringify(users, null, 2) + "\n");
+          await writeStdout(JSON.stringify(flags.full === "true" ? users.slice(page.cursor, page.cursor + page.limit) : page, null, 2) + "\n");
           break;
         }
-        if (users.length === 0) { console.log("No users registered."); }
+        const shownUsers = users.slice(page.cursor, page.cursor + page.limit);
+        if (shownUsers.length === 0) { console.log("No users registered."); }
         else {
-          for (const u of users) {
+          for (const u of shownUsers) {
             const seen = u.last_seen ? ` (last seen: ${new Date(u.last_seen).toLocaleDateString()})` : "";
             console.log(`${u.id} [${u.type}] — ${u.name}${seen}`);
           }
-          console.log(`\n${users.length} user(s)`);
+          console.log(`\n${shownUsers.length} of ${users.length} user(s)${page.next_cursor !== null ? `; next cursor: ${page.next_cursor}` : ""}`);
         }
         break;
       }
@@ -1372,15 +1431,17 @@ switch (command) {
           process.exit(1);
         }
         const items = await store().listVaultItemMetadata(kind);
+        const page = compactListEnvelope(items, flags, (item) => ({ id: item.id, kind: item.kind, title: item.title, subtitle: item.subtitle ?? null, domain_count: item.domains.length, tag_count: item.tags.length, favorite: item.favorite, updated_at: item.updated_at }), "vault item", { fields: ["favorite", "title", "id"], directions: ["desc", "asc", "asc"] });
         if ("json" in flags) {
-          await writeStdout(JSON.stringify(items, null, 2) + "\n");
+          await writeStdout(JSON.stringify(flags.full === "true" ? items.slice(page.cursor, page.cursor + page.limit) : page, null, 2) + "\n");
           break;
         }
-        if (items.length === 0) {
+        const shownItems = items.slice(page.cursor, page.cursor + page.limit);
+        if (shownItems.length === 0) {
           console.log(kind ? `No ${kind} vault items.` : "No structured vault items.");
         } else {
-          for (const item of items) console.log(formatVaultItem(item));
-          console.log(`\n${items.length} item(s)`);
+          for (const item of shownItems) console.log(formatVaultItem(item));
+          console.log(`\n${shownItems.length} of ${items.length} item(s)${page.next_cursor !== null ? `; next cursor: ${page.next_cursor}` : ""}`);
         }
         break;
       }
@@ -1389,15 +1450,17 @@ switch (command) {
         const query = idOrKind;
         if (!query) { console.error("Usage: secrets items search <query>"); process.exit(1); }
         const items = await store().searchVaultItemMetadata(query);
+        const page = compactListEnvelope(items, flags, (item) => ({ id: item.id, kind: item.kind, title: item.title, subtitle: item.subtitle ?? null, domain_count: item.domains.length, tag_count: item.tags.length, favorite: item.favorite, updated_at: item.updated_at }), "vault item", { fields: ["favorite", "title", "id"], directions: ["desc", "asc", "asc"] });
         if ("json" in flags) {
-          await writeStdout(JSON.stringify(items, null, 2) + "\n");
+          await writeStdout(JSON.stringify(flags.full === "true" ? items.slice(page.cursor, page.cursor + page.limit) : page, null, 2) + "\n");
           break;
         }
-        if (items.length === 0) {
+        const shownItems = items.slice(page.cursor, page.cursor + page.limit);
+        if (shownItems.length === 0) {
           console.log(`No vault items for: ${query}`);
         } else {
-          for (const item of items) console.log(formatVaultItem(item));
-          console.log(`\n${items.length} item(s)`);
+          for (const item of shownItems) console.log(formatVaultItem(item));
+          console.log(`\n${shownItems.length} of ${items.length} item(s)${page.next_cursor !== null ? `; next cursor: ${page.next_cursor}` : ""}`);
         }
         break;
       }

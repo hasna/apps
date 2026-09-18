@@ -8,6 +8,8 @@ import type { CreateContactInput, Group } from "../../types/index.js";
 import { readFileSync, writeFileSync, existsSync } from "fs";
 import { extname } from "path";
 import { renderTable, formatContact, promptUser as prompt, confirmUser as confirm } from "../utils.js";
+import { compactContactsPage, normalizeContactsLimit, normalizeContactsOffset } from "../../lib/compact-output.js";
+import { CONTACTS_CORE_TOOL_NAMES, CONTACTS_FULL_TOOL_COUNT } from "../../mcp/profile.js";
 
 // The package version is read in src/cli/index.tsx (../../package.json, same
 // depth as the flat dist/cli bundle) and passed in here: a module-level require
@@ -204,26 +206,25 @@ program
   .description("List contacts")
   .option("--tag <tag_id>", "Filter by tag ID")
   .option("--company <id>", "Filter by company ID")
-  .option("--include-restricted", "Include restricted-sensitivity contacts")
-  .option("-l, --limit <n>", "Max results", "50")
+  .option("-l, --limit <n>", "Max results (default 20; --full defaults to 50)")
   .option("-o, --offset <n>", "Skip first N results", "0")
-  .option("--order-by <field>", "Sort field: display_name|created_at|updated_at|last_contacted_at|follow_up_at", "display_name")
-  .option("--order-dir <dir>", "Sort direction: asc|desc", "asc")
-  .option("-j, --json", "Output JSON")
-  .action(async (opts: { tag?: string; company?: string; includeRestricted?: boolean; limit: string; offset: string; orderBy: string; orderDir: string; json?: boolean }) => {
+  .option("--status <status>", "Filter by hosted lifecycle status")
+  .option("-j, --json", "Output compact paged JSON")
+  .option("--full", "Return the legacy full-record list payload")
+  .action(async (opts: { tag?: string; company?: string; status?: string; limit?: string; offset: string; json?: boolean; full?: boolean }) => {
     const store = getStore();
+    const limit = normalizeContactsLimit(opts.limit, opts.full ? 50 : 20);
+    const offset = normalizeContactsOffset(opts.offset);
     const result = await store.listContacts({
       tag_id: opts.tag,
       company_id: opts.company,
-      include_restricted: opts.includeRestricted,
-      limit: parseInt(opts.limit, 10),
-      offset: parseInt(opts.offset, 10),
-      order_by: opts.orderBy as "display_name" | "created_at" | "updated_at" | "last_contacted_at" | "follow_up_at",
-      order_dir: opts.orderDir === "desc" ? "desc" : "asc",
+      status: opts.status as CreateContactInput["status"],
+      limit,
+      offset,
     });
 
     if (opts.json) {
-      console.log(JSON.stringify(result, null, 2));
+      console.log(JSON.stringify(opts.full ? result : compactContactsPage(result.contacts, { total: result.total, limit, offset }), null, 2));
       return;
     }
 
@@ -633,39 +634,27 @@ program
 
 program
   .command("mcp")
-  .description("Print MCP server setup instructions")
+  .description("Print truthful MCP server setup instructions")
   .action(() => {
     const config = JSON.stringify(
       { contacts: { command: "contacts-mcp", args: [], env: {} } },
       null,
-      4
+      4,
     );
-
+    const coreCount = CONTACTS_CORE_TOOL_NAMES.length;
+    const fullCount = CONTACTS_FULL_TOOL_COUNT;
     console.log(`
 ${chalk.bold.blue("━━━ Contacts MCP Server Setup ━━━")}
 
-${chalk.bold("1. Install the package:")}
-   ${chalk.cyan("npm install -g @hasna/contacts")}
-   ${chalk.gray("or:")} ${chalk.cyan("bun add -g @hasna/contacts")}
+${chalk.bold("Install:")} ${chalk.cyan("npm install -g @hasna/contacts")}
+${chalk.bold("Claude Code:")} ${chalk.cyan("claude mcp add --transport stdio --scope user contacts -- contacts-mcp")}
+${chalk.bold("Manual config:")} ${chalk.yellow(config)}
 
-${chalk.bold("2. Add to Claude Code (recommended):")}
-   ${chalk.cyan("claude mcp add --transport stdio --scope user contacts -- contacts-mcp")}
+Default profile: core (${coreCount} tools). It includes routine contact/company/tag/relationship reads and writes plus search_tools and describe_tools for complete discovery across the ${fullCount}-tool full inventory.
+Full compatibility profile: set HASNA_CONTACTS_MCP_PROFILE=full or run contacts-mcp --mcp-profile full.
+List ordering: display_name asc, then id asc. Hosted list filters: company_id, tag_id, status.
 
-${chalk.bold("3. Or add manually to ~/.claude.json:")}
-   ${chalk.yellow(config)}
-
-${chalk.bold("4. Restart Claude Code and verify with")} ${chalk.cyan("/mcp")}
-
-${chalk.bold("Available tools (24 total):")}
-  ${chalk.gray("Contacts: ")}${chalk.white("create_contact  get_contact  update_contact  delete_contact")}
-  ${chalk.gray("          ")}${chalk.white("list_contacts   search_contacts  merge_contacts")}
-  ${chalk.gray("Companies:")}${chalk.white("create_company  get_company  update_company  delete_company")}
-  ${chalk.gray("          ")}${chalk.white("list_companies  search_companies")}
-  ${chalk.gray("Tags:     ")}${chalk.white("create_tag  list_tags  delete_tag")}
-  ${chalk.gray("          ")}${chalk.white("add_tag_to_contact  remove_tag_from_contact")}
-  ${chalk.gray("Rels:     ")}${chalk.white("add_relationship  list_relationships  delete_relationship")}
-  ${chalk.gray("I/O:      ")}${chalk.white("import_contacts  export_contacts  get_stats")}
-`);
+Restart the client and verify the active profile in the MCP initialize instructions.`);
   });
 
 // ─── contacts recent ──────────────────────────────────────────────────────────

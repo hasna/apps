@@ -343,13 +343,27 @@ describe("profile OpenAPI and generated SDK contract", () => {
       "hook",
       "custom-agent",
     ]);
+    expect(spec.components.schemas.NativeAgentMetadata).toMatchObject({
+      additionalProperties: false,
+      required: ["name", "description"],
+      properties: {
+        name: { type: "string", minLength: 1, maxLength: 128, pattern: "^[A-Za-z0-9][A-Za-z0-9_-]*$" },
+        description: { type: "string", minLength: 1, maxLength: 4096 },
+        frontmatter: { type: "string", maxLength: 16384 },
+      },
+    });
+    expect(spec.components.schemas.ProfileAssetBindingSpec.properties.nativeAgent).toEqual({
+      $ref: "#/components/schemas/NativeAgentMetadata",
+    });
     expect(spec.paths["/v1/profiles/{id}/assets"].get.operationId).toBe("getProfileAssetBindings");
     expect(spec.paths["/v1/profiles/{id}/assets"].post.operationId).toBe("addAssetToProfile");
     expect(spec.paths["/v1/profiles/{id}/assets/{assetKey}"].put.operationId).toBe("setProfileAssetBinding");
     expect(spec.paths["/v1/profiles/{id}/assets/{assetKey}"].delete.operationId).toBe("removeAssetFromProfile");
 
     const generated = readFileSync(join(import.meta.dir, "../sdk/v1.generated.ts"), "utf8");
+    expect(generated).toContain("export interface NativeAgentMetadata");
     expect(generated).toContain("export interface ProfileAssetBindingSpec");
+    expect(generated).toContain('"nativeAgent"?: NativeAgentMetadata');
     expect(generated).toContain("export interface ProfileAssetBinding");
     expect(generated).toContain("async getProfileAssetBindings(id: string");
     expect(generated).toContain("async addAssetToProfile(id: string, body: AddProfileAssetInput");

@@ -421,7 +421,9 @@ describe("syncProject", () => {
     const result = await syncProject({ store: new LocalConfigStore(db), projectDir: projDir });
     expect(result.added).toBe(1);
     const configs = listConfigs(undefined, db);
-    expect(configs[0]!.content).toContain("{{WORKSPACE_ROOT}}");
+    // No workspace was declared; sync must not invent a portable alias for it.
+    expect(configs[0]!.content).toContain("workspace=\n");
+    expect(configs[0]!.content).not.toContain("{{WORKSPACE_ROOT}}");
     expect(configs[0]!.content).toContain("{{BUN_BIN_DIR}}/configs-mcp");
     expect(configs[0]!.content).toContain("{{BUN_PATH}}");
     expect(configs[0]!.is_template).toBe(true);

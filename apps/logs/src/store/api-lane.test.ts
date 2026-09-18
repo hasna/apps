@@ -22,8 +22,9 @@ import {
   fakeClient,
   tokenWith,
 } from "../server/cloud/test-helpers.ts";
-import { ApiStore } from "./api.ts";
+import { buildCompactLogOutput } from "../lib/compact-output.ts";
 import type { LogEntry } from "../types/index.ts";
+import { ApiStore } from "./api.ts";
 
 function buildApiStore(): {
   api: ApiStore;
@@ -366,6 +367,83 @@ describe("ApiStore.listLogs (hosted logs paging)", () => {
     expect(page2.map((r) => r.message)).not.toEqual(
       page1.map((r) => r.message),
     );
+  });
+
+  test("multi-level pages scan beyond nonmatches with truthful matching offsets and continuation", async () => {
+    const { api, state } = buildApiStore();
+    const base = Date.parse("2026-01-01T00:00:00.000Z");
+    for (let index = 0; index < 1_002; index += 1) {
+      const id = `nonmatch-${String(index).padStart(4, "0")}`;
+      state.logs.set(id, {
+        id,
+        timestamp: new Date(base + (index + 10) * 1_000).toISOString(),
+        project_id: "proj-1",
+        level: "info",
+        source: "sdk",
+        service: null,
+        message: id,
+        trace_id: null,
+        session_id: null,
+        agent: null,
+        url: null,
+        stack_trace: null,
+        metadata: null,
+      });
+    }
+    for (const [index, level] of ["error", "warn", "error"].entries()) {
+      const id = `match-${index + 1}`;
+      state.logs.set(id, {
+        id,
+        timestamp: new Date(base + (3 - index) * 1_000).toISOString(),
+        project_id: "proj-1",
+        level,
+        source: "sdk",
+        service: null,
+        message: id,
+        trace_id: null,
+        session_id: null,
+        agent: null,
+        url: null,
+        stack_trace: null,
+        metadata: null,
+      });
+    }
+
+    // The first thousand server rows are all nonmatching. Asking for one extra
+    // matching row is the CLI's continuation probe; it must scan the second
+    // server page rather than filtering a sparse limit=3 response client-side.
+    const firstProbe = await api.listLogs({
+      project_id: "proj-1",
+      level: ["error", "warn"],
+      limit: 3,
+      offset: 0,
+    });
+    const first = buildCompactLogOutput(firstProbe, {
+      limit: 2,
+      offset: 0,
+      maxBytes: 32 * 1024,
+    });
+
+    const secondProbe = await api.listLogs({
+      project_id: "proj-1",
+      level: ["error", "warn"],
+      limit: 3,
+      offset: 2,
+    });
+    const second = buildCompactLogOutput(secondProbe, {
+      limit: 2,
+      offset: 2,
+      maxBytes: 32 * 1024,
+    });
+
+    expect(firstProbe.map((row) => row.id)).toEqual([
+      "match-1",
+      "match-2",
+      "match-3",
+    ]);
+    expect(first.nextOffset).toBe(2);
+    expect(secondProbe.map((row) => row.id)).toEqual(["match-3"]);
+    expect(second.nextOffset).toBeNull();
   });
 });
 

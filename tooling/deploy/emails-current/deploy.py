@@ -23,6 +23,9 @@ SEARCH = ROOT.parent / "emails-search" / "promotion.py"
 spec = importlib.util.spec_from_file_location("emails_search_promotion", SEARCH)
 promotion = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(promotion)
+spec = importlib.util.spec_from_file_location("emails_migration_admission", ROOT / "migration_admission.py")
+migrations = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(migrations)
 
 
 def require(ok, code):
@@ -107,6 +110,16 @@ def deploy(source, reconciled_path, reconciled_sha, image_digest, out):
     next(row for row in normalized["containerDefinitions"] if row.get("name") == "emails")["image"] = previous_image
     require(normalized == current_payload, "CANDIDATE_TASK_DRIFT")
     out.mkdir(mode=0o700)
+    before_digest = reconciled["descendant"]["imageDigest"]
+    running_tasks(anchor, desired, before_digest)
+    admission_path = out / "migration-admission.json"
+    admission = migrations.admit(before_digest, image_digest, promotion, receipt_path=admission_path)
+    admission_sha = hashlib.sha256(admission_path.read_bytes()).hexdigest()
+    # Reading both images can take minutes. Recheck actual healthy tasks and the
+    # stable service immediately before the first ECS mutation.
+    fresh = promotion.current_service()
+    require(promotion.service_binding(fresh) == anchor and fresh.get("desiredCount") == desired, "PRE_REGISTER_SERVICE_DRIFT")
+    running_tasks(anchor, desired, before_digest)
     promotion.save(out / "register-intent.json", {
         "schema": "emails.current-deploy-intent.v1",
         "sourceCommit": source,
@@ -114,7 +127,8 @@ def deploy(source, reconciled_path, reconciled_sha, image_digest, out):
         "taskBefore": anchor,
         "taskCandidateDigest": promotion.digest(promotion.encode(candidate)),
         "imageDigest": image_digest,
-        "migrationDefinitionChanged": False,
+        "migrationAdmissionSha256": admission_sha,
+        "migrationDefinitionChanged": admission["migrationDefinitionChanged"],
     })
     request = copy.deepcopy(candidate)
     if request.get("tags") == []:
@@ -143,7 +157,8 @@ def deploy(source, reconciled_path, reconciled_sha, image_digest, out):
             "desiredCount": desired,
             "runningTasks": tasks,
             "taskConfigurationPreserved": True,
-            "migrationDefinitionChanged": False,
+            "migrationAdmissionSha256": admission_sha,
+            "migrationDefinitionChanged": admission["migrationDefinitionChanged"],
             "automaticRollback": False,
         })
     except Exception:

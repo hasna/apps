@@ -96,6 +96,7 @@ export {
   DEFAULT_KNOWLEDGE_GUARDED_LIMITS,
   KNOWLEDGE_GUARDED_WRITE_CONTRACT,
   KNOWLEDGE_PRIVATE_INPUT_SCHEMA,
+  KNOWLEDGE_PRIVATE_EDIT_APPROVAL_SCHEMA,
   KNOWLEDGE_PRIVATE_QUERY_SCHEMA,
   KNOWLEDGE_PRIVATE_RESULT_SCHEMA,
   KNOWLEDGE_PRIVATE_TITLE_LOOKUP_SCHEMA,
@@ -182,6 +183,7 @@ export {
   type KnowledgeGuardedWriteResult,
   type KnowledgeGuardedWriteVerb,
   type KnowledgePrivateInputDescriptor,
+  type KnowledgePrivateEditApprovalGrant,
   type KnowledgePrivateItemProof,
   type KnowledgePrivateQueryArchive,
   type KnowledgePrivateQueryBounds,
@@ -199,6 +201,18 @@ export {
   type KnowledgeTerminalReconciliation,
 } from './guarded-write-contract.js';
 export * from './guarded-writer.js';
+export {
+  KNOWLEDGE_PRIVATE_REVIEW_SCHEMA,
+  KnowledgePrivateReviewError,
+  createKnowledgePrivateReviewDescriptor,
+  type CreateKnowledgePrivateReviewDescriptorOptions,
+  type KnowledgePrivateReviewDescriptor,
+  type KnowledgePrivateEditApproval,
+  type KnowledgePrivateEditReviewer,
+  type KnowledgePrivateReviewer,
+  type KnowledgePrivateReviewProof,
+  type KnowledgeReviewBindingState,
+} from './guarded-review.js';
 export {
   KNOWLEDGE_GUARDED_CLI_REQUEST_SCHEMA,
   KNOWLEDGE_GUARDED_CLI_RESULT_SCHEMA,

@@ -134,7 +134,7 @@ describe("channel canonical identity repair CLI", () => {
     expect(human.exitCode, human.stderr).toBe(0);
     expect(human.stdout).toContain("Channel #sample updated.");
 
-    const listed = runCli(["channel", "list", "--archived", "--json"]);
+    const listed = runCli(["channel", "list", "--archived", "--json", "--full"]);
     expect(listed.exitCode, listed.stderr).toBe(0);
     expect(JSON.parse(listed.stdout)).toContainEqual(expect.objectContaining({
       id: createdChannel.id,
@@ -187,7 +187,7 @@ describe("channel canonical identity repair CLI", () => {
     expect(badTags.exitCode).toBe(1);
     expect(badTags.stderr).toContain("Invalid --tags JSON. Expected an array of strings.");
 
-    const listed = runCli(["channel", "list", "--json"]);
+    const listed = runCli(["channel", "list", "--json", "--full"]);
     expect(listed.exitCode, listed.stderr).toBe(0);
     expect(JSON.parse(listed.stdout)).toContainEqual(expect.objectContaining({
       name: "identity-guard",

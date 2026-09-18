@@ -18,9 +18,9 @@ beforeAll(async () => {
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 
 type Seen = { path: string; method: string; body: any; authorization: string | null };
-async function fixture<T>(action: (origin: string, calls: Seen[]) => Promise<T>, opts: { costs?: number[]; quoteStatus?: number; quotePayload?: unknown; malformed?: boolean } = {}) {
+async function fixture<T>(action: (origin: string, calls: Seen[]) => Promise<T>, opts: { costs?: number[]; quoteStatus?: number; quotePayload?: unknown; malformed?: boolean; checkout?: (body: any, count: number) => Response } = {}) {
   const calls: Seen[] = [];
-  let quoteCount = 0;
+  let quoteCount = 0, checkoutCount = 0;
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(req) {
     const path = new URL(req.url).pathname;
     const body = req.method === "POST" ? await req.json() : null;
@@ -33,6 +33,7 @@ async function fixture<T>(action: (origin: string, calls: Seen[]) => Promise<T>,
       }), { status: opts.quoteStatus ?? 200 });
     }
     if (path.endsWith("/billing/status")) return Response.json({ plan: "credits", balanceCents: 500, creditBalance: 500, balance: "$5.00", hasPaymentMethod: true });
+    if (path.endsWith("/billing/credits") && req.method === "POST" && opts.checkout) return opts.checkout(body, ++checkoutCount);
     if (path.endsWith("/billing/credits")) return Response.json(req.method === "POST" ? { url: "https://checkout.example.test/session" } : [{ id: "credits_500", credits: 500, amountCents: 500, amount: "$5", expiresInDays: 90 }]);
     if (path.endsWith("/logs") || path.endsWith("/artifacts") || path.endsWith("/billing/usage") || path.endsWith("/billing/invoices")) return Response.json([]);
     if (path.includes("/runs/")) return Response.json({ id: runId, skill: "blog-article", status: "completed", exitCode: 0 });
@@ -200,11 +201,27 @@ finally:
     expect(JSON.parse(packs.stdout)).toEqual([{ id: "credits_500", credits: 500, expiresInDays: 90 }]);
     const bought = await cli(["credits", "buy", "credits_500", "--json"], origin);
     expect(JSON.parse(bought.stdout).url).toBe("https://checkout.example.test/session");
-    expect(calls.filter(call => call.method === "POST")).toEqual([expect.objectContaining({ body: { packId: "credits_500" } })]);
+    expect(calls.filter(call => call.method === "POST")).toEqual([expect.objectContaining({ body: { packId: "credits_500", idempotencyKey: JSON.parse(bought.stdout).requestIdempotencyKey } })]);
     const invalid = await cli(["credits", "buy", "credits_999", "--json"], origin);
     expect(invalid.exitCode).toBe(1);
     expect(calls.filter(call => call.method === "POST")).toHaveLength(1);
   }));
+  test("checkout CLI explicitly recovers503 and409 with the same caller key and no extraPOST", async () => fixture(async (origin, calls) => {
+    const args = ["credits", "buy", "credits_500", "--idempotency-key", "cli-checkout-0001", "--json"];
+    const first = await cli(args, origin), second = await cli(args, origin), third = await cli(args, origin);
+    expect([first.exitCode, second.exitCode, third.exitCode]).toEqual([1, 1, 0]);
+    expect(JSON.parse(first.stdout)).toMatchObject({ code: "CREDIT_CHECKOUT_UNCONFIRMED", status: 503, requestIdempotencyKey: "cli-checkout-0001", retryAfterSeconds: 30 });
+    expect(JSON.parse(second.stdout)).toMatchObject({ code: "CREDIT_CHECKOUT_IN_PROGRESS", status: 409, requestIdempotencyKey: "cli-checkout-0001" });
+    expect(JSON.parse(third.stdout)).toEqual({ url: "https://checkout.example.test/session", requestIdempotencyKey: "cli-checkout-0001" });
+    expect(first.stdout + second.stdout + third.stdout).not.toContain("SERVER_SECRET");
+    expect(calls.filter(c => c.method === "POST").map(c => c.body)).toEqual(Array.from({ length: 3 }, () => ({ packId: "credits_500", idempotencyKey: "cli-checkout-0001" })));
+  }, { checkout: (body, count) => Response.json(count === 1 ? { error: "credit checkout creation unresolved", retryAfterSeconds: 30, detail: "SERVER_SECRET" }
+    : count === 2 ? { error: "credit checkout in_progress", requestIdempotencyKey: body.idempotencyKey } : { url: "https://checkout.example.test/session", requestIdempotencyKey: body.idempotencyKey }, { status: count === 1 ? 503 : count === 2 ? 409 : 200 }) }));
+  test("human checkout guidance retains generated key and never echoes server text", async () => fixture(async (origin, calls) => {
+    const result = await cli(["credits", "buy", "credits_500"], origin, { humanRefusal: true });
+    expect(result.exitCode).toBe(1); expect(result.stdout).toBe(""); expect(result.stderr).toContain("--idempotency-key"); expect(result.stderr).not.toContain("SERVER_SECRET");
+    const posts = calls.filter(c => c.method === "POST"); expect(posts).toHaveLength(1); expect(result.stderr).toContain(posts[0]!.body.idempotencyKey);
+  }, { checkout: () => Response.json({ error: "credit checkout creation unresolved", detail: "SERVER_SECRET" }, { status: 503 }) }));
   test("direct SDK construction normalizes the same complete base and rejects unsafe URLs", async () => fixture(async (origin, calls) => {
     const client = new RemoteSkillsClient("sdk-fixture", `${origin}/prefix/api/v1/`);
     const quote = await client.quoteRun("blog-article");

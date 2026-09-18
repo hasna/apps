@@ -120,7 +120,7 @@ describe("dangerous operation guard standard", () => {
     expect(opencode.files[1]?.relativePath).toBe("opencode.json");
     expect(opencode.files[0]?.content).toContain("OpenCode");
     expect(JSON.parse(opencode.files[1]!.content)).toMatchObject({
-      instructions: [".hasna/instructions/01-dangerous-operation-guard-standard.md"],
+      instructions: ["/tmp/opencode-account999/.hasna/instructions/01-dangerous-operation-guard-standard.md"],
     });
 
     const cursor = planSessionRender({

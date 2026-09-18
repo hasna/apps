@@ -9,7 +9,7 @@ import { LocalStore } from "../src/store/index.js";
 
 // Large-output regression suite for issue #1586.
 //
-// `secrets list --json` / `secrets search --json` silently truncated big piped
+// `secrets list --json --full` / `secrets search --json --full` silently truncated big piped
 // payloads: Bun's process.stdout buffers pipe writes internally in 96 KiB
 // chunks and schedules the tail asynchronously; when the CLI's top-level
 // script ended, the runtime exited without draining the still-queued chunks,
@@ -83,27 +83,27 @@ function expectCompleteJson(stdout: string): unknown[] {
 }
 
 describe("CLI large JSON output (>1 MB corpus, issue #1586)", () => {
-  it("secrets list --json piped through cat is complete parsable JSON with all entries", 120_000, () => {
-    const res = runSecretsPiped(["list", "--json"], "cat");
+  it("secrets list --json --full piped through cat is complete parsable JSON with all entries", 120_000, () => {
+    const res = runSecretsPiped(["list", "--json", "--full"], "cat");
     expect(res.exitCode).toBe(0);
     // The corpus serializes to >1 MB: the payload size that used to truncate.
     expect(res.stdout.length).toBeGreaterThan(1_000_000);
     expectCompleteJson(res.stdout);
   });
 
-  it("secrets list --json piped to a lagging consumer is complete (no queued-chunk drop)", 120_000, () => {
+  it("secrets list --json --full piped to a lagging consumer is complete (no queued-chunk drop)", 120_000, () => {
     // The consumer refuses to read for 500 ms, forcing the writer to
     // backpressure — the exact situation where the old code lost buffered
     // chunks when the script ended.
-    const res = runSecretsPiped(["list", "--json"], "{ sleep 0.5; cat; }");
+    const res = runSecretsPiped(["list", "--json", "--full"], "{ sleep 0.5; cat; }");
     expect(res.exitCode).toBe(0);
     const parsed = expectCompleteJson(res.stdout);
     expect(parsed.some((e: any) => e.key === "corpus/svc/0/key")).toBe(true);
     expect(parsed.some((e: any) => e.key === `corpus/svc/${SEED_COUNT - 1}/key`)).toBe(true);
   });
 
-  it("secrets search --json with a broad query is complete parsable JSON with all entries", 120_000, () => {
-    const res = runSecretsPiped(["search", "corpus", "--json"], "cat");
+  it("secrets search --json --full with a broad query is complete parsable JSON with all entries", 120_000, () => {
+    const res = runSecretsPiped(["search", "corpus", "--json", "--full"], "cat");
     expect(res.exitCode).toBe(0);
     expect(res.stdout.length).toBeGreaterThan(1_000_000);
     expectCompleteJson(res.stdout);

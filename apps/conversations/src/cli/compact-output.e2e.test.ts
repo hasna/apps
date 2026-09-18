@@ -185,3 +185,21 @@ function seedChannel(channel: string, reader: string): void {
     expect(send.stderr).toContain("Invalid --metadata JSON.");
   });
 });
+
+describe("bounded channel inventory JSON", () => {
+  test("defaults to a compact page and keeps the legacy array behind --full", () => {
+    for (let index = 0; index < 12; index += 1) {
+      expect(runCli(["channel", "create", `inventory-${index}`], "inventory-owner").exitCode).toBe(0);
+    }
+    const compact = runCli(["channel", "list", "--json"], "inventory-owner");
+    expect(compact.exitCode, compact.stderr).toBe(0);
+    const page = JSON.parse(compact.stdout) as any;
+    expect(page).toMatchObject({ count: 10, limit: 10, cursor: 0, has_more: true, compact: true });
+    expect(page.channels[0].metadata).toBeUndefined();
+
+    const full = runCli(["channel", "list", "--json", "--full"], "inventory-owner");
+    expect(full.exitCode, full.stderr).toBe(0);
+    expect(Array.isArray(JSON.parse(full.stdout))).toBe(true);
+    expect(JSON.parse(full.stdout).length).toBeGreaterThanOrEqual(12);
+  }, 20_000);
+});

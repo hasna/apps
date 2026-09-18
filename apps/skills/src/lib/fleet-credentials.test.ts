@@ -454,20 +454,26 @@ describe("tier 2 — a vault pointer is a credential, never a blank key", () => 
     expect(fleet.apiOrigin).toBe("https://api.hasna.com/skills");
   });
 
-  test("completing it without the secrets SDK refuses loudly", async () => {
+  test("a pointer that cannot be completed refuses without exposing its vault identifier", async () => {
     // Terminal by contract: a deliberate pointer never falls through to another
-    // tier, and it certainly never falls back to local data.
+    // tier, and it certainly never falls back to local data. The item identifier
+    // is credential routing material too, so diagnostics name only the pointer
+    // environment variable and a redaction marker.
     const failure = resolveSkillsApiKey({ [POINTER_ENV]: VAULT_ITEM });
     await expect(failure).rejects.toBeInstanceOf(SkillsFleetCredentialError);
     await expect(failure).rejects.toThrow(/HASNA_SKILLS_API_KEY_REF/);
+    await expect(failure).rejects.toThrow(/\[redacted vault reference\]/);
+    await expect(failure).rejects.not.toThrow(VAULT_ITEM);
   });
 
-  test("and reaches a --json surface as a reason, not as an unhandled error", async () => {
+  test("and reaches a --json surface as a redacted reason, not as an unhandled error", async () => {
     const { apiKey, reason } = await skillsCredentialOrReason({ [POINTER_ENV]: VAULT_ITEM });
     expect(apiKey).toBeNull();
     // `reason: null` here would be the false green: "not signed in" for an
     // install that IS configured, and a caller free to answer locally.
     expect(reason).toMatch(/HASNA_SKILLS_API_KEY_REF/);
+    expect(reason).toContain("[redacted vault reference]");
+    expect(reason).not.toContain(VAULT_ITEM);
   });
 });
 

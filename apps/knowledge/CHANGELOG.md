@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.4.0
+
+### Minor Changes
+
+- Add additive compact/full/legacy detail modes for Knowledge CLI and MCP search responses. Compact search rows return bounded text previews, compact context search removes duplicated raw result bodies when excerpts are present, and compact MCP JSON is minified. Existing response contracts remain available by omitting `detail` or selecting `legacy`, while `full` explicitly requests complete text.
+
+  Enforce both token and UTF-8 byte ceilings for local and hosted context packs. Context-pack receipts now report the configured and measured byte budgets, and refuse instead of returning a successful over-budget payload.
+
+- Add exact-version private review callbacks for guarded and explicitly owned legacy records. Unmanifested guarded edits require a server-signed, principal-bound, one-time review approval tied to the reviewed revision, content digest, binding, and mutation key; transferred, replayed, forged, expired, or stale capabilities fail closed without exposing private bodies.
+
+### Patch Changes
+
+- `./serve`'s published declarations no longer import values or types from
+  `@hasna/contracts/auth` (hasna/apps#1782, adversarial credential-seam audit).
+  `ServeDeps` spelled `ApiKeyStore` (a class VALUE) and `ApiKeyVerifier` from
+  the contracts distribution, which breaks every strict `nodenext` consumer
+  (`TS2835` inside contracts' own `.d.ts`) with `skipLibCheck: false`. Both are
+  now structural local spellings in the declaration-only leaf
+  `src/contracts-types.ts` — including the client-seam
+  `CredentialTier`/`KeychainTierOptions`, the storage-client surface
+  (`HasnaStorageClient` and its transport), and the project-panel contract —
+  asserted mutually assignable with the real contracts declarations by
+  `src/contracts-types.test.ts` in every direction each type crosses; the serve
+  keeps importing the runtime `verifyApiKey`/`ApiKeyStore` VALUES from
+  `@hasna/contracts`, which remains a dependency. Verified by a packed-package
+  strict consumer compile (`moduleResolution: nodenext`, `skipLibCheck: false`)
+  across every export subpath. The conformance assertions are compile-time only,
+  so `bun run typecheck:conformance` (`tsconfig.conformance.json`) is now part of
+  `bun run build` — a drifted spelling fails the same build step that emits the
+  declarations, which is what makes the guarantee real rather than aspirational.
+- A fail-closed credential resolution now reports the dark source MACHINE-READABLY
+  instead of only in prose (BUG-0044). The rejection is a typed
+  `KnowledgeSourceUnavailableError` (`code: 'source_unavailable'`, exported from
+  the package root), and the CLI exits **3** — distinct from the generic `1` and
+  the version-conflict `2` — with `--json` carrying `status: 'unavailable'`,
+  `credential_source: 'none'`, the consulted credential-file paths, the credential
+  env KEY NAMES, the Keychain-tier flag, and the underlying reason. A run that
+  consumes KNOWLEDGE as a source can record `status=unavailable` from the field
+  instead of reading the message, and can tell a dark source apart from a command
+  that failed for an unrelated reason. The payload is value-free and never echoes
+  an authority URL the resolution refused to use; the human-readable message and
+  its existing assertions are unchanged.
+- Align the exact `@hasna/contracts` pin with the 1.0.2 optional secrets peer release.
+- Resolve hosted MCP item stores before creating a project-scoped local workspace, so project-scoped reads using the canonical Knowledge API leave no `config.json`, SQLite, JSON, or workspace-directory residue. Add real published-bin coverage for the canonical 0600 credential file, exact `/knowledge/v1` routing, compact search output, bounded context packs, and complete local-root isolation.
+
 ## 0.3.2
 
 ### Patch Changes

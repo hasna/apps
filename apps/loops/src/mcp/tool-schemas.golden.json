@@ -388,6 +388,7 @@
         "workflow": {
           "type": "string",
           "minLength": 1,
+          "maxLength": 256,
           "description": "Workflow id or exact workflow name."
         },
         "workflowInput": {
@@ -415,6 +416,7 @@
         "idOrName": {
           "type": "string",
           "minLength": 1,
+          "maxLength": 256,
           "description": "Loop id or exact loop name. Names resolve on exact match only; ambiguous names require the id."
         },
         "runLimit": {
@@ -443,6 +445,7 @@
         "idOrName": {
           "type": "string",
           "minLength": 1,
+          "maxLength": 256,
           "description": "Loop id or exact loop name. Names resolve on exact match only; ambiguous names require the id."
         }
       },
@@ -461,6 +464,7 @@
         "idOrName": {
           "type": "string",
           "minLength": 1,
+          "maxLength": 256,
           "description": "Loop id or exact loop name. Names resolve on exact match only; ambiguous names require the id."
         }
       },
@@ -479,6 +483,7 @@
         "idOrName": {
           "type": "string",
           "minLength": 1,
+          "maxLength": 256,
           "description": "Loop id or exact loop name. Names resolve on exact match only; ambiguous names require the id."
         }
       },
@@ -497,6 +502,7 @@
         "idOrName": {
           "type": "string",
           "minLength": 1,
+          "maxLength": 256,
           "description": "Loop id or exact loop name. Names resolve on exact match only; ambiguous names require the id."
         },
         "status": {
@@ -550,6 +556,7 @@
         "idOrName": {
           "type": "string",
           "minLength": 1,
+          "maxLength": 256,
           "description": "Loop id or exact loop name. Names resolve on exact match only; ambiguous names require the id."
         }
       },
@@ -568,6 +575,7 @@
         "idOrName": {
           "type": "string",
           "minLength": 1,
+          "maxLength": 256,
           "description": "Loop id or exact loop name. Names resolve on exact match only; ambiguous names require the id."
         },
         "mode": {
@@ -605,6 +613,7 @@
         "idOrName": {
           "type": "string",
           "minLength": 1,
+          "maxLength": 256,
           "description": "Loop id or exact loop name. Names resolve on exact match only; ambiguous names require the id."
         }
       },
@@ -996,6 +1005,7 @@
         "workflow": {
           "type": "string",
           "minLength": 1,
+          "maxLength": 256,
           "description": "Workflow id or exact workflow name."
         },
         "workflowInput": {
@@ -1031,6 +1041,7 @@
         "idOrName": {
           "type": "string",
           "minLength": 1,
+          "maxLength": 256,
           "description": "Loop id or exact loop name. Names resolve on exact match only; ambiguous names require the id."
         },
         "runLimit": {
@@ -1147,6 +1158,7 @@
         "idOrName": {
           "type": "string",
           "minLength": 1,
+          "maxLength": 256,
           "description": "Loop id or exact loop name. Names resolve on exact match only; ambiguous names require the id."
         },
         "mode": {
@@ -1229,6 +1241,7 @@
         "idOrName": {
           "type": "string",
           "minLength": 1,
+          "maxLength": 256,
           "description": "Loop id or exact loop name. Names resolve on exact match only; ambiguous names require the id."
         }
       },
@@ -1475,6 +1488,7 @@
         "idOrName": {
           "type": "string",
           "minLength": 1,
+          "maxLength": 256,
           "description": "Loop id or exact loop name. Names resolve on exact match only; ambiguous names require the id."
         }
       },
@@ -1493,6 +1507,7 @@
         "idOrName": {
           "type": "string",
           "minLength": 1,
+          "maxLength": 256,
           "description": "Loop id or exact loop name. Names resolve on exact match only; ambiguous names require the id."
         }
       },
@@ -1511,6 +1526,7 @@
         "idOrName": {
           "type": "string",
           "minLength": 1,
+          "maxLength": 256,
           "description": "Loop id or exact loop name. Names resolve on exact match only; ambiguous names require the id."
         },
         "status": {
@@ -1564,6 +1580,7 @@
         "idOrName": {
           "type": "string",
           "minLength": 1,
+          "maxLength": 256,
           "description": "Loop id or exact loop name. Names resolve on exact match only; ambiguous names require the id."
         },
         "includeLatestRun": {
@@ -1596,6 +1613,7 @@
         "idOrName": {
           "type": "string",
           "minLength": 1,
+          "maxLength": 256,
           "description": "Loop id or exact loop name. Names resolve on exact match only; ambiguous names require the id."
         }
       },
@@ -1614,6 +1632,7 @@
         "idOrName": {
           "type": "string",
           "minLength": 1,
+          "maxLength": 256,
           "description": "Loop id or exact loop name. Names resolve on exact match only; ambiguous names require the id."
         }
       },
@@ -1632,6 +1651,7 @@
         "idOrName": {
           "type": "string",
           "minLength": 1,
+          "maxLength": 256,
           "description": "Workflow id or exact workflow name."
         },
         "includeRuns": {
@@ -1752,6 +1772,7 @@
         "idOrName": {
           "type": "string",
           "minLength": 1,
+          "maxLength": 256,
           "description": "Workflow id or exact workflow name."
         },
         "includeRuns": {

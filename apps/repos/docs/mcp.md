@@ -1,6 +1,6 @@
 # MCP server
 
-`repos-mcp` exposes 37 tools. The standalone process uses stateless Streamable
+`repos-mcp` exposes 39 tools. The standalone process uses stateless Streamable
 HTTP on `127.0.0.1:8874` by default:
 
 ```bash
@@ -25,6 +25,8 @@ bound to loopback; there is no CLI option to expose another hostname.
 `repos-serve` also mounts `GET /health` and `/mcp` on its port (default 19450),
 alongside the REST API.
 
+The executable and programmatic server both default to the `core` profile. Use `search_tools` and `describe_tools` for complete discovery, or set `HASNA_REPOS_MCP_PROFILE=full` / pass `--mcp-profile full` for the complete callable inventory.
+
 The server starts the workspace auto-index worker before accepting calls. Set
 `REPOS_DISABLE_AUTO_INDEX=1` when the MCP process must not scan or install hook
 blocks. Database and workspace selection follow
@@ -34,7 +36,9 @@ blocks. Database and workspace selection follow
 
 | Tool | Main arguments | Result |
 |---|---|---|
-| `list_repos` | `limit`, `offset`, `org`, `query`, `verbose` | Tracked repositories |
+| `search_tools` | `query`, `limit`, `cursor` | Complete dynamic tool inventory |
+| `describe_tools` | `names` | Selected tool descriptions and parameter names |
+| `list_repos` | `limit`, `cursor`, `org`, `query`, `verbose`; legacy `offset` only with verbose | Stable immutable-id snapshot page |
 | `get_repo` | `id` (numeric ID, path, or name), `verbose` | One repo plus counts/stats |
 | `search_repos` | `query`, `limit`, `verbose` | Name, description, and remote matches |
 | `list_commits` | `repo_id`, `author`, `since`, `until`, `limit`, `offset`, `verbose` | Commit records |
@@ -106,8 +110,7 @@ dry runs unless `todo_apply` is true.
 
 List, search, detail, stats, graph, metadata, and agent tools return compact
 JSON summaries by default. Set `verbose: true` for full stored records. Where a
-tool is pageable, pass `limit` and `offset`; compact envelopes return a
-`next_cursor` hint. MCP list limits are capped at 200 and offsets at 100,000.
+tool is pageable, pass `limit` and its returned cursor. `list_repos` uses an immutable-id snapshot cursor so `updated_at` churn and later inserts cannot shift subsequent pages; its legacy verbose path retains numeric offsets. MCP list limits are capped at 200 and offsets at 100,000.
 
 PR compact rows retain merge-gate fields (`head_sha`, `mergeable`,
 `merge_state_status`, `ci_state`, `is_draft`, `review_decision`). All responses

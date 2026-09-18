@@ -62,7 +62,7 @@ export type {
   ProviderEndpointEntry,
 } from "./lib/provider-context.js";
 
-// Skill-home distribution (managed skill runtimes)
+// Deprecated read-only native skill migration reports (Skills owns distribution)
 export {
   INBOX_CONVERSATIONS_MINIMUM_VERSION,
   inspectManagedSkillRuntimes,
@@ -162,6 +162,7 @@ export {
   configAssetDigest,
   configAssetLocator,
   normalizeProfileAssetBinding,
+  renderNativeAgentContent,
   resolveAssetDestination,
   selectAssetCapability,
 } from "./lib/asset-plan.js";
@@ -177,6 +178,8 @@ export type {
   CompileAssetPlanInput,
 } from "./lib/asset-plan.js";
 export { providerVersionSatisfies } from "./lib/provider-version.js";
+export { discoverHarnesses, DISCOVERABLE_HARNESSES, HARNESS_DISCOVERY_SCHEMA } from "./lib/harness-discovery.js";
+export type { DiscoverableHarness, HarnessDiscoveryOptions, HarnessDiscoveryResult, HarnessDiscoveryEntry, HarnessPathObservation } from "./lib/harness-discovery.js";
 export type {
   SessionHostedProfileSelector,
   SessionInstructionLayer,
@@ -248,6 +251,7 @@ export type {
   SessionDriftEntry,
   SessionFileAdoption,
   SessionFileAdoptionReceipt,
+  SessionFileRetirementReceipt,
   SessionFileReconciliationReceipt,
   SessionRestoreConflict,
   SessionRestoreFileResult,

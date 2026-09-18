@@ -179,6 +179,11 @@ export interface ServeDeps {
      * routes keep working and guarded routes fail closed with 503.
      */
     guardedAuthority?: KnowledgeServeGuardedAuthority;
+    /** Server-only HMAC key for revision- and mutation-bound private edit approvals. */
+    reviewApprovalSecret?: string;
+    /** Explicit deployment owner of tenant-null legacy rows. Absent denies access
+     * to those rows; a request's tenant never establishes their ownership. */
+    legacyOwnerTenantId?: string;
     /**
      * Optional test/host override for the package-owned project-link authority.
      * Production uses the same Postgres client as notes and scopes every
@@ -198,8 +203,8 @@ export interface RunningServe {
     stop: () => Promise<void>;
 }
 export declare function resolveKnowledgeGuardedAuthority(env?: NodeJS.ProcessEnv): KnowledgeServeGuardedAuthority | undefined;
-/**
- * Start the knowledge HTTP service on Bun. Opens the server PostgreSQL pool and a
- * contracts API-key verifier backed by the api_keys table (revocation).
- */
+/** Tenant-null records have no request-derived owner. Only explicit deployment
+ * configuration may grant their guarded review or adoption to one tenant. */
+export declare function resolveKnowledgeLegacyOwnerTenantId(env: NodeJS.ProcessEnv): string | undefined;
+/** Start the HTTP service using PostgreSQL and a revocation-aware verifier. */
 export declare function startKnowledgeServe(options?: StartServeOptions): Promise<RunningServe>;

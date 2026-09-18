@@ -30,6 +30,8 @@ import type {
   RecordGoalEventInput,
   RecoverExpiredRunLeasesResult,
   RecoveredLeaseRunPage,
+  StoreMigrationImportInput,
+  StoreMigrationImportResult,
   WorkflowRecoveryContext,
 } from "../store.js";
 import { Store } from "../store.js";
@@ -80,6 +82,8 @@ import {
   DuplicateWorkflowEventError,
   LegacyWorkflowRunProvenanceError,
   LoopArchivedError,
+  MigrationImportConflictError,
+  MigrationImportInvalidError,
   LoopMutationConflictError,
   LoopNotFoundError,
   LoopVersionNotFoundError,
@@ -1535,6 +1539,125 @@ export class PostgresLoopStorage implements LoopStorageContract {
     return imported;
   }
 
+  async importMigrationRows(
+    ...args: M<"importMigrationRows">["args"]
+  ): Promise<M<"importMigrationRows">["result"]> {
+    const [input] = args as [StoreMigrationImportInput];
+    return this.client.transaction(async (client) => {
+      const storage = new PostgresLoopStorage(scopedClient(client, this.client.pool), {
+        tenantId: this.tenantId,
+        principalId: this.principalId,
+        requestId: this.requestId,
+      }, { contextAlreadyBound: true });
+      const replace = input.replace === true;
+      const importedIds = { workflows: [] as string[], loops: [] as string[], runs: [] as string[] };
+      const skippedExistingIds = { workflows: [] as string[], loops: [] as string[], runs: [] as string[] };
+      const skippedRunningIds: string[] = [];
+      const uniqueIds = (rows: Array<{ id: string }>): boolean => new Set(rows.map((row) => row.id)).size === rows.length;
+      if (!uniqueIds(input.workflows) || !uniqueIds(input.loops) || !uniqueIds(input.runs)) {
+        throw new MigrationImportInvalidError();
+      }
+      const incomingWorkflows = new Map(input.workflows.map((row) => [row.id, row]));
+      const incomingLoops = new Map(input.loops.map((row) => [row.id, row]));
+      const existingWorkflows = new Map(await Promise.all(input.workflows.map(async (row) => [
+        row.id,
+        await storage.getWorkflow(row.id),
+      ] as const)));
+      const existingLoops = new Map(await Promise.all(input.loops.map(async (row) => [
+        row.id,
+        await storage.getLoop(row.id),
+      ] as const)));
+
+      for (const loop of input.loops) {
+        if (loop.target.type !== "workflow") continue;
+        const incoming = incomingWorkflows.get(loop.target.workflowId);
+        const existing = existingWorkflows.get(loop.target.workflowId) ?? await storage.getWorkflow(loop.target.workflowId);
+        const effective = incoming && (replace || !existing) ? incoming : existing;
+        if (!effective || (loop.goal && effective.goal)) throw new MigrationImportInvalidError();
+      }
+      for (const run of input.runs) {
+        if (!incomingLoops.has(run.loopId) && !await storage.getLoop(run.loopId)) {
+          throw new MigrationImportInvalidError();
+        }
+      }
+
+      const skippedWorkflowIds = new Set<string>();
+      for (const workflow of input.workflows) {
+        if (!replace && existingWorkflows.get(workflow.id)) {
+          skippedWorkflowIds.add(workflow.id);
+          skippedExistingIds.workflows.push(workflow.id);
+        }
+      }
+      const skippedLoopIds = new Set<string>();
+      for (const loop of input.loops) {
+        if (!replace && existingLoops.get(loop.id)) {
+          skippedLoopIds.add(loop.id);
+          skippedExistingIds.loops.push(loop.id);
+        }
+      }
+      const activeWorkflowNames = new Set<string>();
+      for (const workflow of input.workflows) {
+        if (skippedWorkflowIds.has(workflow.id) || workflow.status !== "active") continue;
+        if (activeWorkflowNames.has(workflow.name)) throw new MigrationImportConflictError();
+        activeWorkflowNames.add(workflow.name);
+        const owner = await client.get<WorkflowRow>(
+          "SELECT * FROM workflow_specs WHERE tenant_id = open_loops_current_tenant_id() AND name = $1 AND status = 'active' ORDER BY updated_at DESC LIMIT 1",
+          [workflow.name],
+        );
+        if (owner && owner.id !== workflow.id) throw new MigrationImportConflictError();
+      }
+      const skippedRunIds = new Set<string>();
+      const slots = new Set<string>();
+      for (const run of input.runs) {
+        const slotKey = `${run.loopId}\u0000${run.scheduledFor}`;
+        if (slots.has(slotKey)) throw new MigrationImportInvalidError();
+        slots.add(slotKey);
+        if (run.status === "running") {
+          skippedRunIds.add(run.id);
+          skippedRunningIds.push(run.id);
+          continue;
+        }
+        const existing = await storage.getRun(run.id);
+        if (existing?.status === "running") throw new MigrationImportConflictError();
+        if (!replace && existing) {
+          skippedRunIds.add(run.id);
+          skippedExistingIds.runs.push(run.id);
+          continue;
+        }
+        const occupant = await storage.getRunBySlot(run.loopId, run.scheduledFor);
+        if (occupant && occupant.id !== run.id) throw new MigrationImportConflictError();
+      }
+
+      const write = async <T extends { id: string }>(expectedId: string, fn: () => Promise<T>): Promise<T> => {
+        try {
+          const stored = await fn();
+          if (stored.id !== expectedId) throw new MigrationImportConflictError();
+          return stored;
+        } catch (error) {
+          if (error instanceof MigrationImportInvalidError || error instanceof MigrationImportConflictError) throw error;
+          if (isUniqueViolation(error)) throw new MigrationImportConflictError();
+          throw error;
+        }
+      };
+      for (const workflow of input.workflows) {
+        if (skippedWorkflowIds.has(workflow.id)) continue;
+        await write(workflow.id, () => storage.upsertMigrationWorkflow(workflow, { replace }));
+        importedIds.workflows.push(workflow.id);
+      }
+      for (const loop of input.loops) {
+        if (skippedLoopIds.has(loop.id)) continue;
+        await write(loop.id, () => storage.upsertMigrationLoop(loop, { replace }));
+        importedIds.loops.push(loop.id);
+      }
+      for (const run of input.runs) {
+        if (skippedRunIds.has(run.id)) continue;
+        await write(run.id, () => storage.upsertMigrationRun(run, { replace }));
+        importedIds.runs.push(run.id);
+      }
+      return { importedIds, skippedRunningIds, skippedExistingIds } satisfies StoreMigrationImportResult;
+    });
+  }
+
   async upsertMigrationLoop(...args: M<"upsertMigrationLoop">["args"]): Promise<M<"upsertMigrationLoop">["result"]> {
     const [loop, opts = {}] = args as [Loop, { replace?: boolean }?];
     const existing = await this.loadLoop(this.client, loop.id);
@@ -1542,8 +1665,8 @@ export class PostgresLoopStorage implements LoopStorageContract {
     await this.client.execute(
       `INSERT INTO loops (id, name, description, labels_json, status, archived_at, archived_from_status, schedule_json, target_json,
         goal_json, machine_json, next_run_at, retry_scheduled_for, catch_up, catch_up_limit, overlap, max_attempts,
-        retry_delay_ms, lease_ms, expires_at, expires_after_runs, created_at, updated_at, tenant_id)
-       VALUES ($1,$2,$3,$4::jsonb,$5,$6,$7,$8::jsonb,$9::jsonb,$10::jsonb,$11::jsonb,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,open_loops_current_tenant_id())
+        retry_delay_ms, lease_ms, expires_at, expires_after_runs, bundle_name, bundle_pinned_version, created_at, updated_at, tenant_id)
+       VALUES ($1,$2,$3,$4::jsonb,$5,$6,$7,$8::jsonb,$9::jsonb,$10::jsonb,$11::jsonb,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,open_loops_current_tenant_id())
        ON CONFLICT(tenant_id,id) DO UPDATE SET
          name=EXCLUDED.name,
          description=EXCLUDED.description,
@@ -1565,6 +1688,8 @@ export class PostgresLoopStorage implements LoopStorageContract {
          lease_ms=EXCLUDED.lease_ms,
          expires_at=EXCLUDED.expires_at,
          expires_after_runs=EXCLUDED.expires_after_runs,
+         bundle_name=EXCLUDED.bundle_name,
+         bundle_pinned_version=EXCLUDED.bundle_pinned_version,
          created_at=EXCLUDED.created_at,
          updated_at=EXCLUDED.updated_at`,
       [
@@ -1589,6 +1714,8 @@ export class PostgresLoopStorage implements LoopStorageContract {
         loop.leaseMs,
         loop.expiresAt ?? null,
         loop.expiresAfterRuns ?? null,
+        loop.bundleName ?? null,
+        loop.bundlePinnedVersion ?? null,
         loop.createdAt,
         loop.updatedAt,
       ],

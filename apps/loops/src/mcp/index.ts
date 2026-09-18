@@ -15,9 +15,16 @@ import {
   publicWorkflowEvent,
   publicWorkflowRun,
   publicWorkflowStepRun,
+  redact,
 } from "../lib/format.js";
 import { publicCommandDescriptor } from "../lib/command-target.js";
 import { buildHealthReport, buildHealthScan, classifyRunFailure, expectationForLoop } from "../lib/health.js";
+import {
+  buildHostedDoctorReport,
+  buildHostedHealthReport,
+  buildHostedHealthScan,
+  buildHostedLoopDiagnosis,
+} from "../lib/hosted-diagnostics.js";
 import { nowIso } from "../lib/ids.js";
 import { LOOP_LABEL_MAX_COUNT, mergeLoopLabels, normalizeLoopLabels, removeLoopLabels } from "../lib/labels.js";
 import { resolveLoopMachine } from "../lib/machines.js";
@@ -57,14 +64,16 @@ const MAX_LIMIT = 500;
 const MAX_OUTPUT_RUN_LIMIT = 25;
 const MAX_OUTPUT_CHARS = 32_000;
 const MAX_RESPONSE_CHARS = 128_000;
+const MAX_ERROR_CHARS = 4_096;
 
 const MUTATION_ENV = "LOOPS_MCP_ALLOW_MUTATIONS";
 
 const loopIdOrNameSchema = z
   .string()
   .min(1)
+  .max(256)
   .describe("Loop id or exact loop name. Names resolve on exact match only; ambiguous names require the id.");
-const workflowIdOrNameSchema = z.string().min(1).describe("Workflow id or exact workflow name.");
+const workflowIdOrNameSchema = z.string().min(1).max(256).describe("Workflow id or exact workflow name.");
 const showOutputSchema = z
   .boolean()
   .optional()
@@ -240,8 +249,15 @@ function jsonResult(value: unknown) {
 function errorResult(error: unknown) {
   // Surface coded store errors (LOOP_NOT_FOUND, LOOP_ARCHIVED, ...) as
   // structured payloads so MCP clients can branch without parsing prose.
-  const message = error instanceof Error ? error.message : String(error);
-  const code = error instanceof CodedError ? error.code : "ERROR";
+  const rawMessage = error instanceof Error ? error.message : String(error);
+  const message = redact(rawMessage, MAX_ERROR_CHARS) ?? "hosted Loops request failed";
+  const code = error instanceof CodedError
+    ? error.code
+    : error && typeof error === "object" && typeof (error as { code?: unknown }).code === "string"
+      ? (error as { code: string }).code
+      : error && typeof error === "object" && typeof (error as { status?: unknown }).status === "number"
+        ? `HOSTED_HTTP_${(error as { status: number }).status}`
+        : "ERROR";
   return {
     isError: true as const,
     content: [
@@ -590,7 +606,15 @@ const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
     readOnly: true,
     annotations: READ_ONLY_ANNOTATIONS,
     inputSchema: {},
-    handler: () => withLocalStore("loops_doctor", (store) => runDoctor(store)),
+    handler: () =>
+      withStore(async (store) => {
+        if (store.transport === "api") {
+          const hosted = await buildHostedDoctorReport(store);
+          return { ...hosted.report, backend: hosted.backend, unchecked: hosted.unchecked };
+        }
+        if (!(store instanceof LocalStore)) throw new Error("local diagnostics require the explicit Loops local store");
+        return runDoctor(store.raw);
+      }),
   },
   {
     name: "loops_health",
@@ -603,7 +627,19 @@ const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
       limit: limitSchema,
     },
     handler: ({ includeArchived, includeInactive, limit }) =>
-      withLocalStore("loops_health", (store) => buildHealthReport(store, { includeArchived, includeInactive, limit })),
+      withStore(async (store) => {
+        if (store.transport === "api") {
+          const hosted = await buildHostedHealthReport(store, { includeArchived, includeInactive, limit });
+          return {
+            ...hosted.report,
+            backend: hosted.backend,
+            executionTruth: hosted.executionTruth,
+            unchecked: hosted.unchecked,
+          };
+        }
+        if (!(store instanceof LocalStore)) throw new Error("local diagnostics require the explicit Loops local store");
+        return buildHealthReport(store.raw, { includeArchived, includeInactive, limit });
+      }),
   },
   {
     name: "loops_health_scan",
@@ -621,16 +657,35 @@ const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
       limit: limitSchema,
     },
     handler: ({ includeStatuses, includeArchived, latestRun, doctor, daemon, staleRunningMs, maxFindings, limit }) =>
-      withLocalStore("loops_health_scan", (store) => buildHealthScan(store, {
-        includeStatuses: includeStatuses as LoopStatus[] | undefined,
-        includeArchived,
-        latestRun,
-        doctor: doctor ? runDoctor(store) : undefined,
-        daemon: daemon ? daemonStatus(store) : undefined,
-        staleRunningMs,
-        maxFindings,
-        limit,
-      })),
+      withStore(async (store) => {
+        if (store.transport === "api") {
+          if (doctor || daemon) {
+            throw new Error(
+              "hosted loops_health_scan supports read-only hosted checks; doctor and daemon findings remain machine-local",
+            );
+          }
+          const hosted = await buildHostedHealthScan(store, {
+            includeStatuses: includeStatuses as LoopStatus[] | undefined,
+            includeArchived,
+            latestRun,
+            staleRunningMs,
+            maxFindings,
+            limit,
+          });
+          return { ...hosted.scan, backend: hosted.backend, unchecked: hosted.unchecked };
+        }
+        if (!(store instanceof LocalStore)) throw new Error("local diagnostics require the explicit Loops local store");
+        return buildHealthScan(store.raw, {
+          includeStatuses: includeStatuses as LoopStatus[] | undefined,
+          includeArchived,
+          latestRun,
+          doctor: doctor ? runDoctor(store.raw) : undefined,
+          daemon: daemon ? daemonStatus(store.raw) : undefined,
+          staleRunningMs,
+          maxFindings,
+          limit,
+        });
+      }),
   },
   {
     name: "loops_diagnose",
@@ -644,12 +699,26 @@ const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
       showOutput: showOutputSchema,
     },
     handler: ({ idOrName, runLimit, showOutput }) =>
-      withLocalStore("loops_diagnose", (store) => {
-        const loop = store.requireLoop(idOrName);
-        const runs = store.listRuns({ loopId: loop.id, limit: runLimit ?? 5 });
+      withStore(async (store) => {
+        if (store.transport === "api") {
+          const hosted = await buildHostedLoopDiagnosis(store, idOrName, { runLimit: runLimit ?? 5 });
+          return {
+            backend: hosted.backend,
+            loop: publicLoop(hosted.loop),
+            expectation: hosted.expectation,
+            recentRuns: hosted.recentRuns.map((entry) => ({
+              run: publicRun(entry.run, showOutput ?? false),
+              failure: entry.failure,
+            })),
+            unchecked: hosted.unchecked,
+          };
+        }
+        if (!(store instanceof LocalStore)) throw new Error("local diagnostics require the explicit Loops local store");
+        const loop = store.raw.requireLoop(idOrName);
+        const runs = store.raw.listRuns({ loopId: loop.id, limit: runLimit ?? 5 });
         return {
           loop: publicLoop(loop),
-          expectation: expectationForLoop(store, loop),
+          expectation: expectationForLoop(store.raw, loop),
           recentRuns: runs.map((run) => ({
             run: publicRun(run, showOutput ?? false),
             failure: classifyRunFailure(run),

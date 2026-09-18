@@ -232,6 +232,27 @@ describe("host protocol against the API", () => {
     }
   });
 
+  test("search accepts both compact envelopes and legacy full arrays from the CLI", async () => {
+    for (const payload of [
+      { items: [{ id: "envelope-item", title: "Envelope" }], count: 1, compact: true },
+      [{ id: "full-item", title: "Full" }],
+    ]) {
+      const binDir = mkdtempSync(join(tmpdir(), "secrets-native-output-"));
+      const script = join(binDir, "secrets");
+      writeFileSync(script, `#!/bin/sh\nprintf '%s\n' '${JSON.stringify(payload)}'\n`, { mode: 0o755 });
+      const env = apiEnv(vaultDir, binDir);
+      const host = new HostClient(env);
+      try {
+        const res = (await host.send({ verb: "search", query: "item" })) as any;
+        expect(res.ok).toBe(true);
+        expect(res.data.items).toHaveLength(1);
+      } finally {
+        host.close();
+        rmSync(binDir, { recursive: true, force: true });
+      }
+    }
+  });
+
   test("add-login validates required fields", async () => {
     const host = new HostClient(apiEnv(vaultDir, secretsBinDir!));
     try {

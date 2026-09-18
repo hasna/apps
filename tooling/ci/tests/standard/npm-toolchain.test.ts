@@ -6,8 +6,8 @@ import { resolve } from "node:path";
 // independent CI job needs the same tested npm before builds, scans or tests.
 const root = resolve(import.meta.dir, "../../../..");
 const ci = readFileSync(resolve(root, ".github/workflows/ci.yml"), "utf8");
-const jobNames = ["gates", "test-suites", "affected-plan", "affected-shard", "build-test", "client-gates", "verify-generated", "publish-guard"];
-const executionJobs = ["gates", "test-suites", "affected-plan", "affected-shard", "client-gates", "verify-generated", "publish-guard"];
+const jobNames = ["gates", "test-suites", "loops-live-postgres", "affected-plan", "affected-shard", "build-test", "client-gates", "verify-generated", "publish-guard"];
+const executionJobs = ["gates", "test-suites", "loops-live-postgres", "affected-plan", "affected-shard", "client-gates", "verify-generated", "publish-guard"];
 const provision = [
   'set -euo pipefail',
   'npm_prefix="$(mktemp -d "${RUNNER_TEMP}/npm-toolchain.XXXXXX")"',
@@ -61,7 +61,10 @@ describe("standard-adherence: npm artifact toolchain", () => {
       expect(bun?.with?.["bun-version"]).toBe("1.3.14");
       if (name === "build-test") {
         expect(steps.some(step => step.name === "Install" || step.name === "Install npm for artifact gates")).toBe(false);
-        expect(steps.filter(step => step.run).map(step => step.run)).toEqual(['bun tooling/ci/run-affected-shards.ts aggregate "$RUNNER_TEMP/affected-plan/plan.json" "$AFFECTED_PLAN_SHA256" "$RUNNER_TEMP/affected-receipts" "$AFFECTED_MATRIX_RESULT" "$RUNNER_TEMP/affected-aggregate.json"']);
+        expect(steps.filter(step => step.run).map(step => step.run)).toEqual([
+          'test "$LOOPS_LIVE_POSTGRES_RESULT" = "success"',
+          'bun tooling/ci/run-affected-shards.ts aggregate "$RUNNER_TEMP/affected-plan/plan.json" "$AFFECTED_PLAN_SHA256" "$RUNNER_TEMP/affected-receipts" "$AFFECTED_MATRIX_RESULT" "$RUNNER_TEMP/affected-aggregate.json"',
+        ]);
         continue;
       }
       const install = steps.find((step) => step.name === "Install");

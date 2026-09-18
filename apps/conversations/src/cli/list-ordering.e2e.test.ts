@@ -159,18 +159,20 @@ describe("item 3 — --limit is honoured by the JSON listing verbs", () => {
     for (const limit of [1, 2, 3]) {
       const res = runCli(["channel", "list", "--json", "--limit", String(limit)]);
       expect(res.exitCode).toBe(0);
-      const rows = JSON.parse(res.stdout);
-      expect(Array.isArray(rows)).toBe(true);
-      expect(rows).toHaveLength(limit);
+      const page = JSON.parse(res.stdout);
+      expect(page).toMatchObject({ count: limit, limit, compact: true });
+      expect(page.channels).toHaveLength(limit);
     }
   }, CASE_TIMEOUT_MS);
 
-  test("channel list --json without --limit still returns the complete set", () => {
+  test("channel list --json without --limit returns a bounded page", () => {
     const res = runCli(["channel", "list", "--json"]);
     expect(res.exitCode).toBe(0);
-    const rows = JSON.parse(res.stdout);
-    expect(rows.length).toBeGreaterThanOrEqual(CHANNELS.length);
-    const names = rows.map((r: { name: string }) => r.name);
+    const page = JSON.parse(res.stdout);
+    expect(page).toMatchObject({ limit: 10, cursor: 0, compact: true });
+    expect(page.channels.length).toBeLessThanOrEqual(10);
+    const full = JSON.parse(runCli(["channel", "list", "--json", "--full"]).stdout);
+    const names = full.map((r: { name: string }) => r.name);
     for (const name of CHANNELS) expect(names).toContain(name);
   }, CASE_TIMEOUT_MS);
 
@@ -187,11 +189,12 @@ describe("item 3 — --limit is honoured by the JSON listing verbs", () => {
     expect(JSON.parse(sessions.stdout).length).toBeLessThanOrEqual(1);
   }, CASE_TIMEOUT_MS);
 
-  test("channel list --json --limit above the terminal cap is not clamped to 100", () => {
+  test("channel list --json --limit above the terminal cap is clamped to 100", () => {
     const res = runCli(["channel", "list", "--json", "--limit", "500"]);
     expect(res.exitCode).toBe(0);
-    const rows = JSON.parse(res.stdout);
-    expect(rows.length).toBeGreaterThanOrEqual(CHANNELS.length);
+    const page = JSON.parse(res.stdout);
+    expect(page.limit).toBe(100);
+    expect(page.channels.length).toBeLessThanOrEqual(100);
   }, CASE_TIMEOUT_MS);
 
   test("channel list TEXT honours --limit — the positive control that the plumbing works", () => {
@@ -217,10 +220,12 @@ describe("item 3 — --limit is honoured by the JSON listing verbs", () => {
     expect(rows.length).toBeGreaterThanOrEqual(2);
   }, CASE_TIMEOUT_MS);
 
-  test("a truncated JSON listing discloses the truncation on stderr", () => {
+  test("a truncated JSON listing discloses continuation in-band", () => {
     const res = runCli(["channel", "list", "--json", "--limit", "2"]);
     expect(res.exitCode).toBe(0);
-    expect(res.stderr).toContain("sort=name asc");
-    expect(res.stderr).toContain("More available");
+    const page = JSON.parse(res.stdout);
+    expect(page.sort).toEqual({ sort: "name", direction: "asc" });
+    expect(page.has_more).toBe(true);
+    expect(page.next_cursor).toBe(2);
   }, CASE_TIMEOUT_MS);
 });

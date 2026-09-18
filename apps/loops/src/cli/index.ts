@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { randomUUID } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, openSync, readFileSync, readSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Command } from "commander";
 import type {
@@ -40,7 +40,7 @@ import { classifyLoopExecutionStaleness } from "../lib/execution-staleness.js";
 import { publicCommandDescriptor } from "../lib/command-target.js";
 import { initialNextRun, parseDuration } from "../lib/recurrence.js";
 import { Store, refuseLocalStore, setLocalStoreOpenNoticeForProcess } from "../lib/store.js";
-import { CloudUnsupportedError, getStore, isCloudStore, type LoopStore } from "../lib/store/index.js";
+import { CloudUnsupportedError, LocalStore, getStore, isCloudStore, type LoopStore } from "../lib/store/index.js";
 import { noticeLocalLoopsMode, resolveCloudStorage } from "../lib/cloud/resolve.js";
 import {
   REMOTE_COMMAND_UNSUPPORTED,
@@ -67,8 +67,10 @@ import {
   exportLoopsMigrationBundle,
   publicMigrationBundle,
   validateLoopsMigrationBundle,
+  type LoopsMigrationBundle,
   type LoopsMigrationPlan,
 } from "../lib/migration.js";
+import { applyHostedImport, buildHostedImportPlan, requireHostedImportV2 } from "../lib/hosted-migration.js";
 import { buildStorageConnectionReport, resolvedClientRuntimeConfig, storageConnectionReportLine, type StorageConnectionReport } from "../lib/runtime-status.js";
 import {
   buildDuplicateOverlapReport,
@@ -193,7 +195,12 @@ function reportCliError(error: unknown): void {
     return;
   }
   if (isJson()) {
-    print({ ok: false, error: { code: error instanceof CodedError ? error.code : "ERROR", message: safeMessage } });
+    const code = error instanceof CodedError
+      ? error.code
+      : error && typeof error === "object" && typeof (error as { code?: unknown }).code === "string"
+        ? (error as { code: string }).code
+        : "ERROR";
+    print({ ok: false, error: { code, message: safeMessage } });
   }
   console.error(`error: ${safeMessage}`);
 }
@@ -769,12 +776,45 @@ function envFromOpts(values: string[] | undefined): Record<string, string> | und
   return Object.keys(env).length ? env : undefined;
 }
 
+const HOSTED_IMPORT_MAX_FILE_BYTES = 32 * 1024 * 1024;
+
 function parseJsonFile(file: string): unknown {
   try {
     return JSON.parse(readFileSync(file, "utf8"));
   } catch (error) {
+    if (error instanceof ValidationError) throw error;
     const reason = error instanceof Error ? error.message : String(error);
     throw new ValidationError(`failed to read JSON file ${file}: ${reason}`);
+  }
+}
+
+function parseBoundedJsonFile(file: string, maxBytes: number): unknown {
+  let fd: number | undefined;
+  try {
+    fd = openSync(file, "r");
+    const metadata = fstatSync(fd);
+    if (!metadata.isFile()) throw new ValidationError(`migration bundle is not a regular file: ${file}`);
+    if (metadata.size > maxBytes) {
+      throw new ValidationError(`migration bundle exceeds the hosted ${maxBytes}-byte file limit: ${metadata.size} bytes`);
+    }
+    const bytes = Buffer.alloc(metadata.size);
+    let offset = 0;
+    while (offset < bytes.length) {
+      const read = readSync(fd, bytes, offset, bytes.length - offset, offset);
+      if (read === 0) throw new ValidationError("migration bundle changed while reading");
+      offset += read;
+    }
+    const extra = Buffer.alloc(1);
+    if (readSync(fd, extra, 0, 1, offset) !== 0) {
+      throw new ValidationError("migration bundle changed while reading and exceeded its validated size");
+    }
+    return JSON.parse(bytes.toString("utf8"));
+  } catch (error) {
+    if (error instanceof ValidationError) throw error;
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new ValidationError(`failed to read JSON file ${file}: ${reason}`);
+  } finally {
+    if (fd !== undefined) closeSync(fd);
   }
 }
 
@@ -1006,27 +1046,102 @@ program
     }
   }));
 
+/**
+ * `loops import` against the hosted control plane.
+ *
+ * The preview reuses the local plan builder over bounded `/v1` projections.
+ * Existing public-projection rows are skipped unless `--replace` is explicit;
+ * the apply is one `POST /v1/import`. Both print what the hosted plan could not check,
+ * and the apply prints the route's backfill safety effect rather than letting
+ * an operator assume imported loops are live.
+ */
+async function hostedImport(
+  store: LoopStore,
+  bundle: LoopsMigrationBundle,
+  opts: { apply?: boolean; replace?: boolean; runs?: boolean; json?: boolean },
+): Promise<void> {
+  if (!opts.apply) {
+    const preview = await buildHostedImportPlan(store, bundle, {
+      includeRuns: opts.runs,
+      replace: opts.replace,
+      dryRun: true,
+    });
+    if (isJson() || opts.json) {
+      console.log(JSON.stringify({ ...preview.plan, backend: preview.backend, unchecked: preview.unchecked }, null, 2));
+    } else {
+      console.log(`backend  hosted control plane ${preview.backend.apiUrl ?? "(url unavailable)"} (transport=${preview.backend.transport})`);
+      printMigrationPlan(preview.plan, opts);
+      printUnchecked(preview.unchecked);
+    }
+    return;
+  }
+  const result = await applyHostedImport(store, bundle, {
+    includeRuns: opts.runs,
+    replace: opts.replace,
+    dryRun: false,
+  });
+  const output = {
+    ok: true,
+    backend: result.backend,
+    imported: result.imported,
+    skippedRunning: result.skippedRunning,
+    receipt: result.receipt ?? null,
+    backfillSafety: result.backfillSafety,
+    plan: result.plan,
+    unchecked: result.unchecked,
+  };
+  if (isJson() || opts.json) console.log(JSON.stringify(output, null, 2));
+  else {
+    console.log(`backend  hosted control plane ${result.backend.apiUrl ?? "(url unavailable)"} (transport=${result.backend.transport})`);
+    console.log(
+      `imported workflows=${result.imported.workflows} loops=${result.imported.loops} runs=${result.imported.runs}` +
+        `${result.skippedRunning > 0 ? ` skipped_running=${result.skippedRunning}` : ""}`,
+    );
+    if (result.receipt) {
+      console.log(`receipt  operation=${result.receipt.operationId} request_digest=${result.receipt.requestDigest}`);
+    }
+    console.log("note  /v1/import backfill safety: imported workflows land archived and imported loops land paused with scheduling cleared; resume them explicitly");
+    printUnchecked(result.unchecked);
+  }
+}
+
 program
   .command("import <file>")
-  .description("preview or apply a local Loops migration bundle")
+  .description("preview or apply a Loops migration bundle against the current connection (hosted /v1 or the explicit local store)")
   .option("--apply", "apply the import; default is a dry-run preview")
-  .option("--replace", "update existing rows whose ids match but hashes differ")
+  .option("--replace", "replace represented same-id hosted rows; local mode updates same-id rows whose hashes differ")
   .option("--no-runs", "ignore loop run history in the bundle")
   .option("--json", "print JSON")
-  .action(runAction((file, opts) => {
-    assertLocalOnlyCommand("import");
-    const bundle = validateLoopsMigrationBundle(parseJsonFile(file));
-    const store = new Store();
+  .action(runAction(async (file, opts) => {
+    // Resolve the authoritative transport before reading the caller-supplied
+    // bundle. A missing/broken hosted credential therefore fails before any
+    // local file access, and the same resolved credential/authority snapshot is
+    // used for every preview/apply request.
+    const store = getStore();
     try {
+      if (store.transport === "api") await requireHostedImportV2(store);
+      const bundle = validateLoopsMigrationBundle(
+        store.transport === "api"
+          ? parseBoundedJsonFile(file, HOSTED_IMPORT_MAX_FILE_BYTES)
+          : parseJsonFile(file),
+      );
+      if (store.transport === "api") {
+        await hostedImport(store, bundle, opts);
+        return;
+      }
+      if (!(store instanceof LocalStore)) {
+        throw new ValidationError("local import requires the explicitly selected Loops local store");
+      }
+      const local = store.raw;
       if (!opts.apply) {
-        printMigrationPlan(buildImportMigrationPlan(store, bundle, {
+        printMigrationPlan(buildImportMigrationPlan(local, bundle, {
           includeRuns: opts.runs,
           replace: opts.replace,
           dryRun: true,
         }), opts);
         return;
       }
-      const plan = buildImportMigrationPlan(store, bundle, {
+      const plan = buildImportMigrationPlan(local, bundle, {
         includeRuns: opts.runs,
         replace: opts.replace,
         dryRun: false,
@@ -1036,7 +1151,7 @@ program
         throw new ValidationError(`refusing to import unsafe bundle: blocked=${plan.summary.blocked} conflict=${plan.summary.conflict}`);
       }
       const backupPath = backupLoopsDatabase("migration-import");
-      const result = applyImportMigrationBundle(store, bundle, {
+      const result = applyImportMigrationBundle(local, bundle, {
         includeRuns: opts.runs,
         replace: opts.replace,
         dryRun: false,
@@ -1047,7 +1162,7 @@ program
         console.log(`imported workflows=${result.applied.workflows} loops=${result.applied.loops} runs=${result.applied.runs}${backupPath ? ` backup=${backupPath}` : ""}`);
       }
     } finally {
-      store.close();
+      await store.close();
     }
   }));
 
@@ -1081,7 +1196,7 @@ program
   .description("bundle push <name>, or (no positional) the id-preserving local->control-plane backfill")
   .option("--api-url <url>", "control-plane API URL")
   .option("--apply", "apply the backfill via the control-plane /v1/import endpoint (default is preview)")
-  .option("--replace", "update differing same-id remote rows; safe default may still archive/pause same-id definitions")
+  .option("--replace", "replace represented same-id remote rows; default push skips rows that appeared after preview")
   .option("--dry-run", "preview only; equivalent to omitting --apply")
   .option("--no-runs", "omit loop run history")
   .option("--manifest-file <path>", "write a control-plane comparison/import manifest JSON file")

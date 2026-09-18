@@ -1145,7 +1145,7 @@ skills --profile customer billing status --json
 skills --profile customer billing usage --json
 skills --profile customer billing invoices --json
 skills --profile customer credits packs --json
-skills --profile customer credits buy <pack-id> --json
+skills --profile customer credits buy <pack-id> --idempotency-key checkout-001 --json
 skills --profile customer billing portal --json
 skills --profile customer auth keys list --email you@example.com --code <FRESH-CODE> --json
 # Request a fresh OTP, then create a separately scoped key (shown once).
@@ -1153,6 +1153,19 @@ skills --profile customer auth signup --email you@example.com --json
 skills --profile customer auth keys create automation --email you@example.com --code <CODE> --scope runs:read --json
 skills --profile customer auth logout --json
 ```
+
+For credit checkouts, generate and retain a unique request key **before** calling.
+The SDK accepts `createCreditCheckout(packId, { idempotencyKey })`; MCP
+`create_credit_checkout` accepts `idempotency_key`. Success and bounded checkout
+errors retain `requestIdempotencyKey`. An omitted key is generated before the
+single POST, but an explicit saved key is needed if the client process exits
+before returning any result. Recover only on the same server, account and pack.
+No surface retries a checkout automatically. For unresolved or in-progress
+outcomes, inspect billing and explicitly reuse the same key after any indicated
+wait. Expired or fulfilled outcomes need a deliberate decision, not a fresh key
+on an automatic retry. The provider's derived `idempotencyKey` is not the request
+key. This protocol requires the configured server to honor checkout idempotency;
+older servers can return a link without proving durable recovery semantics.
 
 An origin, a full `/api/v1` base and a base with a path prefix normalize to the
 same routes. `HASNA_PROFILE=customer` selects the same profile as `--profile`.

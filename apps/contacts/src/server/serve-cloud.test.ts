@@ -239,6 +239,15 @@ describe("ContactsPgStore", () => {
     expect(listCall!.params).toContain("widget");
     expect(listCall!.params).toContain(10);
     expect(listCall!.params).toContain(5);
+    expect(listCall!.sql).toContain("ORDER BY display_name ASC, id ASC");
+  });
+
+  test("listContacts clamps the hosted page size at 500", async () => {
+    const { client, calls } = shim([{ count: "0" }]);
+    const store = new ContactsPgStore(client);
+    await store.listContacts({ limit: 900 });
+    const listCall = calls.find((call) => call.sql.includes("SELECT * FROM contacts"));
+    expect(listCall?.params).toContain(500);
   });
 
   test("updateContact with no fields is a no-op read", async () => {
