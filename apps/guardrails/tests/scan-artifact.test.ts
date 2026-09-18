@@ -51,7 +51,9 @@ function rootCiViolations(workflow: RootCi): string[] {
     if (JSON.stringify(value) !== JSON.stringify(expected)) violations.push(message);
   };
   equal(needs(shard), ["affected-plan"], "shards must depend on the frozen plan");
-  equal([...needs(aggregate)].sort(), ["affected-plan", "affected-shard"], "aggregate must depend on planner and all shards");
+  if (!["affected-plan", "affected-shard"].every((name) => needs(aggregate).includes(name))) {
+    violations.push("aggregate must depend on planner and all shards");
+  }
   equal(shard?.strategy?.matrix, "${{ fromJSON(needs.affected-plan.outputs.matrix) }}", "all planned shards must execute");
   equal(shard?.strategy?.["fail-fast"], false, "a failed shard must not cancel other planned tests");
   for (const job of [shard, aggregate]) {
@@ -232,6 +234,19 @@ describe("scan:artifact release gate", () => {
     expect(turbo.tasks.test.dependsOn).toContain("build");
     expect(turbo.tasks.build.outputs).toContain("dist/**");
     expect(rootCiViolations(rootCi())).toEqual([]);
+  });
+
+  test("additional aggregate gates preserve the required planner and shard dependencies", () => {
+    const expanded = rootCi();
+    const aggregate = expanded.jobs!["build-test"]!;
+    const original = typeof aggregate.needs === "string" ? [aggregate.needs] : aggregate.needs ?? [];
+    aggregate.needs = [...new Set([...original, "publish-guard"])].reverse();
+    expect(rootCiViolations(expanded)).toEqual([]);
+    for (const required of ["affected-plan", "affected-shard"]) {
+      const missing = structuredClone(expanded);
+      missing.jobs!["build-test"]!.needs = aggregate.needs.filter((name) => name !== required);
+      expect(rootCiViolations(missing)).toContain("aggregate must depend on planner and all shards");
+    }
   });
 
   test("root CI coverage checks reject missing, skipped and softened lanes", () => {
