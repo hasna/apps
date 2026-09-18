@@ -1,5 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { resolveContactsClientTransport } from "../cloud/http-storage.js";
+import { shouldRegisterContactsTool, type ContactsMcpProfile } from "./profile.js";
 
 function ok(data: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
@@ -28,7 +29,8 @@ function connectionStatus() {
   };
 }
 
-export function registerContactsStorageTools(server: McpServer): void {
+export function registerContactsStorageTools(server: McpServer, profile: ContactsMcpProfile = "full"): void {
+  if (!shouldRegisterContactsTool("contacts_connection_status", profile)) return;
   server.tool(
     "contacts_connection_status",
     "Inspect the canonical contacts HTTPS client configuration without exposing credential values",

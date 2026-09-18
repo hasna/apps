@@ -77,6 +77,48 @@ afterEach(() => {
 });
 
 describe("MCP contact-method tools on the hosted /v1 path", () => {
+  test("create_contact forwards source, project_id, and tag_ids to hosted /v1", async () => {
+    const calls: Call[] = [];
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : String(input);
+      const method = (init?.method ?? "GET").toUpperCase();
+      const raw = typeof init?.body === "string" ? init.body : undefined;
+      calls.push({ method, url, body: raw ? JSON.parse(raw) : undefined });
+      const path = new URL(url).pathname;
+      const body = path.endsWith("/projects")
+        ? { project_ids: [] }
+        : { contact: { id: "contact-create", display_name: "Created", source: "linkedin", project_id: "project-1", tags: [{ id: "tag-1", name: "Priority" }], emails: [], phones: [] } };
+      return Response.json(body);
+    }) as typeof fetch;
+
+    const result = await allHandlers.create_contact!({
+      display_name: "Created",
+      source: "linkedin",
+      project_id: "project-1",
+      tag_ids: ["tag-1"],
+    });
+
+    expect(calls).toEqual([
+      {
+        method: "POST",
+        url: "https://contacts.example.invalid/v1/contacts",
+        body: { display_name: "Created", project_id: "project-1", source: "linkedin", tag_ids: ["tag-1"] },
+      },
+      {
+        method: "GET",
+        url: "https://contacts.example.invalid/v1/contacts/contact-create/projects",
+        body: undefined,
+      },
+    ]);
+    expect(JSON.parse(result.content[0]!.text as string)).toMatchObject({
+      id: "contact-create",
+      source: "linkedin",
+      project_id: "project-1",
+      tags: [{ id: "tag-1" }],
+    });
+    expect(walk(home)).toEqual([]);
+  });
+
   test("add_email_to_contact PATCHes /v1/contacts/:id and returns the updated contact", async () => {
     const calls: Call[] = [];
     stubFetch(calls, { contact: {

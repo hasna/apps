@@ -322,7 +322,7 @@ export function listContacts(opts: ContactListOptions = {}, db?: ContactsDatabas
   const validOrderDir = order_dir === "desc" ? "DESC" : "ASC";
 
   const totalRow = d.query(`SELECT COUNT(*) as total FROM contacts c ${where}`).get(...params) as { total: number };
-  const rows = d.query(`SELECT c.* FROM contacts c ${where} ORDER BY c.${validOrderBy} ${validOrderDir} LIMIT ? OFFSET ?`).all(...params, limit, offset) as ContactRow[];
+  const rows = d.query(`SELECT c.* FROM contacts c ${where} ORDER BY c.${validOrderBy} ${validOrderDir}, c.id ${validOrderDir} LIMIT ? OFFSET ?`).all(...params, limit, offset) as ContactRow[];
 
   const contacts = rows.map(row => loadContactDetails(d, rowToContact(row)));
   return { contacts, total: totalRow.total };

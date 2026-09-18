@@ -35,6 +35,7 @@ interface FakePg {
   contacts: Row[];
   emails: Row[];
   phones: Row[];
+  contactTags: Array<{ contact_id: string; tag_id: string }>;
 }
 
 function fakePostgres(): FakePg {
@@ -42,6 +43,11 @@ function fakePostgres(): FakePg {
   const contacts: Row[] = [];
   const emails: Row[] = [];
   const phones: Row[] = [];
+  const contactTags: Array<{ contact_id: string; tag_id: string }> = [];
+  const tags: Row[] = [
+    { id: "tag-1", name: "Alpha", color: "#111111", description: null, created_at: "2026-08-06T00:00:00.000Z" },
+    { id: "tag-2", name: "Beta", color: "#222222", description: null, created_at: "2026-08-06T00:00:00.000Z" },
+  ];
 
   // A monotonic clock so `updated_at = NOW()` is observably different from the
   // created_at stamped a moment earlier. Real NOW() has the same property; a
@@ -95,7 +101,8 @@ function fakePostgres(): FakePg {
     return row;
   };
 
-  const client = {
+  let client: PoolQueryClient;
+  client = {
     async query<T>(sql: string, params?: readonly unknown[]) {
       record(sql, params);
       if (sql.includes("INSERT INTO emails")) return { rows: [] as T[], rowCount: insertChild(emails, sql, params ?? []) };
@@ -106,7 +113,12 @@ function fakePostgres(): FakePg {
       record(sql, params);
       if (sql.includes("FROM emails")) return childrenFor(emails, (params?.[0] as string[]) ?? []) as T[];
       if (sql.includes("FROM phones")) return childrenFor(phones, (params?.[0] as string[]) ?? []) as T[];
-      if (sql.includes("SELECT ct.contact_id, t.*")) return [] as T[];
+      if (sql.includes("SELECT ct.contact_id, t.*")) {
+        const ids = (params?.[0] as string[]) ?? [];
+        return contactTags
+          .filter((link) => ids.includes(link.contact_id))
+          .map((link) => ({ ...tags.find((tag) => tag.id === link.tag_id), contact_id: link.contact_id })) as T[];
+      }
       if (sql.includes("SELECT * FROM contacts")) return [...contacts] as T[];
       return [] as T[];
     },
@@ -123,13 +135,31 @@ function fakePostgres(): FakePg {
       record(sql, params);
       if (sql.includes("INSERT INTO emails")) insertChild(emails, sql, params ?? []);
       else if (sql.includes("INSERT INTO phones")) insertChild(phones, sql, params ?? []);
+      else if (sql.includes("INSERT INTO contact_tags")) {
+        const [contactId, tagId] = params as [string, string];
+        if (!tags.some((tag) => tag.id === tagId)) throw new Error(`missing tag ${tagId}`);
+        if (!contactTags.some((link) => link.contact_id === contactId && link.tag_id === tagId)) {
+          contactTags.push({ contact_id: contactId, tag_id: tagId });
+        }
+      }
     },
     pool: {} as never,
-    async transaction() { throw new Error("not used"); },
+    async transaction<T>(fn: (client: any) => Promise<T>): Promise<T> {
+      const snapshots = [contacts.length, emails.length, phones.length, contactTags.length] as const;
+      try {
+        return await fn(client);
+      } catch (error) {
+        contacts.splice(snapshots[0]);
+        emails.splice(snapshots[1]);
+        phones.splice(snapshots[2]);
+        contactTags.splice(snapshots[3]);
+        throw error;
+      }
+    },
     async close() {},
   } as unknown as PoolQueryClient;
 
-  return { client, calls, contacts, emails, phones };
+  return { client, calls, contacts, emails, phones, contactTags };
 }
 
 const PROBE_EMAIL = "probe-8f21ac@example.invalid";
@@ -173,6 +203,40 @@ describe("ContactsPgStore contact methods round-trip (cloud parity)", () => {
     expect(fetched!.phones).toEqual([
       expect.objectContaining({ number: PROBE_PHONE }),
     ]);
+  });
+
+  test("createContact transactionally persists source, project_id, and exact tag_ids", async () => {
+    const { client, contactTags } = fakePostgres();
+    const store = new ContactsPgStore(client);
+
+    const created = await store.createContact({
+      display_name: "Tagged Contact",
+      source: "linkedin",
+      project_id: "project-1",
+      tag_ids: ["tag-2", "tag-1", "tag-2"],
+    });
+
+    expect(created).toMatchObject({ source: "linkedin", project_id: "project-1" });
+    expect(created.tags.map((tag) => tag.id).sort()).toEqual(["tag-1", "tag-2"]);
+    expect(contactTags.map((link) => link.tag_id).sort()).toEqual(["tag-1", "tag-2"]);
+    const fetched = await store.getContact(created.id);
+    expect(fetched).toMatchObject({ source: "linkedin", project_id: "project-1" });
+    expect(fetched!.tags.map((tag) => tag.id).sort()).toEqual(["tag-1", "tag-2"]);
+  });
+
+  test("createContact rolls back the contact and children when one tag attachment fails", async () => {
+    const { client, contacts, emails, contactTags } = fakePostgres();
+    const store = new ContactsPgStore(client);
+
+    await expect(store.createContact({
+      display_name: "Rollback Contact",
+      emails: [{ address: PROBE_EMAIL }],
+      tag_ids: ["tag-1", "missing-tag"],
+    })).rejects.toThrow("missing tag");
+
+    expect(contacts).toEqual([]);
+    expect(emails).toEqual([]);
+    expect(contactTags).toEqual([]);
   });
 
   test("updateContact emails_add is readable via getContact AND listContacts", async () => {

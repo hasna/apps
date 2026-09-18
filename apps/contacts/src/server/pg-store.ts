@@ -319,11 +319,14 @@ export class ContactsPgStore {
   constructor(private readonly client: PoolQueryClient) {}
 
   /** Attach cloud tag memberships in one query for contact read responses. */
-  private async attachTags(contacts: Contact[]): Promise<Array<Contact & { tags: Tag[] }>> {
+  private async attachTags(
+    contacts: Contact[],
+    client: TypedQueryClient = this.client,
+  ): Promise<Array<Contact & { tags: Tag[] }>> {
     const tagsByContactId = new Map<string, Tag[]>(contacts.map((contact) => [contact.id, []]));
     if (contacts.length === 0) return [];
 
-    const rows = await this.client.many<TagRow & { contact_id: string }>(
+    const rows = await client.many<TagRow & { contact_id: string }>(
       `SELECT ct.contact_id, t.*
        FROM contact_tags ct
        JOIN tags t ON t.id = ct.tag_id
@@ -341,18 +344,21 @@ export class ContactsPgStore {
    * correct for a single row and an N+1 on a list or an export — this is the
    * list-safe counterpart, shaped like `attachTags` above.
    */
-  private async attachContactMethods<T extends Contact>(contacts: T[]): Promise<Array<T & { emails: Email[]; phones: Phone[] }>> {
+  private async attachContactMethods<T extends Contact>(
+    contacts: T[],
+    client: TypedQueryClient = this.client,
+  ): Promise<Array<T & { emails: Email[]; phones: Phone[] }>> {
     if (contacts.length === 0) return [];
     const ids = contacts.map((contact) => contact.id);
     const emailsByContactId = new Map<string, Email[]>(ids.map((id) => [id, []]));
     const phonesByContactId = new Map<string, Phone[]>(ids.map((id) => [id, []]));
 
     const [emailRows, phoneRows] = await Promise.all([
-      this.client.many<Record<string, unknown>>(
+      client.many<Record<string, unknown>>(
         `SELECT * FROM emails WHERE contact_id = ANY($1::text[]) ORDER BY created_at ASC`,
         [ids],
       ),
-      this.client.many<Record<string, unknown>>(
+      client.many<Record<string, unknown>>(
         `SELECT * FROM phones WHERE contact_id = ANY($1::text[]) ORDER BY created_at ASC`,
         [ids],
       ),
@@ -369,8 +375,11 @@ export class ContactsPgStore {
   }
 
   /** The single readback contract for every contact-returning v1 path. */
-  private async attachContactDetails(contacts: Contact[]): Promise<ContactWithMethods[]> {
-    return this.attachContactMethods(await this.attachTags(contacts));
+  private async attachContactDetails(
+    contacts: Contact[],
+    client: TypedQueryClient = this.client,
+  ): Promise<ContactWithMethods[]> {
+    return this.attachContactMethods(await this.attachTags(contacts, client), client);
   }
 
   /**
@@ -383,9 +392,10 @@ export class ContactsPgStore {
     contactId: string,
     emails: CreateEmailInput[] | undefined,
     phones: CreatePhoneInput[] | undefined,
+    client: TypedQueryClient = this.client,
   ): Promise<void> {
     for (const email of emails ?? []) {
-      await this.client.query(
+      await client.query(
         `INSERT INTO emails (id, contact_id, company_id, address, type, is_primary)
          SELECT $1, $2, NULL, $3, $4, $5
          WHERE NOT EXISTS (
@@ -395,7 +405,7 @@ export class ContactsPgStore {
       );
     }
     for (const phone of phones ?? []) {
-      await this.client.query(
+      await client.query(
         `INSERT INTO phones (id, contact_id, company_id, number, country_code, type, is_primary)
          SELECT $1, $2, NULL, $3, $4, $5, $6
          WHERE NOT EXISTS (
@@ -435,7 +445,7 @@ export class ContactsPgStore {
     );
     params.push(limit, offset);
     const rows = await this.client.many<ContactRow>(
-      `SELECT * FROM contacts ${whereSql} ORDER BY display_name ASC LIMIT $${params.length - 1} OFFSET $${params.length}`,
+      `SELECT * FROM contacts ${whereSql} ORDER BY display_name ASC, id ASC LIMIT $${params.length - 1} OFFSET $${params.length}`,
       params,
     );
     return { contacts: await this.attachContactDetails(rows.map(mapContact)), count: Number(countRow?.count ?? rows.length) };
@@ -447,14 +457,17 @@ export class ContactsPgStore {
     return (await this.attachContactDetails([mapContact(row)]))[0]!;
   }
 
-  async createContact(input: CreateContactInput): Promise<ContactWithMethods> {
+  private async createContactWithClient(
+    input: CreateContactInput,
+    client: TypedQueryClient,
+  ): Promise<ContactWithMethods> {
     const id = uuid();
     const display =
       input.display_name?.trim() ||
       [input.first_name, input.last_name].filter(Boolean).join(" ").trim() ||
       input.nickname?.trim() ||
       "Unnamed Contact";
-    const row = await this.client.get<ContactRow>(
+    const row = await client.get<ContactRow>(
       `INSERT INTO contacts (
          id, first_name, last_name, display_name, nickname, avatar_url, notes, birthday,
          company_id, job_title, source, custom_fields, last_contacted_at, website,
@@ -464,37 +477,32 @@ export class ContactsPgStore {
          $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22
        ) RETURNING *`,
       [
-        id,
-        input.first_name ?? "",
-        input.last_name ?? "",
-        display,
-        input.nickname ?? null,
-        input.avatar_url ?? null,
-        input.notes ?? null,
-        input.birthday ?? null,
-        input.company_id ?? null,
-        input.job_title ?? null,
-        input.source ?? "manual",
-        JSON.stringify(input.custom_fields ?? {}),
-        input.last_contacted_at ?? null,
-        input.website ?? null,
-        input.preferred_contact_method ?? null,
-        input.status ?? "active",
-        input.follow_up_at ?? null,
-        input.project_id ?? null,
-        input.sensitivity ?? "normal",
-        input.do_not_contact ?? false,
-        input.priority ?? 3,
-        input.timezone ?? null,
+        id, input.first_name ?? "", input.last_name ?? "", display, input.nickname ?? null,
+        input.avatar_url ?? null, input.notes ?? null, input.birthday ?? null, input.company_id ?? null,
+        input.job_title ?? null, input.source ?? "manual", JSON.stringify(input.custom_fields ?? {}),
+        input.last_contacted_at ?? null, input.website ?? null, input.preferred_contact_method ?? null,
+        input.status ?? "active", input.follow_up_at ?? null, input.project_id ?? null,
+        input.sensitivity ?? "normal", input.do_not_contact ?? false, input.priority ?? 3, input.timezone ?? null,
       ],
     );
-    // Child collections are part of the create input and were previously
-    // dropped: `contacts add --email` stored the contact and lost the address.
-    await this.insertContactMethods(id, input.emails, input.phones);
-    // The public v1 Contact schema requires a safe membership readback on every
-    // contact response. A newly created contact has no memberships, but still
-    // returns the stable `tags: []` shape rather than omitting the field.
-    return (await this.attachContactDetails([mapContact(row as ContactRow)]))[0]!;
+    if (!row) throw new Error("contact insert returned no row");
+    await this.insertContactMethods(id, input.emails, input.phones, client);
+    for (const tagId of [...new Set(input.tag_ids ?? [])]) {
+      if (typeof tagId !== "string" || !tagId.trim()) throw new Error("tag_ids must contain non-empty strings");
+      await client.execute(
+        `INSERT INTO contact_tags (contact_id, tag_id) VALUES ($1, $2)
+         ON CONFLICT (contact_id, tag_id) DO NOTHING`,
+        [id, tagId],
+      );
+    }
+    return (await this.attachContactDetails([mapContact(row)], client))[0]!;
+  }
+
+  async createContact(input: CreateContactInput): Promise<ContactWithMethods> {
+    if ((input.tag_ids?.length ?? 0) > 0) {
+      return this.client.transaction((client) => this.createContactWithClient(input, client));
+    }
+    return this.createContactWithClient(input, this.client);
   }
 
   async updateContact(id: string, input: UpdateContactInput): Promise<ContactWithMethods | null> {
@@ -1016,7 +1024,7 @@ export class ContactsPgStore {
 
   async searchContacts(q: string): Promise<Record<string, unknown>[]> {
     const rows = await this.client.many<ContactRow>(
-      `SELECT * FROM contacts WHERE search_vector @@ plainto_tsquery('simple', $1) OR display_name ILIKE $2 ORDER BY display_name ASC LIMIT 50`,
+      `SELECT * FROM contacts WHERE search_vector @@ plainto_tsquery('simple', $1) OR display_name ILIKE $2 ORDER BY display_name ASC, id ASC LIMIT 50`,
       [q, `%${q}%`],
     );
     return Promise.all(rows.map((r) => this.loadDetails(mapContact(r))));
