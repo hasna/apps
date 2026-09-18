@@ -62,10 +62,10 @@
     "typecheck": "tsc --noEmit",
     "verify:release": "bun run scripts/release-guard.ts",
     "verify:consumer-types": "bun run scripts/consumer-types.ts",
-    "prepare": "bun run build:js",
-    "prepack": "bun run build && bun run verify:release && bun run verify:consumer-types",
+    "prepack": "bun run verify:generated && bun run verify:release && bun run verify:consumer-types",
     "prepublishOnly": "bun run verify:producer && bun run typecheck && bun run test",
-    "verify:producer": "bun run scripts/release-dependencies.ts"
+    "verify:producer": "bun run scripts/release-dependencies.ts",
+    "verify:generated": "HASNA_SKILLS_RELEASE_ARTIFACT_TEST=1 bun test src/lib/release-artifacts.test.ts"
   },
   "keywords": [
     "skills",
@@ -87,7 +87,6 @@
   "license": "Apache-2.0",
   "devDependencies": {
     "@hasna/contracts": "1.1.0",
-    "@hasna/secrets": "0.4.2",
     "@types/bun": "1.3.14",
     "@types/node": "25.2.3",
     "@types/react": "^18.2.0",
@@ -100,6 +99,7 @@
     "@aws-sdk/client-ecs": "^3.1079.0",
     "@aws-sdk/client-s3": "^3.1079.0",
     "@hasna/events": "0.1.18",
+    "@hasna/secrets": "0.4.2",
     "@modelcontextprotocol/sdk": "^1.26.0",
     "chalk": "^5.3.0",
     "commander": "^12.1.0",
