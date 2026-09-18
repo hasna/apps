@@ -1,6 +1,6 @@
 import { accessSync, constants, lstatSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { delimiter, isAbsolute, join, resolve } from "node:path";
+import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 
 export const HARNESS_DISCOVERY_SCHEMA = "hasna.instructions.harness-discovery/v1" as const;
 export const DISCOVERABLE_HARNESSES = ["claude", "codex", "opencode", "sumi"] as const;
@@ -12,6 +12,7 @@ export interface HarnessPathObservation {
   state: "present" | "missing" | "unreadable" | "dangling-symlink";
   realPath: string | null;
   symlink: boolean;
+  viaSymlink: boolean;
   type: "file" | "directory" | "other" | null;
 }
 
@@ -62,13 +63,19 @@ function pathInput(value: string, home?: string): string {
 
 function observe(path: string): HarnessPathObservation {
   let symlink = false;
+  let viaSymlink = false;
+  // Inspect parent links even when the leaf does not exist yet. A missing
+  // prompt below a linked directory still needs the same scope review.
+  for (let parent = dirname(path); parent !== dirname(parent); parent = dirname(parent)) {
+    try { if (lstatSync(parent).isSymbolicLink()) { viaSymlink = true; break; } } catch { /* Leaf state below reports errors. */ }
+  }
   try {
     symlink = lstatSync(path).isSymbolicLink();
     const stat = statSync(path);
-    return { path, state: "present", realPath: realpathSync(path), symlink, type: stat.isFile() ? "file" : stat.isDirectory() ? "directory" : "other" };
+    return { path, state: "present", realPath: realpathSync(path), symlink, viaSymlink: viaSymlink || symlink, type: stat.isFile() ? "file" : stat.isDirectory() ? "directory" : "other" };
   } catch (error) {
     const missing = (error as NodeJS.ErrnoException).code === "ENOENT";
-    return { path, state: missing ? symlink ? "dangling-symlink" : "missing" : "unreadable", realPath: null, symlink, type: null };
+    return { path, state: missing ? symlink ? "dangling-symlink" : "missing" : "unreadable", realPath: null, symlink, viaSymlink: viaSymlink || symlink, type: null };
   }
 }
 
@@ -126,8 +133,7 @@ export function discoverHarnesses(options: HarnessDiscoveryOptions = {}): Harnes
       variables[`${tool.toUpperCase()}_EXECUTABLE`] = executable.path;
       if (config) variables[`${tool.toUpperCase()}_CONFIG_DIR`] = config.path;
     }
-    const scopeReviewRequired = !!globalPrompt && (globalPrompt.symlink || (globalPrompt.realPath !== null && globalPrompt.realPath !== globalPrompt.path))
-      || !!config && (config.symlink || (config.realPath !== null && config.realPath !== config.path));
+    const scopeReviewRequired = !!globalPrompt?.viaSymlink || !!config?.viaSymlink;
     if (scopeReviewRequired) diagnostics.push("Global config or prompt resolves through a symlink; preserve its lexical path and review the destination scope before planning writes.");
     return { tool, status: executable ? "executable-found" : "absent", executable, executableSource, versionEvidence: "not-probed", config, globalPrompt, projectPrompt: project ? observe(join(project.path, filename)) : null, scopeReviewRequired, diagnostics };
   });

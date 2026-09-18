@@ -96,4 +96,14 @@ describe("read-only portable harness discovery", () => {
     expect(machineContextToVariables(machine)).not.toHaveProperty("WORKSPACE_ROOT");
     expect(() => renderMachineAwareContent("{{WORKSPACE_ROOT}}/repo", machineContextToVariables(machine))).toThrow("Missing required");
   });
+
+  test("a missing config below a linked parent still requires scope review", () => {
+    const f = fixture(); const project = join(f.home, "project-configs"); mkdirSync(project);
+    symlinkSync(project, join(f.home, ".config"));
+    const result = discoverHarnesses({ env: f.env });
+    expect(result.tools[2]!.config).toMatchObject({ state: "missing", viaSymlink: true });
+    expect(result.tools[2]!.globalPrompt).toMatchObject({ state: "missing", viaSymlink: true });
+    expect(result.tools[2]!.scopeReviewRequired).toBe(true);
+    expect(existsSync(join(project, "opencode"))).toBe(false);
+  });
 });
