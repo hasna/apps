@@ -28,3 +28,5 @@ Normal sequence:
 No automatic retry or rollback is performed after an uncertain ECS write. The
 metadata receipt identifies the previous and candidate task definitions for a
 separate reviewed reconciliation.
+
+A reconciliation may remain admissible across later exact-main commits only when git proves that no Emails source, deployment workflow, current-deploy control, or historical search-promotion control changed. The current main tip must still have its own completed successful CI run; any relevant-path change requires a new reconciliation.
