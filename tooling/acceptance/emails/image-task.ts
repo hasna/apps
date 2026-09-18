@@ -32,6 +32,8 @@ async function run() {
     stage = "IMPORT_AUTH";
     const { ApiKeyStore } = await loadImageAuth();
     const { issueSelfHostedApiKey } = await import("/app/src/server/self-hosted/keys.ts");
+    const { EmailsSelfHostedStore } = await import("/app/src/server/self-hosted/store.ts");
+    const store = new EmailsSelfHostedStore(db);
     const tenants = [];
     for (const letter of ["a", "b"]) {
       stage = "INSERT_TENANT";
@@ -41,10 +43,11 @@ async function run() {
       stage = "BIND_KEY";
       await db.execute("INSERT INTO api_key_tenants(kid,tenant_id) VALUES($1,$2)", [minted.kid, tenant.id]);
       stage = "INSERT_DOMAIN";
-      await db.execute("INSERT INTO domains(id,domain,status,verified,tenant_id) VALUES($1,$2,'verified',true,$3)", [`pair-domain-${letter}`, `${letter}.example.test`, tenant.id]);
+      // Use the actual registration path, including its atomic inbound route claim.
+      const scoped = store.forTenant(tenant.id);
+      await scoped.createDomain({ domain: `${letter}.example.test`, status: "verified", verified: true });
       stage = "INSERT_ADDRESS";
-      await db.execute("INSERT INTO addresses(id,email,domain,display_name,status,verified,tenant_id) VALUES($1,$2,$3,'Synthetic Sender','active',true,$4)",
-        [`pair-address-${letter}`, `sender@${letter}.example.test`, `${letter}.example.test`, tenant.id]);
+      await scoped.createAddress({ email: `sender@${letter}.example.test`, display_name: "Synthetic Sender", status: "active", verified: true });
       tenants.push({ id: tenant.id, token: minted.token, email: `sender@${letter}.example.test` });
     }
     return { tenants, migrations: inventory };
