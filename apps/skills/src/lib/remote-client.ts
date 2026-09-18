@@ -19,6 +19,7 @@ import { normalizeSkillsApiOrigin, skillsApiRequestUrl, resolveSkillsConnection 
 import { normalizeRemoteSkillRunContract, type RemoteSkillRunContract } from "./remote-run-contract.js";
 import { creditCount, runQuoteReceipt, parseRemoteBillingStatus, parseRemoteCheckout, parseRemoteCreditPacks, parseRemoteRunQuote, RemoteCreditApprovalError, type RemoteCreditPack, type RemoteRunApproval, type RemoteRunQuote } from "./remote-account.js";
 import { describeRemoteFiles, readBoundedResponse, sha256, MAX_REMOTE_FILE_BYTES, type RemoteInputFile, type RemoteInputFileDescriptor } from "./remote-files.js";
+import { creditCheckoutFailure, creditCheckoutMessages, creditCheckoutRequestKey, type RemoteCreditCheckout, type RemoteCreditCheckoutOptions, type RemoteCreditCheckoutErrorCode } from "./remote-credit-checkout.js";
 import { customerNamePatch, parseUpdatedProfile, parseUpdatedWorkspace, type UpdateRemoteProfile, type UpdateRemoteWorkspace } from "./remote-profile.js";
 import { quoteUnavailableMessages, readQuoteUnavailableCode, type RemoteQuoteUnavailableCode } from "./remote-quote-errors.js";
 import { parseSkillsAccess, assertSkillsPermission, type RemoteSkillsAccess } from "./remote-permissions.js";
@@ -56,6 +57,16 @@ export class RemoteRequestError extends Error {
     // Keep the optional argument for existing SDK callers without displaying it.
     super(`Remote request to ${path} failed: HTTP ${status}`);
     this.name = "RemoteRequestError";
+  }
+}
+
+/** Bounded checkout outcome; the key is caller-owned, never copied from a server error. */
+export class RemoteCreditCheckoutError extends RemoteRequestError {
+  constructor(readonly code: RemoteCreditCheckoutErrorCode, status: number,
+    readonly requestIdempotencyKey: string, readonly retryAfterSeconds?: number) {
+    super("/api/v1/billing/credits", status);
+    this.name = "RemoteCreditCheckoutError";
+    this.message = creditCheckoutMessages[code];
   }
 }
 
@@ -584,12 +595,36 @@ export class RemoteSkillsClient {
     return parseRemoteCreditPacks(await (await this.requestNewRoute("/api/v1/billing/credits")).json());
   }
 
-  async createCreditCheckout(packId: string): Promise<{ url: string }> {
+  /** One checkout POST. Retain an explicit key before calling to recover even a lost process. */
+  async createCreditCheckout(packId: string, options: RemoteCreditCheckoutOptions = {}): Promise<RemoteCreditCheckout> {
+    const requestIdempotencyKey = creditCheckoutRequestKey(options.idempotencyKey);
     const packs = await this.listCreditPacks();
     if (!packs.some(pack => pack.id === packId)) throw new Error("Choose a credit pack returned by skills credits packs");
-    return parseRemoteCheckout(await (await this.requestNewRoute("/api/v1/billing/credits", {
-      method: "POST", body: JSON.stringify({ packId }),
-    })).json());
+    let response: Response;
+    try {
+      response = await this.request("/api/v1/billing/credits", {
+        method: "POST", body: JSON.stringify({ packId, idempotencyKey: requestIdempotencyKey }),
+      });
+    } catch {
+      throw new RemoteCreditCheckoutError("CREDIT_CHECKOUT_UNCONFIRMED", 0, requestIdempotencyKey);
+    }
+    if (response.status === 404 || response.status === 405) {
+      void response.body?.cancel().catch(() => {});
+      throw new RemoteRouteUnsupportedError("/api/v1/billing/credits", response.status, this.apiUrl);
+    }
+    let value: unknown;
+    try { value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(await readBoundedResponse(response, 4096))); }
+    catch { throw new RemoteCreditCheckoutError("CREDIT_CHECKOUT_UNCONFIRMED", response.status, requestIdempotencyKey); }
+    if (!response.ok) {
+      const failure = creditCheckoutFailure(value, response.status, requestIdempotencyKey);
+      throw new RemoteCreditCheckoutError(failure.code, response.status, requestIdempotencyKey, failure.retryAfterSeconds);
+    }
+    try {
+      const checkout = parseRemoteCheckout(value);
+      const echo = (value as Record<string, unknown>).requestIdempotencyKey;
+      if (echo !== undefined && echo !== requestIdempotencyKey) throw new Error("checkout request key changed");
+      return { ...checkout, requestIdempotencyKey };
+    } catch { throw new RemoteCreditCheckoutError("CREDIT_CHECKOUT_UNCONFIRMED", response.status, requestIdempotencyKey); }
   }
 
   async getUsage(): Promise<Record<string, unknown>[]> { return this.arrayResponse("/api/v1/billing/usage"); }

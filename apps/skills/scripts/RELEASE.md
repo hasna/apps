@@ -21,3 +21,10 @@ The result binds package/lock hashes and resolved package manifest hashes. It is
 not a package payload integrity attestation: retain the clean frozen-install
 receipt, build evidence and installed-archive acceptance separately. Recheck the
 graph before packing and verify the actual published archive after publication.
+
+After installing the selected archive in an isolated consumer directory, run
+`bun scripts/checkout-consumer.ts /absolute/consumer/directory`. It imports the
+installed SDK and verifies explicit 503/409 recovery and connection-loss recovery
+with exactly one checkout POST per call. It intercepts every HTTP request with
+synthetic responses and performs no provider operation. This does not replace
+the standalone producer graph or live server acceptance checks.
