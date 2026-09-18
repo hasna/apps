@@ -179,12 +179,12 @@ test("every store-backed command completes its lifecycle on the local transport"
     expect(orgBySlug.name).toBe("Census Org");
     const orgUpdated = JSON.parse((await runCalendar(["--json", "org-update", org.id, "--name", "Census Org Updated", "--description", "born in the census"], env)).stdout) as { name: string; description: string };
     expect(orgUpdated).toMatchObject({ name: "Census Org Updated", description: "born in the census" });
-    const orgList = JSON.parse((await runCalendar(["--json", "org-list"], env)).stdout) as Array<{ id: string }>;
+    const orgList = JSON.parse((await runCalendar(["--json", "org-list", "--full"], env)).stdout) as Array<{ id: string }>;
     expect(orgList.some((o) => o.id === org.id)).toBe(true);
 
     // ── agents ──
     const agent = JSON.parse((await runCalendar(["--json", "init", "census-agent", "--org", org.id, "--role", "member"], env)).stdout) as { id: string; name: string };
-    const agents = JSON.parse((await runCalendar(["--json", "agents"], env)).stdout) as Array<{ name: string }>;
+    const agents = JSON.parse((await runCalendar(["--json", "agents", "--full"], env)).stdout) as Array<{ name: string }>;
     expect(agents.some((a) => a.name === "census-agent")).toBe(true);
     const heartbeat = JSON.parse((await runCalendar(["--json", "heartbeat", "census-agent"], env)).stdout) as { name: string };
     expect(heartbeat.name).toBe("census-agent");
@@ -193,7 +193,7 @@ test("every store-backed command completes its lifecycle on the local transport"
 
     // ── calendars ──
     const cal = JSON.parse((await runCalendar(["--json", "cal-add", "Census Cal", "--org", org.id, "--timezone", "UTC", "--color", "#ff0000"], env)).stdout) as { id: string; name: string };
-    const calList = JSON.parse((await runCalendar(["--json", "cal-list", "--org", org.id], env)).stdout) as Array<{ id: string }>;
+    const calList = JSON.parse((await runCalendar(["--json", "cal-list", "--org", org.id, "--full"], env)).stdout) as Array<{ id: string }>;
     expect(calList.some((c) => c.id === cal.id)).toBe(true);
     const calUpdated = JSON.parse((await runCalendar(["--json", "cal-update", cal.id, "--visibility", "public"], env)).stdout) as { name: string; visibility: string };
     expect(calUpdated.visibility).toBe("public");
@@ -203,13 +203,13 @@ test("every store-backed command completes its lifecycle on the local transport"
       "--json", "add", "Census Event", "--calendar", cal.id, "--org", org.id,
       "--start", "2026-10-01T10:00:00Z", "--end", "2026-10-01T11:00:00Z", "--agent", agent.id,
     ], env)).stdout) as { id: string; title: string };
-    const list = JSON.parse((await runCalendar(["--json", "list", "--calendar", cal.id], env)).stdout) as Array<{ id: string }>;
+    const list = JSON.parse((await runCalendar(["--json", "list", "--calendar", cal.id, "--full"], env)).stdout) as Array<{ id: string }>;
     expect(list.some((e) => e.id === event.id)).toBe(true);
     const shown = JSON.parse((await runCalendar(["--json", "show", event.id], env)).stdout) as { event: { title: string }; attendees: unknown[] };
     expect(shown.event.title).toBe("Census Event");
-    const search = JSON.parse((await runCalendar(["--json", "search", "Census"], env)).stdout) as Array<{ id: string }>;
+    const search = JSON.parse((await runCalendar(["--json", "search", "Census", "--full"], env)).stdout) as Array<{ id: string }>;
     expect(search.some((e) => e.id === event.id)).toBe(true);
-    const conflicts = JSON.parse((await runCalendar(["--json", "conflicts", cal.id, "--start", "2026-10-01T10:30:00Z", "--end", "2026-10-01T10:45:00Z"], env)).stdout) as Array<{ id: string }>;
+    const conflicts = JSON.parse((await runCalendar(["--json", "conflicts", cal.id, "--start", "2026-10-01T10:30:00Z", "--end", "2026-10-01T10:45:00Z", "--full"], env)).stdout) as Array<{ id: string }>;
     expect(conflicts.some((e) => e.id === event.id)).toBe(true);
     const updated = JSON.parse((await runCalendar(["--json", "update", event.id, "--title", "Census Event Updated"], env)).stdout) as { title: string };
     expect(updated.title).toBe("Census Event Updated");
@@ -224,7 +224,7 @@ test("every store-backed command completes its lifecycle on the local transport"
     // ── availability ──
     const availability = JSON.parse((await runCalendar(["--json", "availability-set", "--agent", agent.id, "--org", org.id, "--day", "1", "--start", "09:00", "--end", "17:00"], env)).stdout) as { id: string; day_of_week: number };
     expect(availability.day_of_week).toBe(1);
-    const availList = JSON.parse((await runCalendar(["--json", "availability-show", agent.id, "--org", org.id], env)).stdout) as Array<{ id: string }>;
+    const availList = JSON.parse((await runCalendar(["--json", "availability-show", agent.id, "--org", org.id, "--full"], env)).stdout) as Array<{ id: string }>;
     expect(availList.some((a) => a.id === availability.id)).toBe(true);
     const availDeleted = JSON.parse((await runCalendar(["--json", "availability-delete", availability.id], env)).stdout) as { deleted: boolean };
     expect(availDeleted.deleted).toBe(true);
@@ -232,9 +232,9 @@ test("every store-backed command completes its lifecycle on the local transport"
     // ── memberships ──
     const member = JSON.parse((await runCalendar(["--json", "member-add", "--org", org.id, "--agent", agent.id, "--role", "member"], env)).stdout) as { role: string };
     expect(member.role).toBe("member");
-    const members = JSON.parse((await runCalendar(["--json", "members", org.id], env)).stdout) as Array<{ agent_id: string }>;
+    const members = JSON.parse((await runCalendar(["--json", "members", org.id, "--full"], env)).stdout) as Array<{ agent_id: string }>;
     expect(members.some((m) => m.agent_id === agent.id)).toBe(true);
-    const agentOrgs = JSON.parse((await runCalendar(["--json", "agent-orgs", agent.id], env)).stdout) as Array<{ org_id: string }>;
+    const agentOrgs = JSON.parse((await runCalendar(["--json", "agent-orgs", agent.id, "--full"], env)).stdout) as Array<{ org_id: string }>;
     expect(agentOrgs.some((m) => m.org_id === org.id)).toBe(true);
     const memberRemoved = JSON.parse((await runCalendar(["--json", "member-remove", agent.id, org.id], env)).stdout) as { removed: boolean };
     expect(memberRemoved.removed).toBe(true);

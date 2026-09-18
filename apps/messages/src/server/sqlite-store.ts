@@ -566,6 +566,7 @@ export class SqliteMessagesStore implements MessagesStore {
   async deliverTo(
     recipient: string,
     at: string,
+    limit?: number,
   ): Promise<Array<{ message: Message; delivery: MessageDelivery }>> {
     // 1. Capture the stored (undelivered) rows for the recipient.
     const stored = this.db
@@ -575,9 +576,10 @@ export class SqliteMessagesStore implements MessagesStore {
          FROM message_deliveries d
          JOIN messages m ON m.id = d.message_id
          WHERE d.recipient = ? AND d.state = 'stored'
-         ORDER BY m.seq ASC, m.created_at ASC`,
+         ORDER BY m.seq ASC, m.created_at ASC
+         ${limit === undefined ? "" : "LIMIT ?"}`,
       )
-      .all(recipient) as MessageDeliveryJoin[];
+      .all(...(limit === undefined ? [recipient] : [recipient, limit])) as MessageDeliveryJoin[];
     if (stored.length === 0) return [];
     // 2. Transition them to delivered (single-writer SQLite: atomic per connection).
     const ids = stored.map((row) => row.id);

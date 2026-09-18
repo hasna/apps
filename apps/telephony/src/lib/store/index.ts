@@ -179,12 +179,14 @@ export interface MessageFilters {
   project_id?: string;
   type?: MessageType;
   limit?: number;
+  offset?: number;
 }
 
 export interface CallFilters {
   agent_id?: string;
   project_id?: string;
   limit?: number;
+  offset?: number;
 }
 
 export interface VoicemailFilters {

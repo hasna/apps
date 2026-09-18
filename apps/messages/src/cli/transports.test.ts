@@ -115,7 +115,7 @@ async function sweep(prefix: string, opts: { args: string[]; env?: Record<string
   expect(who.name).toBe(a);
   expect(who.transport).toBe(opts.expectLocal ? "local" : "http");
 
-  const agents = JSON.parse((await runCli(["agents", ...opts.args, "--json"], opts.env)).stdout) as Array<{ name: string }>;
+  const agents = JSON.parse((await runCli(["agents", ...opts.args, "--json", "--full"], opts.env)).stdout) as Array<{ name: string }>;
   expect(agents.map((x) => x.name)).toContain(a);
 
   const sent = JSON.parse(
@@ -131,7 +131,7 @@ async function sweep(prefix: string, opts: { args: string[]; env?: Record<string
   ) as { message: { seq: number } };
   expect(replied.message.seq).toBe(2);
 
-  const threads = JSON.parse((await runCli(["threads", "--agent", a, ...opts.args, "--json"], opts.env)).stdout) as Array<{
+  const threads = JSON.parse((await runCli(["threads", "--agent", a, ...opts.args, "--json", "--full"], opts.env)).stdout) as Array<{
     id: string;
     message_count: number;
   }>;
@@ -139,23 +139,23 @@ async function sweep(prefix: string, opts: { args: string[]; env?: Record<string
   expect(threads.find((t) => t.id === tid)!.message_count).toBe(2);
 
   const expanded = JSON.parse(
-    (await runCli(["thread", "--id", tid, "--agent", a, ...opts.args, "--json"], opts.env)).stdout,
+    (await runCli(["thread", "--id", tid, "--agent", a, ...opts.args, "--json", "--full"], opts.env)).stdout,
   ) as { thread: { id: string }; messages: Array<{ message: { seq: number } }> };
   expect(expanded.thread.id).toBe(tid);
   expect(expanded.messages.map((m) => m.message.seq)).toEqual([1, 2]);
 
-  const unread = JSON.parse((await runCli(["unread", "--agent", b, ...opts.args, "--json"], opts.env)).stdout) as {
+  const unread = JSON.parse((await runCli(["unread", "--agent", b, ...opts.args, "--json", "--full"], opts.env)).stdout) as {
     total: number;
   };
   expect(unread.total).toBeGreaterThan(0);
 
-  const received = JSON.parse((await runCli(["receive", "--agent", b, ...opts.args, "--json"], opts.env)).stdout) as Array<{
+  const received = JSON.parse((await runCli(["receive", "--agent", b, ...opts.args, "--json", "--full"], opts.env)).stdout) as Array<{
     delivery: { state: string };
   }>;
   expect(received).toHaveLength(1);
   expect(received[0]!.delivery.state).toBe("delivered");
 
-  const deliveries = JSON.parse((await runCli(["delivery", "--id", tid, ...opts.args, "--json"], opts.env)).stdout) as Array<{
+  const deliveries = JSON.parse((await runCli(["delivery", "--id", tid, ...opts.args, "--json", "--full"], opts.env)).stdout) as Array<{
     deliveries: Array<{ state: string }>;
   }>;
   expect(deliveries.flatMap((d) => d.deliveries.map((x) => x.state))).toContain("delivered");
@@ -166,16 +166,16 @@ async function sweep(prefix: string, opts: { args: string[]; env?: Record<string
   expect(read.ok).toBe(true);
 
   await runCli(["close", "--id", tid, "--agent", a, ...opts.args], opts.env);
-  const open = JSON.parse((await runCli(["threads", "--agent", a, ...opts.args, "--json"], opts.env)).stdout) as Array<{
+  const open = JSON.parse((await runCli(["threads", "--agent", a, ...opts.args, "--json", "--full"], opts.env)).stdout) as Array<{
     id: string;
   }>;
   expect(open.map((t) => t.id)).not.toContain(tid);
   const all = JSON.parse(
-    (await runCli(["threads", "--agent", a, "--all", ...opts.args, "--json"], opts.env)).stdout,
+    (await runCli(["threads", "--agent", a, "--all", ...opts.args, "--json", "--full"], opts.env)).stdout,
   ) as Array<{ id: string; closed: boolean }>;
   expect(all.find((t) => t.id === tid)!.closed).toBe(true);
   await runCli(["reopen", "--id", tid, "--agent", a, ...opts.args], opts.env);
-  const reopened = JSON.parse((await runCli(["threads", "--agent", a, ...opts.args, "--json"], opts.env)).stdout) as Array<{
+  const reopened = JSON.parse((await runCli(["threads", "--agent", a, ...opts.args, "--json", "--full"], opts.env)).stdout) as Array<{
     id: string;
   }>;
   expect(reopened.map((t) => t.id)).toContain(tid);
@@ -214,7 +214,7 @@ describe("every messages command works in EVERY transport", () => {
       // Open mode: /v1/* answers without any client credential — the
       // trusted-localhost transport (#1794: a pinned authority attaches no
       // ambient credential, which is exactly what this leg needs).
-      const agents = JSON.parse((await runCli(["agents", "--url", server.baseUrl, "--json"])).stdout) as unknown[];
+      const agents = JSON.parse((await runCli(["agents", "--url", server.baseUrl, "--json", "--full"])).stdout) as unknown[];
       expect(agents).toEqual([]);
     } finally {
       server.close();
@@ -250,7 +250,7 @@ describe("every messages command works in EVERY transport", () => {
       mode: 0o600,
     });
     try {
-      const agents = JSON.parse((await runCli(["agents", "--json"], { HOME: home })).stdout) as unknown[];
+      const agents = JSON.parse((await runCli(["agents", "--json", "--full"], { HOME: home })).stdout) as unknown[];
       expect(agents).toEqual([]);
       const status = JSON.parse((await runCli(["status", "--json"], { HOME: home })).stdout) as {
         transport: string;

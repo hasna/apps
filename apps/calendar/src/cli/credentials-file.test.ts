@@ -106,7 +106,7 @@ test("env -i CLI resolves the authority AND key from ~/.hasna/calendar/config/cr
     const base = `https://127.0.0.1:${mock.port}`;
     await writeCredentialsFile(scratch, base, FIXTURE_KEY);
 
-    const result = await runCliIsolated(["--json", "org-list"], isolatedEnv(scratch, cert));
+    const result = await runCliIsolated(["--json", "org-list", "--full"], isolatedEnv(scratch, cert));
 
     expect(result.exitCode).toBe(0);
     expect(result.stderr).toBe("");

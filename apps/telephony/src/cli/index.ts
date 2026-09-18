@@ -21,6 +21,19 @@ import { generateSchedule, generateMessage } from "../lib/cerebras.js";
 import { setGreeting } from "../lib/voicemail.js";
 import { tick } from "../lib/scheduler.js";
 import { getConfig } from "../lib/config.js";
+import {
+  collectionPage,
+  windowPage,
+  compactAgent,
+  compactCall,
+  compactContact,
+  compactMessage,
+  compactPhoneNumber,
+  compactProject,
+  compactSchedule,
+  compactVoicemail,
+  compactWebhook,
+} from "../lib/compact-output.js";
 
 const program = new Command();
 program
@@ -36,6 +49,24 @@ program
  */
 function withJsonFlag(cmd: Command): Command {
   return cmd.option("--json", "Output as JSON (already the only output format)");
+}
+
+function withCollectionFlags(cmd: Command): Command {
+  return withJsonFlag(cmd)
+    .option("--limit <n>", "Maximum compact rows", "20")
+    .option("--cursor <n>", "Zero-based row offset", "0")
+    .option("--verbose", "Return full fields within the selected page")
+    .option("--full", "Return the legacy response shape");
+}
+
+function pageOptions(opts: { limit?: string; cursor?: string; verbose?: boolean }) {
+  const limit = Number(opts.limit ?? 20); const cursor = Number(opts.cursor ?? 0);
+  if (!Number.isInteger(limit) || limit <= 0) throw new Error("--limit must be a positive integer");
+  if (!Number.isInteger(cursor) || cursor < 0) throw new Error("--cursor must be a non-negative integer");
+  return { limit, cursor, verbose: opts.verbose };
+}
+function printCollection<T, U>(key: string, rows: T[], opts: { limit?: string; cursor?: string; verbose?: boolean; full?: boolean }, summarize: (row: T) => U): void {
+  console.log(JSON.stringify(opts.full ? rows : collectionPage(key, rows, pageOptions(opts), summarize)));
 }
 
 // ---------------------------------------------------------------------------
@@ -55,22 +86,29 @@ withJsonFlag(smsCmd.command("send"))
     console.log(JSON.stringify(msg, null, 2));
   });
 
-withJsonFlag(smsCmd.command("list"))
+withCollectionFlags(smsCmd.command("list"))
   .description("List SMS messages")
   .option("--agent <id>", "Filter by agent")
   .option("--project <id>", "Filter by project")
-  .option("--limit <n>", "Limit results", "50")
   .action(async (opts) => {
-    const msgs = await getStore().listMessages({ agent_id: opts.agent, project_id: opts.project, limit: parseInt(opts.limit) });
-    console.log(JSON.stringify(msgs, null, 2));
+    if (opts.full) {
+      const msgs = await getStore().listMessages({ agent_id: opts.agent, project_id: opts.project, limit: 50 });
+      console.log(JSON.stringify(msgs));
+      return;
+    }
+    const page = pageOptions(opts);
+    const msgs = await getStore().listMessages({ agent_id: opts.agent, project_id: opts.project, limit: page.limit + 1, offset: page.cursor });
+    console.log(JSON.stringify(windowPage("messages", msgs, page, compactMessage)));
   });
 
-withJsonFlag(smsCmd.command("search <query>"))
+withCollectionFlags(smsCmd.command("search <query>"))
   .description("Search messages")
-  .option("--limit <n>", "Limit results", "50")
   .action(async (query, opts) => {
-    const msgs = await getStore().searchMessages(query, parseInt(opts.limit));
-    console.log(JSON.stringify(msgs, null, 2));
+    if (opts.full) { console.log(JSON.stringify(await getStore().searchMessages(query, 50))); return; }
+    const page = pageOptions(opts);
+    if (page.cursor !== 0) throw new Error("sms search does not support --cursor; refine the query or use --full");
+    const msgs = await getStore().searchMessages(query, page.limit + 1);
+    console.log(JSON.stringify(windowPage("messages", msgs, page, compactMessage)));
   });
 
 // ---------------------------------------------------------------------------
@@ -100,13 +138,14 @@ withJsonFlag(waCmd.command("send-audio"))
     console.log(JSON.stringify(msg, null, 2));
   });
 
-withJsonFlag(waCmd.command("list"))
+withCollectionFlags(waCmd.command("list"))
   .description("List WhatsApp messages")
   .option("--agent <id>", "Filter by agent")
-  .option("--limit <n>", "Limit", "50")
   .action(async (opts) => {
-    const msgs = await getStore().listMessages({ agent_id: opts.agent, type: "whatsapp_outbound", limit: parseInt(opts.limit) });
-    console.log(JSON.stringify(msgs, null, 2));
+    if (opts.full) { console.log(JSON.stringify(await getStore().listMessages({ agent_id: opts.agent, type: "whatsapp_outbound", limit: 50 }))); return; }
+    const page = pageOptions(opts);
+    const msgs = await getStore().listMessages({ agent_id: opts.agent, type: "whatsapp_outbound", limit: page.limit + 1, offset: page.cursor });
+    console.log(JSON.stringify(windowPage("messages", msgs, page, compactMessage)));
   });
 
 // ---------------------------------------------------------------------------
@@ -125,13 +164,14 @@ withJsonFlag(callCmd.command("make"))
     console.log(JSON.stringify(call, null, 2));
   });
 
-withJsonFlag(callCmd.command("list"))
+withCollectionFlags(callCmd.command("list"))
   .description("List calls")
   .option("--agent <id>", "Filter by agent")
-  .option("--limit <n>", "Limit", "50")
   .action(async (opts) => {
-    const calls = await getStore().listCalls({ agent_id: opts.agent, limit: parseInt(opts.limit) });
-    console.log(JSON.stringify(calls, null, 2));
+    if (opts.full) { console.log(JSON.stringify(await getStore().listCalls({ agent_id: opts.agent, limit: 50 }))); return; }
+    const page = pageOptions(opts);
+    const calls = await getStore().listCalls({ agent_id: opts.agent, limit: page.limit + 1, offset: page.cursor });
+    console.log(JSON.stringify(windowPage("calls", calls, page, compactCall)));
   });
 
 // ---------------------------------------------------------------------------
@@ -139,13 +179,13 @@ withJsonFlag(callCmd.command("list"))
 // ---------------------------------------------------------------------------
 const vmCmd = program.command("voicemail").description("Voicemail management");
 
-withJsonFlag(vmCmd.command("list"))
+withCollectionFlags(vmCmd.command("list"))
   .description("List voicemails")
   .option("--agent <id>", "Filter by agent")
   .option("--unheard", "Only unheard")
   .action(async (opts) => {
     const vms = await getStore().listVoicemails({ agent_id: opts.agent, listened: opts.unheard ? false : undefined });
-    console.log(JSON.stringify(vms, null, 2));
+    printCollection("voicemails", vms, opts, compactVoicemail);
   });
 
 vmCmd
@@ -179,7 +219,7 @@ withJsonFlag(numCmd.command("search-available"))
   .option("--limit <n>", "Limit", "10")
   .action(async (opts) => {
     const numbers = await searchAvailableNumbers({ country: opts.country, area_code: opts.areaCode, limit: parseInt(opts.limit) });
-    console.log(JSON.stringify(numbers, null, 2));
+    console.log(JSON.stringify(numbers));
   });
 
 withJsonFlag(numCmd.command("provision <number>"))
@@ -200,13 +240,13 @@ numCmd
     console.log("Number released.");
   });
 
-withJsonFlag(numCmd.command("list"))
+withCollectionFlags(numCmd.command("list"))
   .description("List phone numbers")
   .option("--agent <id>", "Filter by agent")
   .option("--project <id>", "Filter by project")
   .action(async (opts) => {
     const numbers = await getStore().listPhoneNumbers({ agent_id: opts.agent, project_id: opts.project });
-    console.log(JSON.stringify(numbers, null, 2));
+    printCollection("numbers", numbers, opts, compactPhoneNumber);
   });
 
 numCmd
@@ -253,12 +293,12 @@ withJsonFlag(agentCmd.command("register"))
     console.log(JSON.stringify(result, null, 2));
   });
 
-withJsonFlag(agentCmd.command("list"))
+withCollectionFlags(agentCmd.command("list"))
   .description("List agents")
   .option("--project <id>", "Filter by project")
   .action(async (opts) => {
     const agents = await getStore().listAgents(opts.project);
-    console.log(JSON.stringify(agents, null, 2));
+    printCollection("agents", agents, opts, compactAgent);
   });
 
 withJsonFlag(agentCmd.command("get <id>"))
@@ -298,10 +338,10 @@ withJsonFlag(projCmd.command("create"))
     console.log(JSON.stringify(proj, null, 2));
   });
 
-withJsonFlag(projCmd.command("list"))
+withCollectionFlags(projCmd.command("list"))
   .description("List projects")
-  .action(async () => {
-    console.log(JSON.stringify(await getStore().listProjects(), null, 2));
+  .action(async (opts) => {
+    const projects = await getStore().listProjects(); printCollection("projects", projects, opts, compactProject);
   });
 
 withJsonFlag(projCmd.command("get <id>"))
@@ -360,11 +400,11 @@ withJsonFlag(schedCmd.command("ai <description>"))
     console.log("Created:", JSON.stringify(sched, null, 2));
   });
 
-withJsonFlag(schedCmd.command("list"))
+withCollectionFlags(schedCmd.command("list"))
   .description("List schedules")
   .option("--agent <id>", "Filter by agent")
   .action(async (opts) => {
-    console.log(JSON.stringify(await getStore().listSchedules({ agent_id: opts.agent }), null, 2));
+    const schedules = await getStore().listSchedules({ agent_id: opts.agent }); printCollection("schedules", schedules, opts, compactSchedule);
   });
 
 schedCmd
@@ -434,15 +474,15 @@ withJsonFlag(contactCmd.command("add"))
     console.log(JSON.stringify(c, null, 2));
   });
 
-withJsonFlag(contactCmd.command("list"))
+withCollectionFlags(contactCmd.command("list"))
   .option("--agent <id>", "Filter by agent")
   .action(async (opts) => {
-    console.log(JSON.stringify(await getStore().listContacts({ agent_id: opts.agent }), null, 2));
+    const contacts = await getStore().listContacts({ agent_id: opts.agent }); printCollection("contacts", contacts, opts, compactContact);
   });
 
-withJsonFlag(contactCmd.command("search <query>"))
-  .action(async (query) => {
-    console.log(JSON.stringify(await getStore().searchContacts(query), null, 2));
+withCollectionFlags(contactCmd.command("search <query>"))
+  .action(async (query, opts) => {
+    const contacts = await getStore().searchContacts(query); printCollection("contacts", contacts, opts, compactContact);
   });
 
 contactCmd
@@ -463,7 +503,7 @@ withJsonFlag(whCmd.command("create"))
     console.log(JSON.stringify(wh, null, 2));
   });
 
-withJsonFlag(whCmd.command("list")).action(async () => { console.log(JSON.stringify(await getStore().listWebhooks(), null, 2)); });
+withCollectionFlags(whCmd.command("list")).action(async (opts) => { const webhooks = await getStore().listWebhooks(); printCollection("webhooks", webhooks, opts, compactWebhook); });
 whCmd.command("delete <id>").action(async (id) => { await getStore().deleteWebhook(id); console.log("Deleted."); });
 
 // ---------------------------------------------------------------------------
@@ -483,12 +523,14 @@ program
 // ---------------------------------------------------------------------------
 // Conversation
 // ---------------------------------------------------------------------------
-withJsonFlag(program.command("conversation <phone>"))
+withCollectionFlags(program.command("conversation <phone>"))
   .description("View conversation with a phone number")
-  .option("--limit <n>", "Limit", "50")
   .action(async (phone, opts) => {
-    const msgs = await getStore().getConversation(phone, parseInt(opts.limit));
-    console.log(JSON.stringify(msgs, null, 2));
+    if (opts.full) { console.log(JSON.stringify(await getStore().getConversation(phone, 50))); return; }
+    const page = pageOptions(opts);
+    if (page.cursor !== 0) throw new Error("conversation does not support --cursor; use --full for the legacy response");
+    const msgs = await getStore().getConversation(phone, page.limit + 1);
+    console.log(JSON.stringify(windowPage("messages", msgs, page, compactMessage)));
   });
 
 // ---------------------------------------------------------------------------

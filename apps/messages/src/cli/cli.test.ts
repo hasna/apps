@@ -73,7 +73,7 @@ describe("messages CLI", () => {
     const sent = JSON.parse(send.stdout) as { message: { id: string; thread_id: string } };
     expect(sent.message.thread_id).toBeTruthy();
 
-    const threads = runCli(["threads", "--agent", "silvanus"]);
+    const threads = runCli(["threads", "--agent", "silvanus", "--full"]);
     expect(threads.status).toBe(0);
     const listed = JSON.parse(threads.stdout) as Array<{ id: string; unread_count: number; last_message_preview: string | null }>;
     expect(listed).toHaveLength(1);
@@ -91,7 +91,7 @@ describe("messages CLI", () => {
     const sent = JSON.parse(send.stdout) as { message: { from_agent: string; thread_id: string } };
     expect(sent.message.from_agent).toBe("envsender");
 
-    const received = runCli(["receive"], { MESSAGES_AGENT_ID: "flavius" });
+    const received = runCli(["receive", "--full"], { MESSAGES_AGENT_ID: "flavius" });
     expect(received.status).toBe(0);
     const messages = JSON.parse(received.stdout) as Array<{ content: string }>;
     expect(messages.some((m) => m.content === "env identity")).toBe(true);
@@ -115,12 +115,27 @@ describe("messages CLI", () => {
     expect(res.stdout).toBe("");
   });
 
+  test("agents JSON is compact and bounded by default with explicit full compatibility", () => {
+    for (let i = 0; i < 25; i += 1) runCli(["register", "--name", `compact-${i}`, "--display-name", "d".repeat(200)]);
+    const compact = runCli(["agents", "--json"]);
+    expect(compact.status).toBe(0);
+    const page = JSON.parse(compact.stdout) as { agents: Array<Record<string, unknown>>; total: number; limit: number; next_cursor: number };
+    expect(page.agents).toHaveLength(20);
+    expect(page.total).toBeGreaterThanOrEqual(25);
+    expect(page.limit).toBe(20);
+    expect(page.next_cursor).toBe(20);
+    expect(Buffer.byteLength(compact.stdout)).toBeLessThan(12_000);
+
+    const full = JSON.parse(runCli(["agents", "--json", "--full"]).stdout) as Array<{ name: string }>;
+    expect(full.some((agent) => agent.name === "compact-24")).toBe(true);
+  });
+
   test("every data command accepts --json (#1602)", async () => {
     const send = runCli(["send", "--from", "jsoner", "--to", "flavius", "--content", "json flag", "--json"]);
     expect(send.status).toBe(0);
     expect(JSON.parse(send.stdout)).toHaveProperty("message");
 
-    const agents = runCli(["agents", "--json"]);
+    const agents = runCli(["agents", "--json", "--full"]);
     expect(agents.status).toBe(0);
     const listed = JSON.parse(agents.stdout) as Array<{ name: string }>;
     expect(listed.some((a) => a.name === "jsoner")).toBe(true);
@@ -249,7 +264,7 @@ describe("messages CLI", () => {
     const register = runCli(["register", "--name", "jsoncli", "--json"]);
     expect(register.status).toBe(0);
     expect(JSON.parse(register.stdout)).toHaveProperty("agent");
-    const agents = runCli(["agents", "--json"]);
+    const agents = runCli(["agents", "--json", "--full"]);
     expect(agents.status).toBe(0);
     const parsed = JSON.parse(agents.stdout) as Array<{ name: string }>;
     expect(parsed.some((a) => a.name === "jsoncli")).toBe(true);
@@ -264,15 +279,15 @@ describe("messages CLI", () => {
     const sent = JSON.parse(send.stdout) as { message: { id: string; thread_id: string } };
 
     // Before receive: per-recipient state 'stored'.
-    const before = JSON.parse(runCli(["delivery", "--id", sent.message.thread_id]).stdout) as Array<{ deliveries: Array<{ recipient: string; state: string }> }>;
+    const before = JSON.parse(runCli(["delivery", "--id", sent.message.thread_id, "--full"]).stdout) as Array<{ deliveries: Array<{ recipient: string; state: string }> }>;
     expect(before[0]!.deliveries[0]!.state).toBe("stored");
 
     // Receive drains -> delivered.
-    const received = JSON.parse(runCli(["receive", "--agent", recipient]).stdout) as Array<{ delivery: { state: string } }>;
+    const received = JSON.parse(runCli(["receive", "--agent", recipient, "--full"]).stdout) as Array<{ delivery: { state: string } }>;
     expect(received).toHaveLength(1);
     expect(received[0]!.delivery.state).toBe("delivered");
 
-    const after = JSON.parse(runCli(["delivery", "--id", sent.message.thread_id]).stdout) as Array<{ deliveries: Array<{ state: string }> }>;
+    const after = JSON.parse(runCli(["delivery", "--id", sent.message.thread_id, "--full"]).stdout) as Array<{ deliveries: Array<{ state: string }> }>;
     expect(after[0]!.deliveries[0]!.state).toBe("delivered");
 
     // Read -> unread clears.
@@ -285,10 +300,10 @@ describe("messages CLI", () => {
     const send = runCli(["send", "--from", "augustus", "--to", "silvanus", "--content", "close me"]);
     const sent = JSON.parse(send.stdout) as { message: { thread_id: string } };
     expect(runCli(["close", "--id", sent.message.thread_id, "--agent", "silvanus"]).status).toBe(0);
-    const open = JSON.parse(runCli(["threads", "--agent", "silvanus"]).stdout) as Array<{ id: string }>;
+    const open = JSON.parse(runCli(["threads", "--agent", "silvanus", "--full"]).stdout) as Array<{ id: string }>;
     expect(open.map((t) => t.id)).not.toContain(sent.message.thread_id);
     expect(runCli(["reopen", "--id", sent.message.thread_id, "--agent", "silvanus"]).status).toBe(0);
-    const reopened = JSON.parse(runCli(["threads", "--agent", "silvanus"]).stdout) as Array<{ id: string }>;
+    const reopened = JSON.parse(runCli(["threads", "--agent", "silvanus", "--full"]).stdout) as Array<{ id: string }>;
     expect(reopened.map((t) => t.id)).toContain(sent.message.thread_id);
   });
 });
@@ -311,7 +326,7 @@ describe("messages CLI fails closed without a credential", () => {
   test("the explicit local opt-in (HASNA_MESSAGES_LOCAL=1) still works without a credential", async () => {
     // Earlier tests in this file registered agents into the shared temp db;
     // the point here is that the opt-in lets verbs reach that local store.
-    const res = runCli(["agents"]);
+    const res = runCli(["agents", "--full"]);
     expect(res.status).toBe(0);
     expect(res.stdout).toContain("silvanus");
     // Every local run says "local" on stderr, once.

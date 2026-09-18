@@ -33,9 +33,18 @@ import { loadLocalMessagesService } from "../local-store-loader";
 import { loadServeEntry } from "../serve-loader";
 import { version } from "../version";
 import { AGENT_DEFAULT_HINT, requireAgent } from "./identity";
+import {
+  collectionPage,
+  compactAgent,
+  compactDeliveryReport,
+  compactDiscoveredAgent,
+  compactInboxItem,
+  compactMessage,
+  compactThread,
+} from "../compact-output.js";
 
 function print(obj: unknown): void {
-  console.log(JSON.stringify(obj, null, 2));
+  console.log(JSON.stringify(obj));
 }
 
 interface CliOpts {
@@ -169,6 +178,22 @@ function withJsonFlag(cmd: Command): Command {
   );
 }
 
+function withCollectionFlags(cmd: Command): Command {
+  return withJsonFlag(cmd)
+    .option("--limit <count>", "maximum rows in compact output", "20")
+    .option("--cursor <count>", "zero-based row offset", "0")
+    .option("--verbose", "return full fields within the selected page")
+    .option("--full", "return the legacy complete response");
+}
+
+function collectionOptions(opts: { limit?: string; cursor?: string; verbose?: boolean }) {
+  return { limit: Number(opts.limit ?? 20), cursor: Number(opts.cursor ?? 0), verbose: opts.verbose };
+}
+
+function printCollection<T, U>(key: string, items: T[], opts: { limit?: string; cursor?: string; verbose?: boolean; full?: boolean }, summarize: (item: T) => U): void {
+  print(opts.full ? items : collectionPage(key, items, collectionOptions(opts), summarize));
+}
+
 const program = new Command();
 
 program
@@ -211,7 +236,7 @@ withJsonFlag(program.command("register"))
     });
   });
 
-withJsonFlag(program.command("agents"))
+withCollectionFlags(program.command("agents"))
   .description("List registered agent identities")
   .option(
     "--url <url>",
@@ -221,13 +246,12 @@ withJsonFlag(program.command("agents"))
     "--api-key <key>",
     "API key for the remote server (a deliberate pin; never re-resolved)",
   )
-  .action(async (opts: CliOpts) => {
+  .action(async (opts: CliOpts & { limit?: string; cursor?: string; verbose?: boolean; full?: boolean }) => {
     const store = await resolveStore(opts);
-    const agents =
-      store.transport === "http"
-        ? (await store.remote!.listAgents()).agents
-        : await store.local!.listAgents();
-    print(agents);
+    const agents = store.transport === "http"
+      ? (await store.remote!.listAgents()).agents
+      : await store.local!.listAgents();
+    printCollection("agents", agents, opts, compactAgent);
   });
 
 withJsonFlag(program.command("discover"))
@@ -239,8 +263,9 @@ withJsonFlag(program.command("discover"))
   .option("--application <name>", "filter by application")
   .option("--online", "only online receivers")
   .option("--offline", "only offline or unknown receivers")
-  .option("--limit <count>", "page size, 1–500", "100")
+  .option("--limit <count>", "page size, 1–500", "20")
   .option("--cursor <cursor>", "next_cursor from the preceding page")
+  .option("--verbose", "return full discovery records")
   .option("--url <url>", "messages-serve base URL")
   .option("--api-key <key>", "explicit API key")
   .action(async (opts) => {
@@ -248,16 +273,15 @@ withJsonFlag(program.command("discover"))
       throw new Error("choose --online or --offline");
     const store = await resolveStore(opts);
     const svc = store.remote ?? store.local!;
-    print(
-      await svc.discoverAgents({
-        search: opts.search,
-        station: opts.station,
-        application: opts.application,
-        online: opts.online ? true : opts.offline ? false : undefined,
-        limit: Number(opts.limit),
-        cursor: opts.cursor,
-      }),
-    );
+    const result = await svc.discoverAgents({
+      search: opts.search,
+      station: opts.station,
+      application: opts.application,
+      online: opts.online ? true : opts.offline ? false : undefined,
+      limit: Number(opts.limit),
+      cursor: opts.cursor,
+    });
+    print({ ...result, agents: opts.verbose ? result.agents : result.agents.map(compactDiscoveredAgent), compact: !opts.verbose });
   });
 
 withJsonFlag(program.command("heartbeat"))
@@ -287,21 +311,17 @@ withJsonFlag(program.command("inbox"))
     "Read a runtime's pending messages without acknowledging them; safe to retry",
   )
   .requiredOption("--runtime <id>", "receiving runtime identity")
-  .option("--limit <count>", "batch size, 1–500", "100")
+  .option("--limit <count>", "batch size, 1–500", "20")
   .option("--wait-ms <ms>", "remote long-poll duration, 0–15000", "0")
+  .option("--verbose", "return full message and delivery records")
   .option("--url <url>", "messages-serve base URL")
   .option("--api-key <key>", "explicit API key")
   .action(async (opts) => {
     const store = await resolveStore(opts);
-    print(
-      store.remote
-        ? await store.remote.runtimeInbox(
-            opts.runtime,
-            Number(opts.limit),
-            Number(opts.waitMs),
-          )
-        : await store.local!.runtimeInbox(opts.runtime, Number(opts.limit)),
-    );
+    const result = store.remote
+      ? await store.remote.runtimeInbox(opts.runtime, Number(opts.limit), Number(opts.waitMs))
+      : await store.local!.runtimeInbox(opts.runtime, Number(opts.limit));
+    print({ ...result, messages: opts.verbose ? result.messages : result.messages.map(compactInboxItem), compact: !opts.verbose });
   });
 
 withJsonFlag(program.command("ack"))
@@ -330,7 +350,7 @@ withJsonFlag(program.command("whoami"))
     "--api-key <key>",
     "API key for the remote server (a deliberate pin; never re-resolved)",
   )
-  .action(async (opts: { agent?: string } & CliOpts) => {
+  .action(async (opts: { agent?: string; limit?: string; cursor?: string; verbose?: boolean; full?: boolean } & CliOpts) => {
     const store = await resolveStore(opts);
     const agent =
       store.transport === "http"
@@ -393,7 +413,7 @@ withJsonFlag(program.command("send"))
     },
   );
 
-withJsonFlag(program.command("receive"))
+withCollectionFlags(program.command("receive"))
   .description(
     "Drain the agent's inbox: transition stored -> delivered and print the delivered messages",
   )
@@ -406,16 +426,17 @@ withJsonFlag(program.command("receive"))
     "--api-key <key>",
     "API key for the remote server (a deliberate pin; never re-resolved)",
   )
-  .action(async (opts: { agent?: string } & CliOpts) => {
+  .action(async (opts: { agent?: string; limit?: string; cursor?: string; verbose?: boolean; full?: boolean } & CliOpts) => {
     const store = await resolveStore(opts);
-    const messages =
-      store.transport === "http"
-        ? (await store.remote!.receive(requireAgent(opts.agent))).messages
-        : await store.local!.receive(requireAgent(opts.agent));
-    print(messages);
+    if (Number(opts.cursor ?? 0) !== 0) throw new Error("receive drains the next batch and does not support --cursor");
+    const limit = opts.full ? undefined : Number(opts.limit ?? 20);
+    const messages = store.transport === "http"
+      ? (await store.remote!.receive(requireAgent(opts.agent), limit, Boolean(opts.full))).messages
+      : await store.local!.receive(requireAgent(opts.agent), limit);
+    print(opts.full ? messages : { messages: opts.verbose ? messages : messages.map((message) => ({ ...compactMessage(message), to_agent: message.to_agent, delivery_state: message.delivery.state })), count: messages.length, limit, compact: !opts.verbose, hint: "Call receive again for the next batch; use --full for the legacy complete drain." });
   });
 
-withJsonFlag(program.command("delivery"))
+withCollectionFlags(program.command("delivery"))
   .description(
     "Show per-recipient delivery state for a thread (stored | delivered | read)",
   )
@@ -428,18 +449,17 @@ withJsonFlag(program.command("delivery"))
     "--api-key <key>",
     "API key for the remote server (a deliberate pin; never re-resolved)",
   )
-  .action(async (opts: { id: string } & CliOpts) => {
+  .action(async (opts: { id: string; limit?: string; cursor?: string; verbose?: boolean; full?: boolean } & CliOpts) => {
     const store = await resolveStore(opts);
-    const deliveries =
-      store.transport === "http"
-        ? (await store.remote!.deliveryStatus(opts.id)).deliveries
-        : await store.local!.deliveryStatus(opts.id);
-    print(deliveries);
+    const deliveries = store.transport === "http"
+      ? (await store.remote!.deliveryStatus(opts.id)).deliveries
+      : await store.local!.deliveryStatus(opts.id);
+    printCollection("deliveries", deliveries, opts, compactDeliveryReport);
   });
 
 // --- threads ---------------------------------------------------------------
 
-withJsonFlag(program.command("threads"))
+withCollectionFlags(program.command("threads"))
   .description("List threads involving an agent, with unread counts")
   .option(
     "--agent <agent>",
@@ -454,7 +474,7 @@ withJsonFlag(program.command("threads"))
     "--api-key <key>",
     "API key for the remote server (a deliberate pin; never re-resolved)",
   )
-  .action(async (opts: { agent?: string; all?: boolean } & CliOpts) => {
+  .action(async (opts: { agent?: string; all?: boolean; limit?: string; cursor?: string; verbose?: boolean; full?: boolean } & CliOpts) => {
     const store = await resolveStore(opts);
     const threads =
       store.transport === "http"
@@ -463,10 +483,10 @@ withJsonFlag(program.command("threads"))
         : await store.local!.threads(requireAgent(opts.agent), {
             openOnly: !opts.all,
           });
-    print(threads);
+    printCollection("threads", threads, opts, compactThread);
   });
 
-withJsonFlag(program.command("thread"))
+withCollectionFlags(program.command("thread"))
   .description(
     "Expand a thread: its messages with your per-message delivery state (does NOT mark read)",
   )
@@ -480,16 +500,21 @@ withJsonFlag(program.command("thread"))
     "--api-key <key>",
     "API key for the remote server (a deliberate pin; never re-resolved)",
   )
-  .action(async (opts: { id: string; agent?: string } & CliOpts) => {
+  .action(async (opts: { id: string; agent?: string; limit?: string; cursor?: string; verbose?: boolean; full?: boolean } & CliOpts) => {
     const store = await resolveStore(opts);
     const result =
       store.transport === "http"
         ? await store.remote!.thread(opts.id, requireAgent(opts.agent))
         : await store.local!.expandThread(opts.id, requireAgent(opts.agent));
-    print(result);
+    if (opts.full) { print(result); return; }
+    const page = collectionPage("messages", result.messages, collectionOptions(opts), (entry) => ({
+      message: compactMessage(entry.message),
+      delivery_state: (entry.delivery as { state?: string } | null)?.state ?? null,
+    }));
+    print({ thread: result.thread, unread_count: result.unread_count, ...page });
   });
 
-withJsonFlag(program.command("unread"))
+withCollectionFlags(program.command("unread"))
   .description("List threads with unread messages for an agent (and the total)")
   .option("--agent <agent>", `the agent ${AGENT_DEFAULT_HINT}`)
   .option(
@@ -500,17 +525,18 @@ withJsonFlag(program.command("unread"))
     "--api-key <key>",
     "API key for the remote server (a deliberate pin; never re-resolved)",
   )
-  .action(async (opts: { agent?: string } & CliOpts) => {
+  .action(async (opts: { agent?: string; limit?: string; cursor?: string; verbose?: boolean; full?: boolean } & CliOpts) => {
     const store = await resolveStore(opts);
     if (store.transport === "http") {
-      print(await store.remote!.unread(requireAgent(opts.agent)));
+      const result = await store.remote!.unread(requireAgent(opts.agent));
+      if (opts.full) { print(result); return; }
+      print({ unread_total: result.total, ...collectionPage("threads", result.threads, collectionOptions(opts), compactThread) });
       return;
     }
     const threads = await store.local!.unreadThreads(requireAgent(opts.agent));
-    print({
-      threads,
-      total: threads.reduce((sum, t) => sum + t.unread_count, 0),
-    });
+    const unreadTotal = threads.reduce((sum, t) => sum + t.unread_count, 0);
+    if (opts.full) { print({ threads, total: unreadTotal }); return; }
+    print({ unread_total: unreadTotal, ...collectionPage("threads", threads, collectionOptions(opts), compactThread) });
   });
 
 withJsonFlag(program.command("read"))

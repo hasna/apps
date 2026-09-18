@@ -298,7 +298,13 @@ export function buildHandler(
       if (req.method === "GET" && path === "/v1/messages/receive") {
         const agent = url.searchParams.get("agent");
         if (!agent) return error(400, "agent query parameter is required");
-        const messages: DeliveredMessage[] = await service.receive(agent);
+        const full = url.searchParams.get("full") === "1";
+        const rawLimit = url.searchParams.get("limit");
+        const limit = full ? undefined : rawLimit === null ? 20 : Number(rawLimit);
+        if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 100)) {
+          return error(400, "limit must be an integer between 1 and 100");
+        }
+        const messages: DeliveredMessage[] = await service.receive(agent, limit);
         return json({ messages });
       }
 

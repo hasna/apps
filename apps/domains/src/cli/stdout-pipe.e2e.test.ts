@@ -13,8 +13,8 @@ import { tmpdir } from "node:os";
  * Measured on station01, Bun 1.3.14, against the published `@hasna/domains`
  * 0.0.36 binary and a 1,040-row portfolio:
  *
- *     domains domain list --all --json > file       ->  929621 bytes, rc=0
- *     domains domain list --all --json | wc -c      ->   65536 bytes, rc=0
+ *     domains domain list --json --full > file       ->  929621 bytes, rc=0
+ *     domains domain list --json --full | wc -c      ->   65536 bytes, rc=0
  *
  * 7% of the document, delivered at exit code 0 with empty stderr. Nothing
  * distinguishes it from success; strict `JSON.parse` throwing is the only
@@ -26,8 +26,8 @@ import { tmpdir } from "node:os";
  * test written the convenient way passes against the bug. Measured in this
  * worktree, same command, same store, same machine, same minute:
  *
- *     bun run src/cli/index.ts domain list --all --json | …  ->  929621  COMPLETE
- *     bun .pipe-e2e/index.js   domain list --all --json | …  ->   65536  TRUNCATED
+ *     bun run src/cli/index.ts domain list --json --full | …  ->  929621  COMPLETE
+ *     bun .pipe-e2e/index.js   domain list --json --full | …  ->   65536  TRUNCATED
  *
  * The difference is `ink`. `src/cli/index.ts` reaches the TUI only through
  * `await import("./commands/interactive.js")`, gated behind the `interactive`
@@ -153,7 +153,7 @@ describe("domains --json over a pipe", () => {
     });
   }
 
-  const listJson = (bundle: string) => `bun ${JSON.stringify(bundle)} domain list --all --json`;
+  const listJson = (bundle: string) => `bun ${JSON.stringify(bundle)} domain list --json --full`;
 
   beforeAll(async () => {
     const dir = mkdtempSync(join(tmpdir(), "domains-stdout-pipe-"));
@@ -176,7 +176,7 @@ describe("domains --json over a pipe", () => {
     rmSync(join(REPO_ROOT, ".pipe-e2e-fixture"), { recursive: true, force: true });
   });
 
-  test("domain list --all --json delivers the same bytes through a pipe as to a file", () => {
+  test("domain list --json --full delivers the same bytes through a pipe as to a file", () => {
     const { dir, bigDb, bundle } = fixture;
     const outFile = join(dir, "redirected.json");
     const redirected = pipeline(`${listJson(bundle)} > ${JSON.stringify(outFile)}`, bigDb);
@@ -236,7 +236,7 @@ describe("domains --json over a pipe", () => {
     // the fix from being read as JSON-specific. Measured against the unfixed
     // bundle on this same fixture:
     //
-    //     domain list --all --json        822523 -> 65536   TRUNCATED
+    //     domain list --json --full        822523 -> 65536   TRUNCATED
     //     domain export --format json     572803 -> 131072  TRUNCATED
     //     domain export --format csv      301772 -> 65536   TRUNCATED
     //     domain expiring --days 9999 -j  784003 -> 65536   TRUNCATED
@@ -274,7 +274,7 @@ describe("domains --json over a pipe", () => {
   test("ends cleanly when the reader closes the pipe, without an unhandled EPIPE", () => {
     // Deleting the EPIPE branch from the writer would regress silently:
     // writeSync throws, Bun prints an uncaught EPIPE and a stack, and
-    // `domains domain list --all --json | head` — an ordinary shell pipeline —
+    // `domains domain list --json --full | head` — an ordinary shell pipeline —
     // becomes a crash.
     //
     // A closed reader makes a SHORT document the CORRECT outcome here, which is

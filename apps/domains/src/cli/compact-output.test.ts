@@ -78,7 +78,7 @@ afterEach(async () => {
 });
 
 describe("compact CLI output", () => {
-  test("domain list is compact by default and keeps JSON full", async () => {
+  test("domain list is compact and bounded for human and JSON output with explicit full compatibility", async () => {
     const { dbPath, firstDomainId } = await seedDomainDb(25);
 
     const compact = runDomains(["domain", "list"], dbPath);
@@ -97,11 +97,20 @@ describe("compact CLI output", () => {
 
     const json = runDomains(["domain", "list", "--json"], dbPath);
     expect(json.exitCode).toBe(0);
-    const body = JSON.parse(text(json.stdout)) as { count: number; limit: number | null; domains: Array<{ notes: string | null }> };
-    expect(body.count).toBe(25);
-    expect(body.limit).toBeNull();
-    expect(body.domains).toHaveLength(25);
-    expect(body.domains[0]!.notes).toContain("x".repeat(120));
+    const body = JSON.parse(text(json.stdout)) as { count: number; total: number; limit: number; domains: Array<{ notes?: string }> };
+    expect(body.count).toBe(20);
+    expect(body.total).toBe(25);
+    expect(body.limit).toBe(20);
+    expect(body.domains).toHaveLength(20);
+    expect(body.domains[0]!.notes).not.toContain("x".repeat(120));
+    expect(Buffer.byteLength(text(json.stdout))).toBeLessThan(12_000);
+
+    const full = runDomains(["domain", "list", "--json", "--full"], dbPath);
+    expect(full.exitCode).toBe(0);
+    const fullBody = JSON.parse(text(full.stdout)) as { count: number; limit: null; domains: Array<{ notes: string | null }> };
+    expect(fullBody.count).toBe(25);
+    expect(fullBody.limit).toBeNull();
+    expect(fullBody.domains[0]!.notes).toContain("x".repeat(120));
 
     const dns = runDomains(["dns", "list", firstDomainId], dbPath);
     const dnsStdout = text(dns.stdout);
@@ -120,22 +129,19 @@ describe("compact CLI output", () => {
   // Regression: `domain list --json --limit N` above MAX_LIST_LIMIT (200) used to
   // clamp to 200 rows AND echo `limit: 200`, so `count === limit` was self-consistent
   // with a request the caller never made. Truncation was undetectable from the payload.
-  test("domain list --json honours a limit above MAX_LIST_LIMIT and never echoes a clamped limit", async () => {
+  test("domain list --json --full preserves the legacy complete response", async () => {
     const { dbPath } = await seedDomainDb(230);
 
-    const over = runDomains(["domain", "list", "--json", "--limit", "5000"], dbPath);
+    const over = runDomains(["domain", "list", "--json", "--full"], dbPath);
     expect(over.exitCode).toBe(0);
     const body = JSON.parse(text(over.stdout)) as {
       count: number; total: number; shown: number; limit: number | null;
       offset: number; has_more: boolean; domains: unknown[];
     };
-    // The bug returned 200 here. Assert the true population, not merely "more than 200".
     expect(body.domains).toHaveLength(230);
     expect(body.count).toBe(230);
     expect(body.total).toBe(230);
-    // The echoed limit must be the REQUEST, never the cap.
-    expect(body.limit).toBe(5000);
-    expect(body.limit).not.toBe(200);
+    expect(body.limit).toBeNull();
     expect(body.has_more).toBe(false);
   });
 

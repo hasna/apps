@@ -349,16 +349,21 @@ server.tool(
 
 server.tool(
   'get_cost_center_breakdown',
-  'Cost per cost center. Params: period(today|week|month|year|all), kind(loop|app|repo|service|team).',
+  'Cost per cost center. Params: period, kind, limit(20), verbose, json. json=true preserves the complete structured response.',
   {
     period: z.enum(['today', 'week', 'month', 'year', 'all']).optional(),
     kind: z.enum(['loop', 'app', 'repo', 'service', 'team']).optional(),
+    limit: z.number().int().positive().max(100).optional(),
+    verbose: z.boolean().optional(),
+    json: z.boolean().optional(),
   },
-  async ({ period, kind }: { period?: Exclude<Period, 'yesterday'>; kind?: CostCenterKind }) => {
+  async ({ period, kind, limit, verbose, json }: { period?: Exclude<Period, 'yesterday'>; kind?: CostCenterKind; limit?: number; verbose?: boolean; json?: boolean }) => {
     const rows = (await store.costCenterBreakdown({ period: period ?? 'all', kind })) as unknown as Array<Record<string, unknown>>
+    if (json) return text(JSON.stringify(rows))
     if (rows.length === 0) return text('No cost-center usage yet.')
+    const visibleRows = rows.slice(0, rowLimit(limit, verbose))
     const lines = ['kind     cost_center          sessions requests tokens   cost']
-    for (const row of rows) {
+    for (const row of visibleRows) {
       lines.push(
         `${String(row['kind']).slice(0, 8).padEnd(9)}` +
         `${String(row['name'] || row['cost_center_id'] || '—').slice(0, 20).padEnd(21)}` +

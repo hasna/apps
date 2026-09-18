@@ -28,6 +28,15 @@ import type { MessagesClient } from "../sdk";
 import type { MessagesService } from "../service";
 import { loadLocalMessagesService } from "../local-store-loader";
 import { version } from "../version";
+import {
+  collectionPage,
+  compactAgent,
+  compactDeliveryReport,
+  compactDiscoveredAgent,
+  compactInboxItem,
+  compactMessage,
+  compactThread,
+} from "../compact-output.js";
 
 // Binds-before-version: --version/-V/--help answer before the stdio framing
 // loop (silent-empty family).
@@ -213,11 +222,11 @@ async function markRead(svc: Service, threadId: string, agent: string) {
   return svc.client.markRead(threadId, agent);
 }
 
-async function receive(svc: Service, agent: string) {
+async function receive(svc: Service, agent: string, limit?: number, full = false) {
   if (svc.transport === "local") {
-    return { messages: await svc.service.receive(agent) };
+    return { messages: await svc.service.receive(agent, limit) };
   }
-  return svc.client.receive(agent);
+  return svc.client.receive(agent, limit, full);
 }
 
 async function deliveryStatus(svc: Service, threadId: string) {
@@ -225,6 +234,17 @@ async function deliveryStatus(svc: Service, threadId: string) {
     return { deliveries: await svc.service.deliveryStatus(threadId) };
   }
   return svc.client.deliveryStatus(threadId);
+}
+
+const collectionSchema = {
+  limit: z.number().int().min(1).max(100).optional().describe("Max returned rows (default 20)"),
+  cursor: z.number().int().min(0).optional().describe("Zero-based row offset"),
+  verbose: z.boolean().optional().describe("Return full fields within the selected page"),
+  full: z.boolean().optional().describe("Return the legacy complete response"),
+};
+
+function result(value: unknown) {
+  return { content: [{ type: "text" as const, text: JSON.stringify(value) }] };
 }
 
 const server = new McpServer({
@@ -247,14 +267,10 @@ server.registerTool(
       limit: z.number().int().min(1).max(500).optional(),
     },
   },
-  async (args) => ({
-    content: [
-      {
-        type: "text" as const,
-        text: JSON.stringify(await discoverAgents(await service(), args)),
-      },
-    ],
-  }),
+  async (args) => {
+    const page = await discoverAgents(await service(), { ...args, limit: args.limit ?? 20 });
+    return result({ ...page, agents: page.agents.map(compactDiscoveredAgent), compact: true });
+  },
 );
 
 server.registerTool(
@@ -296,16 +312,10 @@ server.registerTool(
       limit: z.number().int().min(1).max(500).optional(),
     },
   },
-  async (args) => ({
-    content: [
-      {
-        type: "text" as const,
-        text: JSON.stringify(
-          await runtimeInbox(await service(), args.runtime_id, args.limit),
-        ),
-      },
-    ],
-  }),
+  async (args) => {
+    const inbox = await runtimeInbox(await service(), args.runtime_id, args.limit ?? 20);
+    return result({ ...inbox, messages: inbox.messages.map(compactInboxItem), compact: true });
+  },
 );
 
 server.registerTool(
@@ -354,14 +364,12 @@ server.registerTool(
   "messages_agents",
   {
     title: "List agents",
-    description: "List registered agent identities.",
-    inputSchema: {},
+    description: "List registered agent identities with compact pagination by default.",
+    inputSchema: collectionSchema,
   },
-  async () => {
-    const result = await listAgents(await service());
-    return {
-      content: [{ type: "text" as const, text: JSON.stringify(result) }],
-    };
+  async (args) => {
+    const listed = await listAgents(await service());
+    return result(args.full ? listed : collectionPage("agents", listed.agents, args, compactAgent));
   },
 );
 
@@ -407,13 +415,12 @@ server.registerTool(
         .boolean()
         .optional()
         .describe("Exclude closed threads (default true)"),
+      ...collectionSchema,
     },
   },
   async (args) => {
-    const result = await threads(await service(), args.agent, args.openOnly ?? true);
-    return {
-      content: [{ type: "text" as const, text: JSON.stringify(result) }],
-    };
+    const listed = await threads(await service(), args.agent, args.openOnly ?? true);
+    return result(args.full ? listed : collectionPage("threads", listed.threads, args, compactThread));
   },
 );
 
@@ -426,13 +433,17 @@ server.registerTool(
     inputSchema: {
       threadId: z.string().describe("Thread id"),
       agent: z.string().describe("The agent expanding"),
+      ...collectionSchema,
     },
   },
   async (args) => {
-    const result = await expandThread(await service(), args.threadId, args.agent);
-    return {
-      content: [{ type: "text" as const, text: JSON.stringify(result) }],
-    };
+    const expanded = await expandThread(await service(), args.threadId, args.agent);
+    if (args.full) return result(expanded);
+    const page = collectionPage("messages", expanded.messages, args, (entry) => ({
+      message: compactMessage(entry.message),
+      delivery_state: (entry.delivery as { state?: string } | null)?.state ?? null,
+    }));
+    return result({ thread: expanded.thread, unread_count: expanded.unread_count, ...page });
   },
 );
 
@@ -442,13 +453,14 @@ server.registerTool(
     title: "Unread threads",
     description:
       "List threads with unread messages for an agent (and the total).",
-    inputSchema: { agent: z.string().describe("The agent") },
+    inputSchema: { agent: z.string().describe("The agent"), ...collectionSchema },
   },
   async (args) => {
-    const result = await unread(await service(), args.agent);
-    return {
-      content: [{ type: "text" as const, text: JSON.stringify(result) }],
-    };
+    const unreadResult = await unread(await service(), args.agent);
+    return result(args.full ? unreadResult : {
+      unread_total: unreadResult.total,
+      ...collectionPage("threads", unreadResult.threads, args, compactThread),
+    });
   },
 );
 
@@ -514,13 +526,21 @@ server.registerTool(
     title: "Receive (drain) delivered messages",
     description:
       "Drain the agent's inbox: transition stored -> delivered for the agent's undelivered messages and return them. This is the delivery verb that distinguishes a stored-but-undelivered message from a delivered one.",
-    inputSchema: { agent: z.string().describe("The agent receiving") },
+    inputSchema: { agent: z.string().describe("The agent receiving"), limit: collectionSchema.limit, verbose: collectionSchema.verbose, full: collectionSchema.full },
   },
   async (args) => {
-    const result = await receive(await service(), args.agent);
-    return {
-      content: [{ type: "text" as const, text: JSON.stringify(result) }],
-    };
+    const received = await receive(await service(), args.agent, args.full ? undefined : (args.limit ?? 20), Boolean(args.full));
+    return result(args.full ? received : {
+      messages: args.verbose ? received.messages : received.messages.map((message) => ({
+        ...compactMessage(message),
+        to_agent: message.to_agent,
+        delivery_state: message.delivery.state,
+      })),
+      count: received.messages.length,
+      limit: args.limit ?? 20,
+      compact: !args.verbose,
+      hint: "Call messages_receive again for the next batch; set full=true for the legacy complete drain.",
+    });
   },
 );
 
@@ -530,13 +550,11 @@ server.registerTool(
     title: "Delivery status",
     description:
       "Show per-message per-recipient delivery state for a thread (stored | delivered | read). The sender's view of whether each message was actually delivered.",
-    inputSchema: { threadId: z.string().describe("Thread id") },
+    inputSchema: { threadId: z.string().describe("Thread id"), ...collectionSchema },
   },
   async (args) => {
-    const result = await deliveryStatus(await service(), args.threadId);
-    return {
-      content: [{ type: "text" as const, text: JSON.stringify(result) }],
-    };
+    const delivery = await deliveryStatus(await service(), args.threadId);
+    return result(args.full ? delivery : collectionPage("deliveries", delivery.deliveries, args, compactDeliveryReport));
   },
 );
 

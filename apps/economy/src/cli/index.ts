@@ -139,6 +139,12 @@ function parseNonNegativeCliNumber(value: string | undefined, option: string): n
   return parsed
 }
 
+function parseNonNegativeCliInteger(value: string | undefined, option: string): number {
+  const parsed = parseNonNegativeCliNumber(value, option)
+  if (!Number.isInteger(parsed)) fail(`${option} must be an integer`)
+  return parsed
+}
+
 function parseCliPort(value: string | undefined, option: string): number {
   const port = parsePositiveCliInteger(value, option)
   if (port > 65535) fail(`${option} must be between 1 and 65535`)
@@ -157,6 +163,14 @@ function parseOptionalCliAgent(value: string | undefined): Agent | undefined {
 function resolveRowLimit(value: string | undefined, verbose: boolean | undefined, fallback: number): number {
   if (verbose && value == null) return Number.POSITIVE_INFINITY
   return parsePositiveCliInteger(value ?? String(fallback), '--limit')
+}
+
+function boundedJsonRows<T>(rows: T[], options: { limit: number; cursor?: string; full?: boolean }) {
+  if (options.full) return { rows, total: rows.length, limit: null, cursor: 0, next_cursor: null, compact: false };
+  const cursor = options.cursor === undefined ? 0 : parseNonNegativeCliInteger(options.cursor, '--cursor');
+  const visible = rows.slice(cursor, cursor + options.limit);
+  const nextCursor = cursor + visible.length < rows.length ? cursor + visible.length : null;
+  return { rows: visible, total: rows.length, limit: options.limit, cursor, next_cursor: nextCursor, compact: true };
 }
 
 function printHiddenRowsHint(total: number, shown: number, detail: string): void {
@@ -504,19 +518,23 @@ program
   .option('--by <dimension>', 'Dimension: model|agent|project|account|cost-center|loop|app|repo', 'model')
   .option('--since <date>', 'Filter since date or relative (e.g. 2026-03-01, 7d, 30d)')
   .option('--limit <n>', 'Maximum breakdown rows to print (default: 20)')
-  .option('--verbose', 'Show all breakdown rows')
-  .option('--json', 'Output JSON')
-  .action(async (opts: { by?: string; since?: string; limit?: string; verbose?: boolean; json?: boolean }) => {
+  .option('--cursor <n>', 'Zero-based JSON row offset')
+  .option('--verbose', 'Show all human rows')
+  .option('--full', 'Return the legacy complete JSON rows (requires --json)')
+  .option('--json', 'Output compact bounded JSON')
+  .action(async (opts: { by?: string; since?: string; limit?: string; cursor?: string; verbose?: boolean; full?: boolean; json?: boolean }) => {
     const store = getStore()
     const by = requireCliChoice(opts.by, '--by', ['model', 'agent', 'project', 'account', 'cost-center', 'loop', 'app', 'repo'] as const)
     const since = opts.since ? parseSinceDate(opts.since) : undefined
-    const limit = resolveRowLimit(opts.limit, opts.verbose, 20)
+    if (opts.full && !opts.json) throw new Error('--full requires --json')
+    const limit = resolveRowLimit(opts.limit, opts.verbose && !opts.json, 20)
+    if (opts.json && !opts.full && limit > 100) throw new Error('--limit must be 100 or less; use --full for the legacy complete rows')
     const costCenterKinds = new Set(['loop', 'app', 'repo'] as const)
     console.log()
     if (by === 'project') {
       const rows = await store.projectBreakdown({ since })
       if (opts.json) {
-        console.log(JSON.stringify({ by, since: since ?? null, total: rows.length, rows }, null, 2))
+        console.log(JSON.stringify({ by, since: since ?? null, ...boundedJsonRows(rows, { limit, cursor: opts.cursor, full: opts.full }) }))
         return
       }
       const visibleRows = rows.slice(0, limit)
@@ -534,7 +552,7 @@ program
     } else if (by === 'agent') {
       const rows = await store.agentBreakdown({ since })
       if (opts.json) {
-        console.log(JSON.stringify({ by, since: since ?? null, total: rows.length, rows }, null, 2))
+        console.log(JSON.stringify({ by, since: since ?? null, ...boundedJsonRows(rows, { limit, cursor: opts.cursor, full: opts.full }) }))
         return
       }
       const visibleRows = rows.slice(0, limit)
@@ -554,7 +572,7 @@ program
     } else if (by === 'account') {
       const rows = await store.accountBreakdown({ since })
       if (opts.json) {
-        console.log(JSON.stringify({ by, since: since ?? null, total: rows.length, rows }, null, 2))
+        console.log(JSON.stringify({ by, since: since ?? null, ...boundedJsonRows(rows, { limit, cursor: opts.cursor, full: opts.full }) }))
         return
       }
       const visibleRows = rows.slice(0, limit)
@@ -564,7 +582,7 @@ program
       const kind = costCenterKinds.has(by as 'loop' | 'app' | 'repo') ? by as CostCenterKind : undefined
       const rows = await store.costCenterBreakdown({ since, kind })
       if (opts.json) {
-        console.log(JSON.stringify({ by, since: since ?? null, total: rows.length, rows }, null, 2))
+        console.log(JSON.stringify({ by, since: since ?? null, ...boundedJsonRows(rows, { limit, cursor: opts.cursor, full: opts.full }) }))
         return
       }
       if (rows.length === 0) {
@@ -587,7 +605,7 @@ program
     } else {
       const rows = await store.modelBreakdown({ since })
       if (opts.json) {
-        console.log(JSON.stringify({ by, since: since ?? null, total: rows.length, rows }, null, 2))
+        console.log(JSON.stringify({ by, since: since ?? null, ...boundedJsonRows(rows, { limit, cursor: opts.cursor, full: opts.full }) }))
         return
       }
       const visibleRows = rows.slice(0, limit)
@@ -614,14 +632,18 @@ program
   .command('accounts [period]')
   .description('List account usage by email address and coding agent')
   .option('--limit <n>', 'Maximum account rows to print (default: 20)')
-  .option('--verbose', 'Show all account rows')
-  .option('--json', 'Output JSON')
-  .action(async (periodArg: string | undefined, opts: { limit?: string; verbose?: boolean; json?: boolean }) => {
+  .option('--cursor <n>', 'Zero-based JSON row offset')
+  .option('--verbose', 'Show all human rows')
+  .option('--full', 'Return the legacy complete JSON rows (requires --json)')
+  .option('--json', 'Output compact bounded JSON')
+  .action(async (periodArg: string | undefined, opts: { limit?: string; cursor?: string; verbose?: boolean; full?: boolean; json?: boolean }) => {
     const period = requireCliChoice(periodArg, 'period', ACCOUNT_PERIODS)
     const rows = await getStore().accounts(period)
 
+    if (opts.full && !opts.json) throw new Error('--full requires --json')
     if (opts.json) {
-      console.log(JSON.stringify(rows, null, 2))
+      const limit = resolveRowLimit(opts.limit, false, 20)
+      console.log(JSON.stringify(boundedJsonRows(rows, { limit, cursor: opts.cursor, full: opts.full })))
       return
     }
 

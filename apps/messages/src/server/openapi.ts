@@ -225,6 +225,19 @@ export const openapi = {
             required: true,
             schema: { type: "string" },
           },
+          {
+            name: "limit",
+            in: "query",
+            required: false,
+            schema: { type: "integer", minimum: 1, maximum: 100, default: 20 },
+          },
+          {
+            name: "full",
+            in: "query",
+            required: false,
+            schema: { type: "boolean", default: false },
+            description: "Explicitly request the legacy complete drain",
+          },
         ],
         responses: {
           "200": { description: "Delivered messages" },

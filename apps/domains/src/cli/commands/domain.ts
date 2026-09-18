@@ -35,6 +35,19 @@ const DOMAIN_STATUS_HELP = DOMAIN_STATUSES.join("/");
 const DOMAIN_OFFER_STATUS_HELP = DOMAIN_OFFER_STATUSES.join("/");
 const DOMAIN_EMAIL_TYPE_HELP = DOMAIN_EMAIL_TYPES.join("/");
 
+function compactDomainJson(domain: Awaited<ReturnType<typeof listDomains>>[number]) {
+  return {
+    id: domain.id,
+    name: domain.name,
+    status: domain.status,
+    registrar: domain.registrar ?? undefined,
+    expires_at: domain.expires_at ? formatDate(domain.expires_at) : undefined,
+    auto_renew: domain.auto_renew,
+    premium: domain.is_premium || undefined,
+    notes: domain.notes ? truncateText(domain.notes, 90) : undefined,
+  };
+}
+
 function parseOptionalNumber(value: string | undefined, flagName: string): number | undefined {
   if (value === undefined) return undefined;
   const parsed = Number(value);
@@ -79,18 +92,17 @@ export function registerDomainCommand(program: Command): void {
     .option("--limit <n>", "Limit number of displayed domains")
     .option("--offset <n>", "Skip first N domains", "0")
     .option("--all", "Show all matching domains")
-    .option("--verbose", "Show registrar, expiry, and notes columns")
-    .option("-j, --json", "Output JSON")
-    .action(async (opts: { status?: string; registrar?: string; premium?: boolean; limit?: string; offset?: string; all?: boolean; verbose?: boolean; json?: boolean }) => {
+    .option("--verbose", "Show full fields within the selected JSON page")
+    .option("--full", "Return the legacy complete full JSON response (requires --json)")
+    .option("-j, --json", "Output compact bounded JSON")
+    .action(async (opts: { status?: string; registrar?: string; premium?: boolean; limit?: string; offset?: string; all?: boolean; verbose?: boolean; full?: boolean; json?: boolean }) => {
       let limit: number | undefined;
-      let jsonLimit: number | undefined;
       let offset: number;
       try {
-        // Human output keeps the MAX_LIST_LIMIT display cap. JSON must not clamp:
-        // echoing a clamped limit back asserts a bound the caller never requested.
+        if (opts.limit !== undefined && Number(opts.limit) > 200) throw new Error("--limit must be 200 or less; use --all or --full for exhaustive output");
         limit = opts.limit === undefined ? undefined : parseLimit(opts.limit);
-        jsonLimit = opts.limit === undefined ? undefined : parseLimit(opts.limit, undefined, Infinity);
         offset = parseOffset(opts.offset);
+        if (opts.full && !opts.json) throw new Error("--full requires --json");
       } catch (error) {
         printErrorLine(error instanceof Error ? error.message : String(error));
         process.exit(1);
@@ -106,29 +118,36 @@ export function registerDomainCommand(program: Command): void {
       const domains = await listDomains(filters);
 
       if (opts.json) {
+        if (opts.full) {
+          printLine(JSON.stringify({
+            domains,
+            count: domains.length,
+            total: domains.length,
+            shown: domains.length,
+            limit: null,
+            offset: 0,
+            has_more: false,
+          }, null, 2));
+          return;
+        }
         const jsonPage = pageItemsOrExit(domains, {
-          limit: jsonLimit,
+          limit,
           offset,
           all: opts.all,
-          fallbackLimit: Infinity,
-          maxLimit: Infinity,
+          fallbackLimit: 20,
         });
-        printLine(
-          JSON.stringify(
-            {
-              domains: jsonPage.items,
-              count: jsonPage.shown,
-              total: jsonPage.total,
-              shown: jsonPage.shown,
-              // null is a positive signal: no bound was applied.
-              limit: opts.all ? null : (jsonLimit ?? null),
-              offset: jsonPage.offset,
-              has_more: jsonPage.hasMore,
-            },
-            null,
-            2
-          )
-        );
+        printLine(JSON.stringify({
+          domains: opts.verbose ? jsonPage.items : jsonPage.items.map(compactDomainJson),
+          count: jsonPage.shown,
+          total: jsonPage.total,
+          shown: jsonPage.shown,
+          limit: opts.all ? null : jsonPage.limit,
+          offset: jsonPage.offset,
+          has_more: jsonPage.hasMore,
+          next_offset: jsonPage.hasMore ? jsonPage.offset + jsonPage.shown : null,
+          compact: !opts.verbose,
+          hint: "Use --offset/--limit to continue, --verbose for full fields in a page, or --full for the legacy complete response.",
+        }));
         return;
       }
       const page = pageItemsOrExit(domains, { limit, offset, all: opts.all });
@@ -337,11 +356,18 @@ export function registerDomainCommand(program: Command): void {
     .option("--limit <n>", "Limit number of displayed domains")
     .option("--offset <n>", "Skip first N domains", "0")
     .option("--all", "Show all matching domains")
-    .option("--verbose", "Show registrar and truncated notes")
-    .option("-j, --json", "Output JSON")
-    .action(async (query: string, opts: { limit?: string; offset?: string; all?: boolean; verbose?: boolean; json?: boolean }) => {
+    .option("--verbose", "Show full fields within the selected JSON page")
+    .option("--full", "Return the legacy complete full JSON response (requires --json)")
+    .option("-j, --json", "Output compact bounded JSON")
+    .action(async (query: string, opts: { limit?: string; offset?: string; all?: boolean; verbose?: boolean; full?: boolean; json?: boolean }) => {
       const results = await searchDomains(query);
-      if (opts.json) { printLine(JSON.stringify({ results, count: results.length }, null, 2)); return; }
+      if (opts.full && !opts.json) throw new Error("--full requires --json");
+      if (opts.json) {
+        if (opts.full) { printLine(JSON.stringify({ results, count: results.length }, null, 2)); return; }
+        const page = pageItemsOrExit(results, { limit: opts.limit, offset: opts.offset, all: opts.all });
+        printLine(JSON.stringify({ results: opts.verbose ? page.items : page.items.map(compactDomainJson), count: page.shown, total: page.total, limit: opts.all ? null : page.limit, offset: page.offset, has_more: page.hasMore, next_offset: page.hasMore ? page.offset + page.shown : null, compact: !opts.verbose }));
+        return;
+      }
       let page;
       try {
         page = pageItemsOrExit(results, { limit: opts.limit, offset: opts.offset, all: opts.all });
