@@ -177,6 +177,8 @@ export type {
   CompileAssetPlanInput,
 } from "./lib/asset-plan.js";
 export { providerVersionSatisfies } from "./lib/provider-version.js";
+export { discoverHarnesses, DISCOVERABLE_HARNESSES, HARNESS_DISCOVERY_SCHEMA } from "./lib/harness-discovery.js";
+export type { DiscoverableHarness, HarnessDiscoveryOptions, HarnessDiscoveryResult, HarnessDiscoveryEntry, HarnessPathObservation } from "./lib/harness-discovery.js";
 export type {
   SessionHostedProfileSelector,
   SessionInstructionLayer,
