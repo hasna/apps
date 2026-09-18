@@ -13,3 +13,5 @@ The import route rejects non-object bodies and malformed workflow, loop, schedul
 The configured app authority remains `https://api.hasna.com/loops`, clients append `/v1` exactly once, and local SQLite remains available only through the explicit `HASNA_LOOPS_LOCAL=1` opt-in.
 
 The hosted import apply now requires the server's `loops.import.v2` receipt, bound to a caller operation id, an exact request digest, and imported/skipped row ids. Deploy the merged server before publishing a client release that enables hosted import.
+
+Import rows now preserve accepted loop bundle identity and pinned-version metadata across both SQLite and PostgreSQL writes. Derived latest-run summaries are rejected instead of accepted-and-ignored, and generated SDK agent targets expose `extraArgs` as an empty tuple to match the server's empty-only contract.

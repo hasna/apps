@@ -28,7 +28,7 @@ function problems(source: Workflow, executable: string): string[] {
   require(livePg?.services?.postgres?.image?.startsWith("postgres:16-alpine@sha256:"), "live PostgreSQL proof pins PostgreSQL 16");
   const liveStep = step(livePg, "Prove orphan preflight and forced rollback on PostgreSQL 16");
   require(liveStep?.env?.LOOPS_IMPORT_CI_DATABASE_URL === "postgres://postgres@127.0.0.1:5432/loops_import_ci", "live PostgreSQL proof uses only its disposable service database");
-  require(liveStep?.run?.includes("postgres-import-ci.ts") && liveStep.run.includes("0 fail") && liveStep.run.includes("skip"), "live PostgreSQL proof executes both import regressions and refuses skips");
+  require(liveStep?.run?.includes("postgres-import-ci.ts") && liveStep.run.includes("roundtrip") && liveStep.run.includes("3 pass") && liveStep.run.includes("0 fail") && liveStep.run.includes("skip"), "live PostgreSQL proof executes all import regressions and refuses skips");
   require(step(aggregate, "Require live PostgreSQL import integrity proof")?.if === "${{ always() }}", "aggregate requires the live PostgreSQL proof after every outcome");
   require(step(aggregate, "Verify complete disjoint task execution")?.if === "${{ always() }}", "aggregate validation never skips on failure");
   require(aggregate?.env?.AFFECTED_MATRIX_RESULT === "${{ needs.affected-shard.result }}", "aggregate binds actual matrix result");

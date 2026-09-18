@@ -305,8 +305,8 @@ function loop(value: unknown): Loop {
   onlyKeys(row, [
     "id", "name", "description", "labels", "status", "archivedAt", "archivedFromStatus", "schedule", "target",
     "goal", "machine", "nextRunAt", "retryScheduledFor", "catchUp", "catchUpLimit", "overlap", "maxAttempts",
-    "retryDelayMs", "leaseMs", "expiresAt", "expiresAfterRuns", "bundleName", "bundlePinnedVersion", "latestRunId",
-    "latestRunStatus", "lastRunAt", "createdAt", "updatedAt",
+    "retryDelayMs", "leaseMs", "expiresAt", "expiresAfterRuns", "bundleName", "bundlePinnedVersion",
+    "createdAt", "updatedAt",
   ]);
   nonEmptyString(row.id);
   nonEmptyString(row.name);
@@ -334,9 +334,6 @@ function loop(value: unknown): Loop {
   if (row.expiresAfterRuns !== undefined && !isExpiresAfterRuns(row.expiresAfterRuns)) invalid();
   optionalString(row.bundleName);
   optionalPositiveInteger(row.bundlePinnedVersion);
-  optionalString(row.latestRunId);
-  if (row.latestRunStatus !== undefined && (typeof row.latestRunStatus !== "string" || !RUN_STATUSES.has(row.latestRunStatus))) invalid();
-  optionalTimestamp(row.lastRunAt);
   timestamp(row.createdAt);
   timestamp(row.updatedAt);
   return { ...row, schedule: parsedSchedule, target } as unknown as Loop;

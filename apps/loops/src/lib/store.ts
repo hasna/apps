@@ -6370,10 +6370,10 @@ export class Store {
       .query(
         `INSERT INTO loops (id, name, description, labels_json, status, archived_at, archived_from_status, schedule_json, target_json,
           goal_json, machine_json, next_run_at, retry_scheduled_for, catch_up, catch_up_limit, overlap, max_attempts,
-          retry_delay_ms, lease_ms, expires_at, expires_after_runs, created_at, updated_at)
+          retry_delay_ms, lease_ms, expires_at, expires_after_runs, bundle_name, bundle_pinned_version, created_at, updated_at)
          VALUES ($id, $name, $description, $labels, $status, $archivedAt, $archivedFromStatus, $schedule, $target,
           $goal, $machine, $nextRun, $retrySlot, $catchUp, $catchUpLimit, $overlap, $maxAttempts,
-          $retryDelay, $leaseMs, $expiresAt, $expiresAfterRuns, $created, $updated)
+          $retryDelay, $leaseMs, $expiresAt, $expiresAfterRuns, $bundleName, $bundlePinnedVersion, $created, $updated)
          ON CONFLICT(id) DO UPDATE SET
            name=$name,
            description=$description,
@@ -6395,6 +6395,8 @@ export class Store {
            lease_ms=$leaseMs,
            expires_at=$expiresAt,
            expires_after_runs=$expiresAfterRuns,
+           bundle_name=$bundleName,
+           bundle_pinned_version=$bundlePinnedVersion,
            created_at=$created,
            updated_at=$updated`,
       )
@@ -6420,6 +6422,8 @@ export class Store {
         $leaseMs: loop.leaseMs,
         $expiresAt: loop.expiresAt ?? null,
         $expiresAfterRuns: loop.expiresAfterRuns ?? null,
+        $bundleName: loop.bundleName ?? null,
+        $bundlePinnedVersion: loop.bundlePinnedVersion ?? null,
         $created: loop.createdAt,
         $updated: loop.updatedAt,
       });

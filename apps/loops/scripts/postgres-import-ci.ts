@@ -11,6 +11,8 @@ import { PgPoolExecutor } from "../src/lib/storage/pg-executor.js";
 import { PostgresLoopStorage } from "../src/lib/storage/postgres-loop-storage.js";
 import { PostgresStorage } from "../src/lib/storage/postgres.js";
 import type { LoopRun, WorkflowSpec } from "../src/types.js";
+import { exportLoopsMigrationBundle } from "../src/lib/migration.js";
+import { Store } from "../src/lib/store.js";
 
 const DATABASE_URL = process.env.LOOPS_IMPORT_CI_DATABASE_URL;
 if (!DATABASE_URL) throw new Error("LOOPS_IMPORT_CI_DATABASE_URL is required; live import proofs must not skip");
@@ -96,6 +98,56 @@ describe("required live PostgreSQL import integrity", () => {
     expect(await storage.countRuns()).toBe(0);
   });
 
+  test("export -> PostgreSQL import -> export preserves accepted bundle metadata and all rows", async () => {
+    const source = new Store(":memory:");
+    const reexport = new Store(":memory:");
+    try {
+      const spec = source.createWorkflow({
+        name: "pg-roundtrip-workflow",
+        steps: [{ id: "step", target: { type: "command", command: "true" } }],
+      });
+      const created = source.createLoop({
+        name: "pg-roundtrip-loop",
+        schedule: { type: "interval", everyMs: 60_000 },
+        target: { type: "workflow", workflowId: spec.id },
+      });
+      source.upsertMigrationLoop({
+        ...created,
+        bundleName: "pg-roundtrip-bundle",
+        bundlePinnedVersion: 9,
+      }, { replace: true });
+      source.createSkippedRun(
+        source.requireLoop(created.id),
+        "2026-09-18T13:00:00.000Z",
+        "postgres roundtrip",
+        { now: new Date("2026-09-18T13:00:01.000Z") },
+      );
+      const first = exportLoopsMigrationBundle(source);
+
+      await storage.importMigrationRows({ ...first.data, replace: true });
+      const pgWorkflow = await storage.getWorkflow(spec.id);
+      const pgLoop = await storage.getLoop(created.id);
+      const pgRun = await storage.getRun(first.data.runs[0]!.id);
+      expect(pgLoop).toMatchObject({
+        bundleName: "pg-roundtrip-bundle",
+        bundlePinnedVersion: 9,
+      });
+      expect(pgWorkflow).toBeDefined();
+      expect(pgRun).toBeDefined();
+
+      reexport.importMigrationRows({
+        workflows: [pgWorkflow!],
+        loops: [pgLoop!],
+        runs: [pgRun!],
+        replace: true,
+      });
+      expect(exportLoopsMigrationBundle(reexport).data).toEqual(first.data);
+    } finally {
+      source.close();
+      reexport.close();
+    }
+  });
+
   test("a later PostgreSQL write failure rolls every earlier import row back", async () => {
     await executor.queryClient.execute(`
       CREATE OR REPLACE FUNCTION loops_import_ci_fail_write() RETURNS trigger
@@ -129,6 +181,6 @@ describe("required live PostgreSQL import integrity", () => {
   });
 
   afterAll(() => {
-    console.log("[loops-live-postgres] PASS: orphan preflight and forced rollback executed");
+    console.log("[loops-live-postgres] PASS: roundtrip, orphan preflight, and forced rollback executed");
   });
 });

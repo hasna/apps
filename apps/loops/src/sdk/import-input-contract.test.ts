@@ -31,7 +31,7 @@ function resolve(schema: JsonSchema): JsonSchema {
 function schemaAccepts(value: unknown, input: JsonSchema): boolean {
   const schema = resolve(input);
   if (schema.oneOf) return schema.oneOf.filter((candidate) => schemaAccepts(value, candidate)).length === 1;
-  if (schema.enum && !schema.enum.some((candidate) => Object.is(candidate, value))) return false;
+  if (schema.enum && !schema.enum.some((candidate) => JSON.stringify(candidate) === JSON.stringify(value))) return false;
   if (schema.type === "null") return value === null;
   if (schema.type === "string") {
     if (typeof value !== "string" || (schema.minLength !== undefined && value.length < schema.minLength)) return false;
@@ -115,6 +115,10 @@ sdkImport({ workflows: [{ id: "w", name: "w", version: 1, status: "active", step
 sdkImport({ loops: [{ id: "l", name: "l", labels: [], status: "paused" }] });
 // @ts-expect-error import runs require loop name, schedule identity, attempt, and timestamps
 sdkImport({ runs: [{ id: "r", loopId: "l", status: "succeeded" }] });
+// @ts-expect-error imported agent passthrough arguments are empty-only
+sdkImport({ workflows: [{ ...completeImport.workflows![0]!, steps: [{ id: "step", target: { type: "agent", provider: "codex", prompt: "run", extraArgs: ["--danger"] } }] }] });
+// @ts-expect-error latest run summary fields are derived from imported runs, never accepted on loop rows
+sdkImport({ loops: [{ ...completeImport.loops![0]!, latestRunId: "derived-run" }] });
 
 describe("strict import request contract", () => {
   test("OpenAPI uses dedicated full-row schemas instead of public projections", () => {
@@ -136,6 +140,36 @@ describe("strict import request contract", () => {
     };
     expect(schemaAccepts(incomplete, schemas.ImportInput)).toBe(false);
     expect(() => validateImportRequest(incomplete)).toThrow("migration import request is invalid");
+  });
+
+  test("agent extraArgs are empty-only and derived latest-run fields are rejected across schema and server", () => {
+    const agentWorkflow = {
+      ...completeImport.workflows![0]!,
+      steps: [{
+        id: "agent-step",
+        target: { type: "agent", provider: "codex", prompt: "run", extraArgs: [] },
+      }],
+    };
+    const valid = { workflows: [agentWorkflow] };
+    expect(schemas.ImportAgentTarget.properties?.extraArgs).toMatchObject({
+      type: "array",
+      maxItems: 0,
+      enum: [[]],
+    });
+    expect(schemaAccepts(valid, schemas.ImportInput)).toBe(true);
+    expect(validateImportRequest(valid).workflows[0]?.steps[0]?.target).toMatchObject({ extraArgs: [] });
+
+    const nonEmptyArgs = structuredClone(valid);
+    (nonEmptyArgs.workflows[0]!.steps[0]!.target.extraArgs as string[]).push("--danger");
+    expect(schemaAccepts(nonEmptyArgs, schemas.ImportInput)).toBe(false);
+    expect(() => validateImportRequest(nonEmptyArgs)).toThrow("migration import request is invalid");
+
+    for (const field of ["latestRunId", "latestRunStatus", "lastRunAt"] as const) {
+      expect(schemas.ImportLoop.properties?.[field]).toBeUndefined();
+      const derived = { loops: [{ ...completeImport.loops![0]!, [field]: field === "latestRunStatus" ? "succeeded" : "derived" }] };
+      expect(schemaAccepts(derived, schemas.ImportInput)).toBe(false);
+      expect(() => validateImportRequest(derived)).toThrow("migration import request is invalid");
+    }
   });
 
   test("OpenAPI, generated SDK type, and server accept the same complete rows", () => {

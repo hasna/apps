@@ -1665,8 +1665,8 @@ export class PostgresLoopStorage implements LoopStorageContract {
     await this.client.execute(
       `INSERT INTO loops (id, name, description, labels_json, status, archived_at, archived_from_status, schedule_json, target_json,
         goal_json, machine_json, next_run_at, retry_scheduled_for, catch_up, catch_up_limit, overlap, max_attempts,
-        retry_delay_ms, lease_ms, expires_at, expires_after_runs, created_at, updated_at, tenant_id)
-       VALUES ($1,$2,$3,$4::jsonb,$5,$6,$7,$8::jsonb,$9::jsonb,$10::jsonb,$11::jsonb,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,open_loops_current_tenant_id())
+        retry_delay_ms, lease_ms, expires_at, expires_after_runs, bundle_name, bundle_pinned_version, created_at, updated_at, tenant_id)
+       VALUES ($1,$2,$3,$4::jsonb,$5,$6,$7,$8::jsonb,$9::jsonb,$10::jsonb,$11::jsonb,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,open_loops_current_tenant_id())
        ON CONFLICT(tenant_id,id) DO UPDATE SET
          name=EXCLUDED.name,
          description=EXCLUDED.description,
@@ -1688,6 +1688,8 @@ export class PostgresLoopStorage implements LoopStorageContract {
          lease_ms=EXCLUDED.lease_ms,
          expires_at=EXCLUDED.expires_at,
          expires_after_runs=EXCLUDED.expires_after_runs,
+         bundle_name=EXCLUDED.bundle_name,
+         bundle_pinned_version=EXCLUDED.bundle_pinned_version,
          created_at=EXCLUDED.created_at,
          updated_at=EXCLUDED.updated_at`,
       [
@@ -1712,6 +1714,8 @@ export class PostgresLoopStorage implements LoopStorageContract {
         loop.leaseMs,
         loop.expiresAt ?? null,
         loop.expiresAfterRuns ?? null,
+        loop.bundleName ?? null,
+        loop.bundlePinnedVersion ?? null,
         loop.createdAt,
         loop.updatedAt,
       ],

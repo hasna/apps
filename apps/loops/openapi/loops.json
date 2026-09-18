@@ -6204,7 +6204,10 @@
               "type": "string",
               "minLength": 1
             },
-            "maxItems": 0
+            "maxItems": 0,
+            "enum": [
+              []
+            ]
           },
           "addDirs": {
             "type": "array",
@@ -6730,26 +6733,6 @@
           "bundlePinnedVersion": {
             "type": "integer",
             "minimum": 1
-          },
-          "latestRunId": {
-            "type": "string",
-            "minLength": 1
-          },
-          "latestRunStatus": {
-            "type": "string",
-            "enum": [
-              "running",
-              "succeeded",
-              "failed",
-              "timed_out",
-              "abandoned",
-              "skipped"
-            ]
-          },
-          "lastRunAt": {
-            "type": "string",
-            "format": "date-time",
-            "minLength": 1
           },
           "createdAt": {
             "type": "string",

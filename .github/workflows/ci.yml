@@ -310,8 +310,8 @@ jobs:
         run: |
           set -euo pipefail
           bun test --timeout 120000 ./scripts/postgres-import-ci.ts 2>&1 | tee "$RUNNER_TEMP/loops-live-postgres.log"
-          grep -Fq '[loops-live-postgres] PASS: orphan preflight and forced rollback executed' "$RUNNER_TEMP/loops-live-postgres.log"
-          grep -Eq '^[[:space:]]*2 pass$' "$RUNNER_TEMP/loops-live-postgres.log"
+          grep -Fq '[loops-live-postgres] PASS: roundtrip, orphan preflight, and forced rollback executed' "$RUNNER_TEMP/loops-live-postgres.log"
+          grep -Eq '^[[:space:]]*3 pass$' "$RUNNER_TEMP/loops-live-postgres.log"
           grep -Eq '^[[:space:]]*0 fail$' "$RUNNER_TEMP/loops-live-postgres.log"
           if grep -Eq '\(skip\)|[1-9][0-9]* skip' "$RUNNER_TEMP/loops-live-postgres.log"; then exit 1; fi
 

@@ -3,6 +3,7 @@ import type { AgentTarget } from "../types.js";
 import { ValidationError } from "./errors.js";
 import {
   buildControlPlaneMigrationPlan,
+  applyImportMigrationBundle,
   buildImportMigrationPlan,
   exportLoopsMigrationBundle,
   migrationHash,
@@ -98,6 +99,50 @@ describe("migration agent target validation", () => {
     }
   });
 
+});
+
+describe("full migration bundle roundtrip", () => {
+  test("export -> SQLite import -> export preserves every accepted workflow, loop, and run field", () => {
+    const source = new Store(":memory:");
+    const destination = new Store(":memory:");
+    try {
+      const workflow = source.createWorkflow({
+        name: "roundtrip-workflow",
+        steps: [{ id: "step", target: { type: "command", command: "true" } }],
+      });
+      const created = source.createLoop({
+        name: "roundtrip-loop",
+        schedule: { type: "interval", everyMs: 60_000, anchor: "fixed_rate" },
+        target: { type: "workflow", workflowId: workflow.id },
+      });
+      source.upsertMigrationLoop({
+        ...created,
+        bundleName: "roundtrip-bundle",
+        bundlePinnedVersion: 7,
+      }, { replace: true });
+      source.createSkippedRun(
+        source.requireLoop(created.id),
+        "2026-09-18T12:00:00.000Z",
+        "roundtrip terminal run",
+        { now: new Date("2026-09-18T12:00:01.000Z") },
+      );
+
+      const first = exportLoopsMigrationBundle(source);
+      expect(first.importable).toBe(true);
+      expect(first.data.loops[0]).toMatchObject({
+        bundleName: "roundtrip-bundle",
+        bundlePinnedVersion: 7,
+      });
+
+      const result = applyImportMigrationBundle(destination, first, { includeRuns: true });
+      expect(result.applied).toEqual({ workflows: 1, loops: 1, runs: 1 });
+      const second = exportLoopsMigrationBundle(destination);
+      expect(second.data).toEqual(first.data);
+    } finally {
+      source.close();
+      destination.close();
+    }
+  });
 });
 
 describe("control-plane request bounds", () => {

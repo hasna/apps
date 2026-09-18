@@ -1395,6 +1395,7 @@ describe("loops-api foundation", () => {
         type: "agent",
         provider: "codewith",
         prompt: "do not execute",
+        extraArgs: [],
         addDirs: ["/tmp/allowed"],
       },
       catchUp: "latest",
@@ -1439,6 +1440,7 @@ describe("loops-api foundation", () => {
       expect((await storage.getLoop(importedLoop.id))?.target).toMatchObject({
         type: "agent",
         provider: "codewith",
+        extraArgs: [],
         addDirs: ["/tmp/allowed"],
       });
     } finally {
@@ -1467,6 +1469,8 @@ describe("loops-api foundation", () => {
       maxAttempts: 1,
       retryDelayMs: 60_000,
       leaseMs: 1_800_000,
+      bundleName: "imported-loop-bundle",
+      bundlePinnedVersion: 4,
       createdAt: "2026-01-01T00:00:00.000Z",
       updatedAt: "2026-01-02T00:00:00.000Z",
     };
@@ -1515,6 +1519,8 @@ describe("loops-api foundation", () => {
       expect(fetched?.nextRunAt).toBeUndefined();
       expect(fetched?.retryScheduledFor).toBeUndefined();
       expect(fetched?.archivedAt).toBe("2026-01-02T00:00:00.000Z");
+      expect(fetched?.bundleName).toBe("imported-loop-bundle");
+      expect(fetched?.bundlePinnedVersion).toBe(4);
       expect(fetched?.createdAt).toBe("2026-01-01T00:00:00.000Z");
       const importedRun = await storage.getRun("run-import-1");
       expect(importedRun?.status).toBe("succeeded");
@@ -1527,6 +1533,8 @@ describe("loops-api foundation", () => {
         ...loop,
         id: "loop-import-active",
         name: "imported-loop-active",
+        bundleName: "imported-loop-active-bundle",
+        bundlePinnedVersion: 5,
         status: "active",
         archivedAt: undefined,
         archivedFromStatus: undefined,
@@ -1746,6 +1754,9 @@ describe("loops-api foundation", () => {
         JSON.stringify({ loops: [{ ...baseLoop, schedule: {} }] }),
         JSON.stringify({ loops: [{ ...baseLoop, target: { type: "bogus" } }] }),
         JSON.stringify({ loops: [{ ...baseLoop, target: { type: "workflow", workflowId: "missing-workflow" } }] }),
+        JSON.stringify({ loops: [{ ...baseLoop, latestRunId: "derived-run" }] }),
+        JSON.stringify({ loops: [{ ...baseLoop, latestRunStatus: "succeeded" }] }),
+        JSON.stringify({ loops: [{ ...baseLoop, lastRunAt: "2026-01-01T00:00:00.000Z" }] }),
         JSON.stringify({ runs: [{ ...orphanRun, status: "queued" }] }),
         JSON.stringify({ runs: [{ ...orphanRun, loopId: baseLoop.id, status: "running", finishedAt: orphanRun.updatedAt }] }),
         JSON.stringify({ runs: [orphanRun] }),
