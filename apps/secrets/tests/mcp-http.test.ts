@@ -91,6 +91,10 @@ describe("secrets MCP HTTP transport", () => {
     await client.callTool({ name: "set_secret", arguments: { key: "test/key", value: fixtureValue } });
     const listed = await client.callTool({ name: "list_secrets", arguments: {} });
     expect(JSON.stringify(listed)).not.toContain(fixtureValue);
+    const listedText = (listed.content as Array<{ type: string; text: string }>)[0]?.text ?? "{}";
+    expect(JSON.parse(listedText)).toMatchObject({ count: 1, limit: 20, has_more: false, compact: true });
+    const legacyListed = await client.callTool({ name: "list_secrets", arguments: { full: true } });
+    expect((legacyListed.content as Array<{ text: string }>)[0]?.text).toContain("test/key");
     const got = await client.callTool({ name: "get_secret", arguments: { key: "test/key" } });
     const content = got.content as Array<{ type: string; text: string }>;
     expect(content[0]?.text).toContain(fixtureValue);
