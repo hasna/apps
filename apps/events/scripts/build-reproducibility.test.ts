@@ -2,9 +2,13 @@ import { expect, test } from "bun:test";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
+import {
+  GENERATED_OUTPUTS,
+  assertExactGeneratedOutputInventory,
+  assertGeneratedEntrypointsCovered,
+} from "./generated-output-manifest.js";
 
 const ROOT = resolve(import.meta.dir, "../../..");
-const COMPARED = ["cli/index.js", "commander.js", "durable.js", "index.js", "mcp/intake.js", "server/serve-entry.js"] as const;
 
 function run(cwd: string, command: string[]): void {
   const result = Bun.spawnSync(command, { cwd, stdout: "pipe", stderr: "pipe", env: { ...process.env, CI: "1" } });
@@ -47,10 +51,13 @@ function cleanInstallState(root: string): void {
 function buildAndRead(root: string): Map<string, Buffer> {
   run(root, ["bun", "run", "--filter", "@hasna/contracts", "build"]);
   run(root, ["bun", "run", "--filter", "@hasna/events", "build"]);
-  return new Map(COMPARED.map((file) => [file, readFileSync(join(root, "apps", "events", "dist", file))]));
+  const packageRoot = join(root, "apps", "events");
+  assertExactGeneratedOutputInventory(packageRoot);
+  assertGeneratedEntrypointsCovered(packageRoot);
+  return new Map(GENERATED_OUTPUTS.map((file) => [file, readFileSync(join(packageRoot, file))]));
 }
 
-test("Events bundles are byte-identical after full and filtered Bun installs", () => {
+test("Events generated outputs are byte-identical after full and filtered Bun installs", () => {
   const fixture = mkdtempSync(join(tmpdir(), "events-install-shapes-"));
   try {
     copyFixture(fixture);
@@ -64,7 +71,9 @@ test("Events bundles are byte-identical after full and filtered Bun installs", (
     ]);
     const filtered = buildAndRead(fixture);
 
-    for (const file of COMPARED) expect({ file, bytes: filtered.get(file) }).toEqual({ file, bytes: full.get(file) });
+    for (const file of GENERATED_OUTPUTS) {
+      expect({ file, bytes: filtered.get(file) }).toEqual({ file, bytes: full.get(file) });
+    }
   } finally {
     rmSync(fixture, { recursive: true, force: true });
   }
