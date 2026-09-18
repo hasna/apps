@@ -89,7 +89,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           SOURCE: ${{ inputs.source }}
           RECIPE: ${{ inputs.recipe }}
-          MIGRATION_PHASE: ${{ inputs.phase == 'migration_reconcile' && 'reconcile' || inputs.phase == 'migration_prepare' && 'prepare' || 'execute' }}
+          MIGRATION_PHASE: ${{ inputs.phase == 'migration_image' && 'image' || inputs.phase == 'migration_reconcile' && 'reconcile' || inputs.phase == 'migration_prepare' && 'prepare' || 'execute' }}
           ANCHOR_RUN: ${{ inputs.anchor_reconciliation_run_id }}
           ANCHOR_SHA: ${{ inputs.anchor_reconciled_sha256 }}
           FAILED_RUN_1: ${{ inputs.failed_deploy_run_id_1 }}
@@ -113,9 +113,9 @@ jobs:
             --plan-run "$PLAN_RUN" \
             --plan-sha256 "$PLAN_SHA" \
             --download "$RUNNER_TEMP/emails-migration-reviewed"
-          if [ "$MIGRATION_PHASE" = prepare ]; then
+          if [ "$MIGRATION_PHASE" = image ] || [ "$MIGRATION_PHASE" = prepare ]; then
             printf 'SOURCE_SHA=%s\n' "$SOURCE" >> "$GITHUB_ENV"
-            printf 'IMAGE_TAG=migration-%s-%s-%s\n' "$SOURCE" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" >> "$GITHUB_ENV"
+            printf 'IMAGE_TAG=migration-%s-%s-%s-%s\n' "$MIGRATION_PHASE" "$SOURCE" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" >> "$GITHUB_ENV"
           fi
 
       - name: Verify migration deployment controls before AWS authority
@@ -123,6 +123,7 @@ jobs:
         run: |
           python3 -I -B tooling/deploy/emails-migration/gate_test.py
           python3 -I -B tooling/deploy/emails-migration/deploy_test.py
+          python3 -I -B tooling/deploy/emails-migration/image_test.py
           python3 -I -B tooling/deploy/emails-migration/task_receipt_test.py
           bun test tooling/ci/tests/standard/emails-migration-deploy.test.ts
 
@@ -134,7 +135,7 @@ jobs:
           python3 -I -B tooling/deploy/emails-search/aws_transport_test.py
 
       - name: Exercise the exact amd64 server image with isolated PostgreSQL
-        if: ${{ inputs.phase == 'current' || inputs.phase == 'migration_prepare' }}
+        if: ${{ inputs.phase == 'current' || inputs.phase == 'migration_image' || inputs.phase == 'migration_prepare' }}
         working-directory: apps/emails
         env:
           CONTAINER_RUNTIME_PLATFORM: linux/amd64
@@ -144,7 +145,7 @@ jobs:
         run: bash scripts/container-runtime-smoke.sh
 
       - name: Generate vulnerability report before AWS authority
-        if: ${{ inputs.phase == 'current' || inputs.phase == 'migration_prepare' }}
+        if: ${{ inputs.phase == 'current' || inputs.phase == 'migration_image' || inputs.phase == 'migration_prepare' }}
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
         with:
           image-ref: emails-current-server:${{ inputs.source }}
@@ -157,7 +158,7 @@ jobs:
           exit-code: "0"
 
       - name: Enforce vulnerability gate
-        if: ${{ inputs.phase == 'current' || inputs.phase == 'migration_prepare' }}
+        if: ${{ inputs.phase == 'current' || inputs.phase == 'migration_image' || inputs.phase == 'migration_prepare' }}
         run: |
           set -Eeuo pipefail
           jq -e '
@@ -196,13 +197,13 @@ jobs:
           python3 -I -B tooling/deploy/emails-search/promotion.py "$PHASE" --recipe "$RECIPE" --source "$SOURCE" --out "$RUNNER_TEMP/emails-promotion-receipts" --prepared "$RUNNER_TEMP/emails-reviewed-plan/prepared.json" --prepared-sha256 "$PREPARED_SHA"
 
       - name: Login to Amazon ECR for the current server
-        if: ${{ inputs.phase == 'current' || inputs.phase == 'migration_prepare' }}
+        if: ${{ inputs.phase == 'current' || inputs.phase == 'migration_image' || inputs.phase == 'migration_prepare' }}
         uses: aws-actions/amazon-ecr-login@d539f0932e70871a027e9d5a9d8fc38589180a64
         with:
           mask-password: true
 
       - name: Push immutable current image and resolve its registry digest
-        if: ${{ inputs.phase == 'current' || inputs.phase == 'migration_prepare' }}
+        if: ${{ inputs.phase == 'current' || inputs.phase == 'migration_image' || inputs.phase == 'migration_prepare' }}
         run: |
           set -Eeuo pipefail
           test "$(aws sts get-caller-identity --query Account --output text)" = "789877399345"
@@ -219,6 +220,17 @@ jobs:
             --query 'imageDetails[0].imageDigest' --output text)"
           [[ "$image_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
           printf 'IMAGE_DIGEST=%s\n' "$image_digest" >> "$GITHUB_ENV"
+
+      - name: Inspect immutable migration image without registering a task
+        if: ${{ inputs.phase == 'migration_image' }}
+        env:
+          SOURCE: ${{ inputs.source }}
+        run: |
+          set -Eeuo pipefail
+          python3 -I -B tooling/deploy/emails-migration/image.py \
+            --source "$SOURCE" \
+            --image-digest "$IMAGE_DIGEST" \
+            --out "$RUNNER_TEMP/emails-migration-image-receipts"
 
       - name: Reconcile failed image-only deployments and expected migration drift
         if: ${{ inputs.phase == 'migration_reconcile' }}
@@ -327,6 +339,15 @@ jobs:
         with:
           name: emails-current-migration-reconciled
           path: ${{ runner.temp }}/emails-migration-receipts/reconciled.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Retain immutable migration image identity
+        if: ${{ success() && inputs.phase == 'migration_image' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: emails-current-migration-image
+          path: ${{ runner.temp }}/emails-migration-image-receipts/image.json
           if-no-files-found: error
           retention-days: 30
 
