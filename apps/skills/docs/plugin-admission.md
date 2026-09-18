@@ -196,6 +196,73 @@ not proof of a timestamp-only change: review the complete current registration
 and its complementary sources before explicitly replacing an old witness.
 Capturing this witness does not write a policy or approve native registration.
 
+## Claude settings preferences
+
+`captureClaudeSettings(canonicalSettingsPath)` returns a versioned
+`claude-settings-v1` discovery source for the configured Claude user
+`settings.json`. Use the canonical target when a reviewed home root alias is
+present. The mode is accepted only in explicit reviewed Claude discovery; it
+cannot stand in for a plugin manifest, executable, project settings review or
+another agent's configuration.
+
+The digest canonicalizes JSON object key order, preserves array order and
+unknown numeric values without rounding, and excludes only these top-level
+preferences and model selections with valid documented types:
+
+- Booleans: `autoScrollEnabled`, `axScreenReader`, `emojiCompletionEnabled`,
+  `prefersReducedMotion`, `showTurnDuration`, `spinnerTipsEnabled`,
+  `syntaxHighlightingDisabled`, `terminalProgressBarEnabled`,
+  `terminalTitleFromRename`, `verbose`, `wheelScrollAccelerationEnabled`.
+- Exact strings: `editorMode` (`normal`, `vim`), `tui` (`default`, `fullscreen`),
+  `viewMode` (`default`, `verbose`, `focus`).
+- Built-in `model` values: `default`, `best`, `fable`, `fable[1m]`, `sonnet`,
+  `sonnet[1m]`, `opus`, `opus[1m]`, `haiku`, `opusplan`; exact model IDs
+  `claude-fable-5-1`, `claude-fable-5`, `claude-fable-5[1m]`, `claude-opus-5`,
+  `claude-sonnet-5`, `claude-haiku-4-5-20251001`, `claude-opus-4-6`,
+  `claude-sonnet-4-5`, `claude-sonnet-4-5-20250929`, `claude-opus-4-8`,
+  `claude-opus-4-8[1m]`, `claude-opus-4-7`, `claude-sonnet-4-6`,
+  `claude-opus-4-5-20251101`, `claude-opus-4-5`, `claude-haiku-4-5`,
+  `claude-fable-5-1[1m]`, `claude-opus-5[1m]`, `claude-opus-4-7[1m]`,
+  `claude-opus-4-6[1m]`, `claude-sonnet-4-6[1m]`.
+
+The model exception follows the documented [model picker](https://code.claude.com/docs/en/model-config#setting-your-model)
+and [model IDs](https://platform.claude.com/docs/en/models/overview), including
+the documented [extended-context model-name suffix](https://code.claude.com/docs/en/model-config#extended-context)
+only for the listed supported combinations. It permits
+inference selection among this fixed list, including clearing the override. It
+does not exempt provider or alias mappings, `modelOverrides`, `modelPicker`,
+`modelSettings`, `availableModels`, environment or model-switch hooks. Arbitrary
+custom, provider-specific, future or path-like model strings stay bound; there
+is no prefix wildcard or dynamic model lookup. Non-string model values refuse.
+
+Invalid values for the display preferences refuse capture and verification. Every
+other field remains bound, including unknown future fields, hooks and their
+exact commands, permissions, native skill suppression and synchronization,
+plugin roots, marketplaces, environment and configuration precedence. Language,
+output style, theme, and command-bearing status or file suggestion settings are
+intentionally retained. These are narrow preference and inference-selection
+exceptions, not general permission to change Claude configuration. The native
+bridge guard continues to check its exact commands and native Skill policy.
+
+Migration requires reviewing the current complete settings and complementary
+plugin/loader sources, replacing the settings raw source with the captured
+typed source in a reviewed discovery-input file, and using the normal hook
+installation plan/apply operation. A stale prior raw hash is not evidence that
+only preferences changed. Capture performs no write or automatic refresh; old
+raw witnesses remain exact. Concurrent changes during an installation still
+face full-byte preconditions so a preference edit cannot be overwritten.
+
+The source must be a stable normalized regular file named `settings.json` with
+strict UTF-8, no duplicate JSON keys and no trailing content. Limits are 1 MiB,
+1,024 top-level fields, depth 32, 65,536 nodes and 16,384 characters per string;
+capture also consumes the shared discovery byte budget. Symlinks, special
+nodes and changes during a read refuse. This witness covers the configured
+user file; existing checks on project settings, root aliases and plugin sources
+remain separate. It does not certify arbitrary command-line settings overrides
+or guarantee when a running native client adopts a settings edit.
+Those complementary checks retain their existing exact registration and hook
+entry comparisons; this mode does not relax them for property-order changes.
+
 ## Verification and limits
 
 Unit tests cover provenance and mapping failures, offline/revoked authorities,
