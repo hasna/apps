@@ -17,14 +17,17 @@ name: deploy-trash
 #
 # The manual route is retained and is deliberately narrower than the automatic
 # one: workflow_dispatch must be invoked on the main branch ref and always
-# resolves to the exact current origin/main tip. A historical SHA cannot be
-# deployed by hand, which is what the previous ancestor-of-main check allowed.
+# resolves to the exact current origin/main tip. The deployment controller
+# never accepts a historical SHA by hand.
 # Resolving to the tip is necessary and was not sufficient — the tip itself may
 # never have passed ci, so a hand dispatch during or after red CI could deploy
 # an unverified commit. The gate therefore asks the Actions API, with the
 # workflow's own contents+actions read token, for a COMPLETED SUCCESSFUL ci PUSH
 # run on main whose head_sha equals that freshly resolved tip, and refuses on
 # zero or unreadable matches. Both routes now deploy only ci-passed commits.
+# First migration may use a separately reviewed historical image/source pair
+# from the protected manifest while the service is stopped. Both sources require
+# their own successful main CI; the receipt records their distinct identities.
 #
 # External prerequisite (not changed by this repository): the
 # trash-prod-gha-deploy role trust must admit
@@ -183,6 +186,10 @@ jobs:
 
   deploy:
     name: build + scan + migrate + deploy
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
     needs: gate
     if: ${{ needs.gate.outputs.proceed == 'true' }}
     outputs:
@@ -309,6 +316,7 @@ jobs:
           fi
 
           manifest="$(aws ssm get-parameter --name "${DEPLOY_MANIFEST}" --query Parameter.Value --output text)"
+          printf '%s\n' "${manifest}" > "${RUNNER_TEMP}/trash-deploy-manifest.json"
           get_string() { jq -er "$1 | strings | select(length > 0)" <<<"${manifest}"; }
           cluster="$(get_string '.cluster')"
           service="$(get_string '.service')"
@@ -361,6 +369,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           service_json="$(aws ecs describe-services --cluster "${CLUSTER}" --services "${SERVICE}" --output json)"
+          printf '%s\n' "${service_json}" > "${RUNNER_TEMP}/trash-staged-service.json"
           jq -e '.failures | length == 0' <<<"${service_json}" >/dev/null
           jq -e '.services | length == 1' <<<"${service_json}" >/dev/null
           jq -e '.services[0].status == "ACTIVE" and (.services[0].desiredCount | numbers) >= 0' <<<"${service_json}" >/dev/null
@@ -380,17 +389,29 @@ jobs:
             printf 'bootstrap=%s\n' "${bootstrap}"
           } >> "${GITHUB_OUTPUT}"
 
+      - name: Verify explicit staged bootstrap release authority
+        id: bootstrap-contract
+        if: steps.before.outputs.bootstrap == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREVIOUS_IMAGE: ${{ steps.before.outputs.previous_image }}
+          TRASH_DEPLOY_MANIFEST_FILE: ${{ runner.temp }}/trash-deploy-manifest.json
+          TRASH_STAGED_SERVICE_FILE: ${{ runner.temp }}/trash-staged-service.json
+        run: bash ../../tooling/ci/verify-trash-bootstrap-release.sh
+
       - name: Verify staged bootstrap image provenance and scan
         id: bootstrap-image
         if: steps.before.outputs.bootstrap == 'true'
         env:
+          BOOTSTRAP_SOURCE_SHA: ${{ steps.bootstrap-contract.outputs.source_sha }}
           PREVIOUS_IMAGE: ${{ steps.before.outputs.previous_image }}
           ECR_URL: ${{ steps.manifest.outputs.ecr_url }}
         run: |
           set -Eeuo pipefail
           [[ "${PREVIOUS_IMAGE}" =~ ^${ECR_URL}@sha256:[0-9a-f]{64}$ ]] || { echo "staged bootstrap image is not an immutable Trash ECR digest" >&2; exit 1; }
           digest="${PREVIOUS_IMAGE##*@}"
-          expected_tag="deploy-${SOURCE_SHA}-bootstrap"
+          [[ "${BOOTSTRAP_SOURCE_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          expected_tag="deploy-${BOOTSTRAP_SOURCE_SHA}-bootstrap"
           tags="$(aws ecr describe-images --repository-name "${EXPECTED_ECR_REPOSITORY}" --image-ids imageDigest="${digest}" --query 'imageDetails[0].imageTags' --output json)"
           jq -e --arg tag "${expected_tag}" 'index($tag) != null' <<<"${tags}" >/dev/null || { echo "staged bootstrap image lacks the exact source tag" >&2; exit 1; }
           scan_complete=false
@@ -596,6 +617,9 @@ jobs:
       - name: Emit exact bootstrap migration receipt
         if: steps.before.outputs.bootstrap == 'true'
         env:
+          BOOTSTRAP_SOURCE_SHA: ${{ steps.bootstrap-contract.outputs.source_sha }}
+          BOOTSTRAP_CI_RUN_ID: ${{ steps.bootstrap-contract.outputs.bootstrap_ci_run_id }}
+          CONTROLLER_CI_RUN_ID: ${{ steps.bootstrap-contract.outputs.controller_ci_run_id }}
           IMAGE: ${{ steps.before.outputs.bootstrap == 'true' && steps.bootstrap-image.outputs.digest_image || steps.image.outputs.digest_image }}
           MIGRATION_TASK_DEFINITION: ${{ steps.migration.outputs.task_definition }}
           MIGRATION_TASK: ${{ steps.migration.outputs.task }}
@@ -606,9 +630,13 @@ jobs:
             --arg image "${IMAGE}" \
             --arg task_definition "${MIGRATION_TASK_DEFINITION}" \
             --arg task_arn "${MIGRATION_TASK}" \
-            --arg source_sha "${SOURCE_SHA}" \
+            --arg source_sha "${BOOTSTRAP_SOURCE_SHA}" \
+            --arg controller_source_sha "${SOURCE_SHA}" \
+            --arg controller_run_id "${GITHUB_RUN_ID}" \
+            --argjson bootstrap_ci_run_id "${BOOTSTRAP_CI_RUN_ID}" \
+            --argjson controller_ci_run_id "${CONTROLLER_CI_RUN_ID}" \
             --arg finished_at "${finished_at}" \
-            '{schema:"hasna.trash.migration_receipt.v1",image:$image,task_definition:$task_definition,task_arn:$task_arn,source_sha:$source_sha,finished_at:$finished_at,exit_code:0}' \
+            '{schema:"hasna.trash.migration_receipt.v1",image:$image,task_definition:$task_definition,task_arn:$task_arn,source_sha:$source_sha,controller_source_sha:$controller_source_sha,controller_run_id:$controller_run_id,bootstrap_ci_run_id:$bootstrap_ci_run_id,controller_ci_run_id:$controller_ci_run_id,finished_at:$finished_at,exit_code:0}' \
             > migration-receipt.json
           jq -n \
             --arg name "${MIGRATION_RECEIPT_PARAMETER}" \
@@ -741,12 +769,13 @@ jobs:
           {
             echo "## Trash production deployment"
             echo
-            echo "- source SHA: \`${SOURCE_SHA:-unverified}\`"
+            echo "- controller source SHA: \`${SOURCE_SHA:-unverified}\`"
             echo "- immutable tag: \`${IMAGE_TAG:-not-created}\`"
             echo "- image digest: \`${{ steps.before.outputs.bootstrap == 'true' && steps.bootstrap-image.outputs.digest || steps.image.outputs.digest || 'not-pushed' }}\`"
             echo "- local critical/high: \`${{ steps.local-scan.outputs.critical || 'not-run' }}/${{ steps.local-scan.outputs.high || 'not-run' }}\`"
             echo "- ECR critical/high: \`${{ steps.before.outputs.bootstrap == 'true' && steps.bootstrap-image.outputs.critical || steps.ecr-scan.outputs.critical || 'not-run' }}/${{ steps.before.outputs.bootstrap == 'true' && steps.bootstrap-image.outputs.high || steps.ecr-scan.outputs.high || 'not-run' }}\`"
             echo "- bootstrap migration only: \`${{ steps.before.outputs.bootstrap || 'unknown' }}\`"
+            echo "- bootstrap application source SHA: \`${{ steps.bootstrap-contract.outputs.source_sha || 'not-applicable' }}\`"
             echo "- previous task definition: \`${{ steps.before.outputs.previous_task_definition || 'not-read' }}\`"
             echo "- deployed task definition: \`${{ steps.deploy.outputs.deployed_task_definition || 'not-deployed' }}\`"
             echo "- migration receipt: \`${{ steps.before.outputs.bootstrap == 'true' && 'migration-receipt.json (activation required)' || 'not-required' }}\`"

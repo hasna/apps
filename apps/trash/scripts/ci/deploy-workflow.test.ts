@@ -171,9 +171,12 @@ describe("monorepo deploy context (hasna/apps)", () => {
     expect(workflow).toContain("printf 'bootstrap=%s\\n'");
     expect(workflow).toContain("if: steps.before.outputs.bootstrap != 'true'");
     expect(workflow).toContain("Verify staged bootstrap image provenance and scan");
-    expect(workflow).toContain('expected_tag="deploy-${SOURCE_SHA}-bootstrap"');
+    expect(workflow).toContain('expected_tag="deploy-${BOOTSTRAP_SOURCE_SHA}-bootstrap"');
     expect(workflow).toContain("steps.bootstrap-image.outputs.digest_image");
     expect(workflow).toContain("Emit exact bootstrap migration receipt");
+    expect(workflow).toContain("Verify explicit staged bootstrap release authority");
+    expect(workflow).toContain('--arg source_sha "${BOOTSTRAP_SOURCE_SHA}"');
+    expect(workflow).toContain('--arg controller_source_sha "${SOURCE_SHA}"');
     expect(workflow).toContain("hasna.trash.migration_receipt.v1");
     expect(workflow).toContain("migration-receipt.json");
     expect(workflow).toContain("MIGRATION_RECEIPT_PARAMETER: /hasna/deploy/trash/migration-receipt");

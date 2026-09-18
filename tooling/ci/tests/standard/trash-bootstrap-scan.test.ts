@@ -34,7 +34,7 @@ esac
     const result = spawnSync("bash", ["-c", step.run!], {
       cwd: scratch, encoding: "utf8", timeout: 10_000,
       env: { ...process.env, PATH: `${scratch}:${process.env.PATH}`, TRASH_SCAN_FIXTURE: scratch,
-        SOURCE_SHA: source, PREVIOUS_IMAGE: `${ecr}@${digest}`, ECR_URL: ecr,
+        SOURCE_SHA: "d".repeat(40), BOOTSTRAP_SOURCE_SHA: source, PREVIOUS_IMAGE: `${ecr}@${digest}`, ECR_URL: ecr,
         EXPECTED_ECR_REPOSITORY: "trash", GITHUB_OUTPUT: output },
     });
     return { status: result.status, error: result.error, stderr: result.stderr,
