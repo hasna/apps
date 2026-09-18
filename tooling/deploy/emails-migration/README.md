@@ -30,7 +30,18 @@ performs no AWS mutation. It verifies that:
 
 Review and hash `emails-current-migration-reconciled/reconciled.json`.
 
-## 2. Prepare
+## 2. Prepare — disabled until a dedicated read-only probe is available
+
+The existing preparation code clones the production API task and launches it
+with command and environment overrides. Its launcher is the same production
+deploy role that can register API tasks, and that role correctly denies all
+`ecs:RunTask`. If dispatched, the old path could push an image and register a
+candidate task before the launch fails. Both the exact-main gate and deployment
+entrypoint now refuse `prepare` before AWS access or candidate registration.
+The future planner must use a separately reviewed, read-only probe task and
+launcher authority; changing this gate alone cannot authorize that work.
+
+The following describes the retained draft implementation, not an active runbook.
 
 `phase=prepare` requires that reviewed reconciliation. It builds, exercises,
 scans, and pushes the exact amd64 current image, then:
