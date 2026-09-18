@@ -17,6 +17,11 @@ an alias can make old blobs unreadable until the original binding is restored.
 The workload role needs only `kms:GenerateDataKey` and `kms:Decrypt` on that key,
 with policies restricting the application encryption context. Tenant requests do
 not choose key IDs, regions, credentials, endpoints or filesystem paths.
+On ECS, KMS explicitly uses the task-role container credential provider when
+container credential metadata is present. This prevents general AWS environment
+credentials used by other integrations from taking precedence over the KMS task
+role. A broken container credential endpoint fails the KMS operation closed.
+Outside ECS, KMS retains the standard AWS SDK credential chain.
 
 KMS generates a random 256-bit tenant root and encrypts it under the deployment
 key. The application encrypts each provider payload with a separate random data
