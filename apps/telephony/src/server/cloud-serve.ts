@@ -1660,6 +1660,7 @@ export function telephonyOpenApi(version: string): Record<string, unknown> {
           summary: "List messages",
           parameters: [
             { name: "limit", in: "query", schema: { type: "integer" } },
+            { name: "offset", in: "query", schema: { type: "integer" } },
             { name: "agent_id", in: "query", schema: { type: "string" } },
             { name: "project_id", in: "query", schema: { type: "string" } },
             { name: "type", in: "query", schema: { type: "string" } },
@@ -1677,6 +1678,7 @@ export function telephonyOpenApi(version: string): Record<string, unknown> {
           summary: "List calls",
           parameters: [
             { name: "limit", in: "query", schema: { type: "integer" } },
+            { name: "offset", in: "query", schema: { type: "integer" } },
             { name: "twilio_sid", in: "query", schema: { type: "string" }, description: "Exact Twilio SID filter — finds the call row a provider webhook refers to" },
           ],
           responses: {

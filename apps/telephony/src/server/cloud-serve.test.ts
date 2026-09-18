@@ -147,6 +147,10 @@ describe("telephony cloud serve", () => {
     };
     expect(Object.keys(doc.paths).length).toBeGreaterThanOrEqual(10);
     expect(doc.paths["/v1/contacts"]).toBeDefined();
+    for (const path of ["/v1/messages", "/v1/calls"]) {
+      const operation = doc.paths[path] as { get: { parameters: Array<{ name: string; in: string; schema: { type: string } }> } };
+      expect(operation.get.parameters).toContainEqual({ name: "offset", in: "query", schema: { type: "integer" } });
+    }
     expect(doc.components.securitySchemes.apiKey).toBeDefined();
   });
 
