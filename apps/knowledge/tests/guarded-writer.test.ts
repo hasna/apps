@@ -332,17 +332,32 @@ test('forged private edit approval tokens fail closed without returning or apply
   });
   const approval = await approveEdit(edit);
   const originalFetch = globalThis.fetch;
+  let tamperedSubmissions = 0;
+  let submissionStatus: number | undefined;
   globalThis.fetch = (async (input, init) => {
     if (String(input).endsWith('/guarded-writes') && typeof init?.body === 'string') {
       const body = JSON.parse(init.body) as { review_approval?: { token?: string } };
-      if (body.review_approval?.token) body.review_approval.token = `${body.review_approval.token.slice(0, -1)}x`;
-      return originalFetch(input, { ...init, body: JSON.stringify(body) });
+      if (body.review_approval?.token) {
+        const [payload, encodedSignature] = body.review_approval.token.split('.');
+        const signature = Buffer.from(encodedSignature, 'base64url');
+        expect(signature.length).toBe(32);
+        // Change a signed byte, not a base64url padding bit or an already-matching character.
+        signature[0] ^= 1;
+        body.review_approval.token = `${payload}.${signature.toString('base64url')}`;
+        tamperedSubmissions++;
+      }
+      const response = await originalFetch(input, { ...init, body: JSON.stringify(body) });
+      submissionStatus = response.status;
+      return response;
     }
     return originalFetch(input, init);
   }) as typeof fetch;
   let failure: unknown;
   try { await writer().executeApproved(approval); } catch (error) { failure = error; }
   finally { globalThis.fetch = originalFetch; }
+  expect(tamperedSubmissions).toBe(1);
+  expect(submissionStatus).toBe(400);
+  expect(failure).toMatchObject({ code: 'guarded_write_terminal_state_unavailable' });
   expect(String(failure)).not.toContain(originalBody);
   expect(String(failure)).not.toContain(replacement);
   expect(JSON.stringify(failure)).not.toContain(originalBody);
