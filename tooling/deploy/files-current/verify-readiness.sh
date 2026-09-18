@@ -22,14 +22,13 @@ HTTP_STATUS="${RESPONSE##*$'\n'}"
 BODY="${RESPONSE%$'\n'*}"
 [[ "$HTTP_STATUS" == "200" ]] || { echo "readiness returned HTTP $HTTP_STATUS" >&2; exit 1; }
 
-OBSERVED="$(jq -c -e -s --arg version "$EXPECTED_VERSION" --arg source "$EXPECTED_SOURCE_SHA" --arg image "$EXPECTED_IMAGE" --arg digest "$EXPECTED_DIGEST" '
+OBSERVED="$(jq -c -e -s --arg version "$EXPECTED_VERSION" --arg source "$EXPECTED_SOURCE_SHA" --arg digest "$EXPECTED_DIGEST" '
   if length != 1 or (.[0] | type) != "object" then error("readiness must be exactly one JSON object") else .[0] end
   | select(.status == "ok" and .storage == "postgres" and .version == $version)
-  | select((has("source_sha") | not) or .source_sha == $source)
-  | select((has("source") | not) or .source == $source)
-  | select((has("image") | not) or .image == $image)
-  | select((has("image_digest") | not) or .image_digest == $digest)
-  | {status,storage,version,source_sha:(.source_sha // null),source:(.source // null),image:(.image // null),image_digest:(.image_digest // null)}
+  | select(.deployment_environment == "production")
+  | select(.source_commit == $source)
+  | select(.image_digest == $digest)
+  | {status,storage,version,deployment_environment,source_commit,image_digest}
 ' <<<"$BODY")" || { echo "readiness JSON contract mismatch" >&2; exit 1; }
 
 jq -n --arg url "$URL" --argjson observed "$OBSERVED" \

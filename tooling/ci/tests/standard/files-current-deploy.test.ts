@@ -56,6 +56,14 @@ describe("Files current-server deployment lane", () => {
     expect(readiness).toContain("--max-redirs 0");
     expect(readiness).toContain('HTTP_STATUS" == "200"');
     expect(readiness).toContain('.status == "ok" and .storage == "postgres" and .version == $version');
+    expect(readiness).toContain('.deployment_environment == "production"');
+    expect(readiness).toContain('.source_commit == $source');
+    expect(readiness).toContain('.image_digest == $digest');
+    expect(readiness).not.toContain('has("source_commit") | not');
+    expect(workflow).toContain('HASNA_FILES_DEPLOY_SOURCE_COMMIT');
+    expect(workflow).toContain('HASNA_FILES_DEPLOY_IMAGE_DIGEST');
+    expect(workflow).toContain('deployed_source_commit');
+    expect(workflow).toContain('deployed_image_digest');
     expect(rollout).toContain('LIVE_TD" != "$EXPECTED_TASK_DEF');
   });
 

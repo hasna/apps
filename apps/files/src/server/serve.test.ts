@@ -11,6 +11,10 @@ const ENV_KEYS = [
   "OPEN_FILES_REST_ALLOW_ORIGINS",
   "OPEN_FILES_REST_ALLOW_ANY_ORIGIN",
   "OPEN_FILES_REST_HOST",
+  "HASNA_FILES_DATABASE_URL",
+  "FILES_DATABASE_URL",
+  "HASNA_FILES_DEPLOY_SOURCE_COMMIT",
+  "HASNA_FILES_DEPLOY_IMAGE_DIGEST",
 ] as const;
 
 const savedEnv = new Map<string, string | undefined>();
@@ -26,6 +30,10 @@ beforeEach(() => {
   delete process.env.OPEN_FILES_REST_ALLOW_ORIGINS;
   delete process.env.OPEN_FILES_REST_ALLOW_ANY_ORIGIN;
   delete process.env.OPEN_FILES_REST_HOST;
+  delete process.env.HASNA_FILES_DATABASE_URL;
+  delete process.env.FILES_DATABASE_URL;
+  delete process.env.HASNA_FILES_DEPLOY_SOURCE_COMMIT;
+  delete process.env.HASNA_FILES_DEPLOY_IMAGE_DIGEST;
 });
 
 afterEach(async () => {
@@ -136,3 +144,67 @@ function request(path: string, origin?: string, method = "GET"): Promise<Respons
     }),
   );
 }
+
+describe("files-serve readiness identity", () => {
+  const sourceCommit = "a".repeat(40);
+  const imageDigest = `sha256:${"b".repeat(64)}`;
+
+  test("marks local readiness explicitly as non-production", async () => {
+    const response = await request("/ready");
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      status: "ok",
+      storage: "sqlite",
+      deployment_environment: "non_production",
+      source_commit: null,
+      image_digest: null,
+    });
+  });
+
+  test("fails closed before touching storage when production identity is absent", async () => {
+    const { handleReadinessProbe } = await import("./serve.js");
+    let storageTouched = false;
+    const response = await handleReadinessProbe({
+      production: true,
+      env: {},
+      client: {
+        get: async () => { storageTouched = true; return { ok: 1 }; },
+        many: async () => { storageTouched = true; return []; },
+      } as never,
+    });
+    expect(response.status).toBe(503);
+    expect(storageTouched).toBe(false);
+    expect(await response.json()).toMatchObject({
+      status: "error",
+      storage: "postgres",
+      deployment_environment: "production",
+      source_commit: null,
+      image_digest: null,
+      error: "deployment identity missing",
+    });
+  });
+
+  test("serves exact immutable identity only when production storage is ready", async () => {
+    const { handleReadinessProbe } = await import("./serve.js");
+    const { CLOUD_MIGRATIONS } = await import("../db/cloud-migrations.js");
+    const response = await handleReadinessProbe({
+      production: true,
+      env: {
+        HASNA_FILES_DEPLOY_SOURCE_COMMIT: sourceCommit,
+        HASNA_FILES_DEPLOY_IMAGE_DIGEST: imageDigest,
+      },
+      client: {
+        get: async () => ({ ok: 1 }),
+        many: async () => CLOUD_MIGRATIONS.map(({ id }) => ({ id })),
+      } as never,
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      status: "ok",
+      storage: "postgres",
+      deployment_environment: "production",
+      source_commit: sourceCommit,
+      image_digest: imageDigest,
+    });
+  });
+});

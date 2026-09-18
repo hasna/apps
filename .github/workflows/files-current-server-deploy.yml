@@ -504,14 +504,23 @@ jobs:
           WEB_FAMILY: ${{ steps.manifest.outputs.web_family }}
           WEB_CONTAINER: ${{ steps.manifest.outputs.web_container }}
           PREVIOUS_TASK_DEFINITION: ${{ steps.before.outputs.previous_task_definition }}
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
         run: |
           set -Eeuo pipefail
           task_definition="$(aws ecs describe-task-definition --task-definition "${PREVIOUS_TASK_DEFINITION}" --query taskDefinition --output json)"
           [[ "$(jq -r '.taskDefinitionArn' <<<"${task_definition}")" == "${PREVIOUS_TASK_DEFINITION}" ]]
           [[ "$(jq -r '.family' <<<"${task_definition}")" == "${WEB_FAMILY}" ]]
           [[ "$(jq --arg c "${WEB_CONTAINER}" '[.containerDefinitions[] | select(.name == $c)] | length' <<<"${task_definition}")" == "1" ]]
-          replacement="$(jq --arg image "${IMAGE}" --arg c "${WEB_CONTAINER}" '
-            .containerDefinitions |= map(if .name == $c then .image = $image else . end)
+          replacement="$(jq --arg image "${IMAGE}" --arg digest "${IMAGE_DIGEST}" --arg source "${SOURCE_SHA}" --arg c "${WEB_CONTAINER}" '
+            def upsert_env($items; $name; $value):
+              (($items // []) | map(select(.name != $name)) + [{name:$name,value:$value}]);
+            .containerDefinitions |= map(
+              if .name == $c then
+                .image = $image
+                | .environment = upsert_env(.environment; "HASNA_FILES_DEPLOY_SOURCE_COMMIT"; $source)
+                | .environment = upsert_env(.environment; "HASNA_FILES_DEPLOY_IMAGE_DIGEST"; $digest)
+              else . end
+            )
             | del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy,.deregisteredAt)
           ' <<<"${task_definition}")"
           deployed_task_definition="$(aws ecs register-task-definition --cli-input-json "${replacement}" --query taskDefinition.taskDefinitionArn --output text)"
@@ -562,6 +571,10 @@ jobs:
           deployed_architecture="$(jq -r '.taskDefinition.runtimePlatform.cpuArchitecture // ""' <<<"${deployed_definition}")"
           [[ "${deployed_image}" == "${IMAGE}" ]] || { echo "live task definition image digest mismatch" >&2; exit 1; }
           [[ "${deployed_architecture}" == "${EXPECTED_CPU_ARCHITECTURE}" ]] || { echo "deployed task architecture mismatch" >&2; exit 1; }
+          deployed_source_commit="$(jq -er --arg c "${WEB_CONTAINER}" '[.taskDefinition.containerDefinitions[] | select(.name == $c) | .environment[]? | select(.name == "HASNA_FILES_DEPLOY_SOURCE_COMMIT") | .value] | if length == 1 then .[0] else error("source identity env missing or duplicated") end' <<<"${deployed_definition}")"
+          deployed_image_digest="$(jq -er --arg c "${WEB_CONTAINER}" '[.taskDefinition.containerDefinitions[] | select(.name == $c) | .environment[]? | select(.name == "HASNA_FILES_DEPLOY_IMAGE_DIGEST") | .value] | if length == 1 then .[0] else error("image identity env missing or duplicated") end' <<<"${deployed_definition}")"
+          [[ "${deployed_source_commit}" == "${SOURCE_SHA}" ]] || { echo "deployed source identity mismatch" >&2; exit 1; }
+          [[ "${deployed_image_digest}" == "${IMAGE##*@}" ]] || { echo "deployed image identity mismatch" >&2; exit 1; }
           ready_url="${HEALTH_URL%/health}/ready"
           bash ../../tooling/deploy/files-current/verify-readiness.sh \
             "${ready_url}" "${EXPECTED_VERSION}" "${SOURCE_SHA}" "${IMAGE}" readiness-direct.json

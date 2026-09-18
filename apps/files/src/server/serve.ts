@@ -30,6 +30,7 @@ import { cloudEnabled, getCloudClient } from "./pg-store.js";
 import { checkHealth } from "../generated/storage-kit/health.js";
 import { CLOUD_MIGRATIONS } from "../db/cloud-migrations.js";
 import type { TypedQueryClient } from "../generated/storage-kit/query.js";
+import { resolveDeploymentIdentity } from "./deployment-identity.js";
 
 const require = createRequire(import.meta.url);
 const pkg = require("../../package.json") as { version: string };
@@ -55,6 +56,49 @@ async function readiness(client: TypedQueryClient): Promise<{ ok: boolean; laten
     return { ok: pending.length === 0, latencyMs: Date.now() - start, pending };
   } catch (e) {
     return { ok: false, latencyMs: Date.now() - start, pending: [], error: `migration ledger unreadable: ${(e as Error).message}` };
+  }
+}
+
+export interface ReadinessProbeOptions {
+  production?: boolean;
+  env?: NodeJS.ProcessEnv;
+  client?: TypedQueryClient;
+}
+
+/** Build the exact `/ready` response; options are a test seam only. */
+export async function handleReadinessProbe(options: ReadinessProbeOptions = {}): Promise<Response> {
+  const production = options.production ?? cloudEnabled();
+  const deployment = resolveDeploymentIdentity(production, options.env);
+  if (!production) {
+    return json({
+      status: "ok",
+      version: pkg.version,
+      storage: "sqlite",
+      deployment_environment: deployment.identity?.deployment_environment ?? "non_production",
+      source_commit: null,
+      image_digest: null,
+    });
+  }
+  if (!deployment.ok) {
+    return json({
+      status: "error",
+      version: pkg.version,
+      storage: "postgres",
+      deployment_environment: "production",
+      source_commit: null,
+      image_digest: null,
+      error: `deployment identity ${deployment.reason}`,
+    }, 503);
+  }
+  const identity = deployment.identity;
+  try {
+    const ready = await readiness(options.client ?? getCloudClient());
+    if (!ready.ok) {
+      return json({ status: "degraded", version: pkg.version, storage: "postgres", ...identity, latency_ms: ready.latencyMs, pending_migrations: ready.pending, error: ready.error }, 503);
+    }
+    return json({ status: "ok", version: pkg.version, storage: "postgres", ...identity, latency_ms: ready.latencyMs });
+  } catch (e) {
+    return json({ status: "error", version: pkg.version, storage: "postgres", ...identity, error: (e as Error).message }, 503);
   }
 }
 
@@ -239,18 +283,7 @@ async function routeRestRequest(req: Request): Promise<Response> {
       // ── Liveness / readiness / version (unauthenticated) ───────────────
       if (path === "/health") return json({ status: "ok", version: pkg.version, storage: serviceBackend() });
       if (path === "/version") return json({ status: "ok", version: pkg.version, storage: serviceBackend() });
-      if (path === "/ready") {
-        if (!cloudEnabled()) return json({ status: "ok", version: pkg.version, storage: "sqlite" });
-        try {
-          const ready = await readiness(getCloudClient());
-          if (!ready.ok) {
-            return json({ status: "degraded", version: pkg.version, storage: "postgres", latency_ms: ready.latencyMs, pending_migrations: ready.pending, error: ready.error }, 503);
-          }
-          return json({ status: "ok", version: pkg.version, storage: "postgres", latency_ms: ready.latencyMs });
-        } catch (e) {
-          return json({ status: "error", version: pkg.version, storage: "postgres", error: (e as Error).message }, 503);
-        }
-      }
+      if (path === "/ready") return handleReadinessProbe();
 
       // ── Versioned /v1 API (API-key authenticated) ──────────────────────
       const v1res = await v1.handle(req, url);

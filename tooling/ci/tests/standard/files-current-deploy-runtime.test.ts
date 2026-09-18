@@ -44,17 +44,19 @@ exit 9
     expect(raced.stderr).toContain("service anchor changed before mutation");
   });
 
-  test("canonical readiness rejects redirects and wrong JSON bodies", async () => {
+  test("canonical readiness rejects redirects, identityless, stale, and misrouted bodies", async () => {
     const dir = temp();
     const argsLog = join(dir, "curl-args");
     executable(join(dir, "curl"), `#!/usr/bin/env bash
-printf '%s\\n' "$*" > "$FAKE_CURL_ARGS"
+printf '%s\n' "$*" > "$FAKE_CURL_ARGS"
 case "$FAKE_CURL_MODE" in
-  redirect) printf '{"status":"ok","storage":"postgres","version":"0.5.0"}\\n302' ;;
-  wrong) printf '{"status":"ok","storage":"sqlite","version":"0.5.0"}\\n200' ;;
-  identity) printf '{"status":"ok","storage":"postgres","version":"0.5.0","source_sha":"wrong"}\\n200' ;;
-  multi) printf '{}\\n{}\\n200' ;;
-  *) printf '{"status":"ok","storage":"postgres","version":"0.5.0"}\\n200' ;;
+  redirect) printf '{"status":"ok","storage":"postgres","version":"0.5.0","deployment_environment":"production","source_commit":"${source}","image_digest":"${digest}"}\n302' ;;
+  wrong) printf '{"status":"ok","storage":"sqlite","version":"0.5.0","deployment_environment":"production","source_commit":"${source}","image_digest":"${digest}"}\n200' ;;
+  identityless) printf '{"status":"ok","storage":"postgres","version":"0.5.0"}\n200' ;;
+  stale) printf '{"status":"ok","storage":"postgres","version":"0.5.0","deployment_environment":"production","source_commit":"${"d".repeat(40)}","image_digest":"${digest}"}\n200' ;;
+  misrouted) printf '{"status":"ok","storage":"postgres","version":"0.5.0","deployment_environment":"production","source_commit":"${source}","image_digest":"sha256:${"c".repeat(64)}"}\n200' ;;
+  multi) printf '{}\n{}\n200' ;;
+  *) printf '{"status":"ok","storage":"postgres","version":"0.5.0","deployment_environment":"production","source_commit":"${source}","image_digest":"${digest}"}\n200' ;;
 esac
 `);
     const base = { PATH: `${dir}:${process.env.PATH}`, FAKE_CURL_ARGS: argsLog };
@@ -63,7 +65,9 @@ esac
     expect(readFileSync(argsLog, "utf8")).toContain("--max-redirs 0");
     expect((await run(readiness, args, { ...base, FAKE_CURL_MODE: "redirect" })).code).toBe(1);
     expect((await run(readiness, args, { ...base, FAKE_CURL_MODE: "wrong" })).code).toBe(1);
-    expect((await run(readiness, args, { ...base, FAKE_CURL_MODE: "identity" })).code).toBe(1);
+    expect((await run(readiness, args, { ...base, FAKE_CURL_MODE: "identityless" })).code).toBe(1);
+    expect((await run(readiness, args, { ...base, FAKE_CURL_MODE: "stale" })).code).toBe(1);
+    expect((await run(readiness, args, { ...base, FAKE_CURL_MODE: "misrouted" })).code).toBe(1);
     expect((await run(readiness, args, { ...base, FAKE_CURL_MODE: "multi" })).code).toBe(1);
   });
 
