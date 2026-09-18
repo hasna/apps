@@ -5,6 +5,7 @@ import { join } from "node:path";
 const root = join(import.meta.dir, "../../../..");
 const workflow = readFileSync(join(root, ".github/workflows/files-current-server-deploy.yml"), "utf8");
 const rollout = readFileSync(join(root, "tooling/deploy/files-current/verify-ecs-rollout.sh"), "utf8");
+const ledgerProbe = readFileSync(join(root, "tooling/deploy/files-current/ledger-probe.sh"), "utf8");
 
 describe("Files current-server deployment lane", () => {
   test("is manual, exact-current-main, and CI-bound", () => {
@@ -43,5 +44,29 @@ describe("Files current-server deployment lane", () => {
     expect(workflow).toContain('https://api.hasna.com/files/ready');
     expect(workflow).toContain("hasna.files.production_deploy.v1");
     expect(rollout).toContain('LIVE_TD" != "$EXPECTED_TASK_DEF');
+  });
+
+  test("binds migration ledger state and never rolls an advanced schema to an unproven binary", () => {
+    const before = workflow.indexOf("Capture exact pre-migration ledger receipt");
+    const migrate = workflow.indexOf("Run one-shot migration task on the exact digest");
+    const after = workflow.indexOf("Capture exact post-migration ledger receipt");
+    const classify = workflow.indexOf("Classify migration result and refuse uncertain state");
+    const deploy = workflow.indexOf("Register digest-pinned task definition and update service");
+    expect(before).toBeGreaterThan(0);
+    expect(migrate).toBeGreaterThan(before);
+    expect(after).toBeGreaterThan(migrate);
+    expect(classify).toBeGreaterThan(after);
+    expect(deploy).toBeGreaterThan(classify);
+    expect(workflow).toContain("hasna.files.migration_uncertain_state.v1");
+    expect(workflow).toContain("hasna.files.deployment_reconciliation_required.v1");
+    expect(workflow).toContain('compatibility:"unproven_against_advanced_schema"');
+    expect(workflow).toContain("automatic_rollback_performed:false");
+    expect(workflow).toContain("steps.ledger-classify.outputs.schema_advanced == 'false'");
+    expect(workflow).toContain("steps.ledger-classify.outputs.schema_advanced == 'true'");
+    expect(workflow).not.toContain("Restore rollback anchor after a failed service rollout");
+    expect(ledgerProbe).toContain("SELECT id, checksum FROM schema_migrations ORDER BY id ASC");
+    expect(ledgerProbe).toContain("applied ledger is unknown to or checksum-incompatible with this candidate");
+    expect(ledgerProbe).toContain("ledger probe task identity mismatch");
+    expect(ledgerProbe).not.toMatch(/echo[^\n]*HASNA_FILES_DATABASE_URL/);
   });
 });
