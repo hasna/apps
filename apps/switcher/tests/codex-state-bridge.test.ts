@@ -249,7 +249,8 @@ import{spawn}from'node:child_process';spawn(process.execPath,[${JSON.stringify(d
 test("two desktop provider launches share the corpus while keeping Electron/auth overlays separate and sandbox arguments exact", () => fixture(async root => {
   await mkdir(join(root,".codex"),{mode:0o700});
   await writeFile(join(root,".codex/model.md"),"native fixture instructions",{mode:0o600});
-  const canonicalConfig='developer_instructions="shared developer fixture"\nmodel_instructions_file="model.md"\ninclude_environment_context=false\nproject_doc_fallback_filenames=["RULES.md"]\n';
+  await writeFile(join(root,".codex/compact.md"),"native compact fixture",{mode:0o600});
+  const canonicalConfig='developer_instructions="shared developer fixture"\nmodel_instructions_file="model.md"\nexperimental_compact_prompt_file="compact.md"\ninclude_environment_context=false\nproject_doc_fallback_filenames=["RULES.md"]\n';
   await writeFile(join(root,".codex/config.toml"),canonicalConfig,{mode:0o600});
   const state = await resolveNativeState("codex", { HOME: root });
   const nativePath = join(root, "native-codex");
@@ -262,14 +263,14 @@ test("two desktop provider launches share the corpus while keeping Electron/auth
   for (const model of ["provider-a/model", "provider-b/model"]) {
     const launch = join(root, model.slice(0, 10)), session=join(root,"desktop",model.slice(0,10));await mkdir(launch, { mode: 0o700 });
     const first=model.startsWith("provider-a");
-    if(!first){await mkdir(join(session,"codex"),{recursive:true,mode:0o700});await writeFile(join(session,"codex/config.toml"),'model="old"\nbase_url="https://outside.invalid"\nmodel_reasoning_effort="high"\n[agents]\nenabled=false\nmax_concurrent_threads_per_session=7\n[agents.stale]\nconfig_file="/private/old-launch.toml"\n[memories]\ncustom="keep"\nextract_model="old"\n',{mode:0o600});}
+    if(!first){await mkdir(join(session,"codex"),{recursive:true,mode:0o700});await writeFile(join(session,"codex/stale-compact.md"),"stale provider compact",{mode:0o600});await writeFile(join(session,"codex/config.toml"),'model="old"\nbase_url="https://outside.invalid"\nexperimental_compact_prompt_file="stale-compact.md"\nmodel_reasoning_effort="high"\n[agents]\nenabled=false\nmax_concurrent_threads_per_session=7\n[agents.stale]\nconfig_file="/private/old-launch.toml"\n[memories]\ncustom="keep"\nextract_model="old"\n',{mode:0o600});}
     const native: PreparedLaunch = { executable: nativePath, args: ["-c", `model=${JSON.stringify(model)}`, "-c", 'model_provider="switcher"', "-c", 'model_providers.switcher={name="Switcher",base_url="http://127.0.0.1:9876/v1",wire_api="responses",requires_openai_auth=false,env_key="SWITCHER_HARNESS_API_KEY"}', "-c", 'model_catalog_json="/catalog.json"', "-c", `sqlite_home=${JSON.stringify(state.sqliteHome)}`], env: { SWITCHER_HARNESS_API_KEY: "fixture-only" }, configPaths: [], warnings: [] };
     const prepared = await prepareChatGPTLaunch(native, app, launch, session, state);
     try {
       expect(prepared.env.HASNA_CODEX_STATE_HOME).toBeUndefined();expect(prepared.env.CODEX_SQLITE_HOME).toBe(state.home);
       const config=Bun.TOML.parse(await readFile(join(prepared.env.CODEX_HOME,"config.toml"),"utf8"));
-      expect(config).toMatchObject({model,model_provider:"switcher",developer_instructions:"shared developer fixture",model_instructions_file:join(state.home,"model.md"),include_environment_context:false,project_doc_fallback_filenames:["RULES.md"]});
-      if(!first){expect(config.agents).toMatchObject({enabled:false,max_concurrent_threads_per_session:7});expect(config.agents.stale).toBeUndefined();expect(config.memories).toEqual({custom:"keep"});expect(config.model_reasoning_effort).toBeUndefined();expect(config.base_url).toBeUndefined();}
+      expect(config).toMatchObject({model,model_provider:"switcher",developer_instructions:"shared developer fixture",model_instructions_file:join(state.home,"model.md"),experimental_compact_prompt_file:join(state.home,"compact.md"),include_environment_context:false,project_doc_fallback_filenames:["RULES.md"]});
+      if(!first){expect(config.agents).toMatchObject({enabled:false,max_concurrent_threads_per_session:7});expect(config.agents.stale).toBeUndefined();expect(config.memories).toEqual({custom:"keep"});expect(config.model_reasoning_effort).toBeUndefined();expect(config.base_url).toBeUndefined();expect(await readFile(join(session,"codex/stale-compact.md"),"utf8")).toBe("stale provider compact");}
       expect(await readFile(join(state.home,"config.toml"),"utf8")).toBe(canonicalConfig);
       if(previousElectron)expect(prepared.env.CODEX_ELECTRON_USER_DATA_PATH).not.toBe(previousElectron);previousElectron=prepared.env.CODEX_ELECTRON_USER_DATA_PATH;
       expect(await readFile(join(prepared.env.CODEX_HOME, "sessions/thread.jsonl"), "utf8")).toBe(transcript);

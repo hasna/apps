@@ -163,16 +163,17 @@ optional `AGENTS.override.md` takes native precedence over `AGENTS.md`; Switcher
 does not create empty versions or dangling links. A later launch links an optional
 file only after the canonical regular file exists and passes validation.
 The desktop config projects only the canonical `instructions`,
-`developer_instructions`, `model_instructions_file`, `compact_prompt`, the four
+`developer_instructions`, `model_instructions_file`, `compact_prompt`,
+`experimental_compact_prompt_file`, the four
 `include_*_instructions`/`include_environment_context` switches, and
-`project_doc_max_bytes`/`project_doc_fallback_filenames`. Relative model instruction
-files resolve inside the canonical config directory and must be readable trusted
+`project_doc_max_bytes`/`project_doc_fallback_filenames`. Relative model and
+compact instruction files resolve inside the canonical config directory and must be readable trusted
 regular files; they cannot escape into authentication or unrelated state. Native file/config instruction precedence is preserved; routing
 and private authentication settings are rendered separately. Unsupported legacy
 `profile` selection refuses launch rather than silently losing its instructions.
 Codex CLI normally reads these keys directly from its canonical home. When nested
 inside a private authentication home, its audited instruction keys must match the
-canonical projection, including the resolved model instruction file path; missing
+canonical projection, including resolved model and compact instruction file paths; missing
 or stale keys visibly refuse launch. Switcher does not rewrite that account's
 configuration or place instruction text in process arguments. Refresh the account
 overlay's instruction projection before retrying a conflicting nested launch.

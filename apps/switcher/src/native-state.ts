@@ -16,7 +16,7 @@ export function validateNativeStateVersion(tool: SharedNativeTool, version: stri
   if (!actual || actual[0]!==0 || actual[1]<154)
     throw new Fault(422,"native_state_version","Shared Codex state requires Codex 0.154.0 or newer, whose metadata and resume protocol has been acceptance-tested by Switcher.");
 }
-export const CODEX_INSTRUCTION_KEYS = ["instructions", "developer_instructions", "model_instructions_file", "compact_prompt",
+export const CODEX_INSTRUCTION_KEYS = ["instructions", "developer_instructions", "model_instructions_file", "compact_prompt", "experimental_compact_prompt_file",
   "include_permissions_instructions", "include_apps_instructions", "include_collaboration_mode_instructions", "include_environment_context",
   "project_doc_max_bytes", "project_doc_fallback_filenames"] as const;
 type Entry = { name: string; kind: "directory" | "file" };
@@ -129,7 +129,9 @@ async function readCodexStateConfig(home: string): Promise<Record<string, unknow
   return config;
 }
 
-async function codexInstructionProjection(home: string, config: Record<string, unknown>, allowedExternalModelFile?: string): Promise<Record<string, unknown>> {
+type CodexInstructionKey = (typeof CODEX_INSTRUCTION_KEYS)[number];
+const CODEX_INSTRUCTION_FILE_KEYS = new Set<CodexInstructionKey>(["model_instructions_file", "experimental_compact_prompt_file"]);
+async function codexInstructionProjection(home: string, config: Record<string, unknown>, allowedExternalFiles: Partial<Record<CodexInstructionKey,string>> = {}): Promise<Record<string, unknown>> {
   const instructions: Record<string, unknown> = {};
   for (const key of CODEX_INSTRUCTION_KEYS) {
     const value = config[key]; if (value === undefined) continue;
@@ -138,15 +140,15 @@ async function codexInstructionProjection(home: string, config: Record<string, u
       : key === "project_doc_fallback_filenames" ? Array.isArray(value) && value.every(item => typeof item === "string" && !item.includes("\0"))
       : typeof value === "string" && !value.includes("\0");
     if (!valid) throw new Fault(422, "native_state_instructions", "Codex instruction configuration has an unsupported value.");
-    if (key === "model_instructions_file") {
+    if (CODEX_INSTRUCTION_FILE_KEYS.has(key)) {
       const path = resolve(home, value as string), entry = await info(path);
       const relativePath=relative(home,path),contained=relativePath!==".."&&!relativePath.startsWith("../")&&!isAbsolute(relativePath);
-      if ((!contained && path!==allowedExternalModelFile) || !entry || !entry.isFile() || entry.nlink !== 1 || entry.isSymbolicLink() || ![0, process.getuid?.()].includes(entry.uid)
+      if ((!contained && path!==allowedExternalFiles[key]) || !entry || !entry.isFile() || entry.nlink !== 1 || entry.isSymbolicLink() || ![0, process.getuid?.()].includes(entry.uid)
           || (entry.mode & 0o022) !== 0 || await realpath(path) !== path)
-        throw new Fault(422, "native_state_instructions", "The model instruction file is not a readable trusted file.");
+        throw new Fault(422, "native_state_instructions", "The configured instruction file is not a readable trusted file.");
       await assertSafeAncestors(dirname(path));
-      const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW).catch(() => { throw new Fault(422, "native_state_instructions", "The model instruction file is not readable."); });
-      try { const opened = await handle.stat(); if (opened.ino !== entry.ino || opened.dev !== entry.dev || opened.nlink !== 1) throw new Fault(409, "native_state_instructions", "The model instruction file changed during preparation."); }
+      const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW).catch(() => { throw new Fault(422, "native_state_instructions", "The configured instruction file is not readable."); });
+      try { const opened = await handle.stat(); if (opened.ino !== entry.ino || opened.dev !== entry.dev || opened.nlink !== 1) throw new Fault(409, "native_state_instructions", "The configured instruction file changed during preparation."); }
       finally { await handle.close(); }
       instructions[key] = path;
     } else instructions[key] = value;
@@ -163,7 +165,8 @@ export async function assertNativeInstructionOverlay(state: NativeState, overlay
   if (config.profiles !== undefined || config.include !== undefined)
     throw new Fault(422, "native_state_instruction_overlay", "Private Codex profile/include instruction overlays are not supported. Resolve their effective canonical instructions before launching.");
   const expected = state.instructions ?? {};
-  const actual = await codexInstructionProjection(overlayHome, config, typeof expected.model_instructions_file === "string" ? expected.model_instructions_file : undefined);
+  const allowedExternalFiles=Object.fromEntries([...CODEX_INSTRUCTION_FILE_KEYS].flatMap(key=>typeof expected[key]==="string"?[[key,expected[key]]]:[])) as Partial<Record<CodexInstructionKey,string>>;
+  const actual = await codexInstructionProjection(overlayHome, config, allowedExternalFiles);
   if (CODEX_INSTRUCTION_KEYS.some(key => JSON.stringify(actual[key]) !== JSON.stringify(expected[key])))
     throw new Fault(409, "native_state_instruction_overlay", "This Codex authentication home has missing or conflicting canonical instructions. Refresh its instruction projection before launching; Switcher will not rewrite private account configuration.");
 }

@@ -133,14 +133,20 @@ test("optional instructions never create an empty override and become visible th
 test("canonical instruction configuration projects only the audited keys and resolves a trusted relative file", () => fixture(async home => {
   const canonical=join(home,".codex");await mkdir(canonical,{mode:0o700});
   await writeFile(join(canonical,"model.md"),"native model instructions",{mode:0o600});
-  await writeFile(join(canonical,"config.toml"),'instructions="system fixture"\ndeveloper_instructions="developer fixture"\nmodel_instructions_file="model.md"\ncompact_prompt="compact fixture"\ninclude_permissions_instructions=false\ninclude_apps_instructions=true\ninclude_collaboration_mode_instructions=false\ninclude_environment_context=true\nproject_doc_max_bytes=65536\nproject_doc_fallback_filenames=["RULES.md"]\nmodel_provider="must-not-copy"\n[model_providers.private]\nbase_url="https://fixture.invalid"\n',{mode:0o600});
+  await writeFile(join(canonical,"compact.md"),"native compact instructions",{mode:0o600});
+  await writeFile(join(canonical,"config.toml"),'instructions="system fixture"\ndeveloper_instructions="developer fixture"\nmodel_instructions_file="model.md"\ncompact_prompt="compact fixture"\nexperimental_compact_prompt_file="compact.md"\ninclude_permissions_instructions=false\ninclude_apps_instructions=true\ninclude_collaboration_mode_instructions=false\ninclude_environment_context=true\nproject_doc_max_bytes=65536\nproject_doc_fallback_filenames=["RULES.md"]\nmodel_provider="must-not-copy"\n[model_providers.private]\nbase_url="https://fixture.invalid"\n',{mode:0o600});
   const state=await resolveNativeState("codex",{HOME:home});
-  expect(state.instructions).toEqual({instructions:"system fixture",developer_instructions:"developer fixture",model_instructions_file:join(canonical,"model.md"),compact_prompt:"compact fixture",include_permissions_instructions:false,include_apps_instructions:true,include_collaboration_mode_instructions:false,include_environment_context:true,project_doc_max_bytes:65536,project_doc_fallback_filenames:["RULES.md"]});
+  expect(state.instructions).toEqual({instructions:"system fixture",developer_instructions:"developer fixture",model_instructions_file:join(canonical,"model.md"),compact_prompt:"compact fixture",experimental_compact_prompt_file:join(canonical,"compact.md"),include_permissions_instructions:false,include_apps_instructions:true,include_collaboration_mode_instructions:false,include_environment_context:true,project_doc_max_bytes:65536,project_doc_fallback_filenames:["RULES.md"]});
   await rm(join(canonical,"model.md"));await symlink(join(canonical,"config.toml"),join(canonical,"model.md"));
   await expect(resolveNativeState("codex",{HOME:home})).rejects.toMatchObject({code:"native_state_instructions"});
   await writeFile(join(canonical,"config.toml"),'developer_instructions=7\n');
   await expect(resolveNativeState("codex",{HOME:home})).rejects.toMatchObject({code:"native_state_instructions"});
   await writeFile(join(home,"outside.md"),"private outside fixture",{mode:0o600});await writeFile(join(canonical,"config.toml"),'model_instructions_file="../outside.md"\n');
+  await expect(resolveNativeState("codex",{HOME:home})).rejects.toMatchObject({code:"native_state_instructions"});
+  await writeFile(join(canonical,"config.toml"),'experimental_compact_prompt_file="../outside.md"\n');
+  await expect(resolveNativeState("codex",{HOME:home})).rejects.toMatchObject({code:"native_state_instructions"});
+  await rm(join(canonical,"compact.md"));await symlink(join(home,"outside.md"),join(canonical,"compact.md"));
+  await writeFile(join(canonical,"config.toml"),'experimental_compact_prompt_file="compact.md"\n');
   await expect(resolveNativeState("codex",{HOME:home})).rejects.toMatchObject({code:"native_state_instructions"});
   for(const unsupported of ['profile="legacy"\n','include="private.toml"\n']) {
     await writeFile(join(canonical,"config.toml"),unsupported);
@@ -163,21 +169,27 @@ test("nested Codex CLI instructions must match canonical keys without changing p
   const canonical=join(home,".codex"),overlay=join(home,"account");
   for(const directory of [canonical,overlay]) await mkdir(directory,{mode:0o700});
   await writeFile(join(canonical,"model.md"),"shared instructions",{mode:0o600});
-  await writeFile(join(canonical,"config.toml"),'developer_instructions="shared developer"\nmodel_instructions_file="model.md"\ninclude_environment_context=false\nproject_doc_fallback_filenames=["RULES.md"]\n',{mode:0o600});
+  await writeFile(join(canonical,"compact.md"),"shared compact instructions",{mode:0o600});
+  await writeFile(join(canonical,"config.toml"),'developer_instructions="shared developer"\nmodel_instructions_file="model.md"\nexperimental_compact_prompt_file="compact.md"\ninclude_environment_context=false\nproject_doc_fallback_filenames=["RULES.md"]\n',{mode:0o600});
   await writeFile(join(overlay,"auth.json"),"private-auth-fixture",{mode:0o600});
   const state=await resolveNativeState("codex",{HOME:home});
   await expect(assertNativeInstructionOverlay(state,canonical)).resolves.toBeUndefined();
   await expect(assertNativeInstructionOverlay(state,overlay)).rejects.toMatchObject({code:"native_state_instruction_overlay"});
-  const config='developer_instructions="shared developer"\nmodel_instructions_file="../.codex/model.md"\ninclude_environment_context=false\nproject_doc_fallback_filenames=["RULES.md"]\nmodel_provider="private-account-routing"\n';
+  const config='developer_instructions="shared developer"\nmodel_instructions_file="../.codex/model.md"\nexperimental_compact_prompt_file="../.codex/compact.md"\ninclude_environment_context=false\nproject_doc_fallback_filenames=["RULES.md"]\nmodel_provider="private-account-routing"\n';
   await writeFile(join(overlay,"config.toml"),config,{mode:0o600});
   await expect(assertNativeInstructionOverlay(state,overlay)).resolves.toBeUndefined();
   expect(await readFile(join(overlay,"config.toml"),"utf8")).toBe(config);
   expect(await readFile(join(overlay,"auth.json"),"utf8")).toBe("private-auth-fixture");
+  await writeFile(join(overlay,"private-compact.md"),"stale private compact instructions",{mode:0o600});
+  const staleFile=config.replace("../.codex/compact.md","private-compact.md");
+  await writeFile(join(overlay,"config.toml"),staleFile);
+  await expect(assertNativeInstructionOverlay(state,overlay)).rejects.toMatchObject({code:"native_state_instruction_overlay"});
+  expect(await readFile(join(overlay,"config.toml"),"utf8")).toBe(staleFile);
   const stale=config+'compact_prompt="stale private instructions"\n';
   await writeFile(join(overlay,"config.toml"),stale);
   await expect(assertNativeInstructionOverlay(state,overlay)).rejects.toMatchObject({code:"native_state_instruction_overlay"});
   expect(await readFile(join(overlay,"config.toml"),"utf8")).toBe(stale);
-  expect(await readdir(overlay)).toEqual(["auth.json","config.toml"]);
+  expect((await readdir(overlay)).sort()).toEqual(["auth.json","config.toml","private-compact.md"]);
   await writeFile(join(overlay,"model.md"),"shared instructions",{mode:0o600});
   await writeFile(join(overlay,"config.toml"),config.replace("../.codex/model.md","model.md"));
   await expect(assertNativeInstructionOverlay(state,overlay)).rejects.toMatchObject({code:"native_state_instruction_overlay"});
@@ -205,8 +217,10 @@ test("shared-state lock serializes projection without deleting another owner", (
 test("CLI launch refuses a stale instruction overlay before linking corpus or starting a native run", () => fixture(async home => {
   const canonical=join(home,".codex"),overlay=join(home,"account"),executable=join(home,"native-fixture"),started=join(home,"started");
   for(const path of [canonical,overlay]) await mkdir(path,{mode:0o700});
-  await writeFile(join(canonical,"config.toml"),'developer_instructions="canonical fixture"\n',{mode:0o600});
-  const config='developer_instructions="stale fixture"\n';
+  await writeFile(join(canonical,"compact.md"),"canonical compact fixture",{mode:0o600});
+  await writeFile(join(canonical,"config.toml"),'experimental_compact_prompt_file="compact.md"\n',{mode:0o600});
+  await writeFile(join(overlay,"stale-compact.md"),"stale private compact fixture",{mode:0o600});
+  const config='experimental_compact_prompt_file="stale-compact.md"\n';
   await writeFile(join(overlay,"config.toml"),config,{mode:0o600});
   await writeFile(join(overlay,"auth.json"),"private-auth-fixture",{mode:0o600});
   await writeFile(executable,`#!/bin/sh\nif [ "$1" = "--version" ]; then echo 'codex-cli 0.154.0'; exit 0; fi\ntouch '${started}'\nexit 99\n`,{mode:0o700});
@@ -220,7 +234,7 @@ test("CLI launch refuses a stale instruction overlay before linking corpus or st
     Object.assign(process.env,environment);
     await expect(launch(client,"fixture",{refresh:false,executable,cwd:home,stateDir:join(home,"launch-state"),resolveCredential:async()=>"fixture-only"})).rejects.toMatchObject({code:"native_state_instruction_overlay"});
     expect(runs).toBe(0);expect(await Bun.file(started).exists()).toBe(false);
-    expect(await readdir(canonical)).toEqual(["config.toml"]);expect(await readdir(overlay)).toEqual(["auth.json","config.toml"]);
+    expect((await readdir(canonical)).sort()).toEqual(["compact.md","config.toml"]);expect((await readdir(overlay)).sort()).toEqual(["auth.json","config.toml","stale-compact.md"]);
     expect(await readFile(join(overlay,"config.toml"),"utf8")).toBe(config);
     expect(await readFile(join(overlay,"auth.json"),"utf8")).toBe("private-auth-fixture");
   } finally {for(const [key,value] of Object.entries(previous))if(value===undefined)delete process.env[key];else process.env[key]=value;}
