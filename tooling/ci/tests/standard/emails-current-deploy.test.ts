@@ -25,6 +25,9 @@ describe("Emails complete current-server deploy lane", () => {
     expect(gate).toContain('run.get("head_sha") == args.source');
     expect(gate).toContain('row.get("path") == ".github/workflows/ci.yml"');
     expect(reusable).toContain("This reusable workflow path is the IAM trust-bound sanctioned authority");
+    expect(reusable).toContain("Retain metadata-only search preparation and mutation receipts");
+    expect(reusable).toContain("Retain metadata-only current server deployment receipts");
+    expect(reusable).not.toContain("path: |\n            ${{ runner.temp }}/emails-promotion-receipts/*.json");
   });
 
   test("builds and scans amd64 before sanctioned AWS authority, then changes only the reconciled image", () => {
