@@ -1,5 +1,81 @@
 # Changelog
 
+## 0.17.0
+
+### Minor Changes
+
+- MCP surface triage, slice 1 (fleet alignment 2026-09-11; follows the fail-closed
+  validation in #1942).
+
+  - `todos-mcp` is stdio-only. `--http`, `--port <n>` and `MCP_HTTP=1` are refused
+    with exit code 2 and a stderr line pointing at `todos-serve`, which owns the
+    `POST /mcp` Streamable HTTP endpoint and its auth posture. The MCP bin used to
+    start the full `todos-serve` HTTP app with `allowAnonymous: true` from a client
+    binary that MCP clients spawn with no credential.
+  - Removed 50 files under `src/mcp/tools/` that the server never registered
+    (nothing imported 48 of them; `todos-md.ts` was reached only by its own test),
+    plus `code-tools.ts`: the `extract_todos` and `watch_source_todos` MCP tools are
+    gone (a polling filesystem watcher is not an MCP tool call, and the scan reads
+    the agent host's checkout, not the hosted fleet). `todos extract` /
+    `todos extract-watch` remain as CLI verbs; the CLI↔MCP parity manifest records
+    the `source-index` domain as an intentional gap.
+  - `todos stream` defaults to the `todos serve` port (19427) instead of 3000, a
+    port nothing in this package listens on.
+
+- MCP tools now use the hosted `/v1` routes instead of the local store (PORT-TO-API slice A)
+
+  Thirty-two MCP tools reached `src/db/*` directly and had no hosted arm at all, so on a
+  station whose credential points at the hosted authority they answered from that machine's
+  private SQLite file — while the matching CLI verbs were already remote-only. The two doors
+  disagreed on the same station. Each of these now calls the real `/v1` route through the
+  existing todos client:
+
+  - **Templates (12)** — `create_template`, `list_templates`, `create_task_from_template`,
+    `delete_template`, `update_template`, `init_templates`, `preview_template`,
+    `export_template`, `import_template`, `template_history` now use
+    `GET|POST /v1/templates`, `GET|PATCH|DELETE /v1/templates/{id}`,
+    `GET /v1/templates/{id}/history` and `POST /v1/templates/initialize`.
+    `list_template_library` and `write_template_library` answer from the bundled static
+    library and no longer drag `bun:sqlite` in behind them.
+  - **Tasks (7)** — `upsert_task` (`POST /v1/tasks/upsert`), `claim_task`
+    (`POST /v1/tasks/{id}/start`), `release_task` and `extend_task`
+    (`GET` + `PATCH /v1/tasks/{id}`, revision-checked), `get_comments`
+    (`GET /v1/tasks/{id}/comments`), `list_my_tasks` (`GET /v1/tasks`), `standup`
+    (the shared recap over `/v1/tasks`, `/v1/dependencies` and `/v1/agents`).
+  - **Queue analytics (7)** — `get_my_workload`, `notify_upcoming_deadlines`,
+    `get_sla_breaches`, `get_stale_tasks`, `get_blocked_tasks`, `get_blocking_tasks`
+    compute from `GET /v1/tasks` + `GET /v1/dependencies`; `run_doctor` reports
+    `GET /v1/integrity` and refuses `apply` on the hosted authority rather than
+    pretending a client-side repair happened.
+  - **Git trail and verification (7)** — `link_task_to_commit`, `get_task_commits`,
+    `find_task_by_commit`, `link_task_git_ref`, `get_task_git_refs`,
+    `find_tasks_by_git_ref`, `add_task_verification` use
+    `/v1/tasks/{id}/{commits,refs,verifications}`, `/v1/commits/{sha}` and `/v1/refs/{ref}`.
+  - **Agents (1)** — `get_agent` resolves against the shared roster on
+    `GET /v1/agents/{id}` instead of 404ing every cloud-only agent.
+
+  The local-store arm of each tool is unchanged and still reachable behind the existing
+  explicit local opt-in. The remote reusable-template implementation that was private to the
+  CLI `template*` commands moved to `src/cli/template-remote.ts` so both surfaces run one
+  implementation rather than two. New hosted-path tests drive every ported tool against a
+  real in-process `/v1` origin and assert no database file is created.
+
+- Route twelve additional MCP tools through the authoritative Todos `/v1` API.
+
+  Hosted bulk create and bulk delete now use bounded server-owned transactions. Bulk create commits every task and dependency edge together or commits nothing, including parent-guarded and plan-guarded tasks on the already-held PostgreSQL transaction client. Bulk delete snapshots authoritative child relationships, applies order-independent force semantics, requires `todos:*` for force, and returns a complete per-request receipt. Unsupported or contradictory hosted receipts fail closed without local fallback.
+
+  Archive and workload-rebalance mutation reads exhaust stable authoritative totals through bounded scalar-status pages and refuse before mutation when a selection is incomplete or exceeds 10,000 tasks. `archive_completed` uses `updated_at`, matching the established local age contract. `get_archived_tasks` now requests one server-filtered `archived_only` page, including subtasks, so a tiny archive remains readable inside a fleet-sized live corpus. Agent rosters, recent activity, task history, and dependency analytics are storage-bounded; large legacy unpaged reads fail loudly instead of materializing an unbounded dataset.
+
+  This release is server-first: deploy and prove the new bulk routes, bounded task-history response, and bounded dependency behavior before publishing a client version that depends on them.
+
+### Patch Changes
+
+- Raise the HTTP server's default request allowance from 120 to 12,000 per minute per peer. Preserve canonical and legacy environment overrides, reject invalid or excessive budgets before startup, and retain authentication, proxy trust, and Retry-After behavior.
+
+  Write the complete CLI JSON manual through the existing output helper so piped output remains parseable.
+
+- Harden the hosted MCP slice by preserving template assignees and task-list bindings, binding exact-agent reads to validated response identities, removing placeholder claims, pushing bounded dependency pagination into the storage adapters and generated `/v1` SDK, and refusing unsupported commit and verification timestamps instead of dropping them.
+
 ## 0.16.1
 
 ### Patch Changes
