@@ -104,6 +104,8 @@ describe("authenticated hosted file content", () => {
     expect(response?.status).toBe(200);
     expect(Buffer.from(await response!.arrayBuffer())).toEqual(PRIVATE_BYTES);
     expect(response?.headers.get("cache-control")).toBe("private, no-store");
+    expect(response?.headers.get("x-files-size")).toBe(String(PRIVATE_BYTES.byteLength));
+    expect(response?.headers.get("x-files-truncated")).toBeNull();
     expect(response?.headers.get("content-disposition")).toBeNull();
     expect(reads).toBe(1);
   });

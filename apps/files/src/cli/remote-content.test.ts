@@ -19,10 +19,14 @@ const SERVER_EXPECTED_AUTH = "fixture-files-read-key";
 let testDir: string;
 let server: ReturnType<typeof Bun.serve>;
 let requests: Array<{ method: string; path: string }>;
+let downloadHeaders: Record<string, string>;
+let downloadBytes: Uint8Array;
 
 beforeEach(() => {
   testDir = mkdtempSync(join(tmpdir(), "files-remote-content-cli-"));
   requests = [];
+  downloadHeaders = {};
+  downloadBytes = PRIVATE_BYTES;
   server = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
@@ -33,10 +37,11 @@ beforeEach(() => {
         return Response.json({ error: "Unauthorized" }, { status: 401 });
       }
       if (req.method === "GET" && url.pathname === "/v1/files/f_remote/content") {
-        return new Response(PRIVATE_BYTES, {
+        return new Response(downloadBytes, {
           headers: {
             "content-type": "application/octet-stream",
-            "content-length": String(PRIVATE_BYTES.byteLength),
+            "content-length": String(downloadBytes.byteLength),
+            ...downloadHeaders,
           },
         });
       }
@@ -81,7 +86,33 @@ afterEach(() => {
 });
 
 describe("hosted remote content CLI", () => {
+  test.each([
+    ["explicit truncation", { "x-files-truncated": "1", "x-files-size": "100" }],
+    ["short response", { "x-files-size": "100" }],
+    ["oversized response", { "x-files-size": "2" }],
+    ["invalid expected size", { "x-files-size": "unknown" }],
+  ])("rejects %s and removes the incomplete output", async (_label, headers) => {
+    downloadHeaders = headers as Record<string, string>;
+    const destination = join(testDir, "incomplete.bin");
+    const result = await runCli(["download", "f_remote", destination]);
+    expect(result.exitCode).toBe(1);
+    expect(() => lstatSync(destination)).toThrow();
+    expect(result.stdout).not.toContain("Download complete");
+    expect(`${result.stdout}\n${result.stderr}`).not.toContain(PRIVATE_BYTES.toString("utf8").trim());
+    expect(requests).toEqual([{ method: "GET", path: "/v1/files/f_remote/content" }]);
+  });
+
+  test("accepts a complete zero-byte object", async () => {
+    downloadBytes = new Uint8Array();
+    downloadHeaders = { "x-files-size": "0" };
+    const destination = join(testDir, "empty.bin");
+    const result = await runCli(["download", "f_remote", destination]);
+    expect(result.exitCode).toBe(0);
+    expect(readFileSync(destination)).toHaveLength(0);
+  });
+
   test("downloads exact bytes to a new owner-only destination without printing content", async () => {
+    downloadHeaders = { "x-files-size": String(PRIVATE_BYTES.byteLength) };
     const destination = join(testDir, "download.bin");
 
     const result = await runCli(["download", "f_remote", destination]);

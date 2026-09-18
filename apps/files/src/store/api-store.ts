@@ -360,26 +360,52 @@ export class ApiStore implements FilesStore {
     fileId: string,
     write: (chunk: Uint8Array) => void | Promise<void>,
     options: { max_bytes?: number } = {},
-  ): Promise<{ truncated: boolean; totalBytes?: number }> {
+  ): Promise<{ truncated: boolean; totalBytes?: number; bytesRead: number }> {
     if (!this.fetchContent) throw new Error("Authenticated file-content transport is unavailable.");
+    const limit = options.max_bytes === undefined ? undefined : Math.floor(options.max_bytes);
+    if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1)) {
+      throw new Error("The file-content byte limit must be a positive safe integer.");
+    }
     const path = `/files/${seg(fileId)}/content`;
-    const query = options.max_bytes !== undefined ? `?max_bytes=${Math.max(1, Math.floor(options.max_bytes))}` : "";
+    const query = limit === undefined ? "" : `?max_bytes=${limit}`;
     const response = await this.fetchContent(path + query, { method: "GET" });
     if (!response.ok) throw await remoteContentError("GET", path, response);
     if (!response.body) throw new Error("The file-content response was empty.");
 
     const reader = response.body.getReader();
-    while (true) {
-      const next = await reader.read();
-      if (next.done) break;
-      await write(next.value);
-    }
+    let finished = false;
+    try {
+      const truncated = response.headers.get("x-files-truncated") === "1" || response.status === 206;
+      if (limit === undefined && truncated) {
+        throw new Error("The file-content response was truncated; a complete download is required.");
+      }
+      const sizeHeader = response.headers.get("x-files-size");
+      const totalBytes = sizeHeader === null ? undefined : Number(sizeHeader);
+      if (sizeHeader !== null && (!/^\d+$/.test(sizeHeader) || !Number.isSafeInteger(totalBytes))) {
+        throw new Error("The file-content response has invalid size metadata.");
+      }
 
-    const sizeHeader = response.headers?.get("x-files-size");
-    return {
-      truncated: response.headers?.get("x-files-truncated") === "1",
-      totalBytes: sizeHeader !== null ? Number(sizeHeader) : undefined,
-    };
+      let bytesRead = 0;
+      while (true) {
+        const next = await reader.read();
+        if (next.done) break;
+        bytesRead += next.value.byteLength;
+        if (totalBytes !== undefined && bytesRead > totalBytes) {
+          throw new Error("The file-content response exceeds its expected size.");
+        }
+        await write(next.value);
+      }
+      if (!truncated && totalBytes !== undefined && bytesRead !== totalBytes) {
+        throw new Error("The file-content response does not match its expected size.");
+      }
+      finished = true;
+      return { truncated, totalBytes, bytesRead };
+    } finally {
+      // Stop the upstream read on invalid metadata, interrupted streams, or
+      // failed output writes; callers can then discard their partial output.
+      if (!finished) await reader.cancel().catch(() => {});
+      reader.releaseLock();
+    }
   }
 
   async extractFileText(

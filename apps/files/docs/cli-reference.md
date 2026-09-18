@@ -63,7 +63,7 @@ the machine where they run.
 | `files tag <file-id> <tags...>` | Add tags | Data plane |
 | `files untag <file-id> <tags...>` | Remove tags | Data plane |
 | `files tags` | List tags | Data plane |
-| `files download <file-id> [dest]` | Resolve/download bytes | On-box |
+| `files download <file-id> [dest]` | Download bytes; hosted reads require an explicit new destination | Data plane |
 | `files upload <local-path> [source-id] [s3-key]` | Upload a local document. Cloud (api) mode: server-owned ingestion into the files service, optionally tagged + linked to a project (`--project`, `--tag`). Local mode: upload to an S3 source and reindex | Data plane |
 | `files collections` | Manage collections | Data plane |
 | `files projects` | Manage projects | Data plane |
@@ -99,6 +99,13 @@ server-side. Remote `search` is a ranked full-text search over metadata
 (name/path/mime/canonical/description) AND the derived-content index
 (`search-index` documents) with `--scope all|metadata|content`; the server
 returns a per-row `rank` and the `search_match_sources` that actually matched.
+
+Hosted `download` writes an owner-only file and refuses existing destinations or
+symlinked paths. It rejects explicitly partial responses and, when the service
+supplies its expected object size, rejects a different streamed byte count.
+Failed downloads remove the newly created output. Older services without size
+metadata remain compatible, but their byte count cannot be independently checked
+against an expected size. This check does not verify a checksum or pin a revision.
 
 For machine output, the historical contract stays available unchanged:
 
