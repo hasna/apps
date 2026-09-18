@@ -34,11 +34,13 @@ import {
   cloudCreatePlan, cloudListPlans, cloudResolvePlan, cloudUpdatePlan, cloudListPlanTasks,
   cloudCreateProject, cloudListProjects, cloudResolveProject, cloudUpdateProject, cloudDeleteProjectPreserving, cloudListTasks,
   cloudUpdateTask,
+  cloudUpdateTaskVerified,
   cloudAddComment,
   cloudGetTask,
   cloudResolveProjectRef,
   cloudResolveTaskListRef,
   cloudResolveTaskRef, cloudLockTask, cloudUnlockTask, cloudAddDependency, cloudRemoveDependency,
+  cloudBulkCreateTasks, cloudBulkDeleteTasks, cloudListComments, cloudRecentActivity, cloudTaskHistoryPage, cloudResolveAgentRef,
 } from "../../cli/cloud-router.js";
 import { requireTodosCloudClient } from "../remote-authority.js";
 import { cloudTaskLockStatus, cloudPrioritizeTask, cloudTaskGraph } from "../task-coordination-api.js";
@@ -48,6 +50,7 @@ import {
 import { resolveTaskRunId } from "../../db/task-runs.js";
 import { bootstrapProject } from "../../lib/project-bootstrap.js";
 import { getDatabase } from "../../db/database.js";
+import { resolveWritableIdentity } from "../../lib/creator-identity.js";
 import {
   assignLabelToTask,
   createLabel,
@@ -1360,6 +1363,15 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       },
       async ({ task_id, deadline, version }) => {
         try {
+          // http authority routing: PATCH /v1/tasks/:id. Every neighbouring
+          // lifecycle tool (start/complete/prioritize/move) already routed here;
+          // the deadline write was the one that still landed in local sqlite.
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const remoteTaskId = await cloudResolveTaskRef(cloud, task_id);
+            const rescheduled = await cloudUpdateTaskVerified(cloud, remoteTaskId, version !== undefined ? { due_at: deadline, version } : { due_at: deadline });
+            return { content: [{ type: "text" as const, text: formatTask(rescheduled) }] };
+          }
           const resolvedId = resolveId(task_id);
           const task = updateWithOptionalVersion(resolvedId, { due_at: deadline }, version);
           return { content: [{ type: "text" as const, text: formatTask(task) }] };
@@ -1485,13 +1497,31 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       "bulk_update_tasks",
       "Update multiple tasks at once. All tasks must pass the dependency check.",
       {
-        task_ids: z.array(z.string()).describe("Array of task IDs to update"),
+        task_ids: z.array(z.string().min(1).max(200)).min(1).max(100).describe("Array of task IDs to update"),
         status: z.enum(["pending", "in_progress", "completed", "failed", "cancelled"]).optional(),
         priority: z.enum(["low", "medium", "high", "critical"]).optional(),
         assigned_to: z.string().nullable().optional().describe("Agent ID or name, null to unassign"),
       },
       async ({ task_ids, status, priority, assigned_to }) => {
         try {
+          // http authority routing: one PATCH /v1/tasks/:id per id, reporting
+          // the true updated/failed split instead of a local-store count.
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const resolvedIds: string[] = [];
+            for (const reference of task_ids) resolvedIds.push(await cloudResolveTaskRef(cloud, reference));
+            const patch: Record<string, unknown> = {};
+            if (status !== undefined) patch.status = status;
+            if (priority !== undefined) patch.priority = priority;
+            if (assigned_to !== undefined) patch.assigned_to = assigned_to === null ? null : await cloudResolveAgentRef(cloud, assigned_to);
+            let updated = 0;
+            const failed: string[] = [];
+            for (let index = 0; index < resolvedIds.length; index++) {
+              try { await cloudUpdateTaskVerified(cloud, resolvedIds[index]!, patch); updated++; }
+              catch { failed.push(task_ids[index]!); }
+            }
+            return { content: [{ type: "text" as const, text: `${updated} task(s) updated, ${failed.length} failed.${failed.length ? ` Failed: ${failed.map((f) => f.slice(0, 8)).join(", ")}` : ""}` }] };
+          }
           const { bulkUpdateTasks } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const resolved = task_ids.map(resolveId);
           let resolvedAssignee: string | null | undefined = assigned_to;
@@ -1511,6 +1541,7 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       "Create multiple tasks at once from an array of task objects.",
       {
         tasks: z.array(z.object({
+          temp_id: z.string().min(1).max(100).optional().describe("Caller-local handle for sibling dependencies in this batch"),
           title: z.string(),
           description: z.string().optional(),
           status: z.enum(["pending", "in_progress", "completed", "failed", "cancelled"]).optional(),
@@ -1518,25 +1549,48 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
           project_id: z.string().optional(),
           task_list_id: z.string().optional(),
           assigned_to: z.string().optional(),
-          depends_on: z.array(z.string()).optional(),
-          short_id: z.string().nullable().optional(),
+          depends_on: z.array(z.string().min(1).max(200)).max(100).optional(),
           tags: z.array(z.string()).optional(),
           estimate: z.number().optional(),
-        })).describe("Array of task objects"),
+        })).min(1).max(50).describe("Array of task objects"),
       },
       async ({ tasks }) => {
         try {
-          const { bulkCreateTasks } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
-          const resolved = tasks.map(t => {
-            const r: Record<string, unknown> = { ...t };
-            if (r.project_id) r.project_id = resolveId(r.project_id as string, "projects");
-            if (r.task_list_id) r.task_list_id = resolveId(r.task_list_id as string, "task_lists");
-            if (r.assigned_to) r.assigned_to = resolveId(r.assigned_to as string, "agents");
-            if (r.depends_on) r.depends_on = (r.depends_on as string[]).map((id: string) => resolveId(id));
-            return r as Parameters<typeof bulkCreateTasks>[0][number];
-          });
-          const result = bulkCreateTasks(resolved);
-          return { content: [{ type: "text" as const, text: `${result.created.length} task(s) created.` }] };
+          // One authoritative server transaction creates every task and edge or
+          // commits nothing. The receipt is returned verbatim so an agent never
+          // mistakes a partial multi-request sequence for success.
+          const router = resolveWritableIdentity();
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const remoteAgentId = router.agent_id ? await cloudResolveAgentRef(cloud, router.agent_id) : undefined;
+            const remote = [];
+            for (const t of tasks) {
+              const { estimate, project_id, task_list_id, ...rest } = t;
+              const assignedTo = t.assigned_to ? await cloudResolveAgentRef(cloud, t.assigned_to) : undefined;
+              remote.push({
+                ...rest,
+                ...(remoteAgentId ? { agent_id: remoteAgentId, created_by: remoteAgentId } : {}),
+                ...(assignedTo ? { assigned_to: assignedTo } : {}),
+                ...(estimate !== undefined ? { estimated_minutes: estimate } : {}),
+                ...(project_id ? { project_id: await cloudResolveProjectRef(cloud, project_id) } : {}),
+                ...(task_list_id ? { task_list_id: await cloudResolveTaskListRef(cloud, task_list_id) } : {}),
+              });
+            }
+            const receipt = await cloudBulkCreateTasks(cloud, remote);
+            return { content: [{ type: "text" as const, text: JSON.stringify(receipt) }] };
+          }
+          const { createLocalSqliteTodosStorageAdapter } = require("../../storage/local-sqlite.js") as typeof import("../../storage/local-sqlite.js");
+          const resolved = tasks.map((task) => ({
+            ...task,
+            ...(router.agent_id ? { agent_id: router.agent_id, created_by: router.agent_id } : {}),
+            ...(task.project_id ? { project_id: resolveId(task.project_id, "projects") } : {}),
+            ...(task.task_list_id ? { task_list_id: resolveId(task.task_list_id, "task_lists") } : {}),
+            ...(task.assigned_to ? { assigned_to: resolveId(task.assigned_to, "agents") } : {}),
+            ...(task.estimate !== undefined ? { estimated_minutes: task.estimate } : {}),
+          }));
+          const local = createLocalSqliteTodosStorageAdapter({ db: getDatabase() });
+          const receipt = await local.tasks.bulkCreateAtomic!(resolved);
+          return { content: [{ type: "text" as const, text: `${receipt.created.length} task(s) created.` }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
         }
@@ -1549,15 +1603,25 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       "bulk_delete_tasks",
       "Delete multiple tasks at once. Tasks with active children are skipped.",
       {
-        task_ids: z.array(z.string()).describe("Array of task IDs"),
+        task_ids: z.array(z.string().min(1).max(200)).min(1).max(100).describe("Array of unique task IDs or refs"),
         force: z.boolean().optional().describe("Skip child check for all tasks (dangerous)"),
       },
       async ({ task_ids, force }) => {
         try {
-          const { bulkDeleteTasks } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
-          const resolved = task_ids.map(resolveId);
-          const result = bulkDeleteTasks(resolved, force);
-          return { content: [{ type: "text" as const, text: `${result.deleted} task(s) deleted, ${result.skipped} skipped (has children).` }] };
+          // The server performs child checks and honors force inside one
+          // transaction. Any unsupported or malformed response refuses before a
+          // success receipt is emitted.
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const receipt = await cloudBulkDeleteTasks(cloud, task_ids, force === true);
+            return { content: [{ type: "text" as const, text: JSON.stringify(receipt) }] };
+          }
+          const { createLocalSqliteTodosStorageAdapter } = require("../../storage/local-sqlite.js") as typeof import("../../storage/local-sqlite.js");
+          const local = createLocalSqliteTodosStorageAdapter({ db: getDatabase() });
+          const receipt = await local.tasks.bulkDeleteAtomic!(task_ids, force === true);
+          const deleted = receipt.results.filter((result) => result.outcome === "deleted").length;
+          const skipped = receipt.results.filter((result) => result.outcome === "skipped").length;
+          return { content: [{ type: "text" as const, text: `${deleted} task(s) deleted, ${skipped} skipped (has children).` }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
         }
@@ -2803,6 +2867,18 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       },
       async ({ task_id }) => {
         try {
+          // http authority routing: GET /v1/tasks/:id/comments. `create_comment`
+          // already wrote to the shared store, so this read showed an empty
+          // thread for every comment the same server had just accepted.
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const remoteTaskId = await cloudResolveTaskRef(cloud, task_id);
+            const page = await cloudListComments(cloud, remoteTaskId, { limit: 100 });
+            if (page.comments.length === 0) return { content: [{ type: "text" as const, text: "No comments." }] };
+            const remoteLines = page.comments.map((c) => `[${c.agent_id || "unknown"}] ${c.created_at?.slice(0, 16)}:\n  ${c.content}`);
+            if (page.has_more) remoteLines.push(`(older comments available; showing the ${page.comments.length} most recent)`);
+            return { content: [{ type: "text" as const, text: remoteLines.join("\n\n") }] };
+          }
           const resolvedId = resolveId(task_id);
           const comments = listComments(resolvedId);
           if (comments.length === 0) return { content: [{ type: "text" as const, text: "No comments." }] };
@@ -2822,14 +2898,54 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       {
         entity_type: z.enum(["all", "task", "project", "plan", "run"]).optional().describe("Scope type. Defaults to all."),
         entity_id: z.string().optional().describe("ID for task/project/plan/run scope."),
-        limit: z.number().optional().describe("Max entries, default 50."),
-        offset: z.number().optional().describe("Entries to skip for pagination."),
+        limit: z.number().int().min(1).max(200).optional().describe("Max entries, default 50, maximum 200."),
+        offset: z.number().int().min(0).max(10_000).optional().describe("Entries to skip for pagination, maximum 10000."),
         order: z.enum(["asc", "desc"]).optional().describe("Sort order, default desc."),
         since: z.string().optional().describe("Only entries at or after this ISO timestamp."),
         until: z.string().optional().describe("Only entries at or before this ISO timestamp."),
       },
       async (input) => {
         try {
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const limit = input.limit ?? 50;
+            const offset = input.offset ?? 0;
+            const scopeType = input.entity_type ?? "all";
+            if (scopeType !== "all" && scopeType !== "task") {
+              throw new Error(`REMOTE_API_INCOMPATIBLE: hosted activity does not yet support ${scopeType}-scoped timelines`);
+            }
+            const entityId = scopeType === "task"
+              ? input.entity_id ? await cloudResolveTaskRef(cloud, input.entity_id) : null
+              : null;
+            const historyPage = entityId
+              ? await cloudTaskHistoryPage(cloud, entityId, {
+                  limit, offset, order: input.order ?? "desc",
+                  ...(input.since ? { since: input.since } : {}),
+                  ...(input.until ? { until: input.until } : {}),
+                })
+              : null;
+            let entries = historyPage
+              ? historyPage.history
+              : await cloudRecentActivity(cloud, Math.min(10_000, limit + offset));
+            if (!historyPage) {
+              if (input.since) entries = entries.filter((entry) => (entry.created_at ?? "") >= input.since!);
+              if (input.until) entries = entries.filter((entry) => (entry.created_at ?? "") <= input.until!);
+            }
+            if (!historyPage && input.order === "asc") entries = [...entries].reverse();
+            const page = historyPage ? entries : entries.slice(offset, offset + limit);
+            return { content: [{ type: "text" as const, text: JSON.stringify({
+              source: "cloud",
+              scope: { entity_type: scopeType, entity_id: entityId },
+              entries: page,
+              count: page.length,
+              complete: historyPage ? offset === 0 && !historyPage.has_more : false,
+              ...(historyPage ? { total: historyPage.total, has_more: historyPage.has_more, next_offset: historyPage.next_offset } : {}),
+              omitted_sources: entityId ? ["comments", "run_evidence"] : ["comments", "run_evidence", "older_task_history"],
+              omitted_reason: entityId
+                ? "the hosted task-history route does not include comments or run evidence"
+                : "the hosted recent-activity route is bounded and does not include comments or run evidence",
+            }) }] };
+          }
           let entityId = input.entity_id;
           if (input.entity_type === "task" && entityId) entityId = resolveId(entityId);
           if (input.entity_type === "project" && entityId) entityId = resolveId(entityId, "projects");
@@ -3116,10 +3232,25 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
         query: z.string().describe("Search query"),
         project_id: z.string().optional().describe("Filter by project"),
         status: z.enum(["pending", "in_progress", "completed", "failed", "cancelled"]).optional(),
-        limit: z.number().optional().describe("Max results (default: 20)"),
+        limit: z.number().int().min(1).max(100).optional().describe("Max results (default: 20, maximum: 100)"),
       },
       async ({ query, project_id, status, limit }) => {
         try {
+          // http authority routing: GET /v1/tasks?q=… — the server runs the
+          // search over the shared dataset instead of this machine's rows.
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const remoteProjectId = project_id ? await cloudResolveProjectRef(cloud, project_id) : undefined;
+            const remote = await cloudListTasks(cloud, {
+              query,
+              ...(remoteProjectId ? { project_id: remoteProjectId } : {}),
+              ...(status ? { status } : {}),
+              limit: limit || 20,
+            } as never);
+            if (remote.length === 0) return { content: [{ type: "text" as const, text: `No results for: ${query}` }] };
+            const remoteLines = remote.map((t) => `${(t.short_id || t.id.slice(0, 8))} [${t.status}] ${t.title}`);
+            return { content: [{ type: "text" as const, text: `${remote.length} result(s) for "${query}":\n${remoteLines.join("\n")}` }] };
+          }
           const { searchTasks } = require("../../lib/search.js") as typeof import("../../lib/search.js");
           const resolved: Record<string, unknown> = { query, limit };
           if (project_id) resolved.project_id = resolveId(project_id, "projects");

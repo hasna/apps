@@ -14,12 +14,17 @@ import {
   cloudListProjects,
   cloudListAgents,
   cloudListTasks,
+  cloudListTasksCompleteBounded,
+  cloudListArchivedTasksPage,
   cloudStaleTasks,
   cloudEscalatedTasks,
   cloudAllDependencies,
   cloudBlockingDepsMap,
   cloudGetTasksByIds,
   cloudGetIntegrityReport,
+  cloudGetTask,
+  cloudUpdateTaskVerified,
+  cloudResolveProjectRef,
 } from "../../cli/cloud-router.js";
 import { assignedToAliasSet, getDatabase } from "../../db/database.js";
 
@@ -47,6 +52,32 @@ export function registerTaskAutoTools(server: McpServer, ctx: TaskAutoContext) {
       },
       async ({ days = 7, project_id }) => {
         try {
+          // http authority routing: read the completed set from GET /v1/tasks
+          // (include_archived=false so already-archived rows are not re-stamped)
+          // and stamp archived_at with PATCH /v1/tasks/:id.
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+            const stampedAt = new Date().toISOString();
+            const remoteProjectId = project_id ? await cloudResolveProjectRef(cloud, project_id) : undefined;
+            const selection = await cloudListTasksCompleteBounded(cloud, {
+              status: "completed",
+              include_archived: false,
+              ...(remoteProjectId ? { project_id: remoteProjectId } : {}),
+            } as never);
+            for (const task of selection) {
+              if (typeof task.updated_at !== "string" || !task.updated_at || !Number.isSafeInteger(task.version)) {
+                throw new Error("REMOTE_API_INCOMPATIBLE: archive selection contains a task without updated_at and version");
+              }
+            }
+            const candidates = selection.filter((task) => task.updated_at < cutoff);
+            let archived = 0;
+            for (const t of candidates) {
+              await cloudUpdateTaskVerified(cloud, t.id, { archived_at: stampedAt, version: t.version });
+              archived++;
+            }
+            return { content: [{ type: "text" as const, text: `Archived ${archived} completed task(s) older than ${days} days.` }] };
+          }
           const { archiveCompletedTasks } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const resolvedProjectId = project_id ? resolveId(project_id, "projects") : undefined;
           const count = archiveCompletedTasks(days, resolvedProjectId);
@@ -67,6 +98,15 @@ export function registerTaskAutoTools(server: McpServer, ctx: TaskAutoContext) {
       },
       async ({ task_id }) => {
         try {
+          // http authority routing: PATCH /v1/tasks/:id clearing archived_at
+          // (parity with the local UPDATE ... SET archived_at = NULL).
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const current = await cloudGetTask(cloud, task_id);
+            if (!current) throw new Error(`Task not found: ${task_id}`);
+            await cloudUpdateTaskVerified(cloud, current.id, { archived_at: null, version: current.version });
+            return { content: [{ type: "text" as const, text: `Task ${task_id.slice(0, 8)} restored from archive.` }] };
+          }
           const { unarchiveTask } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           unarchiveTask(resolveId(task_id));
           return { content: [{ type: "text" as const, text: `Task ${task_id.slice(0,8)} restored from archive.` }] };
@@ -83,13 +123,37 @@ export function registerTaskAutoTools(server: McpServer, ctx: TaskAutoContext) {
       "List archived tasks.",
       {
         project_id: z.string().optional().describe("Filter by project"),
-        limit: z.number().optional().describe("Max results (default: 50)"),
+        limit: z.number().int().min(1).max(200).optional().describe("Max results (default: 50, maximum: 200)"),
+        offset: z.number().int().min(0).max(10_000).optional().describe("Archived rows to skip (default: 0, maximum: 10000)"),
       },
-      async ({ project_id, limit }) => {
+      async ({ project_id, limit, offset }) => {
         try {
-          const { getArchivedTasks } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
+          // http authority routing: one storage-bounded archived-only page.
+          // The server filters archived_at before LIMIT/OFFSET, so fleet-sized
+          // live task corpora never need to be read or filtered by this client.
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const remoteProjectId = project_id ? await cloudResolveProjectRef(cloud, project_id) : undefined;
+            const page = await cloudListArchivedTasksPage(cloud, {
+              ...(remoteProjectId ? { project_id: remoteProjectId } : {}),
+              limit: limit ?? 50,
+              offset: offset ?? 0,
+            });
+            if (page.tasks.length === 0) return { content: [{ type: "text" as const, text: "No archived tasks." }] };
+            const remoteLines = page.tasks.map((t) => `${(t.short_id || t.id.slice(0, 8))} ${t.title} archived ${t.archived_at}`);
+            if (page.has_more) remoteLines.push(`(${page.total - (page.offset + page.tasks.length)} more archived task(s); next offset ${page.next_offset})`);
+            return { content: [{ type: "text" as const, text: remoteLines.join("\n") }] };
+          }
+          const { listTasks } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const resolvedProjectId = project_id ? resolveId(project_id, "projects") : undefined;
-          const tasks = getArchivedTasks({ project_id: resolvedProjectId, limit: limit || 50 });
+          const tasks = listTasks({
+            ...(resolvedProjectId ? { project_id: resolvedProjectId } : {}),
+            include_archived: true,
+            archived_only: true,
+            include_subtasks: true,
+            limit: limit ?? 50,
+            offset: offset ?? 0,
+          });
           if (tasks.length === 0) return { content: [{ type: "text" as const, text: "No archived tasks." }] };
           const lines = tasks.map((t: any) => `${(t.short_id || t.id.slice(0,8))} ${t.title} archived ${t.archived_at}`);
           return { content: [{ type: "text" as const, text: lines.join("\n") }] };
@@ -197,6 +261,52 @@ export function registerTaskAutoTools(server: McpServer, ctx: TaskAutoContext) {
       },
       async ({ project_id, max_per_agent }) => {
         try {
+          // http authority routing: GET /v1/agents + GET /v1/tasks, then one
+          // PATCH /v1/tasks/:id per move. The server resolves every alias form
+          // of assigned_to, so the load map is keyed on the roster it returns.
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const cap = max_per_agent || 5;
+            const remoteProjectId = project_id ? await cloudResolveProjectRef(cloud, project_id) : undefined;
+            const roster = (await cloudListAgents(cloud)).filter((a) => (a as { status?: string }).status !== "archived");
+            if (roster.length === 0) return { content: [{ type: "text" as const, text: "No active agents available for rebalancing." }] };
+            const active = (await cloudListTasksCompleteBounded(cloud, {
+              status: ["pending", "in_progress"],
+              ...(remoteProjectId ? { project_id: remoteProjectId } : {}),
+            } as never));
+            for (const task of active) {
+              if (!Number.isSafeInteger(task.version) || typeof task.status !== "string") {
+                throw new Error("REMOTE_API_INCOMPATIBLE: rebalance selection contains an incomplete task");
+              }
+            }
+            const keyByAlias = new Map<string, string>();
+            const ambiguous = new Set<string>();
+            const index = (alias: string | undefined, agentId: string) => {
+              if (!alias) return;
+              const key = alias.toLowerCase();
+              if (ambiguous.has(key)) return;
+              const seen = keyByAlias.get(key);
+              if (seen !== undefined && seen !== agentId) { keyByAlias.delete(key); ambiguous.add(key); return; }
+              keyByAlias.set(key, agentId);
+            };
+            for (const agent of roster) { index(agent.id, agent.id); index(agent.name, agent.id); }
+            const keyOf = (assignedTo: string | null | undefined) => (assignedTo ? keyByAlias.get(assignedTo.toLowerCase()) : undefined);
+            const load = new Map(roster.map((a) => [a.id, active.filter((t) => keyOf(t.assigned_to) === a.id).length]));
+            let moved = 0;
+            let skipped = 0;
+            for (const t of active.filter((t) => t.status === "pending" && keyOf(t.assigned_to) && (load.get(keyOf(t.assigned_to)!) ?? 0) > cap)) {
+              const from = keyOf(t.assigned_to)!;
+              const target = roster
+                .filter((a) => a.id !== from)
+                .sort((a, b) => (load.get(a.id) ?? 0) - (load.get(b.id) ?? 0))[0];
+              if (!target || (load.get(target.id) ?? 0) >= cap) { skipped++; continue; }
+              await cloudUpdateTaskVerified(cloud, t.id, { assigned_to: target.id, version: t.version });
+              load.set(from, (load.get(from) ?? 1) - 1);
+              load.set(target.id, (load.get(target.id) ?? 0) + 1);
+              moved++;
+            }
+            return { content: [{ type: "text" as const, text: `Rebalanced: moved ${moved} task(s), ${skipped} skipped.` }] };
+          }
           const { listAgents } = require("../../db/agents.js") as typeof import("../../db/agents.js");
           const { listTasks, updateTask } = require("../../db/tasks.js") as typeof import("../../db/tasks.js");
           const resolvedProjectId = project_id ? resolveId(project_id, "projects") : undefined;

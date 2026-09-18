@@ -73,6 +73,7 @@ describe("task list and completion OpenAPI contract", () => {
       "parent_id",
       "include_subtasks",
       "include_archived",
+      "archived_only",
       "plan_read_contract",
       "plan_id",
       "task_list_id",

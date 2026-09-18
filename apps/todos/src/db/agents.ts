@@ -289,6 +289,25 @@ export function listAgents(opts?: { include_archived?: boolean } | Database, db?
   return (d.query("SELECT * FROM agents WHERE status = 'active' ORDER BY name").all() as AgentRow[]).map(rowToAgent);
 }
 
+export function listAgentsPage(
+  options: { include_archived?: boolean; limit: number; offset: number },
+  db?: Database,
+): { agents: Agent[]; total: number } {
+  if (!Number.isSafeInteger(options.limit) || options.limit < 1 || options.limit > 500) {
+    throw new Error("Agent page limit must be an integer from 1 to 500");
+  }
+  if (!Number.isSafeInteger(options.offset) || options.offset < 0) {
+    throw new Error("Agent page offset must be a non-negative integer");
+  }
+  const d = db || getDatabase();
+  const where = options.include_archived ? "" : "WHERE status = 'active'";
+  const total = (d.query(`SELECT COUNT(*) AS total FROM agents ${where}`).get() as { total: number }).total;
+  const agents = (d.query(
+    `SELECT * FROM agents ${where} ORDER BY LOWER(name), id LIMIT ? OFFSET ?`,
+  ).all(options.limit, options.offset) as AgentRow[]).map(rowToAgent);
+  return { agents, total };
+}
+
 export function updateAgentActivity(id: string, db?: Database): void {
   const d = db || getDatabase();
   d.run("UPDATE agents SET last_seen_at = ? WHERE id = ?", [now(), id]);

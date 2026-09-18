@@ -16,6 +16,12 @@ export interface TaskDependency { "task_id": string; "depends_on": string; "exte
 
 export interface DependencyPage { "dependencies": Array<TaskDependency>; "count": number; "total": number; "limit": number; "offset": number; "has_more": boolean; "next_offset": number | null }
 
+export interface BulkCreateTaskInput { "temp_id"?: string; "depends_on"?: Array<string>; "title": string; "description"?: string | null; "status"?: "pending" | "in_progress" | "completed" | "failed" | "cancelled"; "priority"?: "low" | "medium" | "high" | "critical"; "project_id"?: string; "parent_id"?: string; "plan_id"?: string; "task_list_id"?: string; "assigned_to"?: string; "agent_id"?: string; "created_by"?: string; "tags"?: Array<string>; "estimated_minutes"?: number }
+
+export interface BulkCreateReceipt { "schema_version": 1; "atomic": true; "created": Array<{ "temp_id": string | null; "id": string; "short_id": string | null; "title": string }>; "dependencies": Array<TaskDependency> }
+
+export interface BulkDeleteReceipt { "schema_version": 1; "atomic": true; "force": boolean; "results": Array<{ "requested_id": string; "task_id": string | null; "outcome": "deleted" | "skipped" | "missing"; "reason": "has_children" | "not_found" | null }> }
+
 export interface Project { "status"?: "active" | "completed" | "on_hold" | "archived"; "short_id"?: string | null; "metadata"?: Record<string, unknown>; "id"?: string; "name"?: string; "path"?: string; "description"?: string | null; "task_list_id"?: string | null; "task_prefix"?: string | null; "task_counter"?: number; "parent_id"?: string | null; "created_at"?: string; "updated_at"?: string }
 
 export interface TaskManifestBounds { "tasks": number; "dependencies": number; "comments": number; "verifications": number; "effects": number; "metadata_fields": number; "effect_payload_fields": number; "request_bytes": number; "response_bytes": number }
@@ -120,7 +126,7 @@ export interface CreateTemplateTaskInput { "position"?: number; "title_pattern":
 
 export interface CreateTaskInput { "title": string; "description"?: string | null; "status"?: "pending" | "in_progress" | "completed" | "failed" | "cancelled"; "priority"?: "low" | "medium" | "high" | "critical"; "project_id"?: string; "parent_id"?: string; "plan_id"?: string; "assigned_to"?: string; "agent_id"?: string; "created_by"?: string; "tags"?: Array<string> }
 
-export interface UpdateTaskInput { "title"?: string; "description"?: string; "status"?: "pending" | "in_progress" | "completed" | "failed" | "cancelled"; "priority"?: "low" | "medium" | "high" | "critical"; "assigned_to"?: string; "project_id"?: string | null; "parent_id"?: string | null; "plan_id"?: string | null; "task_list_id"?: string | null; "version"?: number }
+export interface UpdateTaskInput { "title"?: string; "description"?: string; "status"?: "pending" | "in_progress" | "completed" | "failed" | "cancelled"; "priority"?: "low" | "medium" | "high" | "critical"; "assigned_to"?: string; "project_id"?: string | null; "parent_id"?: string | null; "plan_id"?: string | null; "task_list_id"?: string | null; "archived_at"?: string | null; "version"?: number }
 
 export interface CompleteTaskInput { "agent_id"?: string; "attachment_ids"?: Array<string>; "files_changed"?: Array<string>; "test_results"?: string; "commit_hash"?: string; "notes"?: string; "confidence"?: number }
 
@@ -255,6 +261,24 @@ export class TodosV1Client {
     }
     return data as T;
   }
+
+    /** List a bounded recent task-history window */
+    async listRecentActivity(query?: { "limit"?: number }, init?: RequestInit): Promise<{ "activity": Array<Record<string, unknown>>; "count": number; "limit": number }> {
+      return this.request("GET", `/v1/activity`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
+    /** List the shared agent roster with storage-bounded pagination */
+    async listAgents(query?: { "limit"?: number; "offset"?: number; "include_archived"?: boolean }, init?: RequestInit): Promise<{ "agents": Array<Record<string, unknown>>; "count": number; "total": number; "limit": number; "offset": number; "has_more": boolean; "next_offset": number | null }> {
+      return this.request("GET", `/v1/agents`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
 
     /** List dependency edges with storage-bounded pagination */
     async listDependencies(query?: { "limit"?: number; "offset"?: number }, init?: RequestInit): Promise<DependencyPage> {
@@ -782,7 +806,7 @@ export class TodosV1Client {
     }
 
     /** List tasks */
-    async listTasks(query?: { "status"?: "pending" | "in_progress" | "completed" | "failed" | "cancelled" | Array<"pending" | "in_progress" | "completed" | "failed" | "cancelled">; "priority"?: "low" | "medium" | "high" | "critical" | Array<"low" | "medium" | "high" | "critical">; "project_id"?: string; "parent_id"?: string | null; "include_subtasks"?: boolean; "include_archived"?: boolean; "plan_read_contract"?: "1"; "plan_id"?: string; "task_list_id"?: string; "assigned_to"?: string; "agent_id"?: string; "tags"?: string; "updated_after"?: string; "limit"?: number; "offset"?: number }, init?: RequestInit): Promise<{ "tasks": Array<Task>; "count": number; "total": number; "selection"?: { "schema_version": 1; "plan_id": string; "include_subtasks": true; "include_archived": boolean } }> {
+    async listTasks(query?: { "status"?: "pending" | "in_progress" | "completed" | "failed" | "cancelled" | Array<"pending" | "in_progress" | "completed" | "failed" | "cancelled">; "priority"?: "low" | "medium" | "high" | "critical" | Array<"low" | "medium" | "high" | "critical">; "project_id"?: string; "parent_id"?: string | null; "include_subtasks"?: boolean; "include_archived"?: boolean; "archived_only"?: boolean; "plan_read_contract"?: "1"; "plan_id"?: string; "task_list_id"?: string; "assigned_to"?: string; "agent_id"?: string; "tags"?: string; "updated_after"?: string; "limit"?: number; "offset"?: number }, init?: RequestInit): Promise<{ "tasks": Array<Task>; "count": number; "total": number; "selection"?: { "schema_version": 1; "plan_id": string; "include_subtasks": true; "include_archived": boolean } }> {
       return this.request("GET", `/v1/tasks`, {
         body: undefined,
         query,
@@ -793,6 +817,24 @@ export class TodosV1Client {
     /** Create a task */
     async createTask(body: CreateTaskInput, init?: RequestInit): Promise<{ "task"?: Task }> {
       return this.request("POST", `/v1/tasks`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Atomically create a bounded task batch and its dependency edges */
+    async bulkCreateTasks(body: { "schema_version": 1; "tasks": Array<BulkCreateTaskInput> }, init?: RequestInit): Promise<{ "receipt": BulkCreateReceipt }> {
+      return this.request("POST", `/v1/tasks/bulk-create`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Atomically delete a bounded task set using authoritative child checks */
+    async bulkDeleteTasks(body: { "schema_version": 1; "task_ids": Array<string>; "force"?: boolean }, init?: RequestInit): Promise<{ "receipt": BulkDeleteReceipt }> {
+      return this.request("POST", `/v1/tasks/bulk-delete`, {
         body,
         query: undefined,
         init,
@@ -858,6 +900,15 @@ export class TodosV1Client {
       return this.request("POST", `/v1/tasks/${encodeURIComponent(String(id))}/fail`, {
         body,
         query: undefined,
+        init,
+      });
+    }
+
+    /** List a storage-bounded page of one task's audit history */
+    async listTaskHistory(id: string, query?: { "limit"?: number; "offset"?: number; "since"?: string; "until"?: string; "order"?: "asc" | "desc" }, init?: RequestInit): Promise<{ "history": Array<Record<string, unknown>>; "count": number; "total": number; "limit": number; "offset": number; "order": "asc" | "desc"; "has_more": boolean; "next_offset": number | null }> {
+      return this.request("GET", `/v1/tasks/${encodeURIComponent(String(id))}/history`, {
+        body: undefined,
+        query,
         init,
       });
     }

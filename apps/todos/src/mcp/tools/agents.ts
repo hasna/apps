@@ -165,14 +165,22 @@ export function registerAgentTools(server: McpServer, { shouldRegisterTool, reso
         try {
           const pool = getAgentPoolForProject(working_dir);
           const cutoff = new Date(Date.now() - 30 * 60 * 1000).toISOString();
-          const allActive = listAgents().filter(a => a.last_seen_at > cutoff);
+          // http authority routing: GET /v1/agents. Suggesting names from the
+          // local roster handed out names another station was already holding,
+          // because `register_agent` writes to the shared roster.
+          const cloud = getTodosCloudClient();
+          const roster = cloud ? await cloudListAgents(cloud) : listAgents();
+          const allActive = roster.filter(a => (a.last_seen_at ?? "") > cutoff);
 
           if (!pool) {
             // No pool configured — any name works, just show active agents to avoid conflicts
-            const suggestions = getAvailableNamesFromPool([
+            const defaultPool = [
               "caesar", "augustus", "marcus", "brutus", "cicero", "cato", "nero", "claudius", "tiberius", "hadrian",
               "athena", "apollo", "artemis", "iris", "hector", "sophia", "thalia", "phoebe", "daphne",
-            ], getDatabase());
+            ];
+            const suggestions = cloud
+              ? defaultPool.filter((name) => !roster.some((a) => a.name?.toLowerCase() === name))
+              : getAvailableNamesFromPool(defaultPool, getDatabase());
             const lines = [
               "No project pool configured. Use a distinctive one-word name; generic generated names are blocked.",
               `Suggested names: ${suggestions.slice(0, 8).join(", ")}`,
@@ -184,8 +192,10 @@ export function registerAgentTools(server: McpServer, { shouldRegisterTool, reso
             return { content: [{ type: "text" as const, text: lines.join("\n") }] };
           }
 
-          const available = getAvailableNamesFromPool(pool, getDatabase());
-          const activeInPool = allActive.filter(a => pool.map(n => n.toLowerCase()).includes(a.name));
+          const available = cloud
+            ? pool.filter((name) => !roster.some((a) => a.name?.toLowerCase() === name.toLowerCase()))
+            : getAvailableNamesFromPool(pool, getDatabase());
+          const activeInPool = allActive.filter((agent) => pool.map((name) => name.toLowerCase()).includes(agent.name.toLowerCase()));
           const lines = [
             `Project pool: ${pool.join(", ")}`,
             `Available now (${available.length}): ${available.length > 0 ? available.join(", ") : "none — all names in use"}`,
@@ -214,7 +224,7 @@ export function registerAgentTools(server: McpServer, { shouldRegisterTool, reso
           // dataset rather than this machine's local SQLite island.
           const cloud = getTodosCloudClient();
           const agents = cloud
-            ? await cloudListAgents(cloud)
+            ? await cloudListAgents(cloud, { include_archived: include_archived ?? false })
             : listAgents({ include_archived: include_archived ?? false });
           if (agents.length === 0) {
             return { content: [{ type: "text" as const, text: "No agents registered." }] };
