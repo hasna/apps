@@ -698,8 +698,8 @@ export class LocalStore implements Store {
   async listVaultItemMetadata(kind?: VaultItemKind): Promise<VaultItemMetadata[]> {
     const db = this.db();
     const rows = kind
-      ? (db.prepare(`SELECT ${vaultItemMetadataColumns()} FROM vault_items WHERE kind = ? ORDER BY favorite DESC, title`).all(kind) as VaultItemRow[])
-      : (db.prepare(`SELECT ${vaultItemMetadataColumns()} FROM vault_items ORDER BY favorite DESC, title`).all() as VaultItemRow[]);
+      ? (db.prepare(`SELECT ${vaultItemMetadataColumns()} FROM vault_items WHERE kind = ? ORDER BY favorite DESC, title ASC, id ASC`).all(kind) as VaultItemRow[])
+      : (db.prepare(`SELECT ${vaultItemMetadataColumns()} FROM vault_items ORDER BY favorite DESC, title ASC, id ASC`).all() as VaultItemRow[]);
     return rows.map(rowToVaultItemMetadata);
   }
 
@@ -710,7 +710,7 @@ export class LocalStore implements Store {
         SELECT ${vaultItemMetadataColumns()}
         FROM vault_items
         WHERE title LIKE ? OR subtitle LIKE ? OR kind LIKE ? OR domains LIKE ? OR tags LIKE ?
-        ORDER BY favorite DESC, title
+        ORDER BY favorite DESC, title ASC, id ASC
       `)
       .all(q, q, q, q, q) as VaultItemRow[];
     return rows.map(rowToVaultItemMetadata);
@@ -738,8 +738,8 @@ export class LocalStore implements Store {
 
   async listUsers(type?: "human" | "agent"): Promise<User[]> {
     const db = this.db();
-    if (type) return db.prepare("SELECT * FROM users WHERE type = ? ORDER BY name").all(type) as User[];
-    return db.prepare("SELECT * FROM users ORDER BY type, name").all() as User[];
+    if (type) return db.prepare("SELECT * FROM users WHERE type = ? ORDER BY name, id").all(type) as User[];
+    return db.prepare("SELECT * FROM users ORDER BY type, name, id").all() as User[];
   }
 
   async deleteUser(id: string): Promise<boolean> {
@@ -754,9 +754,9 @@ export class LocalStore implements Store {
   async getAuditLog(key?: string, limit = 100): Promise<AuditEntry[]> {
     const db = this.db();
     if (key) {
-      return db.prepare("SELECT * FROM audit_log WHERE key = ? ORDER BY timestamp DESC LIMIT ?").all(key, limit) as AuditEntry[];
+      return db.prepare("SELECT * FROM audit_log WHERE key = ? ORDER BY timestamp DESC, id DESC LIMIT ?").all(key, limit) as AuditEntry[];
     }
-    return db.prepare("SELECT * FROM audit_log ORDER BY timestamp DESC LIMIT ?").all(limit) as AuditEntry[];
+    return db.prepare("SELECT * FROM audit_log ORDER BY timestamp DESC, id DESC LIMIT ?").all(limit) as AuditEntry[];
   }
 
   // ── feedback ───────────────────────────────────────────────────────────────

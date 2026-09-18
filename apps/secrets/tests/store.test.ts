@@ -352,3 +352,25 @@ describe("users", () => {
     expect(await deleteUser("nope")).toBe(false);
   });
 });
+
+describe("stable metadata tie-breakers", () => {
+  it("orders equal-title vault items by id", async () => {
+    await setVaultItem({ id: "item-b", kind: "login", title: "Same", favorite: true, data: {} });
+    await setVaultItem({ id: "item-a", kind: "login", title: "Same", favorite: true, data: {} });
+    expect((await listVaultItemMetadata()).map((item) => item.id)).toEqual(["item-a", "item-b"]);
+  });
+
+  it("orders equal-name users by id", async () => {
+    await registerUser("user-b", "Same", "agent");
+    await registerUser("user-a", "Same", "agent");
+    expect((await listUsers("agent")).map((user) => user.id)).toEqual(["user-a", "user-b"]);
+  });
+
+  it("orders equal-timestamp audit rows by descending id", async () => {
+    await setSecret("tie/a", "one", "other");
+    await setSecret("tie/b", "two", "other");
+    getDb().prepare("UPDATE audit_log SET timestamp = '2026-09-18T00:00:00.000Z'").run();
+    const ids = (await getAuditLog(undefined, 10)).map((entry) => entry.id);
+    expect(ids).toEqual([...ids].sort((left, right) => right - left));
+  });
+});

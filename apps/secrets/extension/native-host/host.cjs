@@ -163,10 +163,11 @@ async function handleSearch(msg) {
   }
   let items;
   try {
-    items = JSON.parse(r.stdout);
-    if (!Array.isArray(items)) throw new Error("not an array");
+    const parsed = JSON.parse(r.stdout);
+    items = Array.isArray(parsed) ? parsed : parsed && Array.isArray(parsed.items) ? parsed.items : null;
+    if (!items) throw new Error("not an array or compact envelope");
   } catch {
-    return { ok: false, error: "E_CLI_OUTPUT: items search returned unparseable output" };
+    return { ok: false, error: "E_CLI_OUTPUT: items search returned neither a legacy array nor a compact envelope" };
   }
   return { ok: true, data: { items } };
 }

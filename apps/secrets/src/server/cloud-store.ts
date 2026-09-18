@@ -638,11 +638,11 @@ export class CloudSecretsStore {
     const cols = "id, kind, title, subtitle, domains, tags, favorite, created_at, updated_at";
     const rows = kind
       ? await this.db.many<VaultRow>(
-          `SELECT ${cols} FROM vault_items WHERE kind = $1 ORDER BY favorite DESC, title`,
+          `SELECT ${cols} FROM vault_items WHERE kind = $1 ORDER BY favorite DESC, title ASC, id ASC`,
           [kind],
         )
       : await this.db.many<VaultRow>(
-          `SELECT ${cols} FROM vault_items ORDER BY favorite DESC, title`,
+          `SELECT ${cols} FROM vault_items ORDER BY favorite DESC, title ASC, id ASC`,
         );
     return rows.map(vaultMeta);
   }
@@ -653,7 +653,7 @@ export class CloudSecretsStore {
     const rows = await this.db.many<VaultRow>(
       `SELECT ${cols} FROM vault_items
        WHERE title ILIKE $1 OR subtitle ILIKE $1 OR kind ILIKE $1 OR domains ILIKE $1 OR tags ILIKE $1
-       ORDER BY favorite DESC, title`,
+       ORDER BY favorite DESC, title ASC, id ASC`,
       [q],
     );
     return rows.map(vaultMeta);
@@ -681,9 +681,9 @@ export class CloudSecretsStore {
 
   async listUsers(type?: "human" | "agent"): Promise<CloudUser[]> {
     if (type) {
-      return this.db.many<CloudUser>("SELECT * FROM users WHERE type = $1 ORDER BY name", [type]);
+      return this.db.many<CloudUser>("SELECT * FROM users WHERE type = $1 ORDER BY name, id", [type]);
     }
-    return this.db.many<CloudUser>("SELECT * FROM users ORDER BY type, name");
+    return this.db.many<CloudUser>("SELECT * FROM users ORDER BY type, name, id");
   }
 
   async deleteUser(id: string): Promise<boolean> {
@@ -694,9 +694,9 @@ export class CloudSecretsStore {
   // ---- audit ----
   async getAuditLog(key: string | undefined, limit = 50): Promise<Array<{ id: number; action: string; key: string; agent: string; timestamp: string }>> {
     if (key) {
-      return this.db.many("SELECT * FROM audit_log WHERE key = $1 ORDER BY timestamp DESC LIMIT $2", [key, limit]);
+      return this.db.many("SELECT * FROM audit_log WHERE key = $1 ORDER BY timestamp DESC, id DESC LIMIT $2", [key, limit]);
     }
-    return this.db.many("SELECT * FROM audit_log ORDER BY timestamp DESC LIMIT $1", [limit]);
+    return this.db.many("SELECT * FROM audit_log ORDER BY timestamp DESC, id DESC LIMIT $1", [limit]);
   }
 
   // ---- feedback ----

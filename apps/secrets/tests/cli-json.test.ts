@@ -46,8 +46,8 @@ describe("CLI --json output", () => {
     expect(res.exitCode).toBe(0);
 
     const parsed = JSON.parse(res.stdout);
-    expect(Array.isArray(parsed)).toBe(true);
-    expect(parsed.some((e: any) => e.key === "svc/token")).toBe(true);
+    expect(parsed).toMatchObject({ count: 1, total: 1, compact: true, has_more: false });
+    expect(parsed.items.some((e: any) => e.key === "svc/token")).toBe(true);
     // Redaction is preserved — no plaintext value leaks into the JSON.
     expect(res.stdout).not.toContain("val-1");
   });
@@ -59,8 +59,8 @@ describe("CLI --json output", () => {
     expect(res.exitCode).toBe(0);
 
     const parsed = JSON.parse(res.stdout);
-    expect(Array.isArray(parsed)).toBe(true);
-    expect(parsed.some((e: any) => e.key === "svc/token")).toBe(true);
+    expect(parsed).toMatchObject({ count: 1, total: 1, compact: true });
+    expect(parsed.items.some((e: any) => e.key === "svc/token")).toBe(true);
   });
 
   it("secrets audit --json emits parseable JSON", () => {
@@ -70,7 +70,9 @@ describe("CLI --json output", () => {
     expect(res.exitCode).toBe(0);
 
     const parsed = JSON.parse(res.stdout);
-    expect(Array.isArray(parsed)).toBe(true);
+    expect(parsed).toMatchObject({ compact: true, has_more: false, sort: { fields: ["timestamp", "id"], directions: ["desc", "desc"] } });
+    expect(parsed.count).toBeGreaterThanOrEqual(1);
+    expect(Array.isArray(parsed.items)).toBe(true);
   });
 
   it("secrets items list --json emits parseable JSON", () => {
@@ -93,8 +95,8 @@ describe("CLI --json output", () => {
     expect(res.exitCode).toBe(0);
 
     const parsed = JSON.parse(res.stdout);
-    expect(Array.isArray(parsed)).toBe(true);
-    expect(parsed.some((i: any) => i.title === "Example")).toBe(true);
+    expect(parsed).toMatchObject({ count: 1, total: 1, compact: true, sort: { fields: ["favorite", "title", "id"], directions: ["desc", "asc", "asc"] } });
+    expect(parsed.items.some((i: any) => i.title === "Example")).toBe(true);
     // metadata listing must not carry the login password
     expect(res.stdout).not.toContain("hunter2");
   });
@@ -106,13 +108,13 @@ describe("CLI --json output", () => {
     expect(res.exitCode).toBe(0);
 
     const parsed = JSON.parse(res.stdout);
-    expect(Array.isArray(parsed)).toBe(true);
-    expect(parsed.some((u: any) => u.id === "agent-1")).toBe(true);
+    expect(parsed).toMatchObject({ count: 1, total: 1, compact: true, sort: { fields: ["type", "name", "id"], directions: ["asc", "asc", "asc"] } });
+    expect(parsed.items.some((u: any) => u.id === "agent-1")).toBe(true);
   });
 
-  it("secrets list --json returns an empty array for an empty vault", () => {
+  it("secrets list --json returns an empty compact page for an empty vault", () => {
     const res = runSecrets(["list", "--json"]);
     expect(res.exitCode).toBe(0);
-    expect(JSON.parse(res.stdout)).toEqual([]);
+    expect(JSON.parse(res.stdout)).toMatchObject({ items: [], count: 0, total: 0, has_more: false, compact: true });
   });
 });
