@@ -5,6 +5,8 @@ import chalk from "chalk";
 import { createInterface } from "readline";
 import { getAuthConfig, getAuthIdentity, saveAuthConfig, clearAuthConfig, getApiUrl, getAuthFilePath } from "../../lib/auth-store.js";
 import { resolveSkillsFleet, resolveSkillsConnection, SkillsFleetCredentialError, SKILLS_API_KEY_ENV, SKILLS_API_URL_ENV } from "../../lib/fleet-credentials.js";
+import { RemoteSkillsClient } from "../../lib/remote-client.js";
+import type { RemoteSkillsAccess } from "../../lib/remote-permissions.js";
 
 
 const isTTY = process.stdin.isTTY && process.stdout.isTTY;
@@ -143,6 +145,12 @@ function printWhoami(payload: Record<string, unknown>): void {
   if (payload.role) console.log(chalk.bold("Role:   ") + payload.role);
   if (payload.organizationName) console.log(chalk.bold("Name:   ") + payload.organizationName);
   if (payload.authSource) console.log(chalk.dim(`Auth:   ${payload.authSource}`));
+  const permissions = recordField(payload.permissions);
+  if (permissions) {
+    const label = (value: unknown) => value === true ? "allowed" : value === false ? "denied" : "unknown";
+    console.log(`Publish: ${label(permissions.publish)}`);
+    console.log(`Profiles write: ${label(permissions.profilesWrite)}`);
+  }
   if (payload.offline) console.log(chalk.dim("(offline — showing cached info)"));
 }
 
@@ -605,6 +613,11 @@ export function registerAuth(parent: Command) {
           headers: { Authorization: `Bearer ${fleet.apiKey}` },
         }, fleet.apiOrigin);
         const payload = authIdentityPayload(authSource, res, cached);
+        let access: RemoteSkillsAccess | undefined;
+        try { access = await new RemoteSkillsClient(fleet.apiKey, fleet.apiOrigin).getCapabilities(); }
+        catch { /* Identity can succeed while an older or unavailable API cannot report access. */ }
+        payload.permissions = { publish: access?.permissions?.publish ?? null, profilesWrite: access?.permissions?.profilesWrite ?? null };
+        if (access?.scopes) payload.scopes = access.scopes;
         if (options.json) {
           console.log(JSON.stringify(payload, null, 2));
         } else {
@@ -613,6 +626,7 @@ export function registerAuth(parent: Command) {
       } catch (err) {
         if (cached && Object.keys(cached).length > 0 && !(err instanceof HostedApiError && err.status !== undefined && err.status < 500)) {
           const payload = authIdentityPayload(authSource, {}, cached, true);
+          payload.permissions = { publish: null, profilesWrite: null };
           if (options.json) console.log(JSON.stringify(payload, null, 2));
           else printWhoami(payload);
           return;

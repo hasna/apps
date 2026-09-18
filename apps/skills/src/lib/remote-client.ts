@@ -21,6 +21,7 @@ import { creditCount, runQuoteReceipt, parseRemoteBillingStatus, parseRemoteChec
 import { describeRemoteFiles, readBoundedResponse, sha256, MAX_REMOTE_FILE_BYTES, type RemoteInputFile, type RemoteInputFileDescriptor } from "./remote-files.js";
 import { customerNamePatch, parseUpdatedProfile, parseUpdatedWorkspace, type UpdateRemoteProfile, type UpdateRemoteWorkspace } from "./remote-profile.js";
 import { quoteUnavailableMessages, readQuoteUnavailableCode, type RemoteQuoteUnavailableCode } from "./remote-quote-errors.js";
+import { parseSkillsAccess, assertSkillsPermission, type RemoteSkillsAccess } from "./remote-permissions.js";
 export type { RemoteQuoteUnavailableCode } from "./remote-quote-errors.js";
 
 /**
@@ -140,7 +141,7 @@ export interface UpdatedSincePage {
 export class RemoteSkillsClient {
   private apiUrl: string;
   private apiKey: string;
-  private capabilities?: Promise<{ contractVersion: 1; apiVersion: 1; capabilities: string[]; billing?: { boundedRunApproval?: boolean; unit?: string }; recurringConsents?: RecurringCapability }>;
+  private capabilities?: Promise<RemoteSkillsAccess & { contractVersion: 1; apiVersion: 1; capabilities: string[]; billing?: { boundedRunApproval?: boolean; unit?: string }; recurringConsents?: RecurringCapability }>;
 
   constructor(apiKey: string, apiUrl = getApiUrl()) {
     this.apiKey = apiKey;
@@ -278,13 +279,18 @@ export class RemoteSkillsClient {
     return parseRemoteRunQuote(await response.json());
   }
 
-  getCapabilities() {
-    if (!this.capabilities) this.capabilities = (async () => {
-      const value = await (await this.requestNewRoute("/api/v1/capabilities")).json() as Record<string, unknown>;
+  getCapabilities(options: { refresh?: boolean } = {}) {
+    if (!this.capabilities || options.refresh) this.capabilities = (async () => {
+      const response = await this.requestNewRoute("/api/v1/capabilities");
+      let value: Record<string, unknown>;
+      try {
+        value = await response.json() as Record<string, unknown>;
+        if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error();
+      } catch { throw new Error("Invalid Skills capability response"); }
       if (value.contractVersion !== 1 || value.apiVersion !== 1 || !Array.isArray(value.capabilities) || value.capabilities.some(item => typeof item !== "string")) throw new Error("Unsupported Skills server capability contract");
       const billing = value.billing as { boundedRunApproval?: boolean; unit?: string } | undefined;
       const recurringConsents = parseRecurringCapability(value.recurringConsents);
-      return { contractVersion: 1 as const, apiVersion: 1 as const, capabilities: value.capabilities as string[], ...(billing ? { billing } : {}), ...(recurringConsents ? { recurringConsents } : {}) };
+      return { contractVersion: 1 as const, apiVersion: 1 as const, capabilities: value.capabilities as string[], ...parseSkillsAccess(value), ...(billing ? { billing } : {}), ...(recurringConsents ? { recurringConsents } : {}) };
     })();
     return this.capabilities;
   }
@@ -715,6 +721,14 @@ export class RemoteSkillsClient {
    * is how a push never silently overwrites a newer remote revision.
    */
   async publishSkill(manifest: Record<string, unknown>, bundle?: Uint8Array, ifMatch?: string): Promise<Response> {
+    try {
+      assertSkillsPermission(await this.getCapabilities({ refresh: true }), "publish");
+    } catch (error) {
+      // Older instances may predate the capabilities route entirely. Preserve
+      // their server-authorized publish path; authentication/transport errors
+      // and malformed or explicit permission refusals are never bypassed.
+      if (!(error instanceof RemoteRouteUnsupportedError)) throw error;
+    }
     const form = new FormData();
     form.set("manifest", JSON.stringify(manifest));
     if (bundle) {

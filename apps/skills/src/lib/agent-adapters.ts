@@ -1,5 +1,9 @@
 export const INTEGRATION_AGENTS = ["claude", "codex", "gemini", "opencode", "cursor", "hermes"] as const;
 export type IntegrationAgent = typeof INTEGRATION_AGENTS[number];
+export function renderAgentHookCommand(command: string, agent: IntegrationAgent, profileId: string, event: string): string {
+  if (typeof profileId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(profileId) || profileId.includes("..")) throw new Error("Invalid selection profile id");
+  return `'${command.replace(/'/g, `'\\''`)}' hook user-prompt --agent ${agent} --selection-profile ${profileId} --event ${event}`;
+}
 export const AGENT_ADAPTERS = {
   claude: { root: ".claude/skills", config: ".claude/settings.json", events: ["UserPromptSubmit", "SessionStart", "SubagentStart"], promptContext: true },
   codex: { root: ".codex/skills", config: ".codex/hooks.json", events: ["UserPromptSubmit", "SessionStart", "SubagentStart"], promptContext: true },

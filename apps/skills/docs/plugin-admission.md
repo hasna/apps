@@ -1,9 +1,10 @@
 # Reviewed plugin admission
 
 `skills integration plugin` prepares a plugin before a coding agent discovers
-it. The projection, target and binding contracts use schema version 1; admission
-plans and receipts use schema version 2. Claude command sources use `copy` mode, certified against
-Claude 2.1.274. It removes native skill and command prompts while preserving
+it. Projection contracts support schema versions 1 and 2; target and binding
+contracts use schema version 1, and admission plans and receipts use schema
+version 2. Claude command sources use `copy` mode, certified against
+Claude 2.1.274 and 2.1.276 on Linux ARM64. It removes native skill and command prompts while preserving
 reviewed agents, tools, MCP, LSP, hooks and assets. Prompt hooks enforce drift;
 they do not clean an already loaded plugin catalog.
 
@@ -21,7 +22,7 @@ instruction and package metadata outside that tree. Select the integration
 bundle and all its mapped payload versions in a dedicated integration profile.
 These operations do not silently publish or change a selection profile.
 
-The exported `PluginProjectionManifest` is the strict version 1 contract:
+The exported `PluginProjectionManifest` retains this strict version 1 contract:
 
 | Field | Meaning |
 | --- | --- |
@@ -32,6 +33,27 @@ The exported `PluginProjectionManifest` is the strict version 1 contract:
 | `review.dependencies` | `"reviewed-no-retired-payload-dependency"` |
 | `payloads` | Every original skill and command prompt, with source path, kind, source digest and exact hosted target slug/version/bundle digest |
 
+Schema version 2 also supports original manifests that omit `version`. It uses
+`upstream.version: null`, requires a full lowercase 40- or 64-character Git
+commit in `upstream.revision`, and still binds the complete original tree digest.
+A null version refuses an original manifest with any `version` field, including
+null or an empty string. A declared version must still match exactly. No vendor
+version is invented or written into the projection. Claude's command-copy cache
+uses a bare 12-character content hash when the manifest has no version; declared
+versions retain their version-plus-hash form. Both forms require the exact
+admitted producer receipt and complete file witnesses.
+
+Version 2 requires `review.documentation`, an array containing zero or one
+`{ path, sourceDigest }` entries. Only an exact root `README.md` (case-insensitive
+spelling), with mode 0644 and its one-file tree digest, can be declared inert
+documentation. Its original bytes may describe a retired prompt. The exception
+refuses a README selected by a native component, referenced by native configuration,
+or referenced by another retained text file. Other Markdown, including agents,
+keeps the strict removed-file and native skill-preload checks. An undeclared README
+also keeps those checks. This explicit review does not certify arbitrary dynamic
+runtime behavior: dependency review must still establish that the README is not
+an indirect runtime input. Version 1 gains no documentation exception.
+
 `pluginTreeDigest(entries)` hashes sorted file witnesses: path, normalized mode,
 size and SHA-256. A payload's `sourceDigest` is that function applied to its
 single original file. The source is preserved byte-for-byte in the private
@@ -41,7 +63,7 @@ covered. Custom skill trees are removed, including their support files. The
 only rewritten ordinary file is the plugin manifest when its `skills` or
 `commands` declarations need removal.
 
-Overlapping ordinary components, references to removed files, native agent
+Overlapping ordinary components, runtime references to removed files, native agent
 skill preloads, unsupported manifest fields and upstream package installation
 requirements refuse admission. Review must cover indirect/dynamic dependencies
 as well as the direct references checked by software. Admission never executes
@@ -109,7 +131,7 @@ Registration and activation remain explicit operations. Review the command
 shown by Claude's JSON install/update response and pass its exact
 `--accept-command` hash; never substitute blanket approval. Command-source
 support begins at 2.1.229 and exact CLI acceptance at 2.1.271, but version 1
-certifies 2.1.274 only. Claude invokes the source during installation and updates;
+certifies 2.1.274 and 2.1.276. Claude invokes the source during installation and updates;
 this does not imply a resolver invocation on every agent startup. This command does not upgrade Claude, register a
 marketplace, change native settings, disable other plugins or restart agents.
 
@@ -128,7 +150,7 @@ Only these managed row fields can vary after validation: `version`,
 Every current row must match its own producer receipt and exact reviewed scope.
 All retained native cache versions must match approved immutable projections,
 including their command files, ordinary components, paths, modes and membership.
-The native 2.1.274 adapter separately validates root `.in_use/<pid>` process
+The certified native adapter separately validates root `.in_use/<pid>` process
 markers and `.orphaned_at` epoch-millisecond pruning markers. These bounded
 metadata records cannot authorize content, and cannot come from the original
 package. Links, unknown keys, payload files and nested directories still refuse.
@@ -150,7 +172,9 @@ history, and exact unmanaged registry coverage. Synthetic native tests exercise
 actual Claude with a disposable home and loopback mock authority in a separate
 network namespace. They contact no real provider and require explicit opt-in:
 `SKILLS_TEST_CLAUDE_BIN`, `SKILLS_TEST_CLAUDE_SHA256` (reviewed native executable
-digest) and `SKILLS_TEST_NETWORK_ISOLATED=1`. Before native execution, the test
+digest), `SKILLS_TEST_CLAUDE_VERSION` (defaults to 2.1.274), and
+`SKILLS_TEST_NETWORK_ISOLATED=1`. Both versioned and versionless upstream
+manifests run through install, unchanged and changed updates, refusal and drift checks. Before native execution, the test
 checks the source before/after copying, complete copied digest, size and ELF
 format, then atomically publishes its private executable fixture.
 

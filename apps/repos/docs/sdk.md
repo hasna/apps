@@ -38,6 +38,7 @@ not listed here are not part of the package-root API.
 | Worktrees | `WORKTREE_LEASE_SCHEMA`, `WORKTREE_LIST_SCHEMA`, `WORKTREE_ADOPT_SCHEMA`, `WorktreeError`, `worktreeRootDir`, `assertWorktreeName`, `computeWorktreePath`, `parseWorktreeRef`, `addWorktree`, `listWorktrees`, `removeWorktree`, `adoptWorktrees`, `releaseWorktree`, `redactGitDiagnostics`, `WORKTREE_NORMALIZE_SCHEMA`, `normalizeWorktree` |
 | Repository lifecycle | `REPO_CREATE_SCHEMA`, `REPO_CLONE_SCHEMA`, `REPO_ARCHIVE_SCHEMA`, `RepoLifecycleError`, `parseRepoSpec`, `isRepoSpec`, `createRepository`, `cloneRepository`, `archiveRepository`, `redactRepoLifecycleText` |
 | Registry relocation | `PrimaryRelocationError`, `relocatePrimaryRepo` |
+| Existing checkout registration | `REGISTRY_REGISTER_SCHEMA`, `RegistryRegisterError`, `registerRepository` |
 | Branch adjudication | `BranchAdjudicationError`, `adjudicateBranches` |
 | Local ops | `getPackageHealth`, `getPackageDrift`, `getManifestDependents`, `resolvePackageBin`, `scanPorts`, `triageBranches`, `triagePullRequests`, `getDocsDrift`, `getReleaseHealth`, `getReleasePipelineParity`, `withTodos` |
 | Loop producers | `buildPrQueue`, `runGlobalCliSmoke`, `inspectPackageHygiene`, `buildReleaseCandidates`, `buildDocsRulesDrift`, `buildDependencyRefresh`, `buildWorkspaceWorktreeHygiene`, `buildTaskRouteHealth`, `buildProtectedRelease`, `buildReleasePipelineParity` |
@@ -156,6 +157,15 @@ over matching message text.
   lease ID, `<repo>/<worktree>` or `<org>/<repo>/<worktree>` reference.
 - Repository lifecycle functions use station-owned GitHub credentials just like
   their CLI equivalents.
+- `registerRepository` plans one standalone checkout registration in the existing
+  normally resolved registry. Its `RegistryRegisterRequest` binds `path`,
+  `expectedRemote`, `expectedHead`, and `expectedBranch`; applying also requires
+  `apply: true`, `expectedDatabasePath`, and the reviewed `expectedPlanHash`.
+  The `RegistryRegisterResult` reports the exact planned row and whether it was
+  inserted or already present. Matching rows remain unchanged. Relevant active
+  leases, conflicting rows, path aliases and checkout drift refuse registration.
+  This API does not establish inactivity or worktree cleanliness; it performs
+  no bootstrap, schema migration, hooks, scanning, remote sync or row merging.
 - `relocatePrimaryRepo` and `adjudicateBranches` are dry-run/apply APIs that
   require reviewed plan hashes for apply and persist audit receipts.
 - `cleanupRemoteIdentities` requires an explicit remote database, actor, and

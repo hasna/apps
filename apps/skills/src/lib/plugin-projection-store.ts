@@ -92,7 +92,7 @@ function directoryNames(path: string): string[] {
 }
 
 /** Snapshot every file, rejecting empty directories and any membership or metadata change. */
-export function snapshotPluginTree(root: string, options: { nativeRuntime?: "claude-2.1.274" } = {}): SkillBundleEntry[] {
+export function snapshotPluginTree(root: string, options: { nativeRuntime?: "claude-2.1.274" | "claude-2.1.276" } = {}): SkillBundleEntry[] {
   const chain = ancestors(root), entries: SkillBundleEntry[] = [], files: Witness[] = [], directories: Array<Witness & { names: string[] }> = [];
   let bytes = 0, visited = 0;
   const visit = (directory: string, relative: string): void => {
@@ -105,15 +105,15 @@ export function snapshotPluginTree(root: string, options: { nativeRuntime?: "cla
       const path = relative ? `${relative}/${name}` : name;
       pluginNeed(new TextEncoder().encode(path).byteLength <= 100 && !/[\\:\x00-\x1f\x7f]/u.test(path), "Plugin entry path exceeds its limit or is unsafe");
       const absolute = join(directory, name), entryStat = stat(absolute); pluginNeed(entryStat, "Plugin tree member disappeared");
-      if (relative === "" && name === ".orphaned_at" && options.nativeRuntime === "claude-2.1.274") {
-        // Native 2.1.274 marks retained historical versions for later pruning.
+      if (relative === "" && name === ".orphaned_at" && (options.nativeRuntime === "claude-2.1.274" || options.nativeRuntime === "claude-2.1.276")) {
+        // Certified native runtimes mark retained historical versions for later pruning.
         // Its timestamp and process pins never authorize package content.
         const bytes = readBytes(absolute, 32, "native-pin");
         pluginNeed(/^[1-9][0-9]{12}$/.test(new TextDecoder().decode(bytes)), "Malformed native orphan timestamp");
         same(entryStat, stat(absolute)); files.push({ path: absolute, stat: entryStat }); continue;
       }
-      if (relative === "" && name === ".in_use" && options.nativeRuntime === "claude-2.1.274") {
-        // Native 2.1.274 pins cache versions with .in_use/<pid> JSON files. This
+      if (relative === "" && name === ".in_use" && (options.nativeRuntime === "claude-2.1.274" || options.nativeRuntime === "claude-2.1.276")) {
+        // Certified native runtimes pin cache versions with .in_use/<pid> JSON files. This
         // typed exception is unavailable for Skills-owned producer trees.
         pluginNeed(entryStat.isDirectory() && !entryStat.isSymbolicLink(), "Native plugin pins require a real directory"); owner(entryStat);
         const pins = directoryNames(absolute); pluginNeed(pins.length <= 1024, "Native plugin pin count exceeds its limit");

@@ -92,6 +92,13 @@ before synchronization or context loading. Review the hook installation and
 restart the native client to load its current commands. Explicit `skills load`,
 `skills context`, and `skills sync` commands can still select other profiles.
 
+Reinstalling hooks without `--command` or `--selection-profile` preserves each
+agent's existing executable and profile independently, including when using
+`--agent all`. New agents use `skills` and `default`. Either explicit flag
+overrides that choice for the requested agents. The policy's shared default
+profile changes only when `--selection-profile` is supplied; older managed
+agents without a per-agent profile retain that shared default.
+
 The hook install `--include-vendor` option is retained for compatibility with
 older scripts. Hook planning always inventories and disables discovered vendor
 system skills; use `migrate native --include-vendor` when retiring their
@@ -102,6 +109,24 @@ trust to the installed hook definitions before starting a new session. Then
 request a selected skill in a prompt, for example `Use $pdf-generate to create
 a PDF`. The hooks supply instructions; executing the skill remains a separate
 explicit action.
+
+For Codex 0.153.0, 0.154.0, and 0.155.0, the normal installed Skills CLI can
+plan native trust for its three exact managed hook definitions:
+
+```bash
+skills hook trust --agent codex --json
+skills hook trust --agent codex --apply --plan-digest <reviewed-plan-digest> --json
+```
+
+Review the commands, current hashes, and existing trust/enable state in the
+plan. Apply refuses if the plan, package, declarations, or configuration changed.
+It enrolls the current exact definitions, including reviewed modified hooks,
+and preserves unrelated trust, settings, and comments. A private journal keeps
+the pre-write configuration; a failed write or verification requires journal
+reconciliation before retry. Unsupported versions or configuration layouts
+refuse without a configuration write. Enrollment uses a short-lived native
+app-server and makes hooks eligible for new Codex processes. Existing sessions
+retain their own configuration; use their native hook controls to refresh them.
 
 Each supported agent gets one small `skills-cli` native skill containing CLI
 instructions, without a copied catalogue. Claude's native Skill tool admits
@@ -355,6 +380,24 @@ writes use compare-and-swap revisions. Station receipts belong to the workspace,
 user and stable station ID, so rotating a key does not create a new station.
 Consumers need `skills:read` and `stations:write`; profile publishers need
 `skills:write`. Key scopes apply even to workspace owners.
+
+`skills auth whoami --json` reports the current credential's effective
+`permissions.publish` and `permissions.profilesWrite`, alongside its account
+role and advertised scopes. Human output labels each permission `allowed`,
+`denied`, or `unknown`; JSON uses `null` for unknown access. An owner role alone
+does not grant either permission. `skills capabilities --json` and the SDK's
+`getCapabilities()` also retain the server's typed permission and scope fields.
+
+Before sending a bundle, `push` and `RemoteSkillsClient.publishSkill()` read
+fresh capabilities and stop on an explicit publication denial. `profiles set`
+similarly stops before a profile write. The refusal reports
+`SKILLS_PERMISSION_DENIED` with the affected permission and guidance to obtain
+an authorized credential; it never changes credentials or their scopes.
+Servers that omit permissions (or predate the capabilities route) retain their
+existing server-authorized write behavior, with access displayed as unknown.
+Authentication failures and malformed permission responses do not bypass the
+preflight. `push --dry-run` remains a local packing check and does not check
+hosted publication access.
 
 `--selection-profile` chooses the shared skill selection. The top-level
 `--profile` option chooses an isolated credential file; these are separate
