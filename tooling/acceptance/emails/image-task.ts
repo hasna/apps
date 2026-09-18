@@ -10,6 +10,7 @@ const { emailsSelfHostedMigrations } = await import("/app/src/server/self-hosted
 const migrations = emailsSelfHostedMigrations();
 const inventory = Object.fromEntries(migrations.map((row: any) => [row.id, row.checksum]));
 let client: any;
+let stage = "START";
 async function database() {
   client = storage.createQueryClient(storage.createPgPool({ connectionString: input.database_url, env: { PGSSLMODE: "disable" } }));
   return client;
@@ -20,7 +21,9 @@ async function run() {
     version: JSON.parse(readFileSync("/app/package.json", "utf8")).version, bun_version: Bun.version };
   const db = await database();
   if (input.action === "bootstrap") {
+    stage = "MIGRATE";
     await new storage.MigrationLedger(db, migrations).migrate();
+    stage = "CREATE_ROLE";
     check(/^[a-f0-9]{64}$/.test(input.runtime_password), "SYNTHETIC_PASSWORD_FORMAT");
     await db.execute(`CREATE ROLE pair_runtime LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD '${input.runtime_password}'`);
     await db.execute("GRANT CONNECT ON DATABASE pair_fixture TO pair_runtime");
@@ -31,10 +34,15 @@ async function run() {
     const { issueSelfHostedApiKey } = await import("/app/src/server/self-hosted/keys.ts");
     const tenants = [];
     for (const letter of ["a", "b"]) {
+      stage = "INSERT_TENANT";
       const tenant = await db.one("INSERT INTO tenants(slug,name) VALUES($1,$1) RETURNING id", [`pair-${letter}`]);
+      stage = "ISSUE_KEY";
       const minted = await issueSelfHostedApiKey(new ApiKeyStore(db), input.signing_secret, { agent: "isolated-acceptance" });
+      stage = "BIND_KEY";
       await db.execute("INSERT INTO api_key_tenants(kid,tenant_id) VALUES($1,$2)", [minted.kid, tenant.id]);
+      stage = "INSERT_DOMAIN";
       await db.execute("INSERT INTO domains(id,domain,status,verified,tenant_id) VALUES($1,$2,'verified',true,$3)", [`pair-domain-${letter}`, `${letter}.example.test`, tenant.id]);
+      stage = "INSERT_ADDRESS";
       await db.execute("INSERT INTO addresses(id,email,domain,display_name,status,tenant_id) VALUES($1,$2,$3,'Synthetic Sender','active',$4)",
         [`pair-address-${letter}`, `sender@${letter}.example.test`, `${letter}.example.test`, tenant.id]);
       tenants.push({ id: tenant.id, token: minted.token, email: `sender@${letter}.example.test` });
@@ -70,5 +78,10 @@ async function run() {
   throw new Error("TASK_ACTION");
 }
 try { console.log(JSON.stringify(await run())); }
-catch (error) { console.log(JSON.stringify({ error: error instanceof Error && /^[A-Z_]+$/.test(error.message) ? error.message : "IMAGE_TASK_FAILED" })); process.exitCode = 1; }
+catch (error) {
+  const sqlstate = error && typeof error === "object" && "code" in error && typeof error.code === "string" && /^[A-Z0-9]{5}$/.test(error.code) ? `_SQLSTATE_${error.code}` : "";
+  const kind = error instanceof TypeError ? "_TYPE" : error instanceof ReferenceError ? "_REFERENCE" : "";
+  const code = error instanceof Error && /^[A-Z_]+$/.test(error.message) ? error.message : `IMAGE_TASK_${stage}_FAILED${sqlstate}${kind}`;
+  console.log(JSON.stringify({ error: code })); process.exitCode = 1;
+}
 finally { await client?.close(); }

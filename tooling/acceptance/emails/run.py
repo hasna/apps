@@ -8,6 +8,7 @@ import argparse
 import datetime
 import json
 import os
+import re
 from pathlib import Path
 import secrets
 import signal
@@ -105,7 +106,7 @@ class Docker:
             raise Refused("IMAGE_OUTPUT_FORMAT") from None
         if result.returncode or isinstance(value, dict) and "error" in value:
             code = value.get("error") if isinstance(value, dict) else None
-            raise Refused(code if isinstance(code, str) and code.isupper() and code.replace("_", "").isalpha() else "IMAGE_TASK_FAILED")
+            raise Refused(code if isinstance(code, str) and re.fullmatch(r"[A-Z][A-Z0-9_]{0,100}", code) else "IMAGE_TASK_FAILED")
         return value
 
     def stop(self, name):
@@ -253,7 +254,9 @@ class Acceptance:
         self.control("state")
         pg_name = d.start("postgres", self.pair["postgres"]["image"], ["postgres"],
                           {"POSTGRES_DB": "pair_fixture", "POSTGRES_PASSWORD": self.password}, aliases=["pair-db"], postgres=True)
-        wait_for(lambda: d.call("exec", pg_name, "pg_isready", "-U", "postgres", "-d", "pair_fixture", ok=False).returncode,
+        # The official entrypoint temporarily serves only a Unix socket during
+        # initialization; API/worker clients require the final TCP listener.
+        wait_for(lambda: d.call("exec", pg_name, "pg_isready", "-h", "127.0.0.1", "-U", "postgres", "-d", "pair_fixture", ok=False).returncode,
                  lambda code: code == 0, "POSTGRES_NOT_READY")
         self.admin_url = f"postgresql://postgres:{self.password}@pair-db:5432/pair_fixture?sslmode=disable"
         runtime_url = f"postgresql://pair_runtime:{self.runtime_password}@pair-db:5432/pair_fixture?sslmode=disable"
