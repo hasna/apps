@@ -45,6 +45,32 @@
  * it is on the fleet is the false green this whole ruling exists to end.
  */
 
+import {
+  AUDIT_EXPORT_CONTRACT,
+  AUDIT_STATS_CONTRACT,
+  AUDIT_TRAIL_CONTRACT,
+  AuditContractError,
+  auditOperation,
+  canonicalAuditTimestamp,
+  validateAuditPage,
+  validateAuditStats,
+  type AuditEntry,
+  type AuditFilters,
+  type AuditOperation,
+  type AuditPage,
+  type AuditStats,
+} from "../audit-contract.js";
+
+export {
+  AUDIT_EXPORT_CONTRACT as MEMENTOS_AUDIT_EXPORT_CONTRACT,
+  AUDIT_STATS_CONTRACT as MEMENTOS_AUDIT_STATS_CONTRACT,
+  AUDIT_TRAIL_CONTRACT as MEMENTOS_AUDIT_TRAIL_CONTRACT,
+};
+export type MementosAuditEntry = AuditEntry;
+export type MementosAuditOperation = AuditOperation;
+export type MementosAuditPage = AuditPage;
+export type MementosAuditStats = AuditStats;
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -789,6 +815,57 @@ function sdkProtocolError(operation: string, detail: string): MementosError {
 function sessionProtocolError(detail: string): MementosError {
   return sdkProtocolError("session jobs", detail);
 }
+
+function auditSdkError(operation: string, error: unknown): never {
+  if (error instanceof MementosError) throw error;
+  const detail = error instanceof Error ? error.message : String(error);
+  throw sdkProtocolError(operation, detail);
+}
+
+function sdkAuditIdentifier(value: string | undefined, label: string): string | null {
+  if (value === undefined) return null;
+  if (!value || value.length > 512 || /[\u0000-\u001f\u007f]/.test(value)) {
+    throw new AuditContractError(`${label} must be a non-empty printable string of at most 512 characters`);
+  }
+  return value;
+}
+
+function sdkAuditFilters(input: {
+  memory_id?: string;
+  since?: string;
+  until?: string;
+  operation?: string;
+  agent_id?: string;
+}): AuditFilters {
+  const filters: AuditFilters = {
+    memory_id: sdkAuditIdentifier(input.memory_id, "memory_id"),
+    since: input.since === undefined ? null : canonicalAuditTimestamp(input.since, "since"),
+    until: input.until === undefined ? null : canonicalAuditTimestamp(input.until, "until"),
+    operation: input.operation === undefined ? null : auditOperation(input.operation),
+    agent_id: sdkAuditIdentifier(input.agent_id, "agent_id"),
+  };
+  if (filters.since && filters.until && filters.since > filters.until) {
+    throw new AuditContractError("since must not be after until");
+  }
+  return filters;
+}
+
+function sdkAuditCursor(cursor: string | undefined): string | undefined {
+  if (cursor === undefined) return undefined;
+  if (!cursor || cursor.length > 4096 || !/^[A-Za-z0-9_-]+$/.test(cursor)) {
+    throw new AuditContractError("cursor must be a bounded base64url audit cursor");
+  }
+  return cursor;
+}
+
+function sdkAuditLimit(limit: number | undefined): number | undefined {
+  if (limit === undefined) return undefined;
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000) {
+    throw new AuditContractError("limit must be an integer between 1 and 1000");
+  }
+  return limit;
+}
+
 
 function sdkObject(value: unknown, operation: string, field = "response"): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -1783,6 +1860,67 @@ export class MementosClient {
 
   listAgentsByProject(projectId: string): Promise<{ agents: Agent[]; count: number }> {
     return this.get(`/api/agents`, { project_id: projectId });
+  }
+
+  // --------------------------------------------------------------------------
+  // Immutable audit log
+  // --------------------------------------------------------------------------
+
+  async getMemoryAuditTrail(
+    memoryId: string,
+    options: { limit?: number; cursor?: string } = {},
+  ): Promise<MementosAuditPage> {
+    const operation = "GET /v1/memories/:id/audit-trail";
+    try {
+      const filters = sdkAuditFilters({ memory_id: memoryId });
+      const limit = sdkAuditLimit(options.limit);
+      const requestedCursor = sdkAuditCursor(options.cursor);
+      const cursor = requestedCursor ?? null;
+      const response = await this.get<unknown>(
+        `/api/memories/${encodeURIComponent(filters.memory_id!)}/audit-trail`,
+        { limit, cursor: requestedCursor },
+      );
+      return validateAuditPage(response, { contract: AUDIT_TRAIL_CONTRACT, cursor, filters });
+    } catch (error) {
+      return auditSdkError(operation, error);
+    }
+  }
+
+  async exportAuditLog(options: {
+    since?: string;
+    until?: string;
+    operation?: MementosAuditOperation;
+    agent_id?: string;
+    limit?: number;
+    cursor?: string;
+  } = {}): Promise<MementosAuditPage> {
+    const operation = "GET /v1/audit/export";
+    try {
+      const filters = sdkAuditFilters(options);
+      const limit = sdkAuditLimit(options.limit);
+      const requestedCursor = sdkAuditCursor(options.cursor);
+      const cursor = requestedCursor ?? null;
+      const response = await this.get<unknown>("/api/audit/export", {
+        since: filters.since ?? undefined,
+        until: filters.until ?? undefined,
+        operation: filters.operation ?? undefined,
+        agent_id: filters.agent_id ?? undefined,
+        limit,
+        cursor: requestedCursor,
+      });
+      return validateAuditPage(response, { contract: AUDIT_EXPORT_CONTRACT, cursor, filters });
+    } catch (error) {
+      return auditSdkError(operation, error);
+    }
+  }
+
+  async getAuditStats(): Promise<MementosAuditStats> {
+    const operation = "GET /v1/audit/stats";
+    try {
+      return validateAuditStats(await this.get<unknown>("/api/audit/stats"));
+    } catch (error) {
+      return auditSdkError(operation, error);
+    }
   }
 
   // --------------------------------------------------------------------------

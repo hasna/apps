@@ -238,6 +238,32 @@ const scenarios: Record<string, () => Promise<void>> = {
     await expectProtocolRefusal(() => deleteMachine("machine-1"));
   },
 
+  // --- immutable audit log (MCP/client) ---
+  memory_audit_trail: async () => {
+    const { registerMemoryAuditTools } = await import("../../mcp/tools/memory-audit.js");
+    await callTool(registerMemoryAuditTools, "memory_audit_trail", { memory_id: "mem-1", limit: 10, format: "json" });
+  },
+  memory_audit_export: async () => {
+    const { registerMemoryAuditTools } = await import("../../mcp/tools/memory-audit.js");
+    await callTool(registerMemoryAuditTools, "memory_audit_export", { operation: "update", limit: 10, format: "json" });
+  },
+  memory_audit_stats: async () => {
+    const { registerMemoryAuditTools } = await import("../../mcp/tools/memory-audit.js");
+    await callTool(registerMemoryAuditTools, "memory_audit_stats", {});
+  },
+  "malformed-audit-trail": async () => {
+    const { getMemoryAuditTrailPage } = await import("../audit.js");
+    await expectProtocolRefusal(() => getMemoryAuditTrailPage("mem-1", { limit: 10 }));
+  },
+  "malformed-audit-export": async () => {
+    const { exportAuditLogPage } = await import("../audit.js");
+    await expectProtocolRefusal(() => exportAuditLogPage({ operation: "update", limit: 10 }));
+  },
+  "malformed-audit-stats": async () => {
+    const { getAuditStats } = await import("../audit.js");
+    await expectProtocolRefusal(() => getAuditStats());
+  },
+
   // --- memory locks (MCP) ---
   memory_lock: async () => {
     const { registerLockTools } = await import("../../mcp/tools/lock-tools.js");
