@@ -28,7 +28,7 @@ def require(ok, code):
 def require_phase(phase):
     require(phase != "execute", "MIGRATION_EXECUTION_DISABLED")
     require(phase != "prepare", "MIGRATION_PREPARE_DISABLED")
-    require(phase == "reconcile", "PHASE")
+    require(phase in {"image", "reconcile"}, "PHASE")
 
 
 def gh(path):
@@ -176,6 +176,8 @@ def validate(args, destination):
     require(gh(f"repos/{REPO}/git/ref/heads/main")["object"]["sha"] == source, "SUPERSEDED_SOURCE")
     runs = gh(f"repos/{REPO}/actions/workflows/ci.yml/runs?branch=main&event=push&status=completed&head_sha={source}&per_page=100").get("workflow_runs", [])
     require(exact_ci_success(runs, source), "EXACT_MAIN_CI_REQUIRED")
+    if args.phase == "image":
+        return
     if args.phase == "reconcile":
         anchor_input(source, args.anchor_run, args.anchor_sha256, destination / "anchor")
         require(len(args.failed_run) == 2 and len(set(args.failed_run)) == 2, "FAILED_RUN_SET")
@@ -206,7 +208,7 @@ def main():
     else:
         with tempfile.TemporaryDirectory(prefix="emails-migration-gate-") as temporary:
             validate(args, Path(temporary))
-    print("Exact-main reviewed Emails migration admission passed")
+    print("Exact-main Emails image admission passed" if args.phase == "image" else "Exact-main reviewed Emails migration admission passed")
 
 
 if __name__ == "__main__":
