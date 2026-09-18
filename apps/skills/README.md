@@ -103,6 +103,24 @@ request a selected skill in a prompt, for example `Use $pdf-generate to create
 a PDF`. The hooks supply instructions; executing the skill remains a separate
 explicit action.
 
+For Codex 0.153.0, 0.154.0, and 0.155.0, the normal installed Skills CLI can
+plan native trust for its three exact managed hook definitions:
+
+```bash
+skills hook trust --agent codex --json
+skills hook trust --agent codex --apply --plan-digest <reviewed-plan-digest> --json
+```
+
+Review the commands, current hashes, and existing trust/enable state in the
+plan. Apply refuses if the plan, package, declarations, or configuration changed.
+It enrolls the current exact definitions, including reviewed modified hooks,
+and preserves unrelated trust, settings, and comments. A private journal keeps
+the pre-write configuration; a failed write or verification requires journal
+reconciliation before retry. Unsupported versions or configuration layouts
+refuse without a configuration write. Enrollment uses a short-lived native
+app-server and makes hooks eligible for new Codex processes. Existing sessions
+retain their own configuration; use their native hook controls to refresh them.
+
 Each supported agent gets one small `skills-cli` native skill containing CLI
 instructions, without a copied catalogue. Claude's native Skill tool admits
 that bridge after other copies are retired. Prompt guards verify the owned

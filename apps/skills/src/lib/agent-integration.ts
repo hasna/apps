@@ -6,7 +6,7 @@ import { getDataDir, getDataDirReadOnly } from "./config.js";
 import { requiresCliSkillLoading, readManagedSkillPolicySnapshot, serializeManagedSkillPolicy, parseManagedSkillPolicy } from "./managed-policy.js";
 import { CLI_BRIDGE_NAME, CLI_BRIDGE_FILES, CLI_BRIDGE_DIGEST, CLI_BRIDGE_VERSION, isOwnedCliBridge } from "./agent-bridge.js";
 import { assertProjectDiscovery, resolveAgentDiscovery, verifyAgentDiscovery, rebindAgentDiscovery, type AgentDiscoveryBinding, type ReviewedDiscoveryInputs } from "./agent-discovery.js";
-import { AGENT_ADAPTERS, INTEGRATION_AGENTS, renderOpenCodePlugin, type IntegrationAgent } from "./agent-adapters.js";
+import { AGENT_ADAPTERS, INTEGRATION_AGENTS, renderAgentHookCommand, renderOpenCodePlugin, type IntegrationAgent } from "./agent-adapters.js";
 import { assertCodexPathConfigEditable, CODEX_SKILL_CONFIG_SECTIONS, disableCodexBundledSkills } from "./agent-codex.js";
 
 import { HERMES_OPT_OUT, parseHermesConfig, configureHermesHooks, assertHermesProtection, renderHermesSupervisor, assertNoHermesLegacyShadow, type HermesSupervisorBinding } from "./agent-hermes.js";
@@ -229,7 +229,7 @@ function configureHooks(config: Record<string, any>, agent: IntegrationAgent, co
   for (const event of AGENT_ADAPTERS[agent].events) {
     const existing: unknown = config.hooks[event] ?? [];
     if (!Array.isArray(existing)) throw new Error(`Expected ${event} hooks array`);
-    const hookCommand = `${shellQuote(command)} hook user-prompt --agent ${agent} --selection-profile ${profileId} --event ${event}`;
+    const hookCommand = renderAgentHookCommand(command, agent, profileId, event);
     const retained = existing.flatMap((entry: any) => {
       if (agent === "cursor") {
         if (!entry || typeof entry.command !== "string") throw new Error(`Malformed ${event} hook entry`);
@@ -275,7 +275,7 @@ function configureHooks(config: Record<string, any>, agent: IntegrationAgent, co
       const hooks = entry.hooks.filter((hook: any) => !(hook?.type === "command" && typeof hook.command === "string" && /(?:^|\s)hook user-prompt --agent (?:claude|gemini) --selection-profile [A-Za-z0-9._-]+ --event (?:PreToolUse|BeforeTool)$/.test(hook.command)));
       return hooks.length ? [{ ...entry, hooks }] : [];
     });
-    config.hooks[event] = [...retained, { matcher, hooks: [{ type: "command", command: `${shellQuote(command)} hook user-prompt --agent ${agent} --selection-profile ${profileId} --event ${event}`, timeout: agent === "gemini" ? 15000 : 15 }] }];
+    config.hooks[event] = [...retained, { matcher, hooks: [{ type: "command", command: renderAgentHookCommand(command, agent, profileId, event), timeout: agent === "gemini" ? 15000 : 15 }] }];
   }
 }
 

@@ -7,6 +7,7 @@ import { normalizeHermesHookInput, assertHermesTool } from "../../lib/agent-herm
 import { selectedProfileId } from "./context.js";
 import { AGENT_ADAPTERS, INTEGRATION_AGENTS, normalizeAgentHookEvent } from "../../lib/agent-adapters.js";
 import { planAgentIntegration, applyAgentIntegration, inventoryNativeSkills, archiveNativeSkills, assertManagedAgentBridge, hookContextOutput, normalizeAgentHookPrompt, type IntegrationAgent } from "../../lib/agent-integration.js";
+import { enrollCodexNativeHooks } from "../../lib/agent-codex-trust.js";
 
 const RECOVERABLE_CONTEXT_CACHE_ERRORS = new Set(["CACHED_PROFILE_EXPIRED", "CACHED_PROFILE_MISSING", "CACHED_BUNDLE_MISSING"]);
 
@@ -67,6 +68,24 @@ export function registerAgentIntegration(parent: Command): void {
         const receipt = { applied: options.apply, planned: plan.changes.map(change => change.path), ...result, rootAliases: plan.rootAliases ?? [], discovery: plan.discoveryAfter, nativeSkills: plan.nativeSkills.map(entry => ({ agent: entry.agent, path: entry.path, managed: entry.managed, vendor: entry.vendor, system: entry.system === true, bridge: entry.bridge === true })), requiresNativeRetirement: plan.nativeSkills.some(entry => !entry.bridge && !entry.system) };
         if (options.json) await writeCliOutput(JSON.stringify(receipt));
         else await writeCliOutput(`${options.apply ? "Configured" : "Planned"} ${plan.changes.length} agent configuration change(s).${options.apply ? " Restart the agent and trust the installed hook configuration." : " Use --apply to install."}`);
+      } catch (error) { console.error((error as Error).message); process.exitCode = 1; }
+    });
+
+  hook.command("trust")
+    .requiredOption("--agent <agent>", "Native trust adapter (codex)")
+    .option("--codex-command <path>", "Installed Codex executable used for its native configuration API", "codex")
+    .option("--apply", "Enable and trust only the exact managed Skills hook identities", false)
+    .option("--plan-digest <sha256>", "Exact reviewed dry-run digest required with --apply")
+    .option("--json", "Output the native trust plan or receipt", false)
+    .description("Plan or enroll exact Skills hooks through Codex native trust controls")
+    .action(async (options) => {
+      try {
+        if (options.agent !== "codex") throw new Error("Native trust enrollment currently supports --agent codex only");
+        const result = await enrollCodexNativeHooks({ codexCommand: options.codexCommand, apply: options.apply, reviewedPlanDigest: options.planDigest });
+        if (options.json) await writeCliOutput(JSON.stringify(result));
+        else await writeCliOutput(result.applied
+          ? `Enrolled ${result.planned.length} Skills hook(s) for new Codex processes. Existing sessions were not reloaded; use their native hook controls.`
+          : result.planned.length ? `Planned ${result.planned.length} native hook trust change(s). Review the --json plan, then use --apply --plan-digest ${result.planDigest}.` : "The managed Skills hooks are enabled and trusted for new Codex processes. Existing session dispatch was not checked.");
       } catch (error) { console.error((error as Error).message); process.exitCode = 1; }
     });
 
