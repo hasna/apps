@@ -146,17 +146,26 @@ API routes use bearer/API-key authentication when configured. See the
 
 ## Storage
 
-### Local clients
+### Client storage selection
 
-SQLite is authoritative by default. Database selection order is:
+The hosted Mementos API is the ordinary client default. The CLI, MCP server,
+and SDK resolve the hosted credential and authority chain described below; if
+no hosted credential resolves, client data commands fail closed rather than
+opening or creating SQLite automatically.
 
-1. `HASNA_MEMENTOS_DB_PATH` or `MEMENTOS_DB_PATH`.
-2. The nearest existing `.mementos/mementos.db` walking up from the current directory.
-3. Git-root `.mementos/mementos.db` when `MEMENTOS_DB_SCOPE=project`.
-4. `~/.hasna/mementos/mementos.db`.
+SQLite is available only through an explicit local opt-in:
 
-Legacy `~/.mementos` data is copied to `~/.hasna/mementos` when the new directory
-does not yet exist.
+```bash
+# Use the standard local data root (~/.hasna/mementos/mementos.db).
+export HASNA_MEMENTOS_LOCAL=1
+
+# Or select one exact SQLite file explicitly.
+export HASNA_MEMENTOS_DB_PATH=/absolute/path/to/mementos.db
+```
+
+`MEMENTOS_LOCAL=1` and `MEMENTOS_DB_PATH` are compatibility aliases. Legacy
+`~/.mementos` data is considered for migration only after local mode has been
+selected explicitly; it is never an automatic client fallback.
 
 ### Server backend and HTTP clients
 
