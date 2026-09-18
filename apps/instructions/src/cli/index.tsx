@@ -4,6 +4,7 @@ import { program } from "commander";
 import chalk from "chalk";
 import { existsSync, lstatSync, mkdirSync, readFileSync, readSync, renameSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { homedir } from "node:os";
+import { discoverHarnesses, DISCOVERABLE_HARNESSES, type HarnessDiscoveryOptions, type DiscoverableHarness } from "../lib/harness-discovery.js";
 import { basename, dirname, join, resolve } from "node:path";
 import { applyConfigsWithReport, compactPathForConfigHome, expandPath, normalizeTargetPath } from "../lib/apply.js";
 import { findConfigsByTargetPath, findDuplicateTargetPathGroups, findReferenceConfigsByName, findDuplicateReferenceNameGroups } from "../lib/config-target-identity.js";
@@ -1962,6 +1963,41 @@ sessionCmd.command("restore <snapshot>")
     } catch (error) {
       console.error(chalk.red(error instanceof Error ? error.message : String(error)));
       process.exit(1);
+    }
+  });
+
+// Read-only native harness inventory; never selects an application store.
+program.command("harness")
+  .description("Inspect native harness installations and portable path inputs")
+  .command("discover")
+  .description("Read paths without running harnesses, reading prompt bodies, or changing configuration")
+  .option("--owner-home <path>", "explicit owner home; otherwise HOME, USERPROFILE, then OS home")
+  .option("--project-root <path>", "separate repository scope; never redirects global configuration")
+  .option("--executable <tool=path>", "explicit executable path; repeat per harness", (value: string, previous: string[]) => [...previous, value], [])
+  .option("--config-dir <tool=path>", "reviewed native config root; repeat per harness", (value: string, previous: string[]) => [...previous, value], [])
+  .option("--json", "output the versioned discovery receipt")
+  .action((opts) => {
+    try {
+      const overrides: NonNullable<HarnessDiscoveryOptions["overrides"]> = {};
+      for (const [key, inputs] of [["executable", opts.executable], ["configDir", opts.configDir]] as const) {
+        for (const input of inputs as string[]) {
+          const separator = input.indexOf("=");
+          const tool = input.slice(0, separator) as DiscoverableHarness;
+          if (separator < 1 || !DISCOVERABLE_HARNESSES.includes(tool)) throw new Error("Expected claude|codex|opencode|sumi=path.");
+          const entry = overrides[tool] ??= {};
+          if (entry[key] !== undefined) throw new Error(`Duplicate ${key} for ${tool}.`);
+          entry[key] = input.slice(separator + 1);
+        }
+      }
+      const result = discoverHarnesses({ ownerHome: opts.ownerHome, projectRoot: opts.projectRoot, overrides });
+      if (opts.json) { printJson(result); return; }
+      for (const entry of result.tools) {
+        printLine(`${entry.tool}: ${entry.status}; executable=${entry.executable?.path ?? "none"}; config=${entry.config?.path ?? "unresolved"}; version=not-probed`);
+        for (const diagnostic of entry.diagnostics) printLine(`  ${diagnostic}`);
+      }
+    } catch (error) {
+      console.error(chalk.red(error instanceof Error ? error.message : String(error)));
+      process.exitCode = 1;
     }
   });
 

@@ -462,3 +462,7 @@ instructions webhooks test <id> [--type <type>] [--subject <subject>]
 
 Webhook secrets are accepted on input but redacted from list output by the
 events package.
+
+## Harness paths
+
+Use `instructions harness discover --json` for read-only native executable and configuration path inventory. See [portable harness discovery](harness-discovery.md) for resolver precedence, template variables and fleet planning boundaries.
