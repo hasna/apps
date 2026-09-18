@@ -38,7 +38,8 @@ No image command, package manager, migration or provider operation executes.
    and file SHA256. The historical preparation must be a successful main run
    whose exact source is an ancestor of the current exact-main dispatch. This
    phase is read-only: it reconstructs the reviewed image at that historical
-   source, verifies task definitions 88 and 89 byte-for-byte, reads the selected service
+   source, verifies task 88's immutable identity and payload by reconstructing the
+   exact reviewed task-89 candidate digest, verifies task 89's payload byte-for-byte, reads the selected service
    revision and running task image digests, and emits `emails-search-reconciled`.
    If a later manually registered revision is selected, it is admitted only when
    every task field except the web image matches task 89 and that image is an exact
@@ -46,7 +47,15 @@ No image command, package manager, migration or provider operation executes.
    configuration and prior labels. The receipt records only added label names,
    never label values, task environment values or secret references. Any task,
    image, lineage, health, or mixed-rollout drift refuses instead of authorizing a
-   retry or rollback. The appended compressed layer is read back, decompressed and
+   retry or rollback. Docker may timestamp the formerly timestamp-free final parent
+   history row while appending the new layer; that one normalization is accepted only
+   when every original field is unchanged and the new layer timestamp follows within
+   five seconds. ECS read-only DescribeTaskDefinition fields are not treated as
+   immutable payload: their historical preparation hash is retained in the receipt,
+   while current admission is bound through the exact prepared task-89 payload digest.
+   Only Docker's RFC3339Nano subset is accepted: explicit known
+   offsets, normal civil seconds and at most nine fractional digits; leap seconds
+   and RFC3339's unknown `-00:00` offset are refused. The appended compressed layer is read back, decompressed and
    hashed to the appended rootfs diff ID; metadata-only history entries are refused.
    Running task ARNs, definitions, health and image digests are sampled twice around
    a final service-state read, and any change refuses without a receipt. The selected
