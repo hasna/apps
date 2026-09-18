@@ -58,8 +58,10 @@ entrypoint both reject it
 with `MIGRATION_EXECUTION_DISABLED` before assuming AWS authority or running a
 migration. Do not use the following draft behavior as an operational runbook.
 
-Activation requires a separately reviewed migration identity and transaction or
-lock boundary, data-preservation proof for forced-RLS tables, quiesced old
+The draft one-shot apply holds an exclusive migration-ledger lock and puts the
+reviewed-plan recheck, all schema changes, and ledger rows in one PostgreSQL
+transaction. Activation still requires a reviewed migration identity and live
+transaction proof, data-preservation proof for forced-RLS tables, quiesced old
 writers, paired API/ingest-worker cutover, a recovery point, and durable
 reconciliation of an uncertain one-shot task launch.
 

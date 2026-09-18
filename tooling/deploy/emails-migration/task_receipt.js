@@ -42,8 +42,8 @@ if (operation === "kms") {
   const migrations = emailsSelfHostedMigrations();
   const migrationById = new Map(migrations.map((migration) => [migration.id, migration]));
   const { client } = getSelfHostedPool();
-  const snapshot = async () => {
-    const rows = await client.many("SELECT id, checksum FROM schema_migrations ORDER BY id ASC");
+  const snapshot = async (reader) => {
+    const rows = await reader.many("SELECT id, checksum FROM schema_migrations ORDER BY id ASC");
     const ledger = rows.map((row) => ({ id: String(row.id), checksum: String(row.checksum) }));
     const applied = new Map(ledger.map((row) => [row.id, row.checksum]));
     for (const row of ledger) {
@@ -70,24 +70,30 @@ if (operation === "kms") {
     };
   };
   try {
-    const before = await snapshot();
     if (operation === "plan") {
+      const before = await snapshot(client);
       emit({ schema: "emails.migration-production-plan.v1", operation, ...before, databaseMutated: false });
     } else {
       const expectedLedger = requiredHash("EMAILS_MIGRATION_EXPECTED_LEDGER_SHA256");
       const expectedPlan = requiredHash("EMAILS_MIGRATION_EXPECTED_PLAN_SHA256");
       const expectedAfter = requiredHash("EMAILS_MIGRATION_EXPECTED_AFTER_LEDGER_SHA256");
-      if (before.ledgerSha256 !== expectedLedger || before.planSha256 !== expectedPlan || before.expectedAfterLedgerSha256 !== expectedAfter) {
-        throw new Error("Production migration plan changed after review");
-      }
-      const pending = before.plan.filter((row) => row.state === "pending").map((row) => row.id);
-      const ledger = new MigrationLedger(client, migrations);
-      await ledger.migrate();
-      const after = await snapshot();
-      if (after.ledgerSha256 !== expectedAfter || after.plan.some((row) => row.state !== "already_applied")) {
-        throw new Error("Production migration ledger did not reach the reviewed target");
-      }
-      emit({
+      const receipt = await client.transaction(async (tx) => {
+        // Block competing ledger access after lock acquisition while the
+        // reviewed plan, schema changes, and ledger rows commit together.
+        // A separate cutover guard must first drain old API/worker writers.
+        await tx.execute("LOCK TABLE schema_migrations IN ACCESS EXCLUSIVE MODE");
+        const before = await snapshot(tx);
+        if (before.ledgerSha256 !== expectedLedger || before.planSha256 !== expectedPlan || before.expectedAfterLedgerSha256 !== expectedAfter) {
+          throw new Error("Production migration plan changed after review");
+        }
+        const pending = before.plan.filter((row) => row.state === "pending").map((row) => row.id);
+        const ledger = new MigrationLedger(tx, migrations);
+        await ledger.migrate();
+        const after = await snapshot(tx);
+        if (after.ledgerSha256 !== expectedAfter || after.plan.some((row) => row.state !== "already_applied")) {
+          throw new Error("Production migration ledger did not reach the reviewed target");
+        }
+        return {
         schema: "emails.migration-production-applied.v1",
         operation,
         beforeLedger: before.ledger,
@@ -99,7 +105,9 @@ if (operation === "kms") {
         afterLedgerSha256: after.ledgerSha256,
         databaseMutated: pending.length > 0,
         automaticRollback: false,
+        };
       });
+      emit(receipt);
     }
   } finally {
     await closeSelfHostedPool();

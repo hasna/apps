@@ -20,6 +20,7 @@ import { dirname, join } from "node:path";
 import { inspectSkillBundle } from "../lib/skill-bundle.js";
 import { digestInput } from "../sdk/execution/admission.js";
 import type { FrozenAdmission } from "../sdk/execution/types.js";
+import { assertPureAdmission, inspectPureBundle, PURE_DESCRIPTOR, pureInput, validatePureOutput, type PureInput } from "./runtime-pure-contract.js";
 import type { RuntimeResult } from "./runtime-store.js";
 import {
   hashBytes,
@@ -32,7 +33,7 @@ import {
 export interface RuntimeWork {
   admission: FrozenAdmission;
   bundleBase64: string;
-  input: { content: string; title?: string };
+  input: { content: string; title?: string } | PureInput;
 }
 export interface SupervisorOptions {
   executable?: string;
@@ -66,9 +67,12 @@ export async function executeRuntimeWork(
   work: RuntimeWork,
   options: SupervisorOptions,
 ): Promise<RuntimeResult> {
-  const input = runtimeInput(work.input);
+  const contract = work.admission.executionContract ? assertPureAdmission(work.admission) : undefined;
+  if (contract && (options.unprivileged === false || process.platform !== "linux"))
+    throw Error("Pure execution requires the Linux isolation guard");
+  const input = contract ? pureInput(work.input) : runtimeInput(work.input);
   if (
-    work.admission.skillId !== "pdf-generate" ||
+    (!contract && work.admission.skillId !== "pdf-generate") ||
     work.admission.runtime !== "bun" ||
     digestInput(input) !== work.admission.inputDigest
   )
@@ -79,7 +83,7 @@ export async function executeRuntimeWork(
     hashBytes(bytes) !== work.admission.bundleDigest.replace(/^sha256:/, "")
   )
     throw Error("Runtime bundle digest mismatch");
-  const inspected = await inspectSkillBundle(bytes, {
+  const inspected = contract ? { entries: await inspectPureBundle(bytes, contract) } : await inspectSkillBundle(bytes, {
     limits: {
       compressedBytes: RUNTIME_MAX_BUNDLE_BYTES,
       decompressedBytes: 4_000_000,
@@ -88,7 +92,8 @@ export async function executeRuntimeWork(
       timeoutMs: 5000,
     },
   });
-  if (!inspected.entries.some((e) => e.path === "src/index.ts"))
+  const entrypoint = contract?.entrypoint ?? "src/index.ts";
+  if (!inspected.entries.some((e) => e.path === entrypoint))
     throw Error("Reviewed runtime entrypoint is missing");
   const base = mkdtempSync(join(tmpdir(), "skills-execution-"));
   chmodSync(base, 0o755);
@@ -105,7 +110,7 @@ export async function executeRuntimeWork(
     }
     if (existsSync(join(skill, "node_modules")))
       throw Error("Runtime bundle may not supply dependencies");
-    symlinkSync(options.dependenciesPath, join(skill, "node_modules"), "dir");
+    if (!contract) symlinkSync(options.dependenciesPath, join(skill, "node_modules"), "dir");
     const unprivileged = options.unprivileged ?? true;
     if (unprivileged && process.getuid?.() !== 0)
       throw Error(
@@ -118,20 +123,14 @@ export async function executeRuntimeWork(
         chmodSync(p, 0o700);
         chownSync(p, 65534, 65534);
       }
-    const args = [
-      "run",
-      join(skill, "src/index.ts"),
-      "--content",
-      input.content,
-      "--content-type",
-      "text",
-      "--filename",
-      "document",
-      ...(input.title ? ["--title", input.title] : []),
+    const pdf = contract ? undefined : runtimeInput(input);
+    const args = contract ? ["--no-install", "--no-env-file", "run", join(skill, entrypoint)] : [
+      "run", join(skill, entrypoint), "--content", pdf!.content, "--content-type", "text", "--filename", "document",
+      ...(pdf!.title ? ["--title", pdf!.title] : []),
     ];
     const executable = options.executable ?? process.execPath;
     const command = unprivileged
-      ? [options.guardPath ?? "/opt/skills-runtime/guard", executable, ...args]
+      ? [options.guardPath ?? "/opt/skills-runtime/guard", ...(contract ? ["--pure"] : []), executable, ...args]
       : [executable, ...args];
     const proc = Bun.spawn(command, {
       cwd: skill,
@@ -143,30 +142,36 @@ export async function executeRuntimeWork(
         HOME: home,
         TMPDIR: home,
         LANG: "C.UTF-8",
-        SKILLS_EXPORTS_DIR: out,
-        SKILLS_LOGS_DIR: logs,
+        ...(contract ? { SKILLS_INPUT_JSON: JSON.stringify({ ...input, format: "json" }) } : {
+          SKILLS_EXPORTS_DIR: out, SKILLS_LOGS_DIR: logs,
+        }),
       },
     });
+    // Pure guard owns and reaps its child group. Signal its monitor, never a
+    // guessed process group or a station session; SIGKILL would bypass cleanup.
+    const stop = () => proc.kill(contract ? "SIGTERM" : 9);
     let timedOut = false;
     const timeout = setTimeout(
       () => {
         timedOut = true;
-        proc.kill(9);
+        stop();
       },
-      Math.min(work.admission.limits.maxDurationMs, RUNTIME_TIMEOUT_MS),
+      Math.min(work.admission.limits.maxDurationMs, contract ? PURE_DESCRIPTOR.maxDurationMs : RUNTIME_TIMEOUT_MS),
     );
     let stdout = "",
       stderr = "",
       exitCode: number;
+    const reads = [
+      capped(proc.stdout, contract ? PURE_DESCRIPTOR.stdoutBytes : RUNTIME_MAX_LOG_BYTES, stop),
+      capped(proc.stderr, contract ? PURE_DESCRIPTOR.stderrBytes : RUNTIME_MAX_LOG_BYTES, stop),
+      proc.exited,
+    ] as const;
     try {
-      [stdout, stderr, exitCode] = await Promise.all([
-        capped(proc.stdout, RUNTIME_MAX_LOG_BYTES, () => proc.kill(9)),
-        capped(proc.stderr, RUNTIME_MAX_LOG_BYTES, () => proc.kill(9)),
-        proc.exited,
-      ]);
+      [stdout, stderr, exitCode] = await Promise.all(reads);
     } finally {
       clearTimeout(timeout);
-      proc.kill();
+      stop();
+      await Promise.allSettled(reads);
     }
     if (timedOut)
       return {
@@ -176,6 +181,11 @@ export async function executeRuntimeWork(
         artifacts: [],
         error: "Runtime timeout exceeded",
       };
+    if (contract) {
+      if (readdirSync(out).length || readdirSync(logs).length) throw Error("Pure execution cannot produce artifacts");
+      if (exitCode === 0) validatePureOutput(stdout, pureInput(input));
+      return { exitCode, stdout, stderr, artifacts: [] };
+    }
     const artifacts: RuntimeResult["artifacts"] = [];
     let total = 0;
     if (exitCode === 0)
