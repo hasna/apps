@@ -31,7 +31,7 @@ repos-serve  # http://localhost:19450
 
 - [Complete CLI and executable reference](docs/cli.md)
 - [Configuration, database selection, and automatic indexing](docs/configuration.md)
-- [MCP transports and all 37 tools](docs/mcp.md)
+- [MCP transports and all 39 tools](docs/mcp.md)
 - [HTTP API](docs/http-api.md)
 - [TypeScript SDK](docs/sdk.md)
 
@@ -634,8 +634,9 @@ repos-mcp          # Streamable HTTP on 127.0.0.1:8874
 repos-mcp --stdio  # stdio transport for an owning MCP client
 ```
 
-37 tools available for AI agents:
+39 tools available for AI agents. The executable and programmatic server both default to the core profile; set `HASNA_REPOS_MCP_PROFILE=full` or pass `--mcp-profile full` for all operational tools.
 
+- `search_tools`, `describe_tools` (complete dynamic inventory discovery)
 - `list_repos`, `get_repo`, `search_repos`
 - `list_commits`, `search_commits`
 - `list_branches`, `list_tags`
@@ -652,7 +653,7 @@ repos-mcp --stdio  # stdio transport for an owning MCP client
 - `docs_drift`, `release_health`, `release_pipeline_parity`, `manifest_dependents`
 - `register_agent`, `heartbeat`, `list_agents`
 
-MCP list/search/detail tools return compact JSON summaries by default to avoid dumping large records into agent context. Pass `verbose: true` to a tool call when you need the full records, and use `limit`/`offset` where available to page through large result sets.
+MCP list/search/detail tools return compact JSON summaries by default to avoid dumping large records into agent context. Pass `verbose: true` to a tool call when you need the full records, and use `limit` plus the returned snapshot `next_cursor` for `list_repos`; legacy `offset` remains available with `verbose: true`.
 
 See the [MCP reference](docs/mcp.md) for transports, arguments, limits, and the
 complete categorized tool list.

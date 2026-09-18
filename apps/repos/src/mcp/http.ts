@@ -2,6 +2,7 @@ import { createServer, type Server } from "node:http";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { buildServer, MCP_NAME } from "./server.js";
+import type { ReposMcpProfile } from "./profile.js";
 import { env } from "../lib/env.js";
 
 export const DEFAULT_MCP_HTTP_PORT = 8874;
@@ -31,7 +32,7 @@ export function healthPayload(name: string = MCP_NAME): { status: string; name: 
 
 export async function handleMcpHttpRoutes(
   req: Request,
-  options: { port?: number; hostname?: string } = {},
+  options: { port?: number; hostname?: string; profile?: ReposMcpProfile } = {},
 ): Promise<Response | null> {
   const url = new URL(req.url);
 
@@ -60,7 +61,7 @@ export async function handleMcpHttpRoutes(
       allowedHosts,
       allowedOrigins: allowedOrigins.length > 0 ? allowedOrigins : undefined,
     });
-    const server = buildServer();
+    const server = buildServer(options.profile);
     await server.connect(transport);
     return transport.handleRequest(req);
   }
@@ -72,6 +73,7 @@ export function startMcpHttpServer(options: {
   port?: number;
   hostname?: string;
   onListening?: (port: number) => void;
+  profile?: ReposMcpProfile;
 } = {}): Server {
   const hostname = options.hostname ?? "127.0.0.1";
   const requestedPort = options.port ?? DEFAULT_MCP_HTTP_PORT;
@@ -86,7 +88,7 @@ export function startMcpHttpServer(options: {
     }
 
     if (url.pathname === "/mcp") {
-      const server = buildServer();
+      const server = buildServer(options.profile);
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,
       });

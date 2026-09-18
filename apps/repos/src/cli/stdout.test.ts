@@ -110,7 +110,7 @@ describe("writeAllSync", () => {
  * It has to run through a real shell pipeline. Measured on the unfixed CLI with
  * an identical 400-row fixture:
  *
- *     sh -c 'repos repos --json -n 400 | cat'   ->  65536 bytes   (truncated)
+ *     sh -c 'repos repos --json --full -n 400 | cat'   ->  65536 bytes   (truncated)
  *     Bun.spawnSync({ stdout: "pipe" })         -> 204365 bytes   (intact)
  *
  * `Bun.spawnSync`'s own capture pipe does not reproduce it. That is why this
@@ -175,7 +175,7 @@ describe("repos --json over a pipe", () => {
   test("delivers every row through a real shell pipeline, not one pipe buffer", () => {
     const { dir, dbPath } = seedIndex();
     try {
-      const result = pipeline(`bun run src/cli/index.tsx repos --json -n ${REPO_ROWS} | cat`, dbPath);
+      const result = pipeline(`bun run src/cli/index.tsx repos --json --full -n ${REPO_ROWS} | cat`, dbPath);
       // With pipefail this is the *producer's* status, not `cat`'s.
       expect(result.exitCode).toBe(0);
       // Measure BYTES. `String.length` counts UTF-16 code units, and 65536 is a
@@ -212,7 +212,7 @@ describe("repos --json over a pipe", () => {
     // still produced the beginning of the real document.
     const { dir, dbPath } = seedIndex();
     try {
-      const result = pipeline(`bun run src/cli/index.tsx repos --json -n ${REPO_ROWS} | head -1`, dbPath);
+      const result = pipeline(`bun run src/cli/index.tsx repos --json --full -n ${REPO_ROWS} | head -1`, dbPath);
       // A hang is caught by the suite timeout; this asserts it exited rather than
       // being left for the runner to reap.
       expect(result.exitCode).not.toBeNull();

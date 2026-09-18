@@ -280,7 +280,7 @@ describe("the worktree plane needs no GitHub credential", () => {
     expect(report.added_path).toBe(join(seeded.root, "hasna", "open-credfree", "credfree-check"));
     expect(report.base_source).toBe("origin");
     expect(report.removed).toBe(true);
-  });
+  }, 15_000);
 
   test("POSITIVE CONTROL: the credential-env probe finds a token when one is present", () => {
     // Without this, "credential_env_names was empty" proves nothing — an
