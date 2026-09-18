@@ -116,7 +116,7 @@ Events: `task.created`, `task.started`, `task.completed`, `task.failed`, `task.a
 
 ## Cross-Tool Integration
 
-- **Evidence on completion**: `todos done <id> --attach-ids <attachment-id>` (from @hasna/attachments)
+- **Evidence on completion**: `todos done <id> --attach-ids <attachment-id>` (from the hosted Attachments service)
 - **Session linking**: set `HASNA_TODOS_API_URL` in sessions; `sessions show --tasks` surfaces task IDs
 - **Email notifications**: `todos webhook create --url <emails-webhook-url> --events task.assigned`
 - **Memory context**: Use the default `TODOS_PROFILE=minimal` + mementos `format=compact` for minimum context overhead

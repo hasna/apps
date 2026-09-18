@@ -11,7 +11,7 @@
 // per request and the limit never fires. The trustworthy entry is counted
 // from the RIGHT, and only the operator knows how many appending proxies sit
 // in front of the service. Same rule as apps/emails (auth/client-ip.ts) and
-// apps/attachments (core/password-throttle.ts):
+// Hosted Attachments public-share throttling:
 //
 //   HASNA_NOTES_SERVER_TRUSTED_PROXY_HOPS
 //     0 (default): forwarding headers are ignored; the socket peer is the key.

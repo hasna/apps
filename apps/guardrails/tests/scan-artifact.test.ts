@@ -51,6 +51,8 @@ function rootCiViolations(workflow: RootCi): string[] {
     if (JSON.stringify(value) !== JSON.stringify(expected)) violations.push(message);
   };
   equal(needs(shard), ["affected-plan"], "shards must depend on the frozen plan");
+  // Additional hard gates may join the aggregate without removing its frozen
+  // plan or shard prerequisites (for example the live PostgreSQL proof).
   if (!["affected-plan", "affected-shard"].every((name) => needs(aggregate).includes(name))) {
     violations.push("aggregate must depend on planner and all shards");
   }
@@ -236,15 +238,17 @@ describe("scan:artifact release gate", () => {
     expect(rootCiViolations(rootCi())).toEqual([]);
   });
 
-  test("additional aggregate gates preserve the required planner and shard dependencies", () => {
-    const expanded = rootCi();
-    const aggregate = expanded.jobs!["build-test"]!;
-    const original = typeof aggregate.needs === "string" ? [aggregate.needs] : aggregate.needs ?? [];
-    aggregate.needs = [...new Set([...original, "publish-guard"])].reverse();
-    expect(rootCiViolations(expanded)).toEqual([]);
+  test("additional aggregate gates preserve mandatory planner and shard coverage", () => {
+    const extended = rootCi();
+    const aggregate = extended.jobs!["build-test"]!;
+    const originalNeeds = aggregate.needs as string[];
+    extended.jobs!["additional-hard-gate"] = { steps: [{ run: "test 1 = 1" }] };
+    aggregate.needs = [...originalNeeds, "additional-hard-gate"];
+    expect(rootCiViolations(extended)).toEqual([]);
+
     for (const required of ["affected-plan", "affected-shard"]) {
-      const missing = structuredClone(expanded);
-      missing.jobs!["build-test"]!.needs = aggregate.needs.filter((name) => name !== required);
+      const missing = structuredClone(extended);
+      missing.jobs!["build-test"]!.needs = (aggregate.needs as string[]).filter((name) => name !== required);
       expect(rootCiViolations(missing)).toContain("aggregate must depend on planner and all shards");
     }
   });

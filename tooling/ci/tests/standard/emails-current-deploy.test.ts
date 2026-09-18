@@ -52,7 +52,8 @@ describe("Emails complete current-server deploy lane", () => {
     expect(authority).toBeGreaterThan(scan);
     expect(update).toBeGreaterThan(authority);
     expect(reusable).toContain("CONTAINER_RUNTIME_PLATFORM: linux/amd64");
-    expect(reusable).toContain("git diff --exit-code \"$overlay_source\" \"$SOURCE\" -- apps/emails/src/server/self-hosted/migrations.ts");
+    expect(reusable).toContain("deploy.py compares actual immutable OCI migration inputs");
+    expect(reusable).not.toContain("overlay_source=");
     expect(reusable).not.toMatch(/npm publish|bun publish|ecs run-task|db migrate/i);
     expect(deploy).toContain('rows[0]["image"] = promotion.REPOSITORY + "@" + image_digest');
     expect(deploy).toContain('require(normalized == current_payload, "CANDIDATE_TASK_DRIFT")');
