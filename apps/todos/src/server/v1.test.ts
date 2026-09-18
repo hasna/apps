@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { randomUUID } from "node:crypto";
+import { mintApiKey, verifyApiKey } from "@hasna/contracts/auth";
 import type { Database } from "bun:sqlite";
 import { getDatabase, resetDatabase } from "../db/database.js";
 import { createLocalSqliteTodosStorageAdapter } from "../storage/local-sqlite.js";
-import type { TodosStorageAdapter } from "../storage/interfaces.js";
+import type { TodosStorageAdapter, TodosStorageContext } from "../storage/interfaces.js";
 import { ResourceConflictError } from "../types/index.js";
 import { handleV1Request, type V1RequestDependencies } from "./v1.js";
 import { createLocalPrGroupLedger } from "../pr-groups/index.js";
@@ -1912,6 +1914,54 @@ describe("/v1 task hierarchy and lock authorization", () => {
     expect(await response!.json()).toMatchObject({
       code: "TASK_CREATE_PERSISTENCE_UNVERIFIED",
     });
+  });
+
+  test("signed PATCH forwards the authenticated actor for an unassigned task audit", async () => {
+    const actor = "signed-patch-actor";
+    const tenant = "tenant-v1-test";
+    const signingSecret = `${randomUUID()}${randomUUID()}`;
+    const key = mintApiKey({
+      app: "todos",
+      scopes: ["todos:read", "todos:write"],
+      signingSecret,
+      agent: actor,
+      tid: tenant,
+    });
+    const verifier = verifyApiKey({
+      app: "todos",
+      signingSecret,
+      keyStatus: async kid => kid === key.kid ? "active" : "unknown",
+    });
+    const task = await store.tasks.create({ title: "Unassigned signed PATCH audit" });
+    expect(task).toMatchObject({ assigned_to: null, agent_id: null });
+
+    let updateContext: TodosStorageContext | undefined;
+    const originalUpdate = store.tasks.update.bind(store.tasks);
+    store.tasks.update = async (id, input, context) => {
+      updateContext = context;
+      return originalUpdate(id, input, context);
+    };
+
+    const url = new URL(`https://todos.example.test/v1/tasks/${task.id}`);
+    const response = await handleV1Request(
+      new Request(url, {
+        method: "PATCH",
+        headers: {
+          Authorization: `Bearer ${key.token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ title: "Attributed signed PATCH audit", version: task.version }),
+      }),
+      url,
+      {
+        ...dependencies,
+        getVerifier: () => verifier,
+        getMachineRegistryTenantId: () => tenant,
+      },
+    );
+
+    expect(response?.status).toBe(200);
+    expect(updateContext).toEqual({ agentId: actor });
   });
 
   test("create preserves explicit created_by over a shared fleet principal", async () => {

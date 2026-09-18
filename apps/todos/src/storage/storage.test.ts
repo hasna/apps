@@ -987,6 +987,27 @@ describe("storage adapter contracts", () => {
     expect((await adapter.audit.getTaskHistory(task.id)).filter(row => row.action !== "created")).toHaveLength(8);
   });
 
+  test("Postgres task-update audit falls back to storage context for an unassigned task", async () => {
+    const postgres = createMemoryPostgresClient();
+    const adapter = createPostgresTodosStorageAdapter({ client: postgres.client });
+    const task = await adapter.tasks.create({ title: "Unassigned before" });
+    expect(task).toMatchObject({ assigned_to: null, agent_id: null });
+
+    await adapter.tasks.update(
+      task.id,
+      { version: task.version, title: "Unassigned after" },
+      { agentId: "authenticated-patch-actor" },
+    );
+
+    const titleChange = (await adapter.audit.getTaskHistory(task.id))
+      .find(row => row.action === "update" && row.field === "title");
+    expect(titleChange).toMatchObject({
+      old_value: "Unassigned before",
+      new_value: "Unassigned after",
+      agent_id: "authenticated-patch-actor",
+    });
+  });
+
   test("builds a pure remote Postgres adapter from native config and caller-provided client", async () => {
     const postgres = createMemoryPostgresClient();
     const config = loadTodosStorageConfig({
