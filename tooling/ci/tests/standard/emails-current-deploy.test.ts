@@ -10,6 +10,11 @@ const deploy = readFileSync(join(root, "tooling/deploy/emails-current/deploy.py"
 const proof = readFileSync(join(root, "tooling/deploy/emails-current/public_proof.py"), "utf8");
 
 describe("Emails complete current-server deploy lane", () => {
+  test("exercises the credential-free public probe through an edge identity check", () => {
+    const result = Bun.spawnSync(["python3", "-I", "-B", "tooling/deploy/emails-current/public_proof_test.py"], { cwd: root, timeout: 30_000 });
+    expect(result.exitCode).toBe(0);
+  });
+
   test("is manual, exact-main, reconciled, and delegates to the IAM-trusted reusable workflow", () => {
     expect(workflow).toContain("name: emails-current-server-deploy");
     expect(workflow).toContain("workflow_dispatch:");
