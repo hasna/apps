@@ -1,5 +1,5 @@
 /** Black-box requests to the actual API process and inspection of captured provider wire data. */
-import { assertApiReady, assertNoProviderReplay, assertProviderAttempt, assertProviderRequest } from "./probe-assertions.ts";
+import { assertSendSuccess, assertApiReady, assertNoProviderReplay, assertProviderAttempt, assertProviderRequest } from "./probe-assertions.ts";
 const input = await Bun.stdin.json();
 const check = (ok: unknown, code: string) => { if (!ok) throw new Error(code); };
 async function request(path: string, token = input.tenants[0].token, body?: unknown) {
@@ -30,7 +30,7 @@ async function run() {
     reply_to: '"Reply Desk" <reply@a.example.test>', reply_to_message_id: parent.body.message.id, idempotency_key: crypto.randomUUID() };
   const beforeSend = await control("state");
   const sent = await request("/v1/messages/send", undefined, body);
-  check(sent.status === 202 && sent.body.sent === true && sent.body.provider_message_id && sent.body.message?.id, "API_SEND_SUCCESS_CONTRACT");
+  assertSendSuccess(sent);
   const afterSend = await control("state");
   assertProviderAttempt(beforeSend, afterSend, input.provider, 200);
   const captured = afterSend.sends.filter((s: any) => s.id === sent.body.provider_message_id);
@@ -58,4 +58,4 @@ async function run() {
     captured_request_sha256: `sha256:${new Bun.CryptoHasher("sha256").update(JSON.stringify(wire)).digest("hex")}` };
 }
 try { console.log(JSON.stringify(await run())); }
-catch (error) { console.log(JSON.stringify({ error: error instanceof Error && /^[A-Z_]+$/.test(error.message) ? error.message : "API_PROBE_FAILED" })); process.exitCode = 1; }
+catch (error) { console.log(JSON.stringify({ error: error instanceof Error && /^[A-Z][A-Z0-9_]{0,100}$/.test(error.message) ? error.message : "API_PROBE_FAILED" })); process.exitCode = 1; }

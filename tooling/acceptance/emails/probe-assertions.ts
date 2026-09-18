@@ -64,3 +64,13 @@ export function assertProviderAttempt(before: any, after: any, provider: string,
   requireValue(events[0].bodySha256 === hash && after.sends.length - before.sends.length === (status === 200 ? 1 : 0), "PROVIDER_ATTEMPT_RESULT");
   assertProviderRequest(provider, attempts[0].body);
 }
+
+/** Diagnostics are finite scalars, never arbitrary provider response text. */
+export function assertSendSuccess(response: { status: number; body: any }) {
+  if (response.status === 202 && response.body?.sent === true && response.body.provider_message_id && response.body.message?.id) return;
+  const statuses = [400, 401, 403, 404, 409, 422, 429, 500, 502, 503];
+  const reasons = ["sender_unverified", "sender_not_registered", "sender_inactive", "sender_not_ready", "recipient_suppressed", "send_key_required", "invalid_reply_parent", "reply_parent_not_found", "reply_parent_message_id_unavailable"];
+  const status = statuses.includes(response.status) ? `_HTTP_${response.status}` : "";
+  const reason = reasons.includes(response.body?.reason) ? `_${response.body.reason.toUpperCase()}` : "";
+  throw new Error(`API_SEND_SUCCESS_CONTRACT${status}${reason}`);
+}

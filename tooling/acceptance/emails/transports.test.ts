@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { createRequire } from "node:module";
 import { FixtureTransports } from "./transports.ts";
-import { assertApiReady, assertNoProviderReplay, assertProviderAttempt, assertProviderRequest } from "./probe-assertions.ts";
+import { assertSendSuccess, assertApiReady, assertNoProviderReplay, assertProviderAttempt, assertProviderRequest } from "./probe-assertions.ts";
 import { loadImageAuth } from "./image-imports.ts";
 
 const require = createRequire(new URL("../../../apps/emails/package.json", import.meta.url));
@@ -196,4 +196,13 @@ test("readiness requires the actual API contract and an empty migration discrepa
   ]) expect(() => assertApiReady({ status: 200, body: { ...body, ...delta } }, "1.2.3")).toThrow("API_READY_VERSION");
   expect(() => assertApiReady({ ...ready, status: 503 }, "1.2.3")).toThrow("API_READY_VERSION");
   expect(() => assertApiReady({ status: 200, body: { ok: true, version: "1.2.3" } }, "1.2.3")).toThrow("API_READY_VERSION");
+});
+
+
+test("send diagnostics retain the strict receipt and expose only finite safe fields", () => {
+  expect(() => assertSendSuccess({ status: 202, body: { sent: true, provider_message_id: "fixture", message: { id: "ledger" } } })).not.toThrow();
+  expect(() => assertSendSuccess({ status: 202, body: { sent: true, message: { id: "ledger" } } })).toThrow("API_SEND_SUCCESS_CONTRACT");
+  expect(() => assertSendSuccess({ status: 403, body: { reason: "sender_unverified", error: "private fixture text" } })).toThrow("API_SEND_SUCCESS_CONTRACT_HTTP_403_SENDER_UNVERIFIED");
+  try { assertSendSuccess({ status: 599, body: { reason: "private fixture text", error: "private fixture text" } }); throw new Error("expected refusal"); }
+  catch (error) { expect((error as Error).message).toBe("API_SEND_SUCCESS_CONTRACT"); }
 });

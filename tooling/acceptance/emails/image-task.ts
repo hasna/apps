@@ -43,7 +43,7 @@ async function run() {
       stage = "INSERT_DOMAIN";
       await db.execute("INSERT INTO domains(id,domain,status,verified,tenant_id) VALUES($1,$2,'verified',true,$3)", [`pair-domain-${letter}`, `${letter}.example.test`, tenant.id]);
       stage = "INSERT_ADDRESS";
-      await db.execute("INSERT INTO addresses(id,email,domain,display_name,status,tenant_id) VALUES($1,$2,$3,'Synthetic Sender','active',$4)",
+      await db.execute("INSERT INTO addresses(id,email,domain,display_name,status,verified,tenant_id) VALUES($1,$2,$3,'Synthetic Sender','active',true,$4)",
         [`pair-address-${letter}`, `sender@${letter}.example.test`, `${letter}.example.test`, tenant.id]);
       tenants.push({ id: tenant.id, token: minted.token, email: `sender@${letter}.example.test` });
     }
