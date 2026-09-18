@@ -558,7 +558,8 @@ export function assertManagedAgentBridge(agent: IntegrationAgent, options: { hom
   if (!isOwnedCliBridge(expected, [expected])) throw new Error("NATIVE_SKILL_DRIFT: the native Skills bridge is missing or modified; repair it before continuing");
   const roots = projectAncestorDirectories([options.projectDir ?? process.cwd(), ...(options.projectDirs ?? []), ...(agent === "hermes" && process.env.TERMINAL_CWD ? [process.cwd()] : [])]);
   const visible = (entry: NativeSkillEntry) => entry.agent === agent || (["codex", "gemini", "opencode", "hermes"].includes(agent) && entry.path.includes(`${sep}.agents${sep}skills${sep}`)) || (agent === "opencode" && entry.agent === "claude");
-  assertProjectDiscovery(agent, [...roots], home, path => canonicalAgentPath(path, aliases));
+  const discovery: AgentDiscoveryBinding | undefined = binding.discovery?.[agent];
+  assertProjectDiscovery(agent, [...roots], home, path => canonicalAgentPath(path, aliases), discovery);
   const configPath = canonicalAgentPath(join(home, AGENT_ADAPTERS[agent].config), aliases), config = agent === "hermes" ? parseHermesConfig(readOptional(configPath)) : jsonObject(readOptional(configPath), configPath);
   const command = binding.commands?.[agent], profile = binding.profiles?.[agent];
   if (typeof command !== "string" || typeof profile !== "string") throw new Error("NATIVE_SKILL_DRIFT: the native hook command/profile binding is missing");
@@ -589,7 +590,6 @@ export function assertManagedAgentBridge(agent: IntegrationAgent, options: { hom
     const settings = setting(entry.path);
     return matched && settings.length === 1 && settings[0]?.enabled === false;
   };
-  const discovery: AgentDiscoveryBinding | undefined = binding.discovery?.[agent];
   if (!discovery || discovery.agent !== agent) throw new Error("NATIVE_SKILL_DRIFT: native discovery coverage is missing; run skills hook install");
   if (agent === "gemini" && !discovery.builtinNames?.every(name => config.skills.disabled.includes(name))) throw new Error("NATIVE_SKILL_DRIFT: an installed Gemini builtin is not disabled");
   try {

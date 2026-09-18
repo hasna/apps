@@ -264,6 +264,14 @@ system configuration, process-specific overrides, and alternate agent home
 directories are outside automatic coverage and require their own integration
 review before declaring a station migrated.
 
+For reviewed Claude plugins, `skills integration plugin plan`, `admit` and
+`resolve` provide a command-source admission boundary before native discovery.
+Original packages and migrated skill/command prompts remain in private versioned
+Skills storage. Native projections retain ordinary components, and a typed
+receipt permits only verified registry/cache transitions. See
+[plugin admission](docs/plugin-admission.md) for the package, review and runtime
+contracts; these commands do not change live agent registrations or settings.
+
 If your home `.claude` or `.codex` directory intentionally links to another
 directory within your home, add `--allow-root-aliases` to hook installation and
 native migration. The plan records and rechecks the exact link and target;
