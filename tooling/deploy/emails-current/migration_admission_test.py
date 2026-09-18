@@ -58,7 +58,7 @@ class Registry:
         self.manifests = {}
         self.blobs = {}
 
-    def image(self, files=None, extra_layers=()):
+    def image(self, files=None, extra_layers=(), docker=False):
         files = fixture_files() if files is None else files
         dirs = {str(parent) for path in files for parent in Path(path).parents if str(parent) != "."}
         layers = [layer([(name, None) for name in sorted(dirs)] + list(files.items())), *extra_layers]
@@ -66,20 +66,60 @@ class Registry:
         for data, _ in layers:
             digest = p.digest(data)
             self.blobs[digest] = data
-            descriptors.append({"mediaType": p.OCI_LAYER, "digest": digest, "size": len(data)})
+            descriptors.append({"mediaType": "application/vnd.docker.image.rootfs.diff.tar.gzip" if docker else p.OCI_LAYER, "digest": digest, "size": len(data)})
         config = p.encode({"architecture": "amd64", "os": "linux", "rootfs": {"type": "layers", "diff_ids": [diff for _, diff in layers]}})
         self.blobs[p.digest(config)] = config
-        manifest = {"schemaVersion": 2, "mediaType": p.OCI_MANIFEST, "config": {"mediaType": p.OCI_CONFIG, "digest": p.digest(config), "size": len(config)}, "layers": descriptors}
+        manifest = {"schemaVersion": 2, "mediaType": "application/vnd.docker.distribution.manifest.v2+json" if docker else p.OCI_MANIFEST, "config": {"mediaType": "application/vnd.docker.container.image.v1+json" if docker else p.OCI_CONFIG, "digest": p.digest(config), "size": len(config)}, "layers": descriptors}
         digest = p.digest(p.encode(manifest))
         self.manifests[digest] = manifest
         return digest
 
     def compare(self, before, after):
-        with patch.object(p, "image_manifest", side_effect=lambda d: self.manifests[d]), patch.object(p, "blob", side_effect=lambda d: self.blobs[d["digest"]]):
+        with patch.object(deploy.migrations, "read_manifest", side_effect=lambda d, _: self.manifests[d]), patch.object(p, "blob", side_effect=lambda d: self.blobs[d["digest"]]):
             return deploy.migrations.admit(before, after, p)
 
 
 class MigrationAdmissionTest(unittest.TestCase):
+    def test_equal_inputs_across_oci_and_docker_schema_two_are_admitted(self):
+        registry = Registry()
+        self.assertFalse(registry.compare(registry.image(), registry.image(docker=True))["migrationDefinitionChanged"])
+
+    def test_manifest_reader_binds_both_media_families_to_actual_digest(self):
+        registry = Registry()
+        for docker in [False, True]:
+            image = registry.image(docker=docker)
+            manifest = registry.manifests[image]
+            response = {"images": [{"imageManifest": p.encode(manifest).decode(), "imageId": {"imageDigest": image}}]}
+            with patch.object(p, "aws", return_value=response) as aws:
+                self.assertEqual(deploy.migrations.read_manifest(image, p), manifest)
+                self.assertEqual(aws.call_args.args[:2], ("ecr", "batch-get-image"))
+            for change in ["body", "image-id", "unsupported"]:
+                bad = copy.deepcopy(response)
+                expected = image
+                if change == "body":
+                    bad["images"][0]["imageManifest"] += " "
+                elif change == "image-id":
+                    bad["images"][0]["imageId"]["imageDigest"] = "sha256:" + "0" * 64
+                else:
+                    altered = copy.deepcopy(manifest)
+                    altered["mediaType"] = "application/vnd.oci.image.index.v1+json"
+                    bad["images"][0]["imageManifest"] = p.encode(altered).decode()
+                    expected = p.digest(p.encode(altered))
+                    bad["images"][0]["imageId"]["imageDigest"] = expected
+                with self.subTest(docker=docker, change=change), patch.object(p, "aws", return_value=bad), self.assertRaises(ValueError):
+                    deploy.migrations.read_manifest(expected, p)
+
+    def test_unknown_or_mixed_config_and_layer_media_types_refuse(self):
+        for field in ["config", "layer"]:
+            registry = Registry()
+            before = registry.image()
+            after = registry.image(docker=True)
+            manifest = registry.manifests[after]
+            descriptor = manifest["config"] if field == "config" else manifest["layers"][0]
+            descriptor["mediaType"] = p.OCI_CONFIG if field == "config" else p.OCI_LAYER
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, "MIGRATION_CONFIG_TYPE|MIGRATION_LAYER_TYPE"):
+                registry.compare(before, after)
+
     def test_actual_core_drift_is_refused_even_when_git_recipe_matches(self):
         registry = Registry()
         before = registry.image()
@@ -205,7 +245,7 @@ class MigrationAdmissionTest(unittest.TestCase):
         files = fixture_files()
         files["app/src/server/self-hosted/migrations.ts"] += b"\n// changed\n"
         after = registry.image(files)
-        with tempfile.TemporaryDirectory() as directory, patch.object(p, "image_manifest", side_effect=lambda d: registry.manifests[d]), patch.object(p, "blob", side_effect=lambda d: registry.blobs[d["digest"]]):
+        with tempfile.TemporaryDirectory() as directory, patch.object(deploy.migrations, "read_manifest", side_effect=lambda d, _: registry.manifests[d]), patch.object(p, "blob", side_effect=lambda d: registry.blobs[d["digest"]]):
             path = Path(directory) / "comparison.json"
             with self.assertRaisesRegex(ValueError, "MIGRATION_DEFINITION_DRIFT"):
                 deploy.migrations.admit(before, after, p, receipt_path=path)
@@ -250,7 +290,7 @@ class MigrationAdmissionTest(unittest.TestCase):
             calls.append(args[:2])
             self.assertEqual(args[:2], ("sts", "get-caller-identity"))
             return {"Account": p.ACCOUNT}
-        with tempfile.TemporaryDirectory() as directory, patch.object(deploy, "read_reconciled", return_value=reconciled), patch.object(p, "aws", side_effect=aws), patch.object(p, "current_service", return_value={"desiredCount": 1}), patch.object(p, "service_binding", return_value="anchor"), patch.object(p, "task_read", return_value=task), patch.object(deploy, "running_tasks", return_value=[]), patch.object(p, "image_manifest", side_effect=lambda d: registry.manifests[d]), patch.object(p, "blob", side_effect=lambda d: registry.blobs[d["digest"]]):
+        with tempfile.TemporaryDirectory() as directory, patch.object(deploy, "read_reconciled", return_value=reconciled), patch.object(p, "aws", side_effect=aws), patch.object(p, "current_service", return_value={"desiredCount": 1}), patch.object(p, "service_binding", return_value="anchor"), patch.object(p, "task_read", return_value=task), patch.object(deploy, "running_tasks", return_value=[]), patch.object(deploy.migrations, "read_manifest", side_effect=lambda d, _: registry.manifests[d]), patch.object(p, "blob", side_effect=lambda d: registry.blobs[d["digest"]]):
             with self.assertRaisesRegex(ValueError, "MIGRATION_DEFINITION_DRIFT"):
                 deploy.deploy("c" * 40, Path("unused"), "d" * 64, new, Path(directory) / "receipts")
             self.assertEqual(calls, [("sts", "get-caller-identity")])
@@ -267,7 +307,7 @@ class MigrationAdmissionTest(unittest.TestCase):
             calls.append(args[:2])
             self.assertEqual(args[:2], ("sts", "get-caller-identity"))
             return {"Account": p.ACCOUNT}
-        with tempfile.TemporaryDirectory() as directory, patch.object(deploy, "read_reconciled", return_value=reconciled), patch.object(p, "aws", side_effect=aws), patch.object(p, "current_service", return_value={"desiredCount": 1}), patch.object(p, "service_binding", side_effect=["anchor", "different"]), patch.object(p, "task_read", return_value=task), patch.object(deploy, "running_tasks", return_value=[]), patch.object(p, "image_manifest", side_effect=lambda d: registry.manifests[d]), patch.object(p, "blob", side_effect=lambda d: registry.blobs[d["digest"]]):
+        with tempfile.TemporaryDirectory() as directory, patch.object(deploy, "read_reconciled", return_value=reconciled), patch.object(p, "aws", side_effect=aws), patch.object(p, "current_service", return_value={"desiredCount": 1}), patch.object(p, "service_binding", side_effect=["anchor", "different"]), patch.object(p, "task_read", return_value=task), patch.object(deploy, "running_tasks", return_value=[]), patch.object(deploy.migrations, "read_manifest", side_effect=lambda d, _: registry.manifests[d]), patch.object(p, "blob", side_effect=lambda d: registry.blobs[d["digest"]]):
             with self.assertRaisesRegex(ValueError, "PRE_REGISTER_SERVICE_DRIFT"):
                 deploy.deploy("c" * 40, Path("unused"), "d" * 64, new, Path(directory) / "receipts")
             self.assertEqual(calls, [("sts", "get-caller-identity")])

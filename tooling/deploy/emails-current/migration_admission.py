@@ -41,6 +41,12 @@ MAX_BLOB = 128 * 1024 * 1024
 MAX_EXPANDED = 512 * 1024 * 1024
 MAX_TOTAL = 1024 * 1024 * 1024
 MAX_FILE = 4 * 1024 * 1024
+MEDIA_FAMILIES = {
+    "application/vnd.oci.image.manifest.v1+json": (
+        "application/vnd.oci.image.config.v1+json", "application/vnd.oci.image.layer.v1.tar+gzip"),
+    "application/vnd.docker.distribution.manifest.v2+json": (
+        "application/vnd.docker.container.image.v1+json", "application/vnd.docker.image.rootfs.diff.tar.gzip"),
+}
 IMPORTS = {
     CORE: {"../../storage-kit/index.js", "@hasna/contracts/auth"},
     STORAGE + "index.ts": {"./tls.js", "./query.js", "./pool.js", "./migrations.js", "./health.js"},
@@ -56,6 +62,21 @@ IMPORTS = {
 def require(ok, code):
     if not ok:
         raise ValueError(code)
+
+
+def read_manifest(image_digest, promotion):
+    # The historical overlay reader accepts OCI only. Current Docker builds also
+    # emit schema-2 Docker manifests; retain their original bytes/digest rather
+    # than converting media types or trusting a translated registry response.
+    result = promotion.aws("ecr", "batch-get-image", "--repository-name", promotion.REPO, "--image-ids", "imageDigest=" + promotion.sha(image_digest))
+    require(not result.get("failures") and len(result.get("images", [])) == 1, "MIGRATION_IMAGE_UNAVAILABLE")
+    row = result["images"][0]
+    raw = row["imageManifest"].encode()
+    require(promotion.digest(raw) == image_digest and row["imageId"]["imageDigest"] == image_digest, "MIGRATION_MANIFEST_DIGEST")
+    manifest = json.loads(raw)
+    require(manifest.get("schemaVersion") == 2 and manifest.get("mediaType") in MEDIA_FAMILIES, "MIGRATION_MANIFEST_TYPE")
+    require(set(manifest) == {"schemaVersion", "mediaType", "config", "layers"}, "MIGRATION_MANIFEST_FIELDS")
+    return manifest
 
 
 def verified_blob(descriptor, promotion):
@@ -78,7 +99,7 @@ def active_inputs(manifest, config, promotion):
     state = {}
     total = 0
     for index, descriptor in enumerate(layers):
-        require(descriptor.get("mediaType") == promotion.OCI_LAYER, "MIGRATION_LAYER_TYPE")
+        require(descriptor.get("mediaType") == MEDIA_FAMILIES[manifest["mediaType"]][1], "MIGRATION_LAYER_TYPE")
         compressed = verified_blob(descriptor, promotion)
         with gzip.GzipFile(fileobj=io.BytesIO(compressed)) as stream:
             raw = stream.read(MAX_EXPANDED + 1)
@@ -148,11 +169,11 @@ def validate_routing(files):
 
 
 def inspect(image_digest, promotion):
-    # Shared audited ECR primitives verify the exact manifest digest, immutable
-    # image identity, config/layer blob sizes and HTTPS origins.
+    # Shared audited ECR transport/blob primitives retain their bounds and HTTPS
+    # origin verification; this reader supports the two explicit image families.
     promotion.sha(image_digest)
-    manifest = promotion.image_manifest(image_digest)
-    require(manifest.get("config", {}).get("mediaType") == promotion.OCI_CONFIG, "MIGRATION_CONFIG_TYPE")
+    manifest = read_manifest(image_digest, promotion)
+    require(manifest.get("config", {}).get("mediaType") == MEDIA_FAMILIES[manifest["mediaType"]][0], "MIGRATION_CONFIG_TYPE")
     config = json.loads(verified_blob(manifest["config"], promotion))
     files = active_inputs(manifest, config, promotion)
     routing = validate_routing(files)

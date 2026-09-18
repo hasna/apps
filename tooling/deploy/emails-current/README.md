@@ -38,7 +38,9 @@ and candidate immutable OCI images** before registering a task or updating ECS.
 The source commit of an overlay recipe cannot establish what definitions its
 base image contains.
 
-The gate verifies manifest/config/layer digests and uncompressed diff IDs,
+The gate accepts OCI and Docker schema-2 manifests with their corresponding
+config and gzip-layer media types; indexes and unknown formats refuse. It
+verifies original manifest/config/layer digests and uncompressed diff IDs,
 applies whiteouts, and reads only bounded regular files without extracting or
 executing image code. It compares Emails' migration module, its storage helper
 and export modules, and the installed `@hasna/contracts/auth` bundle. The auth
