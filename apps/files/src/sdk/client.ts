@@ -39,6 +39,8 @@ export interface Stats { "total_files": number; "total_size": number; "by_ext"?:
 
 export interface ExtractedText { "source_ref": string; "file_id"?: string; "revision_id"?: string; "status": string; "mime": string; "bytes_read": number; "total_size"?: number; "truncated": boolean; "redacted": boolean; "segments": Array<Record<string, unknown>>; "metadata": Record<string, unknown> }
 
+export interface KnowledgeManifestFilters { "source_id"?: string; "collection_id"?: string; "project_id"?: string; "tag"?: string; "status": "active" | "deleted" | "moved" | "all"; "delta": boolean; "after"?: string; "before"?: string }
+
 export interface KnowledgeManifestRoot { "open_files_root": string; "source_id": string; "source_type": "local" | "s3" | "google_drive"; "evidence_hash": string }
 
 export interface KnowledgeManifestStorage { "provider": "local" | "s3" | "unknown"; "source_id": string }
@@ -51,7 +53,7 @@ export type KnowledgeManifestExtraction = KnowledgeManifestReadableExtraction | 
 
 export interface KnowledgeManifestFile { "kind": "file"; "source_ref": string; "revision_ref"?: string; "revision_id"?: string; "change_cursor": string; "source_revision_hash": string; "file_id": string; "source_id": string; "source_type": "local" | "s3" | "google_drive"; "name": string; "mime": string; "size": number; "hash"?: string; "status": "active" | "deleted" | "moved"; "updated_at": string; "deleted": boolean; "tombstone"?: boolean; "tags": Array<string>; "open_files_root": KnowledgeManifestRoot; "storage": KnowledgeManifestStorage; "extraction": KnowledgeManifestExtraction; "permissions": { "mode": "read_only"; "allowed_purposes": Array<string> }; "permission_labels": Array<string> }
 
-export interface KnowledgeManifest { "filter_contract": "files.knowledge.manifest.v1"; "cursor_contract": "files.knowledge.manifest.change.v1"; "manifest_id": string; "generated_at": string; "format": "json" | "jsonl"; "filters": Record<string, unknown>; "item_count": number; "cursor"?: string; "next_cursor"?: string; "has_more": boolean; "complete": boolean; "delta": boolean; "high_watermark": string; "delta_cursor": string; "tombstone_count": number; "items": Array<KnowledgeManifestFile> }
+export interface KnowledgeManifest { "filter_contract": "files.knowledge.manifest.v1"; "cursor_contract": "files.knowledge.manifest.change.v1"; "manifest_id": string; "generated_at": string; "format": "json" | "jsonl"; "filters": KnowledgeManifestFilters; "item_count": number; "cursor"?: string; "next_cursor"?: string; "has_more": boolean; "complete": boolean; "delta": boolean; "high_watermark": string; "delta_cursor": string; "tombstone_count": number; "items": Array<KnowledgeManifestFile> }
 
 export interface KnowledgeManifestError { "error": string; "reason": "invalid_manifest_cursor" | "invalid_manifest_query" | "unknown_manifest_query" | "legacy_sync_version_unavailable" | "acl_summary_unavailable" | "evidence_assets_unavailable" | "filtered_delta_unavailable" | "tenant_binding_missing" | "manifest_store_incompatible" }
 

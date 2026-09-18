@@ -124,6 +124,47 @@ const HOSTED_MANIFEST = {
   }],
 };
 
+type HostedManifestFixture = Record<string, unknown> & {
+  filters: Record<string, unknown>;
+  items: Array<Record<string, unknown>>;
+};
+
+function hostedManifestFor(query: URLSearchParams): HostedManifestFixture {
+  const delta = query.get("delta") === "true" || query.has("since_cursor");
+  const status = query.get("status") ?? (query.get("include_deleted") === "true" || delta ? "all" : "active");
+  const filters: Record<string, unknown> = { status, delta };
+  for (const key of ["source_id", "collection_id", "project_id", "after", "before"] as const) {
+    const value = query.get(key);
+    if (value !== null) filters[key] = value;
+  }
+  const tag = query.get("tag");
+  if (tag !== null) filters.tag = tag.trim().toLowerCase();
+
+  const manifest = structuredClone(HOSTED_MANIFEST) as unknown as HostedManifestFixture;
+  manifest.filters = filters;
+  manifest.delta = delta;
+  manifest.format = query.get("format") ?? "json";
+  const cursor = query.get("cursor");
+  if (cursor !== null) manifest.cursor = cursor;
+  return manifest;
+}
+
+function adversarialHostedManifest(query: URLSearchParams): HostedManifestFixture {
+  const manifest = hostedManifestFor(query);
+  const tag = query.get("tag");
+  const item = manifest.items[0]!;
+  if (tag === "ignored-filter") manifest.filters = { status: "active", delta: false };
+  if (tag === "private-filter") manifest.filters.api_key = "must-not-pass";
+  if (tag === "unknown-source-type") {
+    item.source_type = "ftp";
+    (item.open_files_root as Record<string, unknown>).source_type = "ftp";
+    (item.storage as Record<string, unknown>).provider = "unknown";
+  }
+  if (tag === "missing-updated-at") delete item.updated_at;
+  if (tag === "non-string-hash") item.hash = { bucket: "private-bucket" };
+  return manifest;
+}
+
 let testDir: string;
 let server: ReturnType<typeof Bun.serve>;
 let hits: string[];
@@ -155,20 +196,22 @@ beforeEach(() => {
         }
         manifestQueries.push(url.searchParams);
         if (url.searchParams.get("tag") === "malformed") return Response.json({ items: [] });
+        const manifest = adversarialHostedManifest(url.searchParams);
         if (url.searchParams.get("tag") === "partial") {
+          const item = manifest.items[0]!;
           return Response.json({
-            ...HOSTED_MANIFEST,
+            ...manifest,
             items: [{
-              ...HOSTED_MANIFEST.items[0],
+              ...item,
               extraction: {
                 text_available: true,
                 status: "partial",
-                extracted_text_ref: `${HOSTED_MANIFEST.items[0].source_ref}/text`,
+                extracted_text_ref: `${item.source_ref as string}/text`,
               },
             }],
           });
         }
-        return Response.json(HOSTED_MANIFEST);
+        return Response.json(manifest);
       }
       if (req.method === "GET" && path === `/files/${HOSTED_FILE.id}`) {
         return Response.json(HOSTED_FILE);
@@ -363,16 +406,26 @@ describe("files knowledge manifest on the hosted transport", () => {
   test("full-snapshot filters are forwarded to the service, not applied locally", async () => {
     const result = await runCli([
       "knowledge", "manifest", "--json",
-      "--source", "src_know", "--tag", "handbook",
+      "--source", "src_know", "--collection", "col_know", "--project", "prj_know", "--tag", "Handbook",
       "--limit", "25", "--status", "all",
     ]);
 
     expect(result.exitCode).toBe(0);
     const query = manifestQueries[0]!;
     expect(query.get("source_id")).toBe("src_know");
-    expect(query.get("tag")).toBe("handbook");
+    expect(query.get("collection_id")).toBe("col_know");
+    expect(query.get("project_id")).toBe("prj_know");
+    expect(query.get("tag")).toBe("Handbook");
     expect(query.get("limit")).toBe("25");
     expect(query.get("status")).toBe("all");
+    expect((JSON.parse(result.stdout) as { filters: Record<string, unknown> }).filters).toEqual({
+      source_id: "src_know",
+      collection_id: "col_know",
+      project_id: "prj_know",
+      tag: "handbook",
+      status: "all",
+      delta: false,
+    });
     expect(databaseFilesUnder(testDir)).toEqual([]);
   });
 
@@ -419,6 +472,25 @@ describe("files knowledge manifest on the hosted transport", () => {
     expect(result.exitCode).toBe(1);
     expect(result.stdout).toBe("");
     expect(result.stderr).toContain("Hosted knowledge manifest response is incompatible");
+    expect(databaseFilesUnder(testDir)).toEqual([]);
+  });
+
+  test("refuses unattested filters and malformed typed fields without printing private values", async () => {
+    const cases = [
+      ["--collection", "col_requested", "--project", "prj_requested", "--tag", "ignored-filter", "--status", "all"],
+      ["--tag", "private-filter"],
+      ["--tag", "unknown-source-type"],
+      ["--tag", "missing-updated-at"],
+      ["--tag", "non-string-hash"],
+    ];
+    for (const args of cases) {
+      const result = await runCli(["knowledge", "manifest", "--json", ...args]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain("Hosted knowledge manifest response is incompatible");
+      expect(`${result.stdout}\n${result.stderr}`).not.toContain("must-not-pass");
+      expect(`${result.stdout}\n${result.stderr}`).not.toContain("private-bucket");
+    }
     expect(databaseFilesUnder(testDir)).toEqual([]);
   });
 

@@ -166,6 +166,47 @@ const HOSTED_MANIFEST = {
   }],
 };
 
+type HostedManifestFixture = Record<string, unknown> & {
+  filters: Record<string, unknown>;
+  items: Array<Record<string, unknown>>;
+};
+
+function hostedManifestFor(query: URLSearchParams): HostedManifestFixture {
+  const delta = query.get("delta") === "true" || query.has("since_cursor");
+  const status = query.get("status") ?? (query.get("include_deleted") === "true" || delta ? "all" : "active");
+  const filters: Record<string, unknown> = { status, delta };
+  for (const key of ["source_id", "collection_id", "project_id", "after", "before"] as const) {
+    const value = query.get(key);
+    if (value !== null) filters[key] = value;
+  }
+  const tag = query.get("tag");
+  if (tag !== null) filters.tag = tag.trim().toLowerCase();
+
+  const manifest = structuredClone(HOSTED_MANIFEST) as unknown as HostedManifestFixture;
+  manifest.filters = filters;
+  manifest.delta = delta;
+  manifest.format = query.get("format") ?? "json";
+  const cursor = query.get("cursor");
+  if (cursor !== null) manifest.cursor = cursor;
+  return manifest;
+}
+
+function adversarialHostedManifest(query: URLSearchParams): HostedManifestFixture {
+  const manifest = hostedManifestFor(query);
+  const tag = query.get("tag");
+  const item = manifest.items[0]!;
+  if (tag === "ignored-filter") manifest.filters = { status: "active", delta: false };
+  if (tag === "private-filter") manifest.filters.api_key = "must-not-pass";
+  if (tag === "unknown-source-type") {
+    item.source_type = "ftp";
+    (item.open_files_root as Record<string, unknown>).source_type = "ftp";
+    (item.storage as Record<string, unknown>).provider = "unknown";
+  }
+  if (tag === "missing-updated-at") delete item.updated_at;
+  if (tag === "non-string-hash") item.hash = { bucket: "private-bucket" };
+  return manifest;
+}
+
 const HOSTED_CONTENT = "hello hosted files\nline two\nline three\n";
 
 const HOSTED_EXTRACT = {
@@ -252,20 +293,22 @@ async function startFakeServer(): Promise<FakeServer> {
           }, { status: 400 });
         }
         if (url.searchParams.get("tag") === "malformed") return Response.json({ items: [] });
+        const manifest = adversarialHostedManifest(url.searchParams);
         if (url.searchParams.get("tag") === "partial") {
+          const item = manifest.items[0]!;
           return Response.json({
-            ...HOSTED_MANIFEST,
+            ...manifest,
             items: [{
-              ...HOSTED_MANIFEST.items[0],
+              ...item,
               extraction: {
                 text_available: true,
                 status: "partial",
-                extracted_text_ref: `${HOSTED_MANIFEST.items[0].source_ref}/text`,
+                extracted_text_ref: `${item.source_ref as string}/text`,
               },
             }],
           });
         }
-        return Response.json(HOSTED_MANIFEST);
+        return Response.json(manifest);
       }
       const f = path.match(/^\/files\/([^/]+)$/);
       if (method === "GET" && f) {
@@ -752,6 +795,28 @@ describe("ported read-side MCP tools on the hosted (api) transport", () => {
       });
       expect(result.isError).toBe(true);
       expect(callText(result)).toContain("Hosted knowledge manifest response is incompatible");
+    } finally {
+      await close();
+    }
+  });
+
+  test("export_knowledge_manifest refuses unattested filters and malformed typed fields", async () => {
+    const { client, close } = await connectedClient();
+    try {
+      const cases: Array<Record<string, unknown>> = [
+        { collection_id: "col_requested", project_id: "prj_requested", tag: "ignored-filter", status: "all" },
+        { tag: "private-filter" },
+        { tag: "unknown-source-type" },
+        { tag: "missing-updated-at" },
+        { tag: "non-string-hash" },
+      ];
+      for (const args of cases) {
+        const result = await client.callTool({ name: "export_knowledge_manifest", arguments: args });
+        expect(result.isError).toBe(true);
+        expect(callText(result)).toContain("Hosted knowledge manifest response is incompatible");
+        expect(callText(result)).not.toContain("must-not-pass");
+        expect(callText(result)).not.toContain("private-bucket");
+      }
     } finally {
       await close();
     }

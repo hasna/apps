@@ -201,6 +201,32 @@ describe("GET /v1/knowledge/manifest", () => {
     const extractionExtra = structuredClone(manifest) as KnowledgeSourceManifest & { items: Array<{ extraction: Record<string, unknown> }> };
     extractionExtra.items[0]!.extraction.bucket = "private-bucket";
     invalid.push(extractionExtra as KnowledgeSourceManifest);
+    const unknownSourceType = structuredClone(manifest) as KnowledgeSourceManifest & { items: Array<Record<string, unknown>> };
+    unknownSourceType.items[0]!.source_type = "ftp";
+    (unknownSourceType.items[0]!.open_files_root as Record<string, unknown>).source_type = "ftp";
+    (unknownSourceType.items[0]!.storage as Record<string, unknown>).provider = "unknown";
+    invalid.push(unknownSourceType as KnowledgeSourceManifest);
+    const missingUpdatedAt = structuredClone(manifest) as KnowledgeSourceManifest & { items: Array<Record<string, unknown>> };
+    delete missingUpdatedAt.items[0]!.updated_at;
+    invalid.push(missingUpdatedAt as KnowledgeSourceManifest);
+    const invalidUpdatedAt = structuredClone(manifest) as KnowledgeSourceManifest & { items: Array<Record<string, unknown>> };
+    invalidUpdatedAt.items[0]!.updated_at = "not-a-date";
+    invalid.push(invalidUpdatedAt as KnowledgeSourceManifest);
+    const nonStringHash = structuredClone(manifest) as KnowledgeSourceManifest & { items: Array<Record<string, unknown>> };
+    nonStringHash.items[0]!.hash = { private: true };
+    invalid.push(nonStringHash as KnowledgeSourceManifest);
+    const emptyManifestId = structuredClone(manifest);
+    emptyManifestId.manifest_id = "";
+    invalid.push(emptyManifestId);
+    const blankManifestId = structuredClone(manifest);
+    blankManifestId.manifest_id = "   ";
+    invalid.push(blankManifestId);
+    const invalidGeneratedAt = structuredClone(manifest);
+    invalidGeneratedAt.generated_at = "2026-02-30T00:00:00.000Z";
+    invalid.push(invalidGeneratedAt);
+    const privateFilter = structuredClone(manifest) as KnowledgeSourceManifest & { filters: Record<string, unknown> };
+    privateFilter.filters.api_key = "must-not-pass";
+    invalid.push(privateFilter);
 
     for (const candidate of invalid) {
       expect(() => validateHostedKnowledgeManifest(candidate)).toThrow("Hosted knowledge manifest response is incompatible");
@@ -217,11 +243,13 @@ describe("GET /v1/knowledge/manifest", () => {
   test("mints signed continuations pinned to the original high watermark", async () => {
     const fixture = handler({ rows: [change(7, "f_1"), change(9, "f_2")] });
     const first = await (await get(fixture.h, "?limit=1&tag=handbook")).json() as KnowledgeSourceManifest;
+    expect(validateHostedKnowledgeManifest(first, { limit: 1, tag: "handbook" })).toBe(first);
     expect(first.next_cursor).toBeDefined();
     expect(first.has_more).toBe(true);
     expect(first.complete).toBe(false);
 
     const second = await (await get(fixture.h, `?limit=1&tag=handbook&cursor=${encodeURIComponent(first.next_cursor!)}`)).json() as KnowledgeSourceManifest;
+    expect(validateHostedKnowledgeManifest(second, { limit: 1, tag: "handbook", cursor: first.next_cursor })).toBe(second);
     expect(second.high_watermark).toBe(HIGH_WATERMARK);
     expect(fixture.sql.filter((text) => text.includes("MAX(cursor)"))).toHaveLength(1);
   });
@@ -241,7 +269,38 @@ describe("GET /v1/knowledge/manifest", () => {
 
   test("pushes source, tag, project, collection, time, and status filters into immutable full snapshots", async () => {
     const fixture = handler();
-    await get(fixture.h, "?source_id=src_1&tag=Handbook&collection_id=col_1&project_id=prj_1&status=all&after=2026-01-01&before=2026-12-31");
+    const response = await get(fixture.h, "?source_id=src_1&tag=Handbook&collection_id=col_1&project_id=prj_1&status=all&after=2026-01-01&before=2026-12-31");
+    const manifest = await response.json() as KnowledgeSourceManifest;
+    const requested = {
+      source_id: "src_1",
+      tag: "Handbook",
+      collection_id: "col_1",
+      project_id: "prj_1",
+      status: "all" as const,
+      after: "2026-01-01",
+      before: "2026-12-31",
+    };
+    expect(manifest.filters).toEqual({
+      source_id: "src_1",
+      collection_id: "col_1",
+      project_id: "prj_1",
+      tag: "handbook",
+      status: "all",
+      delta: false,
+      after: "2026-01-01",
+      before: "2026-12-31",
+    });
+    expect(validateHostedKnowledgeManifest(manifest, requested)).toBe(manifest);
+    for (const [key, replacement] of [
+      ["collection_id", "col_other"],
+      ["project_id", "prj_other"],
+      ["tag", "other"],
+      ["status", "active"],
+    ] as const) {
+      const ignored = structuredClone(manifest) as KnowledgeSourceManifest & { filters: Record<string, unknown> };
+      ignored.filters[key] = replacement;
+      expect(() => validateHostedKnowledgeManifest(ignored, requested)).toThrow("Hosted knowledge manifest response is incompatible");
+    }
     const index = fixture.sql.findIndex((text) => text.includes("WITH latest AS"));
     expect(index).toBeGreaterThanOrEqual(0);
     const text = fixture.sql[index]!;

@@ -31,6 +31,25 @@ export const MANIFEST_MAX_LIMIT = 1000;
 export const MANIFEST_ALLOWED_PURPOSES = ["knowledge_index", "knowledge_answer", "agent_context"];
 
 /**
+ * Privacy-minimized, canonical filter attestation for the hosted manifest.
+ *
+ * Pagination controls and signed cursors are deliberately excluded: they do
+ * not change the selected population. Every property here is applied by the
+ * hosted query and is therefore safe for a client to compare exactly with its
+ * request, including on continuation pages.
+ */
+export interface HostedKnowledgeManifestFilters {
+  source_id?: string;
+  collection_id?: string;
+  project_id?: string;
+  tag?: string;
+  status: "active" | "deleted" | "moved" | "all";
+  delta: boolean;
+  after?: string;
+  before?: string;
+}
+
+/**
  * One manifest row as both stores produce it. `source_enabled` and
  * `machine_is_current` are integers because SQLite has no boolean; the Postgres
  * query casts with `::int` so a single row shape serves both.
@@ -360,6 +379,23 @@ export function manifestFilters(opts: KnowledgeSourceManifestOptions): Record<st
   };
 }
 
+/** Return the exact closed filter set applied by the hosted PostgreSQL query. */
+export function hostedManifestFilters(
+  opts: KnowledgeSourceManifestOptions,
+): HostedKnowledgeManifestFilters & Record<string, unknown> {
+  const delta = Boolean(opts.delta || opts.since_cursor);
+  return compactObject({
+    source_id: opts.source_id,
+    collection_id: opts.collection_id,
+    project_id: opts.project_id,
+    tag: opts.tag === undefined ? undefined : opts.tag.trim().toLowerCase(),
+    status: opts.status ?? (opts.include_deleted || delta ? "all" : "active"),
+    delta,
+    after: opts.after,
+    before: opts.before,
+  }) as unknown as HostedKnowledgeManifestFilters & Record<string, unknown>;
+}
+
 export function parseManifestCursor(cursor: string | undefined): ManifestCursor | null {
   if (!cursor) return null;
   try {
@@ -391,9 +427,10 @@ export function buildManifestId(
   generatedAt: string,
   opts: KnowledgeSourceManifestOptions,
   items: KnowledgeSourceManifestItem[],
+  filters: Record<string, unknown> = manifestFilters(opts),
 ): string {
   return `manifest_${createHash("sha256")
-    .update(JSON.stringify({ generatedAt, filters: manifestFilters(opts), item_ids: itemIds(items) }))
+    .update(JSON.stringify({ generatedAt, filters, item_ids: itemIds(items) }))
     .digest("hex")
     .slice(0, 24)}`;
 }
@@ -513,15 +550,17 @@ export function buildManifestEnvelope(input: {
   delta_cursor?: string;
   has_more?: boolean;
   complete?: boolean;
+  filters?: Record<string, unknown>;
 }): KnowledgeSourceManifest {
   const { generated_at, format, opts, items, high_watermark, next_cursor } = input;
+  const filters = input.filters ?? manifestFilters(opts);
   return {
     filter_contract: input.filter_contract,
     cursor_contract: input.cursor_contract,
-    manifest_id: buildManifestId(generated_at, opts, items),
+    manifest_id: buildManifestId(generated_at, opts, items, filters),
     generated_at,
     format,
-    filters: manifestFilters(opts),
+    filters,
     item_count: items.length,
     cursor: opts.cursor,
     next_cursor,
@@ -539,14 +578,18 @@ export function buildManifestEnvelope(input: {
 }
 
 /** Runtime validation for the hosted, privacy-minimized manifest contract. */
-export function validateHostedKnowledgeManifest(value: unknown): KnowledgeSourceManifest {
+export function validateHostedKnowledgeManifest(
+  value: unknown,
+  requestedOptions: KnowledgeSourceManifestOptions = {},
+): KnowledgeSourceManifest {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Hosted knowledge manifest response is incompatible.");
   const manifest = value as Record<string, unknown>;
+  const expectedFilters = hostedManifestFilters(requestedOptions);
   if (
     manifest.filter_contract !== "files.knowledge.manifest.v1"
     || manifest.cursor_contract !== "files.knowledge.manifest.change.v1"
-    || typeof manifest.manifest_id !== "string"
-    || typeof manifest.generated_at !== "string"
+    || typeof manifest.manifest_id !== "string" || manifest.manifest_id.trim().length === 0
+    || typeof manifest.generated_at !== "string" || !isValidIsoDateTime(manifest.generated_at)
     || (manifest.format !== "json" && manifest.format !== "jsonl")
     || !manifest.filters || typeof manifest.filters !== "object" || Array.isArray(manifest.filters)
     || !Number.isSafeInteger(manifest.item_count) || (manifest.item_count as number) < 0
@@ -558,8 +601,25 @@ export function validateHostedKnowledgeManifest(value: unknown): KnowledgeSource
     || !Number.isSafeInteger(manifest.tombstone_count) || (manifest.tombstone_count as number) < 0
     || !Array.isArray(manifest.items)
   ) throw new Error("Hosted knowledge manifest response is incompatible.");
+  if (manifest.format !== (requestedOptions.format ?? "json")) throw new Error("Hosted knowledge manifest response is incompatible.");
+  if (manifest.delta !== expectedFilters.delta) throw new Error("Hosted knowledge manifest response is incompatible.");
+  const filters = manifest.filters as Record<string, unknown>;
+  if (!isValidHostedManifestFilters(filters) || !exactPrimitiveObject(filters, expectedFilters)) {
+    throw new Error("Hosted knowledge manifest response is incompatible.");
+  }
   if (manifest.items.length !== manifest.item_count) throw new Error("Hosted knowledge manifest response is incompatible.");
   if (manifest.complete && manifest.has_more) throw new Error("Hosted knowledge manifest response is incompatible.");
+  if (manifest.cursor !== undefined && (typeof manifest.cursor !== "string" || manifest.cursor.length === 0)) {
+    throw new Error("Hosted knowledge manifest response is incompatible.");
+  }
+  if (requestedOptions.cursor === undefined) {
+    if (Object.prototype.hasOwnProperty.call(manifest, "cursor")) throw new Error("Hosted knowledge manifest response is incompatible.");
+  } else if (manifest.cursor !== requestedOptions.cursor) {
+    throw new Error("Hosted knowledge manifest response is incompatible.");
+  }
+  if (manifest.next_cursor !== undefined && (typeof manifest.next_cursor !== "string" || manifest.next_cursor.length === 0)) {
+    throw new Error("Hosted knowledge manifest response is incompatible.");
+  }
   if (manifest.has_more !== (typeof manifest.next_cursor === "string" && manifest.next_cursor.length > 0)) {
     throw new Error("Hosted knowledge manifest response is incompatible.");
   }
@@ -587,8 +647,11 @@ export function validateHostedKnowledgeManifest(value: unknown): KnowledgeSource
       || typeof item.name !== "string"
       || typeof item.mime !== "string"
       || !Number.isSafeInteger(item.size) || (item.size as number) < 0
-      || !["active", "deleted", "moved"].includes(String(item.status))
+      || !isOneOfString(item.source_type, ["local", "s3", "google_drive"])
+      || !isOneOfString(item.status, ["active", "deleted", "moved"])
+      || typeof item.updated_at !== "string" || !isValidIsoDateTime(item.updated_at)
       || typeof item.deleted !== "boolean"
+      || (item.tombstone !== undefined && typeof item.tombstone !== "boolean")
       || !Array.isArray(item.tags) || item.tags.some((tag) => typeof tag !== "string")
       || !item.open_files_root || typeof item.open_files_root !== "object" || Array.isArray(item.open_files_root)
       || !item.storage || typeof item.storage !== "object" || Array.isArray(item.storage)
@@ -609,6 +672,9 @@ export function validateHostedKnowledgeManifest(value: unknown): KnowledgeSource
     if (deleted) tombstones++;
     if (item.source_ref !== `open-files://file/${encodeURIComponent(item.file_id as string)}`) throw new Error("Hosted knowledge manifest response is incompatible.");
     if (typeof item.source_revision_hash !== "string" || !/^sha256:[a-f0-9]{64}$/.test(item.source_revision_hash)) {
+      throw new Error("Hosted knowledge manifest response is incompatible.");
+    }
+    if (item.hash !== undefined && (typeof item.hash !== "string" || item.hash.length === 0)) {
       throw new Error("Hosted knowledge manifest response is incompatible.");
     }
 
@@ -678,4 +744,43 @@ function exactObjectKeys(value: Record<string, unknown>, expected: readonly stri
   const actual = Object.keys(value).sort();
   const sortedExpected = [...expected].sort();
   return actual.length === sortedExpected.length && actual.every((key, index) => key === sortedExpected[index]);
+}
+
+function exactPrimitiveObject(
+  actual: Record<string, unknown>,
+  expected: Record<string, unknown>,
+): boolean {
+  const keys = Object.keys(expected);
+  return exactObjectKeys(actual, keys) && keys.every((key) => actual[key] === expected[key]);
+}
+
+function isValidHostedManifestFilters(filters: Record<string, unknown>): boolean {
+  const allowed = ["source_id", "collection_id", "project_id", "tag", "status", "delta", "after", "before"] as const;
+  if (Object.keys(filters).some((key) => !allowed.includes(key as typeof allowed[number]))) return false;
+  if (!isOneOfString(filters.status, ["active", "deleted", "moved", "all"]) || typeof filters.delta !== "boolean") return false;
+  for (const key of ["source_id", "collection_id", "project_id", "tag", "after", "before"] as const) {
+    const value = filters[key];
+    if (value !== undefined && (typeof value !== "string" || value.length === 0)) return false;
+  }
+  return filters.tag === undefined || filters.tag === (filters.tag as string).trim().toLowerCase();
+}
+
+function compactObject(value: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined));
+}
+
+function isOneOfString<const T extends string>(value: unknown, allowed: readonly T[]): value is T {
+  return typeof value === "string" && allowed.includes(value as T);
+}
+
+function isValidIsoDateTime(value: string): boolean {
+  const date = /^(\d{4})-(\d{2})-(\d{2})T/.exec(value);
+  if (!date || !/(?:Z|[+-]\d{2}:\d{2})$/.test(value) || !Number.isFinite(Date.parse(value))) return false;
+  const year = Number(date[1]);
+  const month = Number(date[2]);
+  const day = Number(date[3]);
+  const calendar = new Date(Date.UTC(year, month - 1, day));
+  return calendar.getUTCFullYear() === year
+    && calendar.getUTCMonth() === month - 1
+    && calendar.getUTCDate() === day;
 }

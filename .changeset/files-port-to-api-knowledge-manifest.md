@@ -30,8 +30,12 @@ partial rows remain unavailable.
 
 OpenAPI now defines the complete query, success, item, cursor, and refusal
 schemas, and the generated SDK returns the typed manifest contract. CLI and MCP
-clients reject malformed or unattested 2xx responses. Existing local manifest
-behavior, compact Files output, MCP profiles, canonical Files home, fresh
+clients reject malformed or unattested 2xx responses. Hosted filter evidence is
+a closed typed object and must exactly attest the requested source, project,
+collection, tag, status, time, and delta selection on every page. Runtime
+validation also enforces required timestamps, closed source/status enums,
+typed hashes, and rejects unknown or sensitive response fields. Existing local
+manifest behavior, compact Files output, MCP profiles, canonical Files home, fresh
 credential resolution, and `https://api.hasna.com/files` plus one
 client-appended `/v1` remain unchanged.
 

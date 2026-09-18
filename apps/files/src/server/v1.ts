@@ -24,6 +24,7 @@ import type { TypedQueryClient } from "../generated/storage-kit/query.js";
 import {
   buildHostedManifestFileItem,
   buildManifestEnvelope,
+  hostedManifestFilters,
   normalizeManifestLimit,
 } from "../lib/knowledge-manifest-shared.js";
 import {
@@ -808,6 +809,7 @@ export function createV1Handler(options: V1HandlerOptions = {}): V1Handler {
               cursor_contract: "files.knowledge.manifest.change.v1",
               has_more: hasNext,
               complete: !opts.cursor && !hasNext,
+              filters: hostedManifestFilters(opts),
             }));
           } catch (error) {
             if (error instanceof KnowledgeManifestCursorError) {

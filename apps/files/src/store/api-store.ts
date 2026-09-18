@@ -432,7 +432,7 @@ export class ApiStore implements FilesStore {
         include_evidence_assets: opts.include_evidence_assets,
       },
     });
-    return validateHostedKnowledgeManifest(response);
+    return validateHostedKnowledgeManifest(response, opts);
   }
 
   // ── tags ─────────────────────────────────────────────────────────────────
