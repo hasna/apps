@@ -2,6 +2,10 @@ name: emails-search-promotion-execute
 on:
   workflow_call:
     inputs:
+      recipe:
+        type: string
+        required: false
+        default: search-capacity
       phase: {type: string, required: true}
       source: {type: string, required: true}
       prepared_run_id: {type: string, required: true}
@@ -34,7 +38,7 @@ jobs:
           persist-credentials: false
 
       - name: Install the pinned migration-input parser runtime
-        if: ${{ inputs.phase == 'current' }}
+        if: ${{ inputs.phase == 'current' || inputs.recipe == 'delivery-headers' }}
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: "1.3.14"
@@ -45,19 +49,22 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           SOURCE: ${{ inputs.source }}
           PHASE: ${{ inputs.phase }}
+          RECIPE: ${{ inputs.recipe }}
           PREPARED_RUN: ${{ inputs.prepared_run_id }}
           PREPARED_SHA: ${{ inputs.prepared_sha256 }}
-        run: python3 -I -B tooling/deploy/emails-search/gate.py --source "$SOURCE" --phase "$PHASE" --run "$PREPARED_RUN" --prepared-sha256 "$PREPARED_SHA" --download "$RUNNER_TEMP/emails-reviewed-plan"
+        run: python3 -I -B tooling/deploy/emails-search/gate.py --recipe "$RECIPE" --source "$SOURCE" --phase "$PHASE" --run "$PREPARED_RUN" --prepared-sha256 "$PREPARED_SHA" --download "$RUNNER_TEMP/emails-reviewed-plan"
 
       - name: Recheck exact main and download reviewed reconciliation
         if: ${{ inputs.phase == 'current' }}
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE: ${{ inputs.source }}
+          RECIPE: ${{ inputs.recipe }}
           RECONCILIATION_RUN: ${{ inputs.reconciliation_run_id }}
           RECONCILED_SHA256: ${{ inputs.reconciled_sha256 }}
         run: |
           set -Eeuo pipefail
+          test "$RECIPE" = "search-capacity"
           python3 -I -B tooling/deploy/emails-current/gate.py \
             --source "$SOURCE" \
             --run "$RECONCILIATION_RUN" \
@@ -72,6 +79,7 @@ jobs:
         if: ${{ inputs.phase != 'current' }}
         run: |
           python3 -I -B tooling/deploy/emails-search/promotion_test.py
+          python3 -I -B tooling/deploy/emails-search/delivery_test.py
           python3 -I -B tooling/deploy/emails-search/aws_transport_test.py
 
       - name: Exercise the exact amd64 server image with isolated PostgreSQL
@@ -120,13 +128,14 @@ jobs:
         env:
           SOURCE: ${{ inputs.source }}
           PHASE: ${{ inputs.phase }}
+          RECIPE: ${{ inputs.recipe }}
           PREPARED_SHA: ${{ inputs.prepared_sha256 }}
         shell: bash
         run: |
           set -Eeuo pipefail
           # -I excludes ambient Python import paths. The entrypoint explicitly
           # admits only its checked-in sibling module by exact local path.
-          python3 -I -B tooling/deploy/emails-search/promotion.py "$PHASE" --source "$SOURCE" --out "$RUNNER_TEMP/emails-promotion-receipts" --prepared "$RUNNER_TEMP/emails-reviewed-plan/prepared.json" --prepared-sha256 "$PREPARED_SHA"
+          python3 -I -B tooling/deploy/emails-search/promotion.py "$PHASE" --recipe "$RECIPE" --source "$SOURCE" --out "$RUNNER_TEMP/emails-promotion-receipts" --prepared "$RUNNER_TEMP/emails-reviewed-plan/prepared.json" --prepared-sha256 "$PREPARED_SHA"
 
       - name: Login to Amazon ECR for the current server
         if: ${{ inputs.phase == 'current' }}
@@ -180,7 +189,7 @@ jobs:
         if: ${{ always() && inputs.phase != 'current' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: ${{ inputs.phase == 'prepare' && 'emails-search-prepared' || inputs.phase == 'reconcile' && 'emails-search-reconciled' || 'emails-search-promoted' }}
+          name: ${{ inputs.recipe == 'delivery-headers' && (inputs.phase == 'prepare' && 'emails-delivery-prepared' || inputs.phase == 'reconcile' && 'emails-delivery-reconciled' || 'emails-delivery-promoted') || (inputs.phase == 'prepare' && 'emails-search-prepared' || inputs.phase == 'reconcile' && 'emails-search-reconciled' || 'emails-search-promoted') }}
           path: ${{ runner.temp }}/emails-promotion-receipts/*.json
           if-no-files-found: ignore
           retention-days: 30
