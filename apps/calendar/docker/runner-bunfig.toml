@@ -1,0 +1,3 @@
+[install]
+# An unexpected bare import must fail rather than download code at startup.
+auto = "disable"
