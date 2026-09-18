@@ -60,13 +60,21 @@ mementos <command> --help
 
 Human-readable list and search commands are compact and paginated by default.
 Use `--limit` with `--cursor` or `--offset`, `--verbose` for wider snippets, and
-`mementos show <id>` for a full record. Use global `--json` or a supported
-`--format json|csv|yaml` option for structured output.
+`mementos show <id>` for a full record.
+
+JSON `list` and `history` are also bounded by default. They emit minified
+`{ memories, _meta }` page receipts: list returns 20 compact rows, history
+returns 10, `_meta.next_cursor` continues without overlap, and the default byte
+budget is 32 KiB. Add `--full` for full objects on a bounded page. Complete
+traversal requires `--all` (optionally combined with `--full`) and fails closed
+above 5,000 rows or 1 MiB.
 
 ```bash
-mementos list --limit 20 --cursor 20
+mementos list --format json
+mementos list --format json --cursor 20
+mementos list --format json --full --limit 5
+mementos history --json --all
 mementos search "deploy" --verbose
-mementos --json list
 mementos storage mode --json
 ```
 

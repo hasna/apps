@@ -646,7 +646,8 @@ describe("mementos read verbs never leak credential-shaped keys on stdout", () =
     const { stdout, exitCode } = await runCli(env, "--json", "history", "--limit", "100");
     expect(exitCode).toBe(0);
     expect(stdout).not.toContain(NPM_REGISTRY_TOKEN);
-    const parsed = JSON.parse(stdout) as Array<Record<string, unknown>>;
+    const payload = JSON.parse(stdout) as { memories: Array<Record<string, unknown>> };
+    const parsed = payload.memories;
     expect(parsed.length).toBe(2);
     const npm = parsed.find((m) => m.id === "m-hist-npm");
     expect(npm).toBeTruthy();
