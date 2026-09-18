@@ -509,19 +509,23 @@ function normalizeNativeAgentMetadata(value: unknown): NativeAgentMetadata {
   if (typeof frontmatter !== "string" || frontmatter.length > 16384 || frontmatter.includes("\0")) throw new Error("Invalid nativeAgent.frontmatter.");
   const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n$/.exec(frontmatter);
   if (!match) throw new Error("nativeAgent.frontmatter requires one complete newline-terminated YAML header.");
-  const fields = new Map<string, string>();
+  const scalar = (raw: string): string | number | boolean | null | undefined => {
+    if (raw.startsWith('"')) { try { const parsed: unknown = JSON.parse(raw); return typeof parsed === "string" ? parsed : undefined; } catch { return undefined; } }
+    if (!/^[A-Za-z0-9][A-Za-z0-9 _.,:;()/?@+-]*$/.test(raw) || /:\s/.test(raw)) return undefined;
+    if (raw === "true") return true;
+    if (raw === "false") return false;
+    if (raw === "null") return null;
+    if (/^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$/.test(raw)) return Number(raw);
+    return raw;
+  };
+  const fields = new Map<string, string | number | boolean | null>();
   for (const line of match[1]!.split(/\r?\n/)) {
     if (!line.trim() || line.startsWith("#")) continue;
     const field = /^([A-Za-z][A-Za-z0-9_-]*):[ \t]+(.+)$/.exec(line);
-    if (!field || fields.has(field[1]!) || /^[|>&*!{\[]/.test(field[2]!)) throw new Error("nativeAgent.frontmatter requires unambiguous, unique flat scalar fields.");
-    fields.set(field[1]!, field[2]!);
+    if (!field || fields.has(field[1]!) || scalar(field[2]!) === undefined) throw new Error("nativeAgent.frontmatter requires unambiguous, unique flat scalar fields.");
+    fields.set(field[1]!, scalar(field[2]!)!);
   }
-  const scalar = (key: string): string | undefined => {
-    const raw = fields.get(key);
-    if (raw?.startsWith('"')) { try { const parsed: unknown = JSON.parse(raw); return typeof parsed === "string" ? parsed : undefined; } catch { return undefined; } }
-    return raw && /^[A-Za-z0-9][A-Za-z0-9 _.,:;()/?@+-]*$/.test(raw) ? raw : undefined;
-  };
-  if (scalar("name") !== name || scalar("description") !== description) throw new Error("nativeAgent.frontmatter name and description must match explicit metadata.");
+  if (fields.get("name") !== name || fields.get("description") !== description) throw new Error("nativeAgent.frontmatter name and description must match explicit metadata.");
   return { name, description, frontmatter };
 }
 

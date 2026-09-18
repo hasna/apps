@@ -74,7 +74,11 @@ describe("native custom-agent asset refresh", () => {
       '---\nname: auditor\ndescription: "Review"\ntools:\n  - Read\n---\n',
       '---\nname: auditor\ndescription: "Review"\n---\nEXTRA',
       '---\nname: auditor\ndescription: "Review"\n---\n---\n',
+      '---\nname: auditor\ndescription: "Review"\ntools: "Read\n---\n',
+      '---\nname: auditor\ndescription: "Review"\ntools: "Read\\q"\n---\n',
+      '---\nname: auditor\ndescription: "Review"\ntools: Read: Bash\n---\n',
     ]) expect(() => renderNativeAgentContent(body, { name: "auditor", description: "Review", frontmatter })).toThrow();
+    expect(() => renderNativeAgentContent(body, { name: "auditor", description: "Review: scope", frontmatter: "---\nname: auditor\ndescription: Review: scope\n---\n" })).toThrow();
   });
   test("keeps unknown and unsupported role loaders closed", () => {
     expect(selectAssetCapability("codex", "0.155.0", "cli", "custom-agent").support).toBe("unsupported");
