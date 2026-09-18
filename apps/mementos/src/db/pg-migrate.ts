@@ -100,42 +100,45 @@ export async function applyPgMigrations(
   };
 
   try {
-    // Create tracking table if it doesn't exist
-    await pg.run(
-      `CREATE TABLE IF NOT EXISTS _pg_migrations (
-        id SERIAL PRIMARY KEY,
-        version INT UNIQUE NOT NULL,
-        applied_at TIMESTAMPTZ DEFAULT NOW()
-      )`
-    );
+    // Bootstrap the ledger under the same transaction-level advisory lock used
+    // by every migration. Two fresh deploy jobs must not race CREATE TABLE.
+    const migrationLockKey = 21760041;
+    await pg.transaction(async (client) => {
+      await client.query("SELECT pg_advisory_xact_lock($1)", [migrationLockKey]);
+      await client.query(
+        `CREATE TABLE IF NOT EXISTS _pg_migrations (
+          id SERIAL PRIMARY KEY,
+          version INT UNIQUE NOT NULL,
+          applied_at TIMESTAMPTZ DEFAULT NOW()
+        )`,
+      );
+    });
 
-    // Check which migrations are already applied
-    const applied = await pg.all(
-      "SELECT version FROM _pg_migrations ORDER BY version"
-    );
-    const appliedSet = new Set(
-      applied.map((r: { version: number }) => r.version)
-    );
-
-    // Apply new ones in order
+    // Each migration and its receipt are one transaction. The transaction-level
+    // advisory lock serializes concurrent deploy jobs, and the in-lock receipt
+    // check makes crash/retry behavior idempotent.
     for (let i = 0; i < PG_MIGRATIONS.length; i++) {
-      if (appliedSet.has(i)) {
-        result.alreadyApplied.push(i);
-        continue;
-      }
-
       try {
-        await pg.exec(PG_MIGRATIONS[i]!);
-        await pg.run(
-          "INSERT INTO _pg_migrations (version) VALUES ($1) ON CONFLICT DO NOTHING",
-          i
-        );
-        result.applied.push(i);
-      } catch (err: any) {
+        const outcome = await pg.transaction(async (client) => {
+          await client.query("SELECT pg_advisory_xact_lock($1)", [migrationLockKey]);
+          const already = await client.query(
+            "SELECT 1 FROM _pg_migrations WHERE version = $1",
+            [i],
+          );
+          if (already.rowCount) return "already" as const;
+          await client.query(PG_MIGRATIONS[i]!);
+          await client.query(
+            "INSERT INTO _pg_migrations (version) VALUES ($1)",
+            [i],
+          );
+          return "applied" as const;
+        });
+        if (outcome === "already") result.alreadyApplied.push(i);
+        else result.applied.push(i);
+      } catch (error) {
         result.errors.push(
-          `Migration ${i}: ${err?.message ?? String(err)}`
+          `Migration ${i}: ${error instanceof Error ? error.message : String(error)}`
         );
-        // Stop on first error to avoid applying later migrations on a broken schema
         break;
       }
     }

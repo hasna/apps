@@ -81,22 +81,66 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
       : route.method === "GET"
         && route.path === "/api/projects/:id/resources/:kind/:resource_id"
         ? { $ref: "#/components/schemas/MementosProjectResourceExactResult" }
+        : route.path === "/api/machines" && route.method === "GET"
+          ? { $ref: "#/components/schemas/MementosMachineList" }
+          : route.path === "/api/machines" && route.method === "POST"
+            ? { $ref: "#/components/schemas/MementosMachineRegistration" }
+            : route.path.startsWith("/api/machines/") && route.method === "DELETE"
+              ? { $ref: "#/components/schemas/MementosMachineDeleteReceipt" }
+              : route.path === "/api/machines/:id/touch"
+                ? { $ref: "#/components/schemas/MementosMachineTouchReceipt" }
+                : route.path.startsWith("/api/machines/")
+                  ? { $ref: "#/components/schemas/MementosMachineMutation" }
+                : undefined;
+    const requestBody = route.path === "/api/machines" && route.method === "POST"
+      ? {
+          required: true,
+          content: {
+            "application/json": { schema: { $ref: "#/components/schemas/MementosMachineRegistrationInput" } },
+          },
+        }
+      : route.path === "/api/machines/:id" && route.method === "PATCH"
+        ? {
+            required: true,
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/MementosMachineRenameInput" },
+              },
+            },
+          }
         : undefined;
+    const successResponses: Record<string, unknown> = {
+      "200": {
+        description: "OK",
+        ...(successSchema ? { content: { "application/json": { schema: successSchema } } } : {}),
+      },
+    };
+    if (route.path === "/api/machines" && route.method === "POST") {
+      successResponses["201"] = successResponses["200"];
+    }
+    const machineOperationIds: Record<string, string> = {
+      "GET /api/machines": "listMachines",
+      "POST /api/machines": "registerMachine",
+      "GET /api/machines/:id": "getMachine",
+      "PATCH /api/machines/:id": "renameMachine",
+      "POST /api/machines/:id/primary": "setPrimaryMachine",
+      "POST /api/machines/:id/touch": "touchMachine",
+      "DELETE /api/machines/:id": "deleteMachine",
+    };
+    const operationKey = `${route.method} ${route.path}`;
     paths[p] = paths[p] ?? {};
     (paths[p] as Record<string, unknown>)[method] = {
       summary: `${route.method} ${p}`,
-      operationId: `${method}_${p.replace(/[^a-zA-Z0-9]+/g, "_").replace(/^_|_$/g, "")}`,
+      operationId: machineOperationIds[operationKey] ?? `${method}_${p.replace(/[^a-zA-Z0-9]+/g, "_").replace(/^_|_$/g, "")}`,
       ...(params.length ? { parameters: params } : {}),
+      ...(requestBody ? { requestBody } : {}),
       responses: {
-        "200": {
-          description: "OK",
-          ...(successSchema
-            ? { content: { "application/json": { schema: successSchema } } }
-            : {}),
-        },
+        ...successResponses,
+        "400": { description: "Invalid request" },
         "401": { description: "Unauthorized" },
         "403": { description: "Forbidden" },
         "404": { description: "Not found" },
+        "409": { description: "Conflict" },
       },
     };
   }
@@ -115,6 +159,97 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
         apiKeyAuth: { type: "apiKey", in: "header", name: "x-api-key" },
       },
       schemas: {
+        MementosMachine: {
+          type: "object",
+          additionalProperties: false,
+          required: ["id", "name", "hostname", "platform", "is_primary", "created_at", "last_seen_at"],
+          properties: {
+            id: { type: "string", minLength: 1, description: "Stable server identity used by mutations and memory attribution" },
+            name: { type: "string", minLength: 1, maxLength: 128 },
+            hostname: { type: "string", minLength: 1, maxLength: 253, description: "Normalized account-local registration idempotency key; not an authorization boundary" },
+            platform: { type: "string", minLength: 1, maxLength: 64 },
+            is_primary: { type: "boolean" },
+            created_at: { type: "string", format: "date-time" },
+            last_seen_at: { type: "string", format: "date-time" },
+          },
+        },
+        MementosMachineRegistrationInput: {
+          type: "object",
+          additionalProperties: false,
+          required: ["hostname", "platform"],
+          properties: {
+            hostname: { type: "string", minLength: 1, maxLength: 253 },
+            platform: { type: "string", minLength: 1, maxLength: 64 },
+            name: { type: "string", minLength: 1, maxLength: 128 },
+          },
+        },
+        MementosMachineRenameInput: {
+          type: "object",
+          additionalProperties: false,
+          required: ["name"],
+          properties: { name: { type: "string", minLength: 1, maxLength: 128 } },
+        },
+        MementosMachineRegistration: {
+          type: "object",
+          additionalProperties: false,
+          required: ["contract", "machine", "created", "identity"],
+          properties: {
+            contract: { const: "mementos.machine-registration.v1" },
+            machine: { $ref: "#/components/schemas/MementosMachine" },
+            created: { type: "boolean" },
+            identity: {
+              type: "object",
+              additionalProperties: false,
+              required: ["idempotency_key", "stable_id"],
+              properties: {
+                idempotency_key: { const: "normalized_hostname" },
+                stable_id: { type: "string", minLength: 1 },
+              },
+            },
+          },
+        },
+        MementosMachineList: {
+          type: "object",
+          additionalProperties: false,
+          required: ["contract", "machines", "count", "complete"],
+          properties: {
+            contract: { const: "mementos.machines.v1" },
+            machines: { type: "array", items: { $ref: "#/components/schemas/MementosMachine" } },
+            count: { type: "integer", minimum: 0 },
+            complete: { const: true },
+          },
+        },
+        MementosMachineMutation: {
+          type: "object",
+          additionalProperties: false,
+          required: ["contract", "machine"],
+          properties: {
+            contract: { const: "mementos.machine-mutation.v1" },
+            machine: { $ref: "#/components/schemas/MementosMachine" },
+          },
+        },
+        MementosMachineTouchReceipt: {
+          type: "object",
+          additionalProperties: false,
+          required: ["contract", "touched", "id", "touched_at", "machine"],
+          properties: {
+            contract: { const: "mementos.machine-touch.v1" },
+            touched: { const: true },
+            id: { type: "string", minLength: 1 },
+            touched_at: { type: "string", format: "date-time" },
+            machine: { $ref: "#/components/schemas/MementosMachine" },
+          },
+        },
+        MementosMachineDeleteReceipt: {
+          type: "object",
+          additionalProperties: false,
+          required: ["contract", "deleted", "id"],
+          properties: {
+            contract: { const: "mementos.machine-mutation.v1" },
+            deleted: { const: true },
+            id: { type: "string", minLength: 1 },
+          },
+        },
         MementosProjectResource: {
           type: "object",
           additionalProperties: false,

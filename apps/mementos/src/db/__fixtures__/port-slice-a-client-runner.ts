@@ -147,6 +147,97 @@ const scenarios: Record<string, () => Promise<void>> = {
     }
   },
 
+  // --- machines (MCP) ---
+  register_machine: async () => {
+    const { registerProjectTools } = await import("../../mcp/tools/project-tools.js");
+    await callTool(registerProjectTools, "register_machine", { name: "apple01" });
+  },
+  list_machines: async () => {
+    const { registerProjectTools } = await import("../../mcp/tools/project-tools.js");
+    await callTool(registerProjectTools, "list_machines", {});
+  },
+  rename_machine: async () => {
+    const { registerProjectTools } = await import("../../mcp/tools/project-tools.js");
+    await callTool(registerProjectTools, "rename_machine", { id: "machine-1", new_name: "renamed" });
+  },
+  set_primary_machine: async () => {
+    const { registerProjectTools } = await import("../../mcp/tools/project-tools.js");
+    await callTool(registerProjectTools, "set_primary_machine", { id: "machine-1" });
+  },
+  "machine-cache-credential-change": async () => {
+    const { getCurrentMachineId } = await import("../machines.js");
+    getCurrentMachineId();
+    process.env["HASNA_MEMENTOS_API_KEY"] = "stub-valid-rotated";
+    getCurrentMachineId();
+  },
+  "machine-cache-delete": async () => {
+    const { deleteMachine, getCurrentMachineId } = await import("../machines.js");
+    const id = getCurrentMachineId();
+    deleteMachine(id);
+    getCurrentMachineId();
+  },
+  "memory-save-machine-failure": async () => {
+    const { registerMemoryCrudTools } = await import("../../mcp/tools/memory-crud.js");
+    const handlers = collectTools(registerMemoryCrudTools);
+    const result = await handlers.get("memory_save")!({ key: "machine-failure", value: "must not widen" }) as { isError?: boolean };
+    if (!result.isError) throw new Error("memory_save accepted a hosted machine identity failure");
+  },
+  "machine-visibility-memo": async () => {
+    // getCurrentMachineId is on the memory_save / memory_inject / projects
+    // hot paths. The hosted arm must resolve ONCE per process: an unmemoized
+    // one would put an idempotent-register WRITE in front of every read.
+    const { getCurrentMachineId } = await import("../machines.js");
+    const a = getCurrentMachineId();
+    const b = getCurrentMachineId();
+    const c = getCurrentMachineId();
+    if (a !== b || b !== c || a !== "machine-1") {
+      throw new Error(`memoized machine id disagreed: ${a} ${b} ${c}`);
+    }
+  },
+  "machine-visibility": async () => {
+    // The filter the CLI `projects` / `inject` / `context` / `project-panel`
+    // commands apply: it used to fall back to null (= no machine filter, so
+    // another machine's memories became visible) because getCurrentMachineId
+    // could only read local SQLite.
+    const { resolveVisibleMachineId } = await import("../../lib/machine-visibility.js");
+    const id = resolveVisibleMachineId();
+    if (id !== "machine-1") {
+      throw new Error(`machine-visibility did not resolve the hosted machine id: ${String(id)}`);
+    }
+  },
+  "malformed-machine-register": async () => {
+    const { registerMachine } = await import("../machines.js");
+    await expectProtocolRefusal(() => registerMachine("apple01"));
+  },
+  "malformed-machine-register-binding": async () => {
+    const { registerMachine } = await import("../machines.js");
+    await expectProtocolRefusal(() => registerMachine("apple01"));
+  },
+  "malformed-machine-list": async () => {
+    const { listMachines } = await import("../machines.js");
+    await expectProtocolRefusal(() => listMachines());
+  },
+  "malformed-machine-rename": async () => {
+    const { renameMachine } = await import("../machines.js");
+    await expectProtocolRefusal(() => renameMachine("machine-1", "renamed"));
+  },
+  "malformed-machine-primary": async () => {
+    const { setPrimaryMachine } = await import("../machines.js");
+    await expectProtocolRefusal(() => setPrimaryMachine("machine-1"));
+  },
+  "malformed-machine-get": async () => {
+    const { getMachine } = await import("../machines.js");
+    await expectProtocolRefusal(() => getMachine("machine-1"));
+  },
+  "malformed-machine-touch": async () => {
+    const { touchMachine } = await import("../machines.js");
+    await expectProtocolRefusal(() => touchMachine("machine-1"));
+  },
+  "malformed-machine-delete": async () => {
+    const { deleteMachine } = await import("../machines.js");
+    await expectProtocolRefusal(() => deleteMachine("machine-1"));
+  },
+
   // --- memory locks (MCP) ---
   memory_lock: async () => {
     const { registerLockTools } = await import("../../mcp/tools/lock-tools.js");

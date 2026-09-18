@@ -44,6 +44,16 @@ const RUN = {
   completed_at: "2026-09-11T00:01:00.000Z",
 };
 
+const MACHINE = {
+  id: "machine-1",
+  name: "apple01",
+  hostname: "apple01",
+  platform: "darwin",
+  is_primary: false,
+  created_at: "2026-09-11T00:00:00.000Z",
+  last_seen_at: "2026-09-11T00:00:00.000Z",
+};
+
 const JOB = {
   id: "job-1",
   session_id: "session-1",
@@ -61,7 +71,7 @@ const JOB = {
   completed_at: null,
 };
 
-function respond(method: string, path: string, mode: string, requestUrl: URL): unknown {
+function respond(method: string, path: string, mode: string, requestUrl: URL, requestBody: unknown): unknown {
   if (mode === "malformed-lock-acquire" && method === "POST" && path === "/v1/locks") return { id: "lock-1" };
   if (mode === "malformed-lock-list" && method === "GET" && path === "/v1/locks") return {};
   if (mode === "malformed-lock-release" && method === "DELETE" && path.startsWith("/v1/locks/")) return { released: "yes" };
@@ -96,6 +106,50 @@ function respond(method: string, path: string, mode: string, requestUrl: URL): u
       memory_count: 7,
       from_cache: false,
     };
+  }
+  if (mode === "malformed-machine-register" && method === "POST" && path === "/v1/machines") return { machine: MACHINE, created: true };
+  if (mode === "malformed-machine-list" && method === "GET" && path === "/v1/machines") return { contract: "mementos.machines.v1", machines: [MACHINE], count: 2, complete: true };
+  if (mode === "malformed-machine-rename" && method === "PATCH" && path.startsWith("/v1/machines/")) return { contract: "mementos.machine-mutation.v1", machine: MACHINE };
+  if (mode === "malformed-machine-primary" && method === "POST" && path.endsWith("/primary")) return { contract: "mementos.machine-mutation.v1", machine: MACHINE };
+  if (mode === "malformed-machine-register-binding" && method === "POST" && path === "/v1/machines") return { contract: "mementos.machine-registration.v1", machine: { ...MACHINE, hostname: "other-host" }, created: true, identity: { idempotency_key: "normalized_hostname", stable_id: MACHINE.id } };
+  if (mode === "malformed-machine-get" && method === "GET" && path.startsWith("/v1/machines/")) return { contract: "mementos.machine-mutation.v1", machine: { ...MACHINE, id: "wrong-machine" } };
+  if (mode === "malformed-machine-touch" && method === "POST" && path.endsWith("/touch")) return { contract: "mementos.machine-touch.v1", touched: false, id: MACHINE.id, touched_at: MACHINE.last_seen_at, machine: MACHINE };
+  if (mode === "malformed-machine-delete" && method === "DELETE" && path.startsWith("/v1/machines/")) return { contract: "mementos.machine-mutation.v1", deleted: false, id: MACHINE.id };
+
+  if (method === "POST" && path === "/v1/machines") {
+    const input = requestBody && typeof requestBody === "object" && !Array.isArray(requestBody)
+      ? requestBody as Record<string, unknown>
+      : {};
+    const registered = {
+      ...MACHINE,
+      name: typeof input["name"] === "string" ? input["name"] : String(input["hostname"] ?? MACHINE.name),
+      hostname: String(input["hostname"] ?? MACHINE.hostname),
+      platform: String(input["platform"] ?? MACHINE.platform),
+    };
+    return {
+      contract: "mementos.machine-registration.v1",
+      machine: registered,
+      created: true,
+      identity: { idempotency_key: "normalized_hostname", stable_id: registered.id },
+    };
+  }
+  if (method === "GET" && path === "/v1/machines") {
+    return { contract: "mementos.machines.v1", machines: [MACHINE], count: 1, complete: true };
+  }
+  if (method === "GET" && path.startsWith("/v1/machines/")) {
+    return { contract: "mementos.machine-mutation.v1", machine: MACHINE };
+  }
+  if (method === "PATCH" && path.startsWith("/v1/machines/")) {
+    return { contract: "mementos.machine-mutation.v1", machine: { ...MACHINE, name: "renamed" } };
+  }
+  if (method === "POST" && path.endsWith("/primary")) {
+    return { contract: "mementos.machine-mutation.v1", machine: { ...MACHINE, is_primary: true } };
+  }
+  if (method === "POST" && path.endsWith("/touch")) {
+    return { contract: "mementos.machine-touch.v1", touched: true, id: MACHINE.id, touched_at: MACHINE.last_seen_at, machine: MACHINE };
+  }
+  if (method === "DELETE" && path.startsWith("/v1/machines/")) {
+    return { contract: "mementos.machine-mutation.v1", deleted: true, id: MACHINE.id };
   }
   if (method === "POST" && path === "/v1/locks") return LOCK;
   if (method === "DELETE" && path.startsWith("/v1/locks/")) return { released: true };
@@ -194,14 +248,18 @@ const server = Bun.serve({
     const url = new URL(req.url);
     const path = `${url.pathname}${url.search}`;
     let body = "-";
+    let parsedBody: unknown = undefined;
     if (req.method !== "GET" && req.method !== "HEAD") {
       const text = await req.text();
-      if (text.trim()) body = text.replace(/\n/g, " ");
+      if (text.trim()) {
+        body = text.replace(/\n/g, " ");
+        try { parsedBody = JSON.parse(text); } catch { parsedBody = undefined; }
+      }
     }
     appendFileSync(captureFile, `${req.method} ${path} ${body}\n`);
     const auth = req.headers.get("authorization") ?? "";
     const mode = auth.startsWith("Bearer stub-") ? auth.slice("Bearer stub-".length) : "valid";
-    const response = respond(req.method, url.pathname, mode, url);
+    const response = respond(req.method, url.pathname, mode, url, parsedBody);
     return response === undefined
       ? Response.json({ error: "unexpected test route" }, { status: 404 })
       : Response.json(response);
