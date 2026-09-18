@@ -2,7 +2,9 @@ import type { EventEnvelope } from "../types.js";
 export declare const EVENT_LIST_CURSOR_PREFIX = "events-list-v1:";
 interface EventListCursorPayload {
     snapshot_id: string;
+    snapshot_position: number;
     before_id: string;
+    before_position: number;
     source?: string;
     type?: string;
 }

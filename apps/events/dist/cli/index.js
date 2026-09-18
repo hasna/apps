@@ -4113,9 +4113,13 @@ var EVENT_LIST_CURSOR_PREFIX = "events-list-v1:";
 function sameFilter(left, right) {
   return (left ?? undefined) === (right ?? undefined);
 }
+function isNonNegativeInteger(value) {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
 function encodeEventListCursor(payload) {
-  if (!payload.snapshot_id || !payload.before_id)
-    throw new Error("Event list cursor identities are required");
+  if (!payload.snapshot_id || !isNonNegativeInteger(payload.snapshot_position) || !payload.before_id || !isNonNegativeInteger(payload.before_position) || payload.before_position > payload.snapshot_position) {
+    throw new Error("Event list cursor identities and positions are required");
+  }
   return `${EVENT_LIST_CURSOR_PREFIX}${Buffer.from(JSON.stringify(payload), "utf8").toString("base64url")}`;
 }
 function decodeEventListCursor(cursor, filters) {
@@ -4127,7 +4131,7 @@ function decodeEventListCursor(cursor, filters) {
   } catch {
     throw new Error(`Invalid event list cursor: ${cursor}`);
   }
-  if (!payload || typeof payload.snapshot_id !== "string" || !payload.snapshot_id || typeof payload.before_id !== "string" || !payload.before_id) {
+  if (!payload || typeof payload.snapshot_id !== "string" || !payload.snapshot_id || !isNonNegativeInteger(payload.snapshot_position) || typeof payload.before_id !== "string" || !payload.before_id || !isNonNegativeInteger(payload.before_position) || payload.before_position > payload.snapshot_position) {
     throw new Error(`Invalid event list cursor: ${cursor}`);
   }
   if (!sameFilter(payload.source, filters.source) || !sameFilter(payload.type, filters.type)) {
@@ -4146,24 +4150,31 @@ function eventListSnapshotPage(events, options) {
   const limit = Math.max(1, Math.floor(options.limit));
   let snapshotEvents = events;
   let end = events.length;
-  let snapshotId = events.at(-1)?.id ?? null;
+  let snapshotPosition = events.length - 1;
+  let snapshotId = events.at(snapshotPosition)?.id ?? null;
   if (options.cursor) {
     const cursor = decodeEventListCursor(options.cursor, options);
-    const snapshotIndex = events.findIndex((event) => event.id === cursor.snapshot_id);
-    if (snapshotIndex < 0)
+    const snapshotEvent = events.at(cursor.snapshot_position);
+    if (!snapshotEvent || snapshotEvent.id !== cursor.snapshot_id) {
       throw new Error("Event list cursor snapshot is no longer available");
-    snapshotEvents = events.slice(0, snapshotIndex + 1);
+    }
+    snapshotEvents = events.slice(0, cursor.snapshot_position + 1);
+    snapshotPosition = cursor.snapshot_position;
     snapshotId = cursor.snapshot_id;
-    end = snapshotEvents.findIndex((event) => event.id === cursor.before_id);
-    if (end < 0)
+    const boundaryEvent = snapshotEvents.at(cursor.before_position);
+    if (!boundaryEvent || boundaryEvent.id !== cursor.before_id) {
       throw new Error("Event list cursor boundary is no longer available");
+    }
+    end = cursor.before_position;
   }
   const start = Math.max(0, end - limit);
   const pageEvents = snapshotEvents.slice(start, end);
   const hasMore = start > 0;
   const nextCursor = hasMore && snapshotId && pageEvents[0] ? encodeEventListCursor({
     snapshot_id: snapshotId,
+    snapshot_position: snapshotPosition,
     before_id: pageEvents[0].id,
+    before_position: start,
     ...options.source ? { source: options.source } : {},
     ...options.type ? { type: options.type } : {}
   }) : null;
