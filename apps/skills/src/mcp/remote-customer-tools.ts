@@ -7,7 +7,7 @@ import { RemoteSkillsAuthClient } from "../lib/remote-auth.js";
 import { captureProfileWorkspace } from "../lib/workspace-profile.js";
 import type { RemoteWorkspaceContext } from "../lib/remote-workspace-selection.js";
 import { REMOTE_CUSTOMER_OPERATIONS } from "../lib/remote-customer-operations.js";
-import { createRemoteSkillsClient, RemoteCapabilityUnavailableError, RemoteWorkspaceMemberError, type RemoteSkillsClient } from "../lib/remote-client.js";
+import { createRemoteSkillsClient, RemoteCapabilityUnavailableError, RemoteWorkspaceMemberError, RemoteCreditCheckoutError, type RemoteSkillsClient } from "../lib/remote-client.js";
 import { workspaceLeaveProfileContext, RemoteWorkspaceLeaveError, RemoteWorkspaceLeaveUnconfirmedError } from "../lib/remote-workspace-leave.js";
 import { mcpError, mcpJson } from "./helpers.js";
 import { decodeRemoteFiles, describeRemoteFiles } from "../lib/remote-files.js";
@@ -77,6 +77,14 @@ export function registerRemoteCustomerTools(server: McpServer) {
     });
   }
   for (const operation of REMOTE_CUSTOMER_OPERATIONS) {
+    if (operation.name === "create_credit_checkout") {
+      server.registerTool(operation.name, {
+        title: operation.title,
+        description: "Create one external checkout link on the selected Skills server. Retain an idempotency_key before calling and reuse it only for explicit recovery on the same server, account and pack. No automatic retries; payment requires customer confirmation.",
+        inputSchema: { pack_id: z.string().min(1), idempotency_key: z.string().regex(/^[A-Za-z0-9._:-]{8,255}$/).optional() },
+      }, ({ pack_id, idempotency_key }) => callRemote(client => operation.invoke(client, pack_id, { idempotencyKey: idempotency_key })));
+      continue;
+    }
     const inputSchema: Record<string, ReturnType<typeof z.string>> = {};
     if (operation.parameter) inputSchema[operation.parameter] = z.string().min(1);
     server.registerTool(operation.name, {
@@ -136,6 +144,11 @@ async function callRemote(action: (client: RemoteSkillsClient) => Promise<unknow
     if (!client) return mcpError("AUTH_REQUIRED", "Configure a Skills API and sign in with skills auth login");
     return mcpJson(await action(client));
   } catch (error) {
+    if (error instanceof RemoteCreditCheckoutError) {
+      return { ...mcpJson({ code: error.code, message: error.message, status: error.status,
+        requestIdempotencyKey: error.requestIdempotencyKey,
+        ...(error.retryAfterSeconds === undefined ? {} : { retryAfterSeconds: error.retryAfterSeconds }) }), isError: true };
+    }
     if (error instanceof RemoteCapabilityUnavailableError) {
       return { ...mcpJson({ code: error.code, message: error.message, status: error.status }), isError: true };
     }
