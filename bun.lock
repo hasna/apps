@@ -946,6 +946,7 @@
       "dependencies": {
         "@aws-sdk/client-kms": "3.1127.0",
         "@aws-sdk/client-secrets-manager": "^3.1008.0",
+        "@aws-sdk/client-sts": "3.1127.0",
         "@aws-sdk/credential-providers": "^3.1008.0",
         "@hasna/events": "^0.1.16",
         "@modelcontextprotocol/sdk": "^1.27.1",
