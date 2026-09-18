@@ -212,7 +212,7 @@
     },
     "apps/contracts": {
       "name": "@hasna/contracts",
-      "version": "1.2.0",
+      "version": "1.2.1",
       "bin": {
         "contracts": "dist/cli/index.js",
         "contracts-cli": "dist/cli/contracts-cli.js",
@@ -532,7 +532,7 @@
     },
     "apps/instructions": {
       "name": "@hasna/instructions",
-      "version": "0.7.3",
+      "version": "0.7.4",
       "bin": {
         "instructions": "dist/cli/index.js",
         "configs": "dist/cli/index.js",
