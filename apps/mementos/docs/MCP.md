@@ -2,7 +2,7 @@
 
 `mementos-mcp` exposes the memory system through the Model Context Protocol.
 The default `core` profile registers 23 bounded agent tools. The explicit `full`
-profile preserves all 123 tools and three legacy resources from the live source
+profile preserves all 124 tools and three legacy resources from the live source
 tree.
 
 ## Transport modes
@@ -126,7 +126,7 @@ Use `full` only for compatibility or broad administration.
 | `admin` | fleet registries, bulk operations, locks, import/export, ACL, GDPR, audit and eviction tools |
 | `storage` | storage status/sync/migration tools, including PostgreSQL migration |
 | `hooks` | hooks, webhooks, subscriptions, tool events, and feedback |
-| `full` | all 123 tools plus the three legacy unpaged resources |
+| `full` | all 124 tools plus the three legacy unpaged resources |
 
 The legacy `mementos://memories`, `mementos://agents`, and
 `mementos://projects` resources are registered only in `full`. Reduced profiles
@@ -136,7 +136,7 @@ memory objects into agent context.
 
 ## Full-profile tool inventory
 
-### Core memories (29)
+### Core memories (30)
 
 ```text
 memory_save
@@ -165,6 +165,7 @@ memory_activity
 memory_report
 memory_audit_trail
 memory_audit_export
+memory_audit_stats
 memory_export
 memory_import
 memory_inject

@@ -86,7 +86,7 @@ additive comma-separated profile list with `--mcp-profile`,
   audit, and eviction;
 - `storage` — storage status, sync, and migration operations;
 - `hooks` — hooks, webhooks, subscriptions, tool events, and feedback;
-- `full` — compatibility profile exposing all 123 tools and the three legacy
+- `full` — compatibility profile exposing all 124 tools and the three legacy
   unpaged resources.
 
 Every reduced profile includes `core`, and profiles compose:
