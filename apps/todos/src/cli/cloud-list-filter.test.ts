@@ -30,27 +30,6 @@ const OTHER_LIST_ID = "33333333-3333-4333-8333-333333333333";
 const OTHER_TASK_ID = "44444444-4444-4444-8444-444444444444";
 const tempRoots: string[] = [];
 
-/**
- * Scan ceiling pinned for this file's cloud requests.
- *
- * `todos list` bounds a REMOTE read with a scan ceiling (`task-commands.ts`,
- * `scanCeiling`, gated on `cloud &&`), so every `/v1/tasks` request below carries a
- * `limit`. That is the deliberate behaviour, not a stray parameter: the unbounded
- * remote read it replaced was a blocking review finding on this PR.
- *
- * It is pinned to a number this file OWNS rather than left to the CLI's built-in
- * default, for two reasons. The assertions then name a value instead of duplicating a
- * constant that lives in the product, so changing that default does not break these
- * task-list-resolution tests, which are not about limits. And because the value is
- * arbitrary rather than round, asserting it proves the env override actually reaches
- * the request — a test expecting the default would pass even if the override were
- * ignored entirely.
- *
- * It only has to exceed the row counts these stubs return (0 or 1); well below it, the
- * truncation warning stays silent, which is what keeps `stderr: ""` a real assertion.
- */
-const SCAN_LIMIT = "4242";
-
 afterEach(() => {
   for (const root of tempRoots.splice(0)) {
     rmSync(root, { recursive: true, force: true });
@@ -69,7 +48,6 @@ async function runCli(args: string[], root: string, baseUrl: string, env: Record
       TODOS_AUTO_PROJECT: "false",
       HASNA_TODOS_API_URL: baseUrl,
       HASNA_TODOS_API_KEY: TEST_API_KEY,
-      TODOS_LIST_SCAN_LIMIT: SCAN_LIMIT,
       ...env,
 }),
     stdout: "pipe",
@@ -347,11 +325,10 @@ describe("cloud CLI task-list filtering", () => {
             status: url.searchParams.get("status"),
             taskListId,
           });
-          return Response.json({
-            tasks: taskListId === LIST_ID
-              ? [{ id: TASK_ID, task_list_id: LIST_ID, title: "Cloud list task", status: "pending", priority: "medium" }]
-              : [],
-          });
+          const tasks = taskListId === LIST_ID
+            ? [{ id: TASK_ID, task_list_id: LIST_ID, title: "Cloud list task", status: "pending", priority: "medium" }]
+            : [];
+          return Response.json({ tasks, count: tasks.length, total: tasks.length });
         }
         return Response.json({ error: "not found" }, { status: 404 });
       },
@@ -368,8 +345,8 @@ describe("cloud CLI task-list filtering", () => {
       expect(JSON.parse(result.stdout)).toEqual([
         expect.objectContaining({ id: TASK_ID, task_list_id: LIST_ID }),
       ]);
-      expect(seenTaskRequests).toHaveLength(2);
-      expect(seenTaskRequests.map(({ status }) => status).sort()).toEqual(["in_progress", "pending"]);
+      expect(seenTaskRequests).toHaveLength(1);
+      expect(seenTaskRequests[0]!.status).toBe("pending,in_progress");
       expect(seenTaskRequests.every(({ taskListId }) => taskListId === LIST_ID)).toBe(true);
       expect(taskListRequests).toBe(1);
     } finally {
@@ -425,20 +402,20 @@ describe("cloud CLI task-list filtering", () => {
         ["--json", "list", "--all", "--list", ref, "--format", "json", "--limit", "1"],
         root,
         `http://127.0.0.1:${server.port}`,
-        { TODOS_LIST_SCAN_LIMIT: "4" },
       );
-      // The stub serves three matching rows for a --limit 1 read, so the truncation
-      // signal (todos 52b0a207) is EXPECTED here: stderr names the bounded read
-      // while stdout stays a clean one-row array.
-      expect(result).toMatchObject({ exitCode: 0 });
-      expect(result.stderr).toContain("more than --limit 1");
+      expect(result).toMatchObject({ exitCode: 0, stderr: "" });
       expect(taskRequests).toHaveLength(1);
       expect(taskRequests[0]!.searchParams.get("project_id")).toBe(PROJECT_ID);
       expect(taskRequests[0]!.searchParams.get("task_list_id")).toBe(LIST_ID);
-      expect(taskRequests[0]!.searchParams.get("limit")).toBe("4");
-      expect(JSON.parse(result.stdout)).toEqual([
-        expect.objectContaining({ id: TASK_ID, task_list_id: LIST_ID }),
-      ]);
+      expect(taskRequests[0]!.searchParams.get("limit")).toBe("1");
+      expect(taskRequests[0]!.searchParams.get("offset")).toBe("0");
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        tasks: [expect.objectContaining({ id: TASK_ID, task_list_id: LIST_ID })],
+        count: 1,
+        total: 2,
+        has_more: true,
+        next_offset: 2,
+      });
     } finally {
       server.stop(true);
     }
@@ -519,9 +496,12 @@ describe("cloud CLI task-list filtering", () => {
       expect(result).toMatchObject({ exitCode: 0, stderr: "" });
       expect(taskRequests).toHaveLength(1);
       expect(taskRequests[0]!.searchParams.get("task_list_id")).toBe(LIST_ID);
-      expect(JSON.parse(result.stdout)).toEqual([
-        expect.objectContaining({ id: TASK_ID, task_list_id: LIST_ID }),
-      ]);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        tasks: [expect.objectContaining({ id: TASK_ID, task_list_id: LIST_ID })],
+        count: 1,
+        total: 1,
+        has_more: false,
+      });
     } finally {
       server.stop(true);
     }
@@ -572,15 +552,14 @@ describe("cloud CLI task-list filtering", () => {
           ["list", "--all", "--list", LIST_ID, "--format", format],
           root,
           `http://127.0.0.1:${server.port}`,
-          { TODOS_LIST_SCAN_LIMIT: "2" },
         );
         expect(result).toMatchObject({ exitCode: 0, stderr: "" });
         expect(result.stdout).toContain("Cloud list task");
         expect(result.stdout).not.toContain("Foreign list task");
         expect(taskRequests).toHaveLength(2);
         expect(taskRequests.every((url) => url.searchParams.get("task_list_id") === LIST_ID)).toBe(true);
-        expect(taskRequests.map((url) => url.searchParams.get("offset"))).toEqual([null, "1"]);
-        expect(taskRequests.map((url) => url.searchParams.get("limit"))).toEqual(["2", "1"]);
+        expect(taskRequests.map((url) => url.searchParams.get("offset"))).toEqual(["0", "1"]);
+        expect(taskRequests.map((url) => url.searchParams.get("limit"))).toEqual(["500", "500"]);
       } finally {
         server.stop(true);
       }
@@ -591,18 +570,16 @@ describe("cloud CLI task-list filtering", () => {
     [
       "missing pagination metadata",
       { tasks: [{ id: OTHER_TASK_ID, task_list_id: OTHER_LIST_ID, title: "Foreign list task", status: "pending", priority: "medium" }] },
-      "REMOTE_TASK_LIST_FILTER_UNSUPPORTED",
     ],
     [
-      "reported total exceeds the bounded scan",
+      "a changing reported total",
       {
         tasks: [{ id: OTHER_TASK_ID, task_list_id: OTHER_LIST_ID, title: "Foreign list task", status: "pending", priority: "medium" }],
         count: 1,
         total: 3,
       },
-      "REMOTE_TASK_LIST_FILTER_INCOMPLETE",
     ],
-  ])("fails closed when a foreign hosted page has %s", async (_label, response, expectedCode) => {
+  ])("returns unknown completeness rather than failing when a legacy foreign page has %s", async (_label, response) => {
     const taskRequests: URL[] = [];
     const server = Bun.serve({
       hostname: "127.0.0.1",
@@ -626,14 +603,11 @@ describe("cloud CLI task-list filtering", () => {
         ["list", "--all", "--list", LIST_ID, "--format", "json"],
         root,
         `http://127.0.0.1:${server.port}`,
-        { TODOS_LIST_SCAN_LIMIT: "2" },
       );
-      expect(result.exitCode).not.toBe(0);
-      expect(result.stdout).toBe("");
-      expect(result.stderr).toContain(expectedCode);
-      expect(taskRequests).toHaveLength(1);
-      expect(taskRequests[0]!.searchParams.get("task_list_id")).toBe(LIST_ID);
-      expect(taskRequests[0]!.searchParams.get("limit")).toBe("2");
+      expect(result).toMatchObject({ exitCode: 0, stderr: "" });
+      expect(JSON.parse(result.stdout)).toMatchObject({ tasks: [], total: null, complete: null });
+      expect(taskRequests.length).toBeGreaterThan(0);
+      expect(taskRequests.every((url) => url.searchParams.get("task_list_id") === LIST_ID)).toBe(true);
     } finally {
       server.stop(true);
     }
@@ -659,7 +633,7 @@ describe("cloud CLI task-list filtering", () => {
         if (url.pathname === "/v1/task-lists") {
           return Response.json({ task_lists: [taskList(LIST_ID, "release")] });
         }
-        if (url.pathname === "/v1/tasks") return Response.json({ tasks: [] });
+        if (url.pathname === "/v1/tasks") return Response.json({ tasks: [], count: 0, total: 0 });
         return Response.json({ error: "not found" }, { status: 404 });
       },
     });
@@ -677,13 +651,13 @@ describe("cloud CLI task-list filtering", () => {
         `/v1/task-lists?project_id=${PROJECT_ID}`,
       ]);
       const taskRequests = requests.slice(2).map((request) => new URL(request, "http://127.0.0.1"));
-      expect(taskRequests).toHaveLength(2);
-      expect(taskRequests.map((url) => url.searchParams.get("status")).sort()).toEqual(["in_progress", "pending"]);
+      expect(taskRequests).toHaveLength(3);
+      expect(taskRequests.map((url) => url.searchParams.get("status")).sort()).toEqual(["in_progress", "pending", "pending,in_progress"]);
       for (const url of taskRequests) {
         expect(url.pathname).toBe("/v1/tasks");
         expect(url.searchParams.get("project_id")).toBe(PROJECT_ID);
         expect(url.searchParams.get("task_list_id")).toBe(LIST_ID);
-        expect(url.searchParams.get("limit")).toBe(SCAN_LIMIT);
+        expect(url.searchParams.get("limit")).toBe("50");
       }
     } finally {
       server.stop(true);
@@ -700,11 +674,10 @@ describe("cloud CLI task-list filtering", () => {
         requests.push(`${url.pathname}?${url.searchParams.toString()}`);
         if (url.pathname === "/v1/projects") return Response.json({ projects: [project()] });
         if (url.pathname === "/v1/tasks") {
-          return Response.json({
-            tasks: url.searchParams.get("project_id") === PROJECT_ID
-              ? [{ id: TASK_ID, project_id: PROJECT_ID, title: "Cloud project task", status: "pending", priority: "medium" }]
-              : [],
-          });
+          const tasks = url.searchParams.get("project_id") === PROJECT_ID
+            ? [{ id: TASK_ID, project_id: PROJECT_ID, title: "Cloud project task", status: "pending", priority: "medium" }]
+            : [];
+          return Response.json({ tasks, count: tasks.length, total: tasks.length });
         }
         return Response.json({ error: "not found" }, { status: 404 });
       },
@@ -723,7 +696,7 @@ describe("cloud CLI task-list filtering", () => {
       ]);
       expect(requests).toEqual([
         "/v1/projects?",
-        `/v1/tasks?project_id=${PROJECT_ID}&limit=${SCAN_LIMIT}`,
+        `/v1/tasks?limit=500&offset=0&project_id=${PROJECT_ID}`,
       ]);
     } finally {
       server.stop(true);
@@ -742,7 +715,7 @@ describe("cloud CLI task-list filtering", () => {
         if (url.pathname === "/v1/task-lists") {
           return Response.json({ task_lists: [taskList(LIST_ID, "release")] });
         }
-        if (url.pathname === "/v1/tasks") return Response.json({ tasks: [] });
+        if (url.pathname === "/v1/tasks") return Response.json({ tasks: [], count: 0, total: 0 });
         return Response.json({ error: "not found" }, { status: 404 });
       },
     });
@@ -758,7 +731,7 @@ describe("cloud CLI task-list filtering", () => {
       expect(requests).toEqual([
         "/v1/projects?",
         `/v1/task-lists?project_id=${PROJECT_ID}`,
-        `/v1/tasks?project_id=${PROJECT_ID}&task_list_id=${LIST_ID}&limit=${SCAN_LIMIT}`,
+        `/v1/tasks?limit=500&offset=0&project_id=${PROJECT_ID}&task_list_id=${LIST_ID}`,
       ]);
     } finally {
       server.stop(true);
