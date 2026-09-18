@@ -46,7 +46,12 @@ jobs:
           bun test \
             tests/native-state.test.ts \
             tests/native-state-import.test.ts \
+            tests/codex-native.test.ts \
+            tests/codex-session-discovery.test.ts \
             tests/codex-state-bridge.test.ts \
+            tests/harness-arguments.test.ts \
+            tests/harness-process.test.ts \
+            tests/launcher.test.ts \
             tests/chatgpt-launch.test.ts \
             tests/claude-desktop.test.ts
       - name: Scan the exact packed artifact

@@ -26,7 +26,7 @@ test("desktop protocol binds canonical state and private auth, dispatches actual
     await prepared.beforeLaunch?.();
     expect(prepared.executable).toBe(app.executable);
     expect(prepared.env.CODEX_HOME).toBe(state.home);
-    expect(prepared.args).toEqual([`--user-data-dir=${join(session,"electron")}`]);
+    expect(prepared.args).toEqual([`--user-data-dir=${join(launch,"electron")}`]);
     const script=await readFile(prepared.env.CODEX_CLI_PATH,"utf8");
     expect(script).not.toContain(native.env.SWITCHER_HARNESS_API_KEY);expect(script).not.toContain('${1-}');
     const binding=await Bun.file(join(launch,"desktop-binding.json")).json();
@@ -82,6 +82,32 @@ test("desktop protocol binds canonical state and private auth, dispatches actual
     expect(await readFile(join(state.home,"config.toml"),"utf8")).toBe(canonicalConfig);
   }finally{await prepared?.cleanup?.().catch(()=>{});await rm(root,{recursive:true,force:true});}
 },30000);
+
+test("reusing a provider profile shares native history without reusing Electron authentication",async()=>{
+  const root=await realpath(await mkdtemp(join(tmpdir(),"switcher-desktop-cookie-isolation-")));
+  const session=join(root,"mutable-profile"),nativePath=join(root,"native"),prepared:PreparedLaunch[]=[];
+  try {
+    await writeFile(nativePath,"#!/bin/sh\nexit 0\n",{mode:0o700});
+    const state=await resolveNativeState("codex",{HOME:root});
+    const app={path:root,executable:join(root,"app"),codexExecutable:nativePath,bundleId:"com.openai.codex",version:"fixture"};
+    for(const account of ["a","b"]){
+      const launch=join(root,account);await mkdir(launch,{mode:0o700});
+      const item=await prepareChatGPTLaunch({executable:nativePath,args:[],env:{SWITCHER_HARNESS_API_KEY:`synthetic-${account}`},configPaths:[],warnings:[]},app,launch,session,state,await desktopAdmissionFixture(nativePath,session,state));
+      prepared.push(item);
+      expect(item.env.CODEX_HOME).toBe(state.home);
+      expect(item.env.CODEX_ELECTRON_USER_DATA_PATH).toBe(join(launch,"electron"));
+      expect(await readdir(item.env.CODEX_ELECTRON_USER_DATA_PATH)).toEqual([]);
+      await writeFile(join(item.env.CODEX_ELECTRON_USER_DATA_PATH,"Cookies"),`synthetic-cookie-${account}`,{mode:0o600});
+      await item.cleanup!();
+    }
+    expect(prepared[0].env.CODEX_ELECTRON_USER_DATA_PATH).not.toBe(prepared[1].env.CODEX_ELECTRON_USER_DATA_PATH);
+    expect(await readFile(join(prepared[0].env.CODEX_ELECTRON_USER_DATA_PATH,"Cookies"),"utf8")).toBe("synthetic-cookie-a");
+    expect(await Bun.file(join(session,"electron/Cookies")).exists()).toBe(false);
+  } finally {
+    for(const item of prepared)await item.cleanup?.();
+    await rm(root,{recursive:true,force:true});
+  }
+});
 
 test.skipIf(process.platform!=="darwin")("source desktop CLI protocol fixture selects Responses provider and records app exit without leaking GUI output",async()=>{
   const root=await realpath(await mkdtemp(join(tmpdir(),"switcher-desktop-cli-")));

@@ -56,7 +56,9 @@ export async function prepareChatGPTLaunch(native: PreparedLaunch, app: ChatGPTI
   await accepted.guard();
   // All legacy/installation checks above are read-only and precede mutation.
   await privateDirectory(sessionDir);
-  const userData = join(sessionDir, "electron"), settlementDirectory = join(sessionDir, "codex-bridges");
+  // A mutable provider profile is not an account identity. Never reuse login
+  // cookies when its provider or credential changes; only the corpus is shared.
+  const userData = join(stateDir, "electron"), settlementDirectory = join(sessionDir, "codex-bridges");
   await privateDirectory(userData); await privateDirectory(settlementDirectory);
   const guardSettlement = await codexDirectoryGuard(settlementDirectory, true);
   const release = await desktopLease(join(sessionDir, "launch.sqlite"));

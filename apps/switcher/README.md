@@ -114,13 +114,16 @@ Successful inference does not establish browser or computer compatibility for
 every provider. See the [browser extension guide](https://learn.chatgpt.com/docs/chrome-extension)
 and [DeepSeek compatibility details](https://api-docs.deepseek.com/guides/responses_api/).
 
-Switcher starts a separate app instance with private Electron state under
-`~/.hasna/switcher/state/desktop/PROFILE_ID`. A fresh `launch-*/auth` directory
-holds only that invocation's gateway credential; the native corpus is shared.
+Switcher starts a separate app instance with fresh private Electron state and
+authentication under `~/.hasna/switcher/state/launch-*`. Login cookies and app UI
+preferences do not carry over to the next invocation, including when a saved
+provider profile changes credentials. The native corpus remains shared.
 Local conversations, skills and instructions use the same native corpus as Codex
 CLI (normally `~/.codex`). Your regular ChatGPT app's signed-in state is preserved;
 authentication and cookies are not copied. A second launch of the same active
 provider profile is refused; quit that instance before relaunching it.
+The profile's persistent directory holds only its launch lease and recovery
+fences; existing legacy Electron directories are preserved without reuse.
 Keep the launching terminal running until you quit that instance: Switcher owns
 its inference gateway and stops its own app process on interruption or timeout.
 
