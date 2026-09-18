@@ -704,6 +704,17 @@ emails-serve
 
 Clients read and write the shared API registry; no mailbox database synchronization is required between machines.
 
+The `emails-serve ingest-worker` uses the same SELECT-only migration inventory
+check as the API's `/ready` probe. Missing, unknown or mismatched migrations
+(including dependency migrations), or an unreadable ledger, refuse startup
+before any queue or object request. Published historical checksum compatibility
+is shared with the API; the worker never applies migrations automatically.
+It rechecks before each receive, after the long poll and before visibility
+sampling. Observed drift stops new work and closes worker health and database
+resources; an already processing message retains its normal acknowledgment.
+These batch checks do not replace coordinated writer shutdown for migrations.
+
+
 ## Data
 
 Mail, addresses, domains, provider references, sources, and provisioning jobs
