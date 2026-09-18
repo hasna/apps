@@ -108,6 +108,7 @@ import {
   type IntegrityReport,
 } from "../lib/integrity.js";
 import { redactEvidenceText } from "../lib/redaction.js";
+import { sanitizePreWriteText } from "../lib/prewrite-secrets.js";
 import {
   isCanonicalSlug,
   isValidTaskListProjectScope,
@@ -173,7 +174,11 @@ export function createPostgresTodosStorageAdapter(
       resolveRef: (ref) => store.resolveTaskRef(ref),
       list: (filter = {}) => store.listTasks(filter),
       count: (filter = {}) => store.countTasks(filter),
-      update: (id, input, context) => updateTask(id, input, store, context),
+      // A successful PATCH must commit its task and history together. Reuse the
+      // existing service-scoped transaction and its parent/plan integrity lock.
+      update: (id, input, context) => store.withDependencyGraphTransaction(
+        scoped => updateTask(id, input, scoped, context),
+      ),
       delete: (id, context) => store.deleteTaskHierarchy(id, context),
       bulkCreateAtomic: (inputs, context) => bulkCreateTasksAtomic(inputs, store, context),
       bulkDeleteAtomic: (ids, force, context) => bulkDeleteTasksAtomic(ids, force, store, context),
@@ -2810,7 +2815,8 @@ async function updateTask(
   store: PostgresJsonRecordStore,
   context?: TodosStorageContext,
 ): Promise<Task> {
-  const existing = await requireRecord<Task>("tasks", id, store);
+  const existing = await store.get<Task>("tasks", id);
+  if (!existing) throw new TaskNotFoundError(id);
   if (existing.version !== input.version) {
     throw new VersionConflictError(id, input.version, existing.version);
   }
@@ -2932,17 +2938,17 @@ async function updateTask(
       parentId: input.parent_id !== undefined ? input.parent_id : existing.parent_id,
     },
   );
-  if (input.parent_id !== undefined && input.parent_id !== existing.parent_id) {
-    await logTaskChange(
-      id,
-      "update",
-      "parent_id",
-      existing.parent_id,
-      input.parent_id,
-      existing.assigned_to ?? existing.agent_id,
-      store,
-      context,
-    );
+  // Match SQLite's material-field history, including explicit null clears and
+  // its approval action. Use persisted values; a stale guarded write must not
+  // claim an input value that did not win.
+  const agentId = existing.assigned_to || existing.agent_id || null;
+  for (const field of ["status", "priority", "title", "parent_id", "assigned_to", "archived_at", "working_dir"] as const) {
+    if (input[field] !== undefined && storedTask[field] !== existing[field]) {
+      await logTaskChange(id, "update", field, existing[field], storedTask[field], agentId, store, context);
+    }
+  }
+  if (input.approved_by !== undefined) {
+    await logTaskChange(id, "approve", "approved_by", null, storedTask.approved_by, agentId, store, context);
   }
   return storedTask;
 }
@@ -3891,8 +3897,8 @@ async function logTaskChange(
     task_id: taskId,
     action,
     field: field ?? null,
-    old_value: oldValue ?? null,
-    new_value: newValue ?? null,
+    old_value: oldValue == null ? null : sanitizePreWriteText(oldValue, "task_history.old_value"),
+    new_value: newValue == null ? null : sanitizePreWriteText(newValue, "task_history.new_value"),
     agent_id: agentId ?? context?.agentId ?? null,
     created_at: new Date().toISOString(),
     machine_id: store.machineId(context),
