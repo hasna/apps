@@ -248,6 +248,7 @@ export type {
   SessionDriftEntry,
   SessionFileAdoption,
   SessionFileAdoptionReceipt,
+  SessionFileRetirementReceipt,
   SessionFileReconciliationReceipt,
   SessionRestoreConflict,
   SessionRestoreFileResult,

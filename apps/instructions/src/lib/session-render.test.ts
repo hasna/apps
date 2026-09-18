@@ -544,14 +544,30 @@ describe("session render planner", () => {
     expect(plan.files[1]?.relativePath).toBe("opencode.json");
     const config = JSON.parse(plan.files[1]!.content) as { instructions: string[] };
     expect(config.instructions).toEqual([
-      ".hasna/instructions/01-global-codewith.md",
-      ".hasna/instructions/02-agent-marcus.md",
+      "/tmp/opencode-account999/.hasna/instructions/01-global-codewith.md",
+      "/tmp/opencode-account999/.hasna/instructions/02-agent-marcus.md",
     ]);
     expect(plan.files.filter((file) => file.role === "fragment")).toHaveLength(2);
     expect(plan.targetOwner.writer).toMatchObject({
       id: "instructions-session-renderer",
       canonical: true,
     });
+  });
+
+  test("anchors OpenCode managed instruction references to their owner home across project working directories", () => {
+    const targetHome = join(tmpRoot, "opencode-global-anchor");
+    mkdirSync(targetHome, { recursive: true });
+    const first = planSessionRender({ tool: "opencode", profile: "global", targetHome,
+      providerSurface: "opencode-config-instructions", sources: [globalIdentity] });
+    const configFile = first.files.find((file) => file.relativePath === "opencode.json")!;
+    const fragment = first.files.find((file) => file.role === "fragment")!;
+    const config = JSON.parse(configFile.content);
+    expect(config.instructions).toEqual([fragment.path]);
+    writeFileSync(configFile.path, JSON.stringify({ ...config, instructions: [...config.instructions, "team-rules.md", "/other-profile/.hasna/instructions/private.md"] }));
+    const next = planSessionRender({ tool: "opencode", profile: "global", targetHome,
+      providerSurface: "opencode-config-instructions", sources: [agentIdentity] });
+    const updated = JSON.parse(next.files.find((file) => file.relativePath === "opencode.json")!.content);
+    expect(updated.instructions).toEqual(["team-rules.md", "/other-profile/.hasna/instructions/private.md", next.files.find((file) => file.role === "fragment")!.path]);
   });
 
   test("preserves OpenCode settings and unmanaged instruction entries", () => {
@@ -588,7 +604,7 @@ describe("session render planner", () => {
     expect(config.mcp).toHaveProperty("files");
     expect(config.instructions).toEqual([
       "team-rules.md",
-      ".hasna/instructions/01-global-codewith.md",
+      join(targetHome, ".hasna/instructions/01-global-codewith.md"),
     ]);
   });
 
@@ -614,7 +630,7 @@ describe("session render planner", () => {
 
     expect(config.model).toBe("openai/profile-model");
     expect(config.mcp).toHaveProperty("skills");
-    expect(config.instructions).toEqual([".hasna/instructions/01-global-codewith.md"]);
+    expect(config.instructions).toEqual([join(plan.targetHome, ".hasna/instructions/01-global-codewith.md")]);
     expect(plan.manifest.providerConfig).toMatchObject({
       sourceId: "opencode-config",
       selected: true,

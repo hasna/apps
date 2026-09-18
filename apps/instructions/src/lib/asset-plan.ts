@@ -152,6 +152,7 @@ function assetCapability(
 export const ASSET_CAPABILITY_DESCRIPTORS: readonly AssetCapability[] = Object.freeze([
   assetCapability("claude", "code", "skill", "supported", ["emit-file"], "Claude Code project or profile skill files."),
   assetCapability("claude", "code", "workflow", "supported", ["emit-file"], "Claude Code command and workflow files."),
+  assetCapability("claude", "code", "custom-agent", "supported", ["emit-file"], "Claude Code Markdown subagents with native frontmatter in agents/.", ">=2.1.276 <3.0.0"),
   assetCapability("claude", "code", "hook", "supported", ["emit-file"], "Claude Code hook configuration fragments."),
   assetCapability("claude", "code", "plugin", "conditional", ["install-marketplace"], "Claude marketplace installation requires an explicit installer."),
   assetCapability("codex", "cli", "skill", "supported", ["emit-file"], "Codex skill bundle files."),
@@ -162,6 +163,7 @@ export const ASSET_CAPABILITY_DESCRIPTORS: readonly AssetCapability[] = Object.f
   assetCapability("opencode", "cli", "workflow", "supported", ["emit-file"], "OpenCode command/workflow files."),
   assetCapability("opencode", "cli", "plugin", "supported", ["emit-file"], "OpenCode local plugin modules."),
   assetCapability("opencode", "cli", "custom-agent", "supported", ["emit-file"], "OpenCode custom agent files."),
+  assetCapability("sumi", "cli", "custom-agent", "supported", ["emit-file"], "Sumi Markdown agent definitions in its explicit resolved config or project directory.", ">=0.2.22 <0.3.0"),
   assetCapability("codewith", "cli", "skill", "supported", ["emit-file"], "Codewith skill bundle files."),
   assetCapability("codewith", "cli", "plugin", "conditional", ["install-local", "install-marketplace"], "Codewith plugin installation requires an explicit installer."),
   assetCapability("aicopilot", "cli", "skill", "supported", ["emit-file"], "AICopilot discovered skill files."),

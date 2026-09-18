@@ -107,7 +107,11 @@ Codewith native imports are selected by `--codewith-native-imports` or
 `HASNA_CONFIGS_CODEWITH_NATIVE_IMPORTS=1|true`. Native mode writes managed
 fragments below `.hasna/instructions` and imports them from `CODEWITH.md`.
 
-OpenCode preserves existing non-managed `instructions` entries. If a profile
+OpenCode preserves existing non-managed `instructions` entries. Generated
+fragment references are absolute paths anchored to their owning target home,
+because OpenCode resolves relative entries against the active project directory.
+Refreshing removes both legacy relative references and absolute references owned
+by that exact home, while preserving entries owned by other homes. If a profile
 contains OpenCode config rows, the newest equivalent provider config is used;
 conflicting provider configs fail.
 
@@ -235,6 +239,30 @@ new plan and use the project-context lock during apply. The reserved source ID
 [Project context](project-context.md).
 
 ## Source eligibility and profile scope
+
+### Reviewed obsolete files and custom agents
+
+To retire an obsolete manifest-owned fragment, rule, or asset, pass
+`--retire-file relative/path.md=<observed-sha256>` together with
+`--expected-manifest-sha256 <observed-manifest-sha256>`. The target must be absent
+from the new plan and owned by the prior manifest for the same provider home.
+This explicit precondition can accept reviewed local edits without `--force`.
+The before-image and prior manifest are retained in the normal restore snapshot;
+the new manifest retains retirement provenance. Missing files, changed preimages,
+retained outputs, symlinks, unknown ownership, and stale manifest hashes fail closed.
+
+Hosted profile assets support emitted Markdown `custom-agent` definitions for
+Claude Code 2.1.276 through 2.x, Sumi 0.2.22 through 0.2.x, and supported OpenCode
+versions. Bind an immutable source version/digest to its explicit native
+`agents/<name>.md` destination and scope. Preserve native frontmatter in the source
+bytes; the asset is emitted separately from global instruction prose. These
+reviewed outputs accept exact `--adopt-file` and `--reconcile-file` preconditions
+and participate in hosted session refresh and snapshots. Updating source bytes
+requires reviewing and repinning the asset binding; a stale digest fails closed.
+Other executable asset kinds cannot use this custom-agent adoption exception.
+Codex custom-agent file loading remains unsupported. A generated file is not
+proof that a running provider loaded the role; verify the native consumer and
+keep existing sessions intact.
 
 Session profiles contain reviewed instruction prose: `rules` records in Markdown
 or text, with templates resolved before injection. Compiling a mixed machine

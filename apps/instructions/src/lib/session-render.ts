@@ -336,6 +336,12 @@ export interface SessionRenderManifest {
     previousManagedSha256: string;
     sourceIds: string[];
   }>;
+  retirements?: Array<{
+    relativePath: string;
+    preimageSha256: string;
+    previousManagedSha256: string;
+    sourceIds: string[];
+  }>;
   targetHome: string;
   targetKind: SessionRenderTargetKind;
   targetOwner: SessionTargetOwner;
@@ -1763,7 +1769,7 @@ function buildOpenCodeFiles(
       ? readOpenCodeConfig(providerConfig.content, providerConfig.sourceId)
       : {};
   const preservedInstructions = normalizeOpenCodeInstructions(selectedConfig["instructions"])
-    .filter((path) => !pathIsManagedOpenCodeInstruction(path, adapter.managedDir));
+    .filter((path) => !pathIsManagedOpenCodeInstruction(path, adapter.managedDir, targetHome));
   const config = {
     ...selectedConfig,
     $schema: typeof selectedConfig["$schema"] === "string"
@@ -1771,7 +1777,10 @@ function buildOpenCodeFiles(
       : "https://opencode.ai/config.json",
     instructions: [
       ...preservedInstructions,
-      ...fragments.map((file) => file.relativePath),
+      // OpenCode resolves instruction entries from the active project, even
+      // when their config came from a global provider home. Anchor generated
+      // references to their owning files so changing cwd cannot drop them.
+      ...fragments.map((file) => file.path),
     ],
   };
   const configSourceIds = [
@@ -1825,9 +1834,11 @@ function normalizeOpenCodeInstructions(value: unknown): string[] {
   return value as string[];
 }
 
-function pathIsManagedOpenCodeInstruction(path: string, managedDir: string): boolean {
+function pathIsManagedOpenCodeInstruction(path: string, managedDir: string, targetHome: string): boolean {
   const normalized = posix.normalize(path.replaceAll("\\", "/")).replace(/^\.\//, "");
-  return normalized === managedDir || normalized.startsWith(`${managedDir}/`);
+  const absoluteManagedDir = posix.join(targetHome.replaceAll("\\", "/"), managedDir);
+  return normalized === managedDir || normalized.startsWith(`${managedDir}/`)
+    || normalized === absoluteManagedDir || normalized.startsWith(`${absoluteManagedDir}/`);
 }
 
 function buildAntigravityRuleFiles(
