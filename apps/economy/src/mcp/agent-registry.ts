@@ -456,7 +456,7 @@ export async function emitConflictEvent(
 // --- MCP tool registration ---
 
 function jsonText(data: unknown): { content: Array<{ type: string; text: string }> } {
-  return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] }
+  return { content: [{ type: 'text', text: JSON.stringify(data) }] }
 }
 
 function errorText(message: string): {
@@ -586,13 +586,38 @@ export function registerAgentTools(
     {
       online_only: z.boolean().optional().describe('Only agents seen within the active window'),
       include_archived: z.boolean().optional().describe('Include archived agents'),
+      limit: z.number().int().positive().max(100).optional().describe('Max returned agents (default 20)'),
+      cursor: z.number().int().nonnegative().optional().describe('Zero-based agent offset'),
+      verbose: z.boolean().optional().describe('Return full records within the selected page'),
+      full: z.boolean().optional().describe('Return the legacy complete agent array'),
     },
-    async (args: { online_only?: boolean; include_archived?: boolean }) => {
+    async (args: { online_only?: boolean; include_archived?: boolean; limit?: number; cursor?: number; verbose?: boolean; full?: boolean }) => {
       const agents = listAgents(
         { online_only: args.online_only, include_archived: args.include_archived },
         await db(),
       )
-      return jsonText(agents)
+      if (args.full) return jsonText(agents)
+      const limit = args.limit ?? 20
+      const cursor = args.cursor ?? 0
+      const page = agents.slice(cursor, cursor + limit)
+      const nextCursor = cursor + page.length < agents.length ? cursor + page.length : null
+      return jsonText({
+        agents: args.verbose ? page : page.map((agent) => ({
+          id: agent.id,
+          name: agent.name,
+          status: agent.status,
+          active_project_id: agent.active_project_id,
+          machine_id: agent.machine_id,
+          last_seen_at: agent.last_seen_at,
+        })),
+        count: page.length,
+        total: agents.length,
+        limit,
+        cursor,
+        next_cursor: nextCursor,
+        compact: !args.verbose,
+        hint: 'Use cursor/limit to continue, verbose=true for full page fields, or full=true for the legacy complete array.',
+      })
     },
   )
 

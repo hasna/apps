@@ -4,6 +4,8 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { existsSync, mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
+import { openDatabase } from '../db/sqlite-store.js'
+import { bulkIngest } from '../db/database.js'
 
 const roots: string[] = []
 // Storage-mode variables are retired. The fleet shell exports
@@ -223,7 +225,7 @@ describe('economy-mcp stdio server', () => {
       )
 
       const description = await client.callTool(
-        { name: 'describe_tools', arguments: { names: ['sync', 'get_sessions', 'get_billing_summary', 'get_pricing', 'get_usage', 'get_savings', 'get_session_detail', 'set_budget', 'set_pricing', 'list_subscriptions', 'set_subscription', 'register_agent', 'list_agents'] } },
+        { name: 'describe_tools', arguments: { names: ['sync', 'get_sessions', 'get_billing_summary', 'get_pricing', 'get_usage', 'get_savings', 'get_session_detail', 'get_cost_center_breakdown', 'set_budget', 'set_pricing', 'list_subscriptions', 'set_subscription', 'register_agent', 'list_agents'] } },
         undefined,
         { timeout: 5_000 },
       )
@@ -236,6 +238,7 @@ describe('economy-mcp stdio server', () => {
       expect(text).toContain('limit(20), json? -> usage snapshots')
       expect(text).toContain('get_savings: period(today|week|month|year|all)')
       expect(text).toContain('get_session_detail: session_id(prefix ok), limit(20), verbose?')
+      expect(text).toContain('get_cost_center_breakdown: period?(today|week|month|year|all), kind?(loop|app|repo|service|team), cursor(0), limit(20), verbose?, json?')
       expect(text).toContain('set_budget: period(daily|weekly|monthly)')
       expect(text).toContain('cost_center_id?')
       expect(text).toContain('set_pricing: model, input_per_1m')
@@ -243,9 +246,57 @@ describe('economy-mcp stdio server', () => {
       expect(text).toContain('set_subscription: provider, plan')
       expect(text).toContain('json? -> create/update subscription plan')
       expect(text).toContain('register_agent: name, session_id?')
-      expect(text).toContain('list_agents: no params')
+      expect(text).toContain('list_agents: online_only?, include_archived?, cursor(0), limit(20), verbose?, full?')
     } finally {
       await client.close()
     }
   })
+
+  it('paginates cost-center output with truthful hidden counts and continuation', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'economy-mcp-cost-centers-'))
+    roots.push(root)
+    const dbPath = join(root, 'economy.db')
+    const db = openDatabase(dbPath)
+    bulkIngest(db, {
+      requests: Array.from({ length: 25 }, (_, index) => ({
+        id: `cost-center-request-${index}`,
+        agent: 'codex',
+        session_id: `cost-center-session-${index}`,
+        model: 'gpt-5',
+        input_tokens: 100,
+        output_tokens: 20,
+        cost_usd: index + 1,
+        timestamp: '2026-09-18T12:00:00Z',
+        machine_id: 'station01',
+        cost_center_id: `loop:cost-center-${String(index).padStart(2, '0')}`,
+      })),
+    })
+    db.close()
+
+    const client = new Client({ name: 'economy-cost-center-page-test', version: '1.0.0' }, { capabilities: {} })
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: ['run', 'src/mcp/index.ts'],
+      cwd: process.cwd(),
+      env: envWith({ HASNA_ECONOMY_DB_PATH: dbPath }),
+      stderr: 'pipe',
+    })
+    try {
+      await client.connect(transport, { timeout: 5_000 })
+      const first = await client.callTool({ name: 'get_cost_center_breakdown', arguments: { kind: 'loop', limit: 10 } })
+      const firstText = first.content[0]?.type === 'text' ? first.content[0].text : ''
+      expect(firstText).toContain('Showing 1-10 of 25 cost centers.')
+      expect(firstText).toContain('15 more cost centers hidden')
+      expect(firstText).toContain('cursor=10')
+
+      const second = await client.callTool({ name: 'get_cost_center_breakdown', arguments: { kind: 'loop', limit: 10, cursor: 10 } })
+      const secondText = second.content[0]?.type === 'text' ? second.content[0].text : ''
+      expect(secondText).toContain('Showing 11-20 of 25 cost centers.')
+      expect(secondText).toContain('5 more cost centers hidden')
+      expect(secondText).toContain('cursor=20')
+    } finally {
+      await client.close()
+    }
+  })
+
 })

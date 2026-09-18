@@ -79,7 +79,7 @@ describe('economy-mcp in hosted mode (hasna/apps#1720)', () => {
         status: 'active',
       })
 
-      const listed = await client.callTool({ name: 'list_agents', arguments: {} }, undefined, { timeout: 10_000 })
+      const listed = await client.callTool({ name: 'list_agents', arguments: { full: true } }, undefined, { timeout: 10_000 })
       const agents = JSON.parse(textOf(listed as { content: Array<{ type: string; text?: string }> })) as Array<{ name: string }>
       expect(agents.map((agent) => agent.name)).toContain('fixture-agent')
     } finally {
