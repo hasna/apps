@@ -1290,6 +1290,21 @@ describe("the lanes actually call the checker", () => {
     }
   });
 
+  test("Knowledge's existing-key proof cannot enter the mint path", () => {
+    const caller = read("deploy-knowledge.yml");
+    expect(caller).toContain("verify_only: true");
+    const workflow = read("fleet-key-provision.yml");
+    expect(workflow).toMatch(/verify_only:\n\s+description:[^\n]+\n\s+required: false\n\s+type: boolean\n\s+default: false/);
+    const steps = workflow.split(/\n\s+- name: /);
+    const mint = steps.find((step) => step.includes("args=(provision"));
+    expect(mint).toContain("!inputs.verify_only && vars.FLEET_KEY_PROVISION_ENABLED == 'true'");
+    const verify = steps.find((step) => step.includes("fleet-key.ts drift --apps"));
+    expect(verify).toContain("if: ${{ inputs.verify_only }}");
+    expect(verify).toContain('--region "$REGION" --strict');
+    expect(verify).not.toContain("--allow-rotate");
+    expect(verify).not.toContain("args=(provision");
+  });
+
   test("the daily drift workflow is scheduled, self-tests, and posts to #incidents", () => {
     const wf = read("fleet-key-drift.yml");
     expect(wf).toMatch(/cron:\s*"[^"]+"/);
