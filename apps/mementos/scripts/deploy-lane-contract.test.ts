@@ -165,6 +165,8 @@ describe("mementos deploy lane contract", () => {
     expect(allEnv.SERVICE).toBe("mementos-prod");
     expect(allEnv.WEB_FAMILY).toBe("mementos-prod");
     expect(allEnv.WEB_CONTAINER).toBe("mementos");
+    expect(allEnv.MIGRATION_FAMILY).toBe("mementos-prod-migrate");
+    expect(allEnv.MIGRATION_CONTAINER).toBe("mementos-migrate");
     expect(allEnv.ECR_REPOSITORY).toBe("mementos");
     expect(allEnv.ECR_URL).toContain(
       ".dkr.ecr.us-east-1.amazonaws.com/mementos",
@@ -210,12 +212,14 @@ describe("mementos deploy lane contract", () => {
 
   test("runs an exact-image one-shot migration before updating the service", () => {
     const script = readFileSync(deployScriptPath, "utf8");
-    const migrationCall = script.indexOf('run_migration_task "$new_td"');
+    const migrationCall = script.indexOf('run_migration_task "$migration_td"');
     const serviceUpdate = script.indexOf("ecs update-service");
 
     expect(migrationCall).toBeGreaterThanOrEqual(0);
     expect(serviceUpdate).toBeGreaterThan(migrationCall);
     expect(script).toContain('command: ["mementos", "storage", "migrate"]');
+    expect(script).toContain('--task-definition "$MIGRATION_FAMILY"');
+    expect(script).not.toContain('run_migration_task "$new_td"');
     expect(script).toContain("ecs wait tasks-stopped");
     expect(script).toContain(
       "migration task did not prove an exact-image transactional migration with exit code 0",
