@@ -258,10 +258,30 @@ class ReconciliationControls(unittest.TestCase):
   self.assertEqual(row["state"],"candidate_live_stable")
   self.assertTrue(row["service"]["stable"]);self.assertTrue(row["service"]["healthy"])
   self.assertIsNone(row["descendant"])
+  self.assertTrue(row["task88"]["readOnlyRepresentationMayDiffer"])
+  self.assertRegex(row["task88"]["historicalReadDigest"],r"^sha256:[0-9a-f]{64}$")
+  self.assertRegex(row["task88"]["currentPayloadDigest"],r"^sha256:[0-9a-f]{64}$")
   self.assertFalse(row["rollback"]["automatic"]);self.assertTrue(row["rollback"]["requiresSeparateReview"])
   self.assertFalse(row["rollback"]["validAfterForwardMigration"])
   self.assertEqual(row["sourceCommit"],"b"*40);self.assertEqual(row["preparedSourceCommit"],"a"*40)
   self.assertEqual(set(row),{"schema","sourceCommit","preparedSourceCommit","preparedSha256","task88","task89","descendant","service","state","rollback"})
+ def test_task88_readonly_envelope_drift_is_tolerated_but_payload_drift_refuses(self):
+  before,candidate,descendant,plan,service,cloud=self.fixture("candidate",True)
+  plan["taskBeforeDigest"]="sha256:"+"0"*64
+  lookup={row["taskDefinitionArn"]:row for row in (before,candidate,descendant)}
+  with tempfile.TemporaryDirectory() as tmp:
+   out=pathlib.Path(tmp)
+   with patch.object(m,"historical_reviewed_plan",return_value=(plan,plan["image"],"a"*40)),patch.object(m,"task_read",side_effect=lambda arn: lookup[arn]),patch.object(m,"current_service",return_value=service),patch.object(m,"aws",side_effect=cloud):
+    m.reconcile("b"*40,out,out/"prepared.json","e"*64)
+   row=json.loads((out/"reconciled.json").read_bytes())
+  self.assertEqual(row["task88"]["historicalReadDigest"],plan["taskBeforeDigest"])
+  changed=copy.deepcopy(before);next(c for c in changed["containerDefinitions"] if c["name"]=="emails")["environment"].append({"name":"UNREVIEWED","value":"1"})
+  lookup[before["taskDefinitionArn"]]=changed
+  with tempfile.TemporaryDirectory() as tmp:
+   out=pathlib.Path(tmp)
+   with patch.object(m,"historical_reviewed_plan",return_value=(plan,plan["image"],"a"*40)),patch.object(m,"task_read",side_effect=lambda arn: lookup[arn]),patch.object(m,"current_service",return_value=service),patch.object(m,"aws",side_effect=cloud):
+    with self.assertRaisesRegex(ValueError,"^RECONCILE_TASK_88_PAYLOAD_DRIFT$"):m.reconcile("b"*40,out,out/"prepared.json","e"*64)
+   self.assertFalse((out/"reconciled.json").exists())
  def test_historical_plan_requires_ancestor_and_runs_real_reviewed_plan(self):
   prepared_source="a"*40;current_source="b"*40
   manifest={"schemaVersion":2,"mediaType":m.OCI_MANIFEST,"config":{},"layers":[]}
@@ -307,6 +327,7 @@ class ReconciliationControls(unittest.TestCase):
    row=m.descendant_overlay_lineage(parent_digest,child_digest)
   self.assertEqual(row["layerDigest"],child_layer["digest"]);self.assertEqual(row["diffId"],m.digest(layer_bytes))
   self.assertEqual(row["addedLabelNames"],["com.hasna.review.patch-sha256"])
+  self.assertFalse(row["parentHistoryTimestampNormalized"])
   drift=copy.deepcopy(child_config);drift["config"]["Env"]=["CHANGED=1"]
   with patch.object(m,"image_manifest",side_effect=[parent_manifest,child_manifest]),patch.object(m,"blob",side_effect=[m.encode(parent_config),m.encode(drift),compressed]):
    with self.assertRaisesRegex(ValueError,"^RECONCILE_DESCENDANT_RUNTIME_DRIFT$"):m.descendant_overlay_lineage(parent_digest,child_digest)
@@ -316,6 +337,34 @@ class ReconciliationControls(unittest.TestCase):
   empty_history=copy.deepcopy(child_config);empty_history["history"][-1]={"created_by":"metadata only","empty_layer":True}
   with patch.object(m,"image_manifest",side_effect=[parent_manifest,child_manifest]),patch.object(m,"blob",side_effect=[m.encode(parent_config),m.encode(empty_history),compressed]):
    with self.assertRaisesRegex(ValueError,"^RECONCILE_DESCENDANT_HISTORY_LAYER$"):m.descendant_overlay_lineage(parent_digest,child_digest)
+  stamped=copy.deepcopy(child_config);stamped["history"]=[{"created_by":"base","created":"2026-09-16T00:26:12.261010935+03:00"},{"created_by":"overlay","created":"2026-09-16T00:26:12.328330003+03:00"}]
+  def lineage(value):
+   with patch.object(m,"image_manifest",side_effect=[parent_manifest,child_manifest]),patch.object(m,"blob",side_effect=[m.encode(parent_config),m.encode(value),compressed]):
+    return m.descendant_overlay_lineage(parent_digest,child_digest)
+  self.assertTrue(lineage(stamped)["parentHistoryTimestampNormalized"])
+  exact_five=copy.deepcopy(stamped);exact_five["history"][0]["created"]="2026-09-16T00:00:00.000000000Z";exact_five["history"][1]["created"]="2026-09-16T00:00:05.000000000Z"
+  self.assertTrue(lineage(exact_five)["parentHistoryTimestampNormalized"])
+  equivalent_offset=copy.deepcopy(stamped);equivalent_offset["history"][0]["created"]="2026-09-16T00:00:00Z";equivalent_offset["history"][1]["created"]="2026-09-16T01:00:00+01:00"
+  self.assertTrue(lineage(equivalent_offset)["parentHistoryTimestampNormalized"])
+  just_over=copy.deepcopy(exact_five);just_over["history"][1]["created"]="2026-09-16T00:00:05.000000001Z"
+  negative=copy.deepcopy(exact_five);negative["history"][1]["created"]="2026-09-15T23:59:59.999999999Z"
+  malformed=[]
+  for value in ["2026-09-16 00:00:00Z","2026-09-16T00:00:00","2026-09-16T00:00:00.1234567890Z","2026-09-16T00:00:00+24:00","2026-09-16T00:00:00-00:00","2026-12-31T23:59:60Z",None,7,"x"*65]:
+   row=copy.deepcopy(stamped);row["history"][0]["created"]=value;malformed.append(row)
+  missing_appended=copy.deepcopy(stamped);missing_appended["history"][1].pop("created")
+  for invalid in [just_over,negative,missing_appended,*malformed]:
+   with self.assertRaisesRegex(ValueError,"^RECONCILE_DESCENDANT_HISTORY_TIMESTAMP$"):lineage(invalid)
+  altered=copy.deepcopy(stamped);altered["history"][-2]["created_by"]="changed"
+  added=copy.deepcopy(stamped);added["history"][-2]["extra"]="field"
+  typed_parent={**parent_config,"history":[{"created_by":"base","empty_layer":False}]}
+  typed_child=copy.deepcopy(stamped);typed_child["history"]=[{"created_by":"base","empty_layer":0,"created":"2026-09-16T00:00:00Z"},{"created_by":"overlay","created":"2026-09-16T00:00:01Z"}]
+  earlier_parent={**parent_config,"history":[{"created_by":"first","empty_layer":False},{"created_by":"base"}]}
+  earlier_child=copy.deepcopy(stamped);earlier_child["history"]=[{"created_by":"changed"},{"created_by":"base","created":"2026-09-16T00:26:12Z"},{"created_by":"overlay","created":"2026-09-16T00:26:13Z"}]
+  parent_stamped={**parent_config,"history":[{"created_by":"base","created":"2026-09-16T00:00:00Z"}]}
+  typed_earlier=copy.deepcopy(earlier_child);typed_earlier["history"][0]={"created_by":"first","empty_layer":0}
+  for parent_value,child_value in [(parent_config,altered),(parent_config,added),(typed_parent,typed_child),(earlier_parent,earlier_child),(earlier_parent,typed_earlier),(parent_stamped,stamped)]:
+   with patch.object(m,"image_manifest",side_effect=[parent_manifest,child_manifest]),patch.object(m,"blob",side_effect=[m.encode(parent_value),m.encode(child_value),compressed]):
+    with self.assertRaisesRegex(ValueError,"^RECONCILE_DESCENDANT_HISTORY$"):m.descendant_overlay_lineage(parent_digest,child_digest)
  def test_base_live_reconciliation_records_registered_candidate_without_mutation(self):
   row=self.execute("base")
   self.assertEqual(row["state"],"base_live_stable")
