@@ -300,7 +300,7 @@ describe("calendar CLI", () => {
     }
   });
 
-  test("event list JSON remains a full record array unless paging is requested", async () => {
+  test("event list JSON is compact and bounded by default with explicit full compatibility", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "calendar-cli-"));
     const dbPath = join(tempDir, "calendar.db");
     try {
@@ -309,7 +309,16 @@ describe("calendar CLI", () => {
 
       expect(result.exitCode).toBe(0);
       expect(result.stderr).toBe("");
-      const events = JSON.parse(result.stdout) as Array<{ description: string }>;
+      const page = JSON.parse(result.stdout) as { items: Array<Record<string, unknown>>; total: number; limit: number; next_cursor: number };
+      expect(page.items).toHaveLength(20);
+      expect(page.total).toBe(105);
+      expect(page.limit).toBe(20);
+      expect(page.next_cursor).toBe(20);
+      expect(page.items[0]!.description).toBeUndefined();
+      expect(Buffer.byteLength(result.stdout)).toBeLessThan(12_000);
+
+      const full = await runCalendar(["list", "--calendar", calendar.id, "--json", "--full"], dbPath);
+      const events = JSON.parse(full.stdout) as Array<{ description: string }>;
       expect(events).toHaveLength(105);
       expect(events[0]!.description).toBe(longDescription);
     } finally {
