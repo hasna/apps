@@ -14,7 +14,7 @@ import { runHarnessProcess, HarnessSettlementError } from "./harness-process";
 import { inspectCodexNative, codexConfigGuard, codexDirectoryGuard } from "./codex-native";
 import { oriLaunchWarnings, assertOriLoginAllowed, inspectOri, prepareOriLaunch, requireOriHarness, validateOriLaunchRequest, type OriContract, type OriLaunchPlan } from "./ori-backend";
 
-import { prepareChatGPTLaunch } from "./chatgpt-launch";
+import { prepareChatGPTLaunch, preflightChatGPTLaunch } from "./chatgpt-launch";
 import { prepareClaudeDesktopLaunch } from "./claude-desktop-launch";
 import type { ChatGPTInstallation, ClaudeDesktopInstallation } from "./desktop-apps";
 import type { ReasoningEffort } from "./reasoning";
@@ -134,10 +134,11 @@ export async function launch(client: SwitcherClient, profileId: string, options:
     throw new Fault(400, "native_state_harness", "--share-native-state is supported only for Codex, ChatGPT, Claude CLI and Claude desktop launches.");
   if (backend !== "direct" && ["codex", "claude"].includes(plan.profile.harness))
     throw new Fault(400, "native_state_backend", "Shared native state requires the direct native adapter; Ori state/resume integration is not yet accepted.");
-  const directCodex = plan.profile.harness === "codex" && backend === "direct" && !options.desktop;
+  const managedCodex = plan.profile.harness === "codex" && backend === "direct";
+  const directCodex = managedCodex && !options.desktop;
   // Read-only admission before credential resolution, private state creation or
-  // any native version probe. The desktop parser retains its own -c-only input.
-  const canonicalState = directCodex ? await resolveNativeState("codex", process.env, { create: false }) : undefined;
+  // any native version probe. Desktop helpers reuse the same accepted binding.
+  const canonicalState = managedCodex ? await resolveNativeState("codex", process.env, { create: false }) : undefined;
   const previousCodexHome = canonicalState ? resolve(process.env.CODEX_HOME ?? canonicalState.home) : undefined;
   const codexChecks: Array<() => Promise<void>> = [];
   if (canonicalState) {
@@ -146,7 +147,7 @@ export async function launch(client: SwitcherClient, profileId: string, options:
     await assertCodexCanonicalLaunch(canonicalState, previousCodexHome);
     if (previousCodexHome !== canonicalState.home) codexChecks.push(await codexDirectoryGuard(previousCodexHome!), await codexConfigGuard(previousCodexHome!));
   }
-  const codex = directCodex ? await inspectCodexNative(options.executable) : undefined;
+  const codex = managedCodex ? await inspectCodexNative(options.desktop ? undefined : options.executable) : undefined;
   if (codex) codexChecks.push(codex.guard);
   const nativeExecutable = options.desktop?.codexExecutable ?? options.executable;
   const detection = codex ? { available: true, executable: codex.executable, version: "0.154.0" }
@@ -156,6 +157,8 @@ export async function launch(client: SwitcherClient, profileId: string, options:
   if(backend==="direct"&&plan.profile.harness==="aider")validateHarnessVersion(plan.profile.harness,detection?.version);
   if (options.desktop) validateNativeStateVersion("codex", detection?.version);
   const root = resolve(options.stateDir ?? join(switcherHome(),"state"));
+  const desktopAdmission = options.desktop && canonicalState && codex
+    ? await preflightChatGPTLaunch(join(root,"desktop",profileId),canonicalState,codex) : undefined;
   await privateDirectory(root);
   const stateDir = await mkdtemp(join(root,"launch-"));
   let credential: string | undefined;
@@ -232,7 +235,7 @@ export async function launch(client: SwitcherClient, profileId: string, options:
     prepared = {...prepared,warnings:[...prepared.warnings,...stateWarnings]};
     if (sharedState) prepared = {...prepared,env:{...prepared.env,...nativeStateEnvironment(sharedState),
       ...(nativeHome ? {[sharedState.tool === "codex" ? "CODEX_HOME" : "CLAUDE_CONFIG_DIR"]:nativeHome} : {})}};
-    if (codex && canonicalState) {
+    if (directCodex && codex && canonicalState) {
       const authHome = join(stateDir, "auth");
       await mkdir(authHome, { mode: 0o700 });
       codexChecks.push(await codexDirectoryGuard(authHome, true));
@@ -252,7 +255,7 @@ export async function launch(client: SwitcherClient, profileId: string, options:
       prepared = {...prepared,args:[...baseArgs,...resumedArgs]};
     }
     if (options.desktop) {
-      prepared = await prepareChatGPTLaunch(prepared,options.desktop,stateDir,join(root,"desktop",desktopState),sharedState);
+      prepared = await prepareChatGPTLaunch(prepared,options.desktop,stateDir,join(root,"desktop",desktopState),sharedState,desktopAdmission);
       cleanup = prepared.cleanup;
       closeTransport = prepared.closeTransport;
     }

@@ -10,6 +10,7 @@ import {providerFromPreset} from "../src/presets";
 import {resolveLaunchProvider} from "../src/direct-launch";
 import {providerCredentialFingerprint} from "../src/provider-credential-onboarding";
 import {mockCodexNative} from "./fixtures/codex-native";
+import {codexFileGuard} from "../src/codex-native";
 
 // These launcher lifecycle tests use explicit fake native executables. Give
 // each test an owned canonical corpus and a guarded protocol binding, without
@@ -353,14 +354,22 @@ test("desktop settlement uncertainty during failed launch preparation preserves 
   const native=join(dir,"codex-version"),app=join(dir,"unused-app"),state=join(dir,"state"),profileId="desktop-fixture";
   await writeFile(native,"#!/bin/sh\necho 'codex-cli 0.154.0'\n",{mode:0o700});
   await writeFile(app,"#!/bin/sh\nexit 99\n",{mode:0o700});
-  const sessionDir=join(state,"desktop",profileId),configPath=join(sessionDir,"codex/config.toml");
-  let gateway:string|undefined;
+  codexFixture.binding.mockImplementation(async executable => {
+    if (executable !== undefined && executable !== native) throw new Error("Unexpected protocol fixture executable");
+    return {executable:native,guard:await codexFileGuard(native,1024*1024,undefined,true)};
+  });
+  const sessionDir=join(state,"desktop",profileId);
+  let gateway:string|undefined,authHome:string|undefined;
   const client={
     getProfile:async()=>({providerId:"fixture",harness:"codex"}),
     launchPlan:async()=>({profile:{harness:"codex",model:"fixture-model"},provider:{id:"fixture",baseUrl:"http://127.0.0.1:1",protocol:"openai-responses"},catalog:{models:[{id:"fixture-model",name:"Fixture"}]},warnings:[]}),
     createRun:async()=>{
-      const config=Bun.TOML.parse(await readFile(configPath,"utf8")) as any;
+      const launches=(await readdir(state)).filter(name=>name.startsWith("launch-"));
+      expect(launches).toHaveLength(1);
+      const binding=JSON.parse(await readFile(join(state,launches[0],"desktop-binding.json"),"utf8"));
+      const config=Bun.TOML.parse(binding.args.filter((_:string,index:number)=>index%2===1).join("\n")) as any;
       gateway=config.model_providers.switcher.base_url;
+      authHome=binding.authHome;
       // Model a bridge admitted before a later preparation failure. The fixture
       // creates no native child; production keeps this receipt until settlement.
       await mkdir(join(sessionDir,"codex-bridges"),{recursive:true,mode:0o700});
@@ -372,7 +381,8 @@ test("desktop settlement uncertainty during failed launch preparation preserves 
     await expect(launch(client,profileId,{refresh:false,cwd:dir,stateDir:state,
       desktop:{path:dir,executable:app,codexExecutable:native,bundleId:"com.openai.codex",version:"fixture"},
     })).rejects.toThrow("fixture createRun failed");
-    expect(await Bun.file(join(sessionDir,"codex/auth.json")).exists()).toBe(true);
+    expect(authHome).toBeDefined();
+    expect(await Bun.file(join(authHome!,"auth.json")).exists()).toBe(true);
     expect(await Bun.file(join(sessionDir,"codex-bridges/fixture.pending")).exists()).toBe(true);
     expect((await readdir(state)).filter(name=>name.startsWith("launch-"))).toHaveLength(1);
     expect(gateway).toBeDefined();

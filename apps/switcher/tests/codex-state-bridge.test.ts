@@ -9,6 +9,7 @@ import { prepareChatGPTLaunch } from "../src/chatgpt-launch";
 import { resolveNativeState } from "../src/native-state";
 import type { PreparedLaunch } from "../src/harness-types";
 import { HarnessSettlementError } from "../src/harness-process";
+import { desktopAdmissionFixture, desktopHelperFixture } from "./fixtures/codex-desktop";
 
 const routing = { model: "new-provider/model", config: { model_provider: "switcher", model_providers:{switcher:{name:"Switcher",base_url:"http://127.0.0.1:9876/v1",wire_api:"responses",requires_openai_auth:false,env_key:"SWITCHER_HARNESS_API_KEY"}},model_catalog_json:"/catalog.json",sqlite_home: "/canonical" } };
 const request = (value: unknown) => Buffer.from(JSON.stringify(value));
@@ -263,32 +264,31 @@ test("two desktop provider launches share the corpus while keeping Electron/auth
   let previousElectron: string | undefined;
   for (const model of ["provider-a/model", "provider-b/model"]) {
     const launch = join(root, model.slice(0, 10)), session=join(root,"desktop",model.slice(0,10));await mkdir(launch, { mode: 0o700 });
-    const first=model.startsWith("provider-a");
-    if(!first){await mkdir(join(session,"codex"),{recursive:true,mode:0o700});await writeFile(join(session,"codex/stale-compact.md"),"stale provider compact",{mode:0o600});await writeFile(join(session,"codex/config.toml"),'model="old"\nbase_url="https://outside.invalid"\nexperimental_compact_prompt_file="stale-compact.md"\nmodel_reasoning_effort="high"\n[agents]\nenabled=false\nmax_concurrent_threads_per_session=7\n[agents.stale]\nconfig_file="/private/old-launch.toml"\n[memories]\ncustom="keep"\nextract_model="old"\n',{mode:0o600});}
     const native: PreparedLaunch = { executable: nativePath, args: ["-c", `model=${JSON.stringify(model)}`, "-c", 'model_provider="switcher"', "-c", 'model_providers.switcher={name="Switcher",base_url="http://127.0.0.1:9876/v1",wire_api="responses",requires_openai_auth=false,env_key="SWITCHER_HARNESS_API_KEY"}', "-c", 'model_catalog_json="/catalog.json"', "-c", `sqlite_home=${JSON.stringify(state.sqliteHome)}`], env: { SWITCHER_HARNESS_API_KEY: "fixture-only" }, configPaths: [], warnings: [] };
-    const prepared = await prepareChatGPTLaunch(native, app, launch, session, state);
+    const prepared = await prepareChatGPTLaunch(native, app, launch, session, state, await desktopAdmissionFixture(nativePath,session,state));
     try {
       expect(prepared.env.HASNA_CODEX_STATE_HOME).toBe(state.home);expect(prepared.env.CODEX_SQLITE_HOME).toBe(state.home);
       const config=Bun.TOML.parse(await readFile(join(prepared.env.CODEX_HOME,"config.toml"),"utf8"));
-      expect(config).toMatchObject({model,model_provider:"switcher",developer_instructions:"shared developer fixture",model_instructions_file:join(state.home,"model.md"),experimental_compact_prompt_file:join(state.home,"compact.md"),include_environment_context:false,project_doc_fallback_filenames:["RULES.md"]});
-      if(!first){expect(config.agents).toMatchObject({enabled:false,max_concurrent_threads_per_session:7});expect(config.agents.stale).toBeUndefined();expect(config.memories).toEqual({custom:"keep"});expect(config.model_reasoning_effort).toBeUndefined();expect(config.base_url).toBeUndefined();expect(await readFile(join(session,"codex/stale-compact.md"),"utf8")).toBe("stale provider compact");}
+      expect(config).toMatchObject({developer_instructions:"shared developer fixture",model_instructions_file:"model.md",experimental_compact_prompt_file:"compact.md",include_environment_context:false,project_doc_fallback_filenames:["RULES.md"]});
+      expect(prepared.env.CODEX_HOME).toBe(state.home);
+      const binding=JSON.parse(await readFile(join(launch,"desktop-binding.json"),"utf8"));expect(binding.args).toContain(`model=${JSON.stringify(model)}`);expect(binding.authHome).toBe(join(launch,"auth"));
       expect(await readFile(join(state.home,"config.toml"),"utf8")).toBe(canonicalConfig);
       if(previousElectron)expect(prepared.env.CODEX_ELECTRON_USER_DATA_PATH).not.toBe(previousElectron);previousElectron=prepared.env.CODEX_ELECTRON_USER_DATA_PATH;
       expect(await readFile(join(prepared.env.CODEX_HOME, "sessions/thread.jsonl"), "utf8")).toBe(transcript);
-      expect(await realpath(join(prepared.env.CODEX_HOME, "thread-writer-locks"))).toBe(join(state.home, "thread-writer-locks"));
+      expect(await Bun.file(join(session,"codex/config.toml")).exists()).toBe(false);
       const nativeArgs = ["sandbox", "--", "node", "kernel.js"];
-      const child = Bun.spawn([prepared.env.CODEX_CLI_PATH, ...nativeArgs], { env: { PATH: process.env.PATH, ...prepared.env }, stdout: "pipe", stderr: "pipe" });
+      const child = Bun.spawn(await desktopHelperFixture(prepared,nativePath,nativeArgs), { env: { PATH: process.env.PATH, ...prepared.env }, stdout: "pipe", stderr: "pipe" });
       expect(JSON.parse(await new Response(child.stdout).text())).toEqual(nativeArgs);expect(await child.exited).toBe(0);
-      const bridge = Bun.spawn([prepared.env.CODEX_CLI_PATH, "app-server"], { env: { PATH: process.env.PATH, ...prepared.env }, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+      const bridge = Bun.spawn(await desktopHelperFixture(prepared,nativePath,["-c","features.code_mode_host=true","app-server","--analytics-default-enabled"]), { env: { PATH: process.env.PATH, ...prepared.env }, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
       bridge.stdin.write(JSON.stringify({ id: 1, method: "thread/list", params: { modelProviders: ["openai"] } }) + "\n");bridge.stdin.end();
       const output = JSON.parse(await new Response(bridge.stdout).text());expect(await bridge.exited).toBe(0);
       expect(output.params).toEqual({ modelProviders: [], useStateDbOnly: false });
     } finally { await prepared.cleanup?.(); }
-    expect(await Bun.file(join(session, "codex/auth.json")).exists()).toBe(false);
+    expect(await Bun.file(join(launch, "auth/auth.json")).exists()).toBe(false);
   }
   const conflicted=join(root,"desktop/conflicted"),launch=join(root,"conflicted-launch");await mkdir(join(conflicted,"codex"),{recursive:true,mode:0o700});await mkdir(launch,{mode:0o700});await writeFile(join(conflicted,"codex/config.toml"),'include="private.toml"\n',{mode:0o600});
   const native:PreparedLaunch={executable:nativePath,args:["-c",'model="provider/model"',"-c",'model_provider="switcher"'],env:{SWITCHER_HARNESS_API_KEY:"fixture-only"},configPaths:[],warnings:[]};
-  await expect(prepareChatGPTLaunch(native,app,launch,conflicted,state)).rejects.toMatchObject({code:"native_state_config"});expect(await Bun.file(join(conflicted,"codex/auth.json")).exists()).toBe(false);
+  await expect(desktopAdmissionFixture(nativePath,conflicted,state)).rejects.toMatchObject({code:"native_state_migration_required"});expect(await Bun.file(join(conflicted,"codex/auth.json")).exists()).toBe(false);
 }));
 
 
@@ -309,12 +309,13 @@ while(!existsSync(${JSON.stringify(pidPath)}))await Bun.sleep(5);process.exit(0)
   await writeFile(driver, `import{readFile,readdir,writeFile}from'node:fs/promises';
 import{prepareChatGPTLaunch}from ${JSON.stringify(join(import.meta.dir, "../src/chatgpt-launch.ts"))};
 import{HarnessSettlementError}from ${JSON.stringify(join(import.meta.dir, "../src/harness-process.ts"))};
+import{desktopAdmissionFixture,desktopHelperFixture}from ${JSON.stringify(join(import.meta.dir,"./fixtures/codex-desktop.ts"))};
 let cleanupCalls=0,transportCloses=0;
 const native={...${JSON.stringify(native)},cleanup:async()=>{cleanupCalls++;},closeTransport:async()=>{transportCloses++;}};
-const prepared=await prepareChatGPTLaunch(native,${JSON.stringify(app)},${JSON.stringify(launch)},${JSON.stringify(session)},${JSON.stringify(state)});
-const auth=${JSON.stringify(join(session, "codex/auth.json"))},config=${JSON.stringify(join(session, "codex/config.toml"))};
+const prepared=await prepareChatGPTLaunch(native,${JSON.stringify(app)},${JSON.stringify(launch)},${JSON.stringify(session)},${JSON.stringify(state)},await desktopAdmissionFixture(native.executable,${JSON.stringify(session)},${JSON.stringify(state)}));
+const auth=${JSON.stringify(join(launch, "auth/auth.json"))},config=${JSON.stringify(join(launch, "desktop-binding.json"))};
 const beforeAuth=await readFile(auth,'utf8'),beforeConfig=await readFile(config,'utf8'),started=performance.now();
-const child=Bun.spawn([prepared.env.CODEX_CLI_PATH,'app-server'],{env:{PATH:process.env.PATH,...prepared.env},stdin:'pipe',stdout:'pipe',stderr:'pipe'});
+const child=Bun.spawn(await desktopHelperFixture(prepared,native.executable,['-c','features.code_mode_host=true','app-server','--analytics-default-enabled']),{env:{PATH:process.env.PATH,...prepared.env},stdin:'pipe',stdout:'pipe',stderr:'pipe'});
 await writeFile(${JSON.stringify(bridgePid)},String(child.pid));child.stdin.end();
 const [code,stdout,stderr]=await Promise.all([child.exited,new Response(child.stdout).text(),new Response(child.stderr).text()]);
 let cleanupUncertain=false;try{await prepared.cleanup();}catch(error){cleanupUncertain=error instanceof HarnessSettlementError;}
@@ -334,14 +335,14 @@ process.exit(0);`, { mode: 0o600 });
     const owned = JSON.parse(await readFile(witness, "utf8"));
     expect(() => process.kill(-owned.native, 0)).toThrow();
     expect(() => process.kill(owned.escaped, 0)).not.toThrow();
-    const beforeAuth = await readFile(join(session, "codex/auth.json"), "utf8"), beforeConfig = await readFile(join(session, "codex/config.toml"), "utf8");
+    const beforeAuth = await readFile(join(launch, "auth/auth.json"), "utf8"), beforeConfig = await readFile(join(launch, "desktop-binding.json"), "utf8");
     const nextLaunch = join(root, "next-launch"); await mkdir(nextLaunch, { mode: 0o700 });
     // The old desktop lease was released by its process exit. The persistent
     // receipt, including repeated failed admission, must fence every restart.
     for (let attempt = 0; attempt < 2; attempt++)
-      await expect(prepareChatGPTLaunch(native, app, nextLaunch, session, state)).rejects.toBeInstanceOf(HarnessSettlementError);
-    expect(await readFile(join(session, "codex/auth.json"), "utf8")).toBe(beforeAuth);
-    expect(await readFile(join(session, "codex/config.toml"), "utf8")).toBe(beforeConfig);
+      await expect(desktopAdmissionFixture(nativePath,session,state)).rejects.toBeInstanceOf(HarnessSettlementError);
+    expect(await readFile(join(launch, "auth/auth.json"), "utf8")).toBe(beforeAuth);
+    expect(await readFile(join(launch, "desktop-binding.json"), "utf8")).toBe(beforeConfig);
     expect(await readdir(join(session, "codex-bridges"))).toEqual(result.pending);
     expect(await readdir(nextLaunch)).toEqual([]);
   } finally {

@@ -66,8 +66,11 @@ This runs **local Codex conversations inside the unified ChatGPT app** through
 Switcher's provider gateway. ChatGPT cloud Chat/Work, Preview Edit and other
 account-only features use their own service and are outside this routing path.
 The classic ChatGPT app (`com.openai.chat`) cannot use this launcher. The current
-unified ChatGPT app and its former Codex name (`com.openai.codex`) are supported;
-the bundled Codex runtime must be at least 0.153.0. Desktop launch uses the existing app adapter; it does not yet use the direct CLI auth-home binding.
+unified ChatGPT app and its former Codex name (`com.openai.codex`) use this adapter.
+This shared-state candidate requires the same verified Codex 0.154.0 installation
+as direct CLI launches; it does not select the app's bundled executable. The new
+binding has protocol coverage; compatibility with the installed GUI remains an
+acceptance gate before publication.
 
 Providers must support the Responses protocol and the selected model's tool
 calling. DeepSeek, OpenRouter, OpenAI and other Responses-compatible presets
@@ -111,9 +114,9 @@ Successful inference does not establish browser or computer compatibility for
 every provider. See the [browser extension guide](https://learn.chatgpt.com/docs/chrome-extension)
 and [DeepSeek compatibility details](https://api-docs.deepseek.com/guides/responses_api/).
 
-Switcher starts a separate app instance with private login and Electron state
-under `~/.hasna/switcher/state/desktop/PROFILE_ID`. Credentials and Electron
-state remain private to that provider profile; the native corpus is shared.
+Switcher starts a separate app instance with private Electron state under
+`~/.hasna/switcher/state/desktop/PROFILE_ID`. A fresh `launch-*/auth` directory
+holds only that invocation's gateway credential; the native corpus is shared.
 Local conversations, skills and instructions use the same native corpus as Codex
 CLI (normally `~/.codex`). Your regular ChatGPT app's signed-in state is preserved;
 authentication and cookies are not copied. A second launch of the same active
@@ -122,9 +125,12 @@ Keep the launching terminal running until you quit that instance: Switcher owns
 its inference gateway and stops its own app process on interruption or timeout.
 
 Upstream API keys remain in the Switcher gateway. Only a temporary loopback
-credential reaches the child; its private auth file is removed after exit.
-Switcher refuses to overwrite authentication added manually to a provider
-profile. It does not modify or re-sign the installed app. Select a nonstandard
+credential reaches the child; its unchanged private auth file is removed after
+owned helpers have stopped. If shutdown is uncertain or authentication changes,
+Switcher closes the gateway and retains private files and a persistent restart
+fence. A provider profile containing a legacy private Codex corpus or config
+requires explicit reconciliation before launch. It does not modify or re-sign
+the installed app. Select a nonstandard
 installation with `--app-path /absolute/path/ChatGPT.app`; native CLI arguments,
 `--executable` and `--backend` are not accepted for desktop launches.
 
@@ -141,14 +147,14 @@ refuse launch. `--share-native-state` remains accepted for compatibility and is
 unnecessary for normal launches.
 Directories must be absolute, owned and free of writable/symlink redirection.
 
-Direct Codex CLI launches require the exact accepted native installation for
+Direct Codex CLI and ChatGPT desktop launches require the exact accepted native installation for
 macOS arm64 or Linux arm64. Switcher checks immutable binary, patch-manifest and
 evidence hashes from its package before starting it; `--executable` can only name
 that same installation. It never downloads a replacement or falls back to a PATH
 binary. A missing or incompatible installation stops the launch before provider
 credentials or private launch state are prepared.
 
-This direct path uses the canonical `CODEX_HOME` for native config, sessions,
+Both paths use the canonical `CODEX_HOME` for native config, sessions,
 session names, skills and SQLite, with a new private auth-only directory selected
 through `--auth-home`. Provider/model settings remain per-invocation arguments;
 the canonical config and credentials are preserved. The canonical home must
@@ -158,31 +164,32 @@ not perform that migration. Owned processes must settle before their private
 launch directory is removed; uncertain settlement closes the owned gateway and
 retains the files for inspection.
 
-The ChatGPT desktop adapter retains its existing overlay path; this direct CLI
-change does not establish desktop support for the accepted auth-home runtime.
-Ori shared-state launches are refused until its state/resume integration is accepted. Codex overlays share the sessions, archived sessions, capabilities and
-`thread-writer-locks` directories. The entire SQLite store uses the canonical
+Ori shared-state launches are refused until its state/resume integration is accepted.
+Codex sessions, archived sessions, capabilities and `thread-writer-locks` remain
+in the canonical home. The entire SQLite store uses the canonical
 configuration's `sqlite_home`, or the canonical root; inherited account-specific
 `CODEX_SQLITE_HOME` is ignored. There are no per-database or WAL symlinks.
-`session_index.jsonl` stays an overlay-local native index; legacy index-only names
+`session_index.jsonl` also stays canonical; legacy private index-only names
 remain pending explicit migration. Authentication,
 Electron cookies, `.codex-global-state.json`, plugin caches and worktree metadata
-are not projected between homes. Claude's compatible projects, todos, skills,
+are not copied from legacy homes. Claude's compatible projects, todos, skills,
 commands, agents, rules, history and instructions use its common corpus; credentials and
 settings remain separate.
 
-Both tools share only `.hasna/instructions`, never the rest of `.hasna`. Codex's
-optional `AGENTS.override.md` takes native precedence over `AGENTS.md`; Switcher
-does not create empty versions or dangling links. A later launch links an optional
-file after the canonical regular file exists and passes validation.
-The desktop config projects only the canonical `instructions`,
+Claude's projection shares only `.hasna/instructions`, never the rest of `.hasna`.
+Codex reads its canonical home directly, where optional `AGENTS.override.md`
+takes native precedence over `AGENTS.md`. Switcher does not create empty optional
+instruction files. Claude links an optional file on a later launch after the
+canonical regular file exists and passes validation.
+Codex reads its instructions and native settings from canonical config on both
+CLI and desktop paths. Legacy overlay reconciliation audits `instructions`,
 `developer_instructions`, `model_instructions_file`, `compact_prompt`,
 `experimental_compact_prompt_file`, `model_auto_compact_instructions_file`, the four
 `include_*_instructions`/`include_environment_context` switches, and
 `project_doc_max_bytes`/`project_doc_fallback_filenames`. Relative model and compact instruction
 files resolve within the canonical config directory and must be readable trusted
 regular files; file references remain paths rather than inline contents. Native file/config instruction precedence is preserved; routing
-and private authentication settings are rendered separately. Unsupported legacy
+and private authentication settings remain invocation-specific. Unsupported legacy
 `profile` selection refuses launch rather than silently losing its instructions.
 Codex CLI normally reads these keys directly from its canonical home. When nested
 inside a private authentication home, its audited instruction keys must match the

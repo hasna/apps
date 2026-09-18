@@ -1,13 +1,17 @@
 import { spawn } from "node:child_process";
-import { Transform } from "node:stream";
+import { PassThrough, Transform } from "node:stream";
 import { once } from "node:events";
 import { constants } from "node:fs";
-import { open, unlink } from "node:fs/promises";
+import { lstat, open, readFile, readdir, unlink } from "node:fs/promises";
 import { join } from "node:path";
-import { codexDirectoryGuard, codexFileGuard } from "./codex-native";
+import { codexConfigGuard, codexDirectoryGuard, codexFileGuard, inspectCodexNative } from "./codex-native";
 import { settleHarnessGroup } from "./harness-process";
-import { codexConfigPath } from "./harness-arguments";
+import { assertHarnessArguments, codexCommandIndex, codexConfigPath, codexOptionRequestsHelp, codexOptionTakesValue } from "./harness-arguments";
 import { codexRoutingKeys, codexTransportKeys } from "./codex-model-policy";
+import { createHash } from "node:crypto";
+import { assertCodexCanonicalLaunch, resolveNativeState, type NativeState } from "./native-state";
+import { childEnvironment } from "./harness-environment";
+import { Fault } from "./domain";
 
 const MAX_FRAME = 8 * 1024 * 1024;
 type ObjectValue = Record<string, unknown>;
@@ -166,9 +170,123 @@ export function codexStateRequestStream(routing: CodexStateRouting): Transform {
   });
 }
 
+export type CodexDesktopSnapshot = {
+  home: string; sqliteHome: string; homeIdentity: string; sqliteIdentity: string;
+  configIdentity: string | null; configSha256: string | null;
+};
+export type CodexDesktopBinding = {
+  schema: 1; nativeExecutable: string; canonical: CodexDesktopSnapshot;
+  authHome: string; authIdentity: string; authSha256: string;
+  sessionDir: string; settlementDirectory: string; args: string[];
+};
+const desktopRefusal = () => new Fault(409, "desktop_binding_changed", "The desktop native binding changed or is unsupported. Existing state was preserved; prepare a new launch.");
+const identity = async (path: string) => {
+  const entry = await lstat(path, { bigint: true });
+  return [entry.dev, entry.ino, entry.uid, entry.gid, entry.mode].join(":");
+};
+
+/** Legacy private corpus/config must be reconciled explicitly, never hidden by
+ * redirecting a new desktop process to the canonical native home. */
+export async function assertChatGPTLegacyEmpty(sessionDir: string): Promise<void> {
+  const legacy = join(sessionDir, "codex");
+  try { await lstat(legacy); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return; throw error; }
+  await (await codexDirectoryGuard(legacy, true))();
+  if ((await readdir(legacy)).length)
+    throw new Fault(409, "native_state_migration_required", "This desktop profile retains a private Codex corpus or configuration. Reconcile its original state before launching with shared state; no files were changed.");
+}
+
+export async function snapshotCodexDesktopState(state: NativeState): Promise<CodexDesktopSnapshot> {
+  if (state.tool !== "codex" || !state.sqliteHome) throw desktopRefusal();
+  await (await codexDirectoryGuard(state.home))();
+  await (await codexDirectoryGuard(state.sqliteHome))();
+  await assertCodexCanonicalLaunch(state);
+  const guard = await codexConfigGuard(state.home), path = join(state.home, "config.toml");
+  let configIdentity: string | null = null, configSha256: string | null = null;
+  try {
+    configIdentity = await identity(path);
+    configSha256 = createHash("sha256").update(await readFile(path)).digest("hex");
+  } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+  await guard();
+  return { home: state.home, sqliteHome: state.sqliteHome, homeIdentity: await identity(state.home), sqliteIdentity: await identity(state.sqliteHome), configIdentity, configSha256 };
+}
+
+export async function assertCodexDesktopSnapshot(expected: CodexDesktopSnapshot): Promise<void> {
+  const state = await resolveNativeState("codex", { HASNA_CODEX_STATE_HOME: expected.home }, { create: false });
+  if (JSON.stringify(await snapshotCodexDesktopState(state)) !== JSON.stringify(expected)) throw desktopRefusal();
+}
+
+/** Public for protocol fixtures; installation selection always remains pinned. */
+export async function runCodexDesktopHelper(bindingPath: string, bindingSha256: string, args: string[]): Promise<number> {
+  if (!/^[a-f0-9]{64}$/.test(bindingSha256)) throw desktopRefusal();
+  const guardBinding = await codexFileGuard(bindingPath, 1024 * 1024, bindingSha256);
+  const raw: unknown = JSON.parse(await readFile(bindingPath, "utf8"));
+  const keys = ["schema", "nativeExecutable", "canonical", "authHome", "authIdentity", "authSha256", "sessionDir", "settlementDirectory", "args"];
+  if (!object(raw) || Object.keys(raw).some(key => !keys.includes(key)) || keys.some(key => !Object.hasOwn(raw, key))
+      || raw.schema !== 1 || !object(raw.canonical) || !Array.isArray(raw.args) || raw.args.some(arg => typeof arg !== "string")
+      || ![raw.nativeExecutable, raw.authHome, raw.sessionDir, raw.settlementDirectory].every(safePath)
+      || typeof raw.authIdentity !== "string" || typeof raw.authSha256 !== "string" || !/^[a-f0-9]{64}$/.test(raw.authSha256)) throw desktopRefusal();
+  const canonical = raw.canonical;
+  const canonicalKeys = ["home", "sqliteHome", "homeIdentity", "sqliteIdentity", "configIdentity", "configSha256"];
+  if (Object.keys(canonical).some(key => !canonicalKeys.includes(key)) || canonicalKeys.some(key => !Object.hasOwn(canonical, key))
+      || !safePath(raw.canonical.home) || !safePath(raw.canonical.sqliteHome)
+      || ![raw.canonical.homeIdentity, raw.canonical.sqliteIdentity].every(value => typeof value === "string")
+      || !(raw.canonical.configIdentity === null || typeof raw.canonical.configIdentity === "string")
+      || !(raw.canonical.configSha256 === null || typeof raw.canonical.configSha256 === "string" && /^[a-f0-9]{64}$/.test(raw.canonical.configSha256))) throw desktopRefusal();
+  const binding = raw as unknown as CodexDesktopBinding;
+  if (binding.authHome !== join(bindingPath.slice(0, bindingPath.lastIndexOf("/")), "auth")
+      || binding.settlementDirectory !== join(binding.sessionDir, "codex-bridges")) throw desktopRefusal();
+  await guardBinding();
+  const native = await inspectCodexNative(binding.nativeExecutable);
+  const guardAuth = await codexDirectoryGuard(binding.authHome, true);
+  const check = async () => {
+    await guardBinding(); await native.guard(); await guardAuth();
+    await assertCodexDesktopSnapshot(binding.canonical); await assertChatGPTLegacyEmpty(binding.sessionDir);
+    if (await identity(binding.authHome) !== binding.authIdentity) throw desktopRefusal();
+    const names = await readdir(binding.authHome);
+    if (names.length !== 1 || names[0] !== "auth.json") throw desktopRefusal();
+    await (await codexFileGuard(join(binding.authHome, "auth.json"), 64 * 1024, binding.authSha256))();
+  };
+  assertHarnessArguments("codex", args, { additionalReserved: ["--listen"] });
+  const command = codexCommandIndex(args), mode = command < 0 ? undefined : args[command];
+  let help = false;
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--") break;
+    if (codexOptionRequestsHelp(args[i])) help = true;
+    if (codexOptionTakesValue(args[i])) i++;
+  }
+  if (mode !== "app-server" && mode !== "sandbox" && !(mode === undefined && help)) throw desktopRefusal();
+  if (mode === "app-server") {
+    const nested = codexCommandIndex(args.slice(command + 1));
+    if (nested >= 0) throw desktopRefusal();
+  }
+  let config: ObjectValue = {};
+  for (let i = 0; i < binding.args.length; i += 2) {
+    if (binding.args[i] !== "-c" || typeof binding.args[i + 1] !== "string") throw desktopRefusal();
+    config = merge(config, Bun.TOML.parse(binding.args[i + 1]) as ObjectValue);
+  }
+  const routing: CodexStateRouting = { model: String(config.model ?? ""), config: Object.fromEntries(Object.entries(config).filter(([key]) => ["model_provider", "model_providers", "model_catalog_json", "review_model", "agents", "memories", "sqlite_home"].includes(key))) };
+  validateRouting(routing);
+  const appServer = mode === "app-server" && !help;
+  // The desktop runtime needs its local tool pipes and bundled executables.
+  // Do not inherit arbitrary CODEX_* routing or account credentials.
+  const runtimeEnvironment = new Set(["CODEX_CLI_PATH", "CODEX_APP_TOOLS_PIPE_PATH", "CODEX_BROWSER_USE_NODE_PATH",
+    "CODEX_BROWSER_USE_PEER_AUTHORIZATION", "CODEX_MCP_NODE_PATH", "CODEX_NODE_REPL_PATH",
+    "CODEX_ELECTRON_COMPUTER_USE_APP_PATH", "CODEX_ELECTRON_BUNDLED_PLUGINS_RESOURCES_PATH"]);
+  const appEnvironment = !help ? Object.fromEntries(Object.entries(process.env).filter(([name, value]) => value !== undefined
+    && runtimeEnvironment.has(name))) : {};
+  const environment = { ...childEnvironment(), ...appEnvironment, CODEX_HOME: binding.canonical.home, CODEX_SQLITE_HOME: binding.canonical.sqliteHome,
+    HASNA_CODEX_STATE_HOME: binding.canonical.home, SWITCHER_HARNESS_API_KEY: appServer ? process.env.SWITCHER_HARNESS_API_KEY ?? "" : "switcher-metadata-no-auth" };
+  if (appServer && !environment.SWITCHER_HARNESS_API_KEY) throw desktopRefusal();
+  // Sandbox and metadata argv remain exact. Only app-server receives the typed
+  // credential home and Switcher's current inference settings.
+  const nativeArgs = appServer ? ["--auth-home", binding.authHome, "-c", 'cli_auth_credentials_store="file"', ...args, ...binding.args] : args;
+  return runCodexStateBridge(native.executable, nativeArgs, routing, binding.settlementDirectory, { passthrough: !appServer, environment, beforeSpawn: check });
+}
+
 /** The native app-server owns inference and state. This process only adapts
  * requests over its supported stdio API, with no retry or conversation replay. */
-export async function runCodexStateBridge(executable: string, args: string[], routing: CodexStateRouting, settlementDirectory?: string): Promise<number> {
+export async function runCodexStateBridge(executable: string, args: string[], routing: CodexStateRouting, settlementDirectory?: string, execution: { passthrough?: boolean; environment?: NodeJS.ProcessEnv; beforeSpawn?: () => Promise<void> } = {}): Promise<number> {
   validateRouting(routing);
   let clearReceipt = async () => {};
   if (settlementDirectory !== undefined) {
@@ -185,13 +303,13 @@ export async function runCodexStateBridge(executable: string, args: string[], ro
   }
   const grouped = process.platform !== "win32";
   let child: ReturnType<typeof spawn>;
-  try { child = spawn(executable, args, { stdio: ["pipe", "pipe", "pipe"], detached: grouped }); }
+  try { await execution.beforeSpawn?.(); child = spawn(executable, args, { stdio: ["pipe", "pipe", "pipe"], detached: grouped, env: execution.environment }); }
   catch (error) { try { await clearReceipt(); } catch { /* Retained receipt fences parent cleanup. */ } throw error; }
   // Own both output pipes: an escaped native descendant must never retain the
   // bridge's actual stdout/stderr descriptors after the bridge itself exits.
   const stdin = child.stdin!, stdout = child.stdout!, stderr = child.stderr!;
   const closed = new Promise<void>(resolve => child.once("close", () => resolve()));
-  const requests = codexStateRequestStream(routing);
+  const requests = execution.passthrough ? new PassThrough() : codexStateRequestStream(routing);
   let stopping = false, failed = false, settled = false, timer: ReturnType<typeof setTimeout> | undefined;
   const signal = (value: NodeJS.Signals) => {
     try { if (grouped && child.pid) process.kill(-child.pid, value); else child.kill(value); }
@@ -248,10 +366,16 @@ export async function runCodexStateBridge(executable: string, args: string[], ro
 if (import.meta.main) {
   try {
     const input = process.argv.slice(2);
-    const settlementDirectory = input[0] === "--settlement-dir" ? input.splice(0, 2)[1] : undefined;
-    const [executable, model, config, ...args] = input;
-    const parsed: unknown = JSON.parse(config);
-    if (!executable?.startsWith("/") || !model || !object(parsed) || args[0] !== "app-server") throw new Error();
-    process.exitCode = await runCodexStateBridge(executable, args, { model, config: parsed }, settlementDirectory);
+    if (input[0] === "--desktop") {
+      const [, binding, sha256, separator, ...args] = input;
+      if (separator !== "--") throw desktopRefusal();
+      process.exitCode = await runCodexDesktopHelper(binding, sha256, args);
+    } else {
+      const settlementDirectory = input[0] === "--settlement-dir" ? input.splice(0, 2)[1] : undefined;
+      const [executable, model, config, ...args] = input;
+      const parsed: unknown = JSON.parse(config);
+      if (!executable?.startsWith("/") || !model || !object(parsed) || args[0] !== "app-server") throw new Error();
+      process.exitCode = await runCodexStateBridge(executable, args, { model, config: parsed }, settlementDirectory);
+    }
   } catch { console.error("Switcher native session bridge failed."); process.exitCode = 1; }
 }
