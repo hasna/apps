@@ -164,6 +164,29 @@ new loaders still require their dedicated review. API failure refuses an update;
 stale projection as synchronized. Claude may retain its previous installation
 after a refused update, whose existing local drift checks continue to apply.
 
+## Marketplace registry timestamps
+
+For an explicitly reviewed `known_marketplaces.json`,
+`captureClaudeMarketplaceRegistry(path)` emits a separate
+`claude-marketplace-registry` witness. It preserves every marketplace name,
+source, install location and unknown value. Only a valid UTC `lastUpdated`
+timestamp can vary, and only for exact rows containing `source`,
+`installLocation` and `lastUpdated`, with a recognized GitHub repository or local
+directory source. Rows with any extra field, including `autoUpdate`, retain
+their entire contents in the digest. Registration changes still refuse.
+
+This mode is opt-in for reviewed Claude discovery. It cannot project fields,
+carry managed-plugin rules, accept an absent registry or synthesize registry
+changes during hook installation. It does not replace the separate settings,
+installed-plugin, marketplace catalog, loader, root or payload witnesses.
+Capture requires a bounded regular file with strict UTF-8 and unambiguous JSON;
+links, duplicate keys and concurrent file replacement refuse.
+
+Existing byte witnesses retain their exact behavior. A prior hash mismatch is
+not proof of a timestamp-only change: review the complete current registration
+and its complementary sources before explicitly replacing an old witness.
+Capturing this witness does not write a policy or approve native registration.
+
 ## Verification and limits
 
 Unit tests cover provenance and mapping failures, offline/revoked authorities,

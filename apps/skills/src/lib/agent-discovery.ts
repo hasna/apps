@@ -9,9 +9,10 @@ import { discoveryByteBudget, hashRawDiscoveryFile } from "./agent-discovery-byt
 import { hashDiscoveryPathFile } from "./agent-discovery-path-bytes.js";
 import { hashManagedPluginRegistry, type ManagedPluginRegistrationWitness } from "./plugin-discovery.js";
 import { readPluginBinding } from "./plugin-admission.js";
+import { captureClaudeMarketplaceRegistry } from "./claude-marketplace-registry.js";
 export { captureDiscoveryDirectories, type DiscoveryDirectory } from "./agent-discovery-directories.js";
 
-export interface DiscoverySource { path: string; sha256: string | null; hashMode?: "bytes" | "path-bytes" | "claude-plugin-registry"; managedPlugins?: ManagedPluginRegistrationWitness[]; format?: "json" | "toml" | "yaml"; fields?: string[] }
+export interface DiscoverySource { path: string; sha256: string | null; hashMode?: "bytes" | "path-bytes" | "claude-plugin-registry" | "claude-marketplace-registry"; managedPlugins?: ManagedPluginRegistrationWitness[]; format?: "json" | "toml" | "yaml"; fields?: string[] }
 export interface AgentDiscoveryBinding { agent: IntegrationAgent; roots: string[]; sources: DiscoverySource[]; directories?: DiscoveryDirectory[]; method: "automatic" | "reviewed"; builtinNames?: string[] }
 export interface ReviewedDiscoveryInputs { version: 1; agents: Array<{ agent: IntegrationAgent; roots: string[]; sources: DiscoverySource[]; directories?: DiscoveryDirectory[]; pluginHooks: "reviewed-no-skill-injection" }> }
 const digest = (text: string) => createHash("sha256").update(text).digest("hex");
@@ -39,6 +40,14 @@ function read(path: string, changes?: Map<string, string>): string | null {
   return readFileSync(path, "utf8");
 }
 function projected(source: DiscoverySource, changes?: Map<string, string>, budget = discoveryByteBudget()): string | null {
+  if (source.hashMode === "claude-marketplace-registry") {
+    if (source.format !== undefined || source.fields !== undefined || source.managedPlugins !== undefined || typeof source.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(source.sha256) || changes?.has(source.path)) throw new Error("Claude marketplace witnesses require an exact reviewed registry without synthetic changes");
+    const sha256 = captureClaudeMarketplaceRegistry(source.path, budget).sha256;
+    // Hook rendering never writes this registry, so rebinding may not adopt a
+    // registration change that appeared after the explicit review was checked.
+    if (sha256 !== source.sha256) throw new Error(`Native discovery input changed; run skills hook install with a fresh discovery review: ${source.path}`);
+    return sha256;
+  }
   if (source.hashMode === "claude-plugin-registry") {
     if (source.format !== undefined || source.fields !== undefined || !source.managedPlugins || changes?.has(source.path)) throw new Error("Managed plugin registry witnesses require verified native registrations");
     return hashManagedPluginRegistry(source.path, source.managedPlugins);
@@ -63,6 +72,7 @@ export function verifyAgentDiscovery(binding: AgentDiscoveryBinding): void {
   if (binding.directories !== undefined) verifyDiscoveryDirectories(binding.directories);
   const budget = discoveryByteBudget();
   for (const source of binding.sources) {
+    assertMarketplaceBinding(binding, source);
     if (source.hashMode === "claude-plugin-registry" && binding.agent !== "claude") throw new Error("Managed Claude registry witnesses cannot apply to another agent");
     if (source.format !== undefined && (!["json", "toml", "yaml"].includes(source.format) || !Array.isArray(source.fields) || !source.fields.length || source.fields.length > 64 || source.fields.some(field => typeof field !== "string" || !field))) throw new Error("Invalid native discovery projection");
     if (source.sha256 !== null && !/^[a-f0-9]{64}$/.test(source.sha256)) throw new Error("Invalid native discovery digest");
@@ -70,9 +80,12 @@ export function verifyAgentDiscovery(binding: AgentDiscoveryBinding): void {
   }
   for (const root of binding.roots) safe(root);
 }
+function assertMarketplaceBinding(binding: AgentDiscoveryBinding, source: DiscoverySource): void {
+  if (source.hashMode === "claude-marketplace-registry" && (binding.agent !== "claude" || binding.method !== "reviewed")) throw new Error("Claude marketplace witnesses require explicit reviewed Claude discovery");
+}
 export function rebindAgentDiscovery(binding: AgentDiscoveryBinding, changes: Map<string, string>): AgentDiscoveryBinding {
   const budget = discoveryByteBudget();
-  return { ...binding, sources: binding.sources.map(source => ({ ...source, sha256: projected(source, changes, budget) })) };
+  return { ...binding, sources: binding.sources.map(source => { assertMarketplaceBinding(binding, source); return { ...source, sha256: projected(source, changes, budget) }; }) };
 }
 
 /** Capture full byte witnesses for reviewed source or executable files; never import or execute them. */
