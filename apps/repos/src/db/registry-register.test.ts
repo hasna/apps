@@ -164,6 +164,30 @@ describe("exact existing-checkout registration", () => {
     expect(inspect(db => db.query("SELECT * FROM repos").all())).toEqual(before);
   });
 
+  it("refuses a schema conflict without replacing unrelated rows or clearing their leases", () => {
+    const searchSchema = inspect(db => db.query("SELECT sql FROM sqlite_master WHERE name='fts_repos' OR type='trigger' AND tbl_name='repos'")
+      .all() as Array<{ sql: string }>);
+    dbPath = join(temp, "constraint.db"); process.env.HASNA_REPOS_DB_PATH = dbPath;
+    const db = new Database(dbPath);
+    db.exec(`CREATE TABLE repos (id INTEGER PRIMARY KEY AUTOINCREMENT,path TEXT NOT NULL UNIQUE,
+      name TEXT NOT NULL UNIQUE ON CONFLICT REPLACE,org TEXT,remote_url TEXT,
+      default_branch TEXT NOT NULL DEFAULT 'main',description TEXT);
+      CREATE TABLE worktree_leases (repo_id TEXT,repo_path TEXT,repo_catalog_id INTEGER REFERENCES repos(id) ON DELETE SET NULL,
+      worktree_path TEXT,git_common_dir TEXT,status TEXT);`);
+    for (const entry of searchSchema) db.exec(entry.sql);
+    const other = join(temp, "other-owner", "alumia");
+    db.query("INSERT INTO repos(path,name,org,remote_url) VALUES (?,'alumia','other-owner','github.com/other-owner/alumia')").run(other);
+    db.query("INSERT INTO worktree_leases VALUES ('github:other-owner/alumia',?,1,?,?,'claimed')")
+      .run(other, join(other, "task"), join(other, ".git"));
+    const snapshot = (connection: Database) => ({ repos: connection.query("SELECT * FROM repos").all(),
+      leases: connection.query("SELECT * FROM worktree_leases").all() });
+    const before = snapshot(db); db.close();
+    let refusal: string | undefined;
+    try { registerRepository(reviewed()); } catch (error) { refusal = (error as Error).message; }
+    expect(inspect(snapshot)).toEqual(before);
+    expect(refusal).toBe("REGISTRATION_FAILED");
+  });
+
   it("keeps the CLI registry command outside auto-bootstrap", () => {
     const invoke = (extra: string[]) => Bun.spawnSync({
       cmd: [process.execPath, "--no-env-file", "run", "src/cli/index.tsx", "registry", "register", target,

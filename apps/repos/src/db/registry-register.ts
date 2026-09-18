@@ -220,7 +220,7 @@ export function registerRepository(request: RegistryRegisterRequest): RegistryRe
     if (request.apply) need(request.expectedPlanHash === plan.plan_hash, "PLAN_HASH_MISMATCH");
     let repoId = existing;
     if (request.apply && repoId === null) {
-      const result = db.query("INSERT INTO repos (path,name,org,remote_url,default_branch) VALUES (?,?,?,?,?)")
+      const result = db.query("INSERT OR ABORT INTO repos (path,name,org,remote_url,default_branch) VALUES (?,?,?,?,?)")
         .run(row.path, row.name, row.org, row.remote_url, row.default_branch);
       repoId = Number(result.lastInsertRowid);
       // Bun's changes count includes normal FTS trigger writes. Verify the
