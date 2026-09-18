@@ -62,7 +62,7 @@ export type {
   ProviderEndpointEntry,
 } from "./lib/provider-context.js";
 
-// Skill-home distribution (managed skill runtimes)
+// Deprecated read-only native skill migration reports (Skills owns distribution)
 export {
   INBOX_CONVERSATIONS_MINIMUM_VERSION,
   inspectManagedSkillRuntimes,
