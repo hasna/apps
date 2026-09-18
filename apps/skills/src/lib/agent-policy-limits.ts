@@ -29,7 +29,12 @@ export function assertAgentPolicyCollections(policy: Record<string, any>): void 
     for (const source of array(value.sources, AGENT_POLICY_LIMITS.discoverySources)) {
       requireBound(object(source)); text(source.path);
       requireBound(source.sha256 === null || typeof source.sha256 === "string" && /^[a-f0-9]{64}$/.test(source.sha256));
-      if (source.hashMode !== undefined) requireBound(["bytes", "path-bytes"].includes(source.hashMode) && source.format === undefined && source.fields === undefined && (source.hashMode !== "path-bytes" || source.sha256 !== null));
+      if (source.hashMode !== undefined) requireBound(["bytes", "path-bytes", "claude-plugin-registry"].includes(source.hashMode) && source.format === undefined && source.fields === undefined && (source.hashMode === "bytes" || source.sha256 !== null));
+      if (source.hashMode === "claude-plugin-registry") {
+        requireBound(agent === "claude");
+        const managed = array(source.managedPlugins, 64); requireBound(managed.length > 0);
+        for (const entry of managed) { requireBound(object(entry) && Object.keys(entry).every(key => ["bindingId", "storeRoot"].includes(key))); text(entry.storeRoot); requireBound(typeof entry.bindingId === "string" && /^[a-f0-9]{64}$/.test(entry.bindingId)); }
+      } else requireBound(source.managedPlugins === undefined);
       if (source.format !== undefined) requireBound(["json", "toml", "yaml"].includes(source.format));
       if (source.fields !== undefined) for (const field of array(source.fields, AGENT_POLICY_LIMITS.fields)) text(field, 256);
     }

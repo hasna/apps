@@ -7,9 +7,11 @@ import type { IntegrationAgent } from "./agent-adapters.js";
 import { captureDiscoveryDirectories, verifyDiscoveryDirectories, type DiscoveryDirectory } from "./agent-discovery-directories.js";
 import { discoveryByteBudget, hashRawDiscoveryFile } from "./agent-discovery-bytes.js";
 import { hashDiscoveryPathFile } from "./agent-discovery-path-bytes.js";
+import { hashManagedPluginRegistry, type ManagedPluginRegistrationWitness } from "./plugin-discovery.js";
+import { readPluginBinding } from "./plugin-admission.js";
 export { captureDiscoveryDirectories, type DiscoveryDirectory } from "./agent-discovery-directories.js";
 
-export interface DiscoverySource { path: string; sha256: string | null; hashMode?: "bytes" | "path-bytes"; format?: "json" | "toml" | "yaml"; fields?: string[] }
+export interface DiscoverySource { path: string; sha256: string | null; hashMode?: "bytes" | "path-bytes" | "claude-plugin-registry"; managedPlugins?: ManagedPluginRegistrationWitness[]; format?: "json" | "toml" | "yaml"; fields?: string[] }
 export interface AgentDiscoveryBinding { agent: IntegrationAgent; roots: string[]; sources: DiscoverySource[]; directories?: DiscoveryDirectory[]; method: "automatic" | "reviewed"; builtinNames?: string[] }
 export interface ReviewedDiscoveryInputs { version: 1; agents: Array<{ agent: IntegrationAgent; roots: string[]; sources: DiscoverySource[]; directories?: DiscoveryDirectory[]; pluginHooks: "reviewed-no-skill-injection" }> }
 const digest = (text: string) => createHash("sha256").update(text).digest("hex");
@@ -37,6 +39,11 @@ function read(path: string, changes?: Map<string, string>): string | null {
   return readFileSync(path, "utf8");
 }
 function projected(source: DiscoverySource, changes?: Map<string, string>, budget = discoveryByteBudget()): string | null {
+  if (source.hashMode === "claude-plugin-registry") {
+    if (source.format !== undefined || source.fields !== undefined || !source.managedPlugins || changes?.has(source.path)) throw new Error("Managed plugin registry witnesses require verified native registrations");
+    return hashManagedPluginRegistry(source.path, source.managedPlugins);
+  }
+  if (source.managedPlugins !== undefined) throw new Error("Managed plugin rules require a typed registry witness");
   if (source.hashMode !== undefined) {
     if (source.hashMode !== "bytes" && source.hashMode !== "path-bytes") throw new Error("Invalid native discovery hash mode");
     if (source.format !== undefined || source.fields !== undefined) throw new Error("Raw discovery witnesses cannot project configuration fields");
@@ -56,6 +63,7 @@ export function verifyAgentDiscovery(binding: AgentDiscoveryBinding): void {
   if (binding.directories !== undefined) verifyDiscoveryDirectories(binding.directories);
   const budget = discoveryByteBudget();
   for (const source of binding.sources) {
+    if (source.hashMode === "claude-plugin-registry" && binding.agent !== "claude") throw new Error("Managed Claude registry witnesses cannot apply to another agent");
     if (source.format !== undefined && (!["json", "toml", "yaml"].includes(source.format) || !Array.isArray(source.fields) || !source.fields.length || source.fields.length > 64 || source.fields.some(field => typeof field !== "string" || !field))) throw new Error("Invalid native discovery projection");
     if (source.sha256 !== null && !/^[a-f0-9]{64}$/.test(source.sha256)) throw new Error("Invalid native discovery digest");
     if (projected(source, undefined, budget) !== source.sha256) throw new Error(`Native discovery input changed; run skills hook install with a fresh discovery review: ${source.path}`);
@@ -84,7 +92,7 @@ export function captureDiscoveryPathSources(paths: string[]): DiscoverySource[] 
 /** Project settings can introduce a higher-precedence discovery source. Until
  * its native merge format is supported, refuse that layer rather than certify
  * the home-only inventory. Ordinary unrelated project settings remain usable. */
-export function assertProjectDiscovery(agent: IntegrationAgent, directories: string[], home: string, canonical: (path: string) => string = resolve): void {
+export function assertProjectDiscovery(agent: IntegrationAgent, directories: string[], home: string, canonical: (path: string) => string = resolve, reviewed?: AgentDiscoveryBinding): void {
   for (const directory of directories) {
     const isHome = resolve(directory) === resolve(home);
     if (agent === "hermes") { assertHermesEnvironment(home); continue; }
@@ -102,7 +110,16 @@ export function assertProjectDiscovery(agent: IntegrationAgent, directories: str
         : agent === "codex" ? ["plugins", "marketplaces", "skills"]
         : agent === "gemini" ? ["skills", "extensions"]
         : agent === "opencode" ? ["plugin", "skills"] : ["hooks"];
-      if (keys.some(key => config[key] !== undefined) || config.disableAllHooks === true || config.disableBundledSkills === false || config.hooksConfig?.enabled === false || config.permission?.skill !== undefined || config.permissions?.deny?.some((rule: unknown) => typeof rule === "string" && /^Skill(?:\(|$)/.test(rule))) throw new Error(`NATIVE_SKILL_DRIFT: higher-precedence project skill or hook configuration requires review: ${path}`);
+      let admittedPlugins = false;
+      if (agent === "claude" && reviewed?.agent === agent && reviewed.method === "reviewed" && config.enabledPlugins && typeof config.enabledPlugins === "object" && !Array.isArray(config.enabledPlugins)) {
+        const exact = reviewed.sources.find(source => source.path === path && source.format === undefined && source.fields === undefined && (source.hashMode === undefined || source.hashMode === "bytes"));
+        const managed = reviewed.sources.flatMap(source => source.hashMode === "claude-plugin-registry" ? source.managedPlugins ?? [] : []);
+        if (exact && projected(exact) === exact.sha256 && managed.length) {
+          const bindings = managed.map(item => readPluginBinding(item.storeRoot, item.bindingId));
+          admittedPlugins = Object.entries(config.enabledPlugins).every(([id, enabled]) => typeof enabled === "boolean" && bindings.some(binding => binding.target.pluginId === id && binding.target.registrations.some(scope => scope.scope === "project" && scope.projectPath === canonical(directory))));
+        }
+      }
+      if (keys.some(key => config[key] !== undefined && !(key === "enabledPlugins" && admittedPlugins)) || config.disableAllHooks === true || config.disableBundledSkills === false || config.hooksConfig?.enabled === false || config.permission?.skill !== undefined || config.permissions?.deny?.some((rule: unknown) => typeof rule === "string" && /^Skill(?:\(|$)/.test(rule))) throw new Error(`NATIVE_SKILL_DRIFT: higher-precedence project skill or hook configuration requires review: ${path}`);
     }
     if (agent === "claude") {
       const commands = canonical(join(directory, ".claude/commands")); safe(commands);

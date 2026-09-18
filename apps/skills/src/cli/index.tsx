@@ -107,6 +107,8 @@ const { registerContextCommands } = await import("./commands/context.js");
 registerContextCommands(program);
 const { registerAgentIntegration } = await import("./commands/agent-integration.js");
 registerAgentIntegration(program);
+const { registerPluginAdmission } = await import("./commands/plugin-admission.js");
+registerPluginAdmission(program);
 const { registerProfiles } = await import("./commands/profiles.js");
 registerProfiles(program);
 const { registerGrants } = await import("./commands/grants.js");

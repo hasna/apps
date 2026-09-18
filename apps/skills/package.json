@@ -38,6 +38,7 @@
     "bin/",
     "migrations/",
     "docs/skill-standard.md",
+    "docs/plugin-admission.md",
     "schemas/",
     "LICENSE",
     "README.md",
