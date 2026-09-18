@@ -511,11 +511,12 @@ function normalizeNativeAgentMetadata(value: unknown): NativeAgentMetadata {
   if (!match) throw new Error("nativeAgent.frontmatter requires one complete newline-terminated YAML header.");
   const scalar = (raw: string): string | number | boolean | null | undefined => {
     if (raw.startsWith('"')) { try { const parsed: unknown = JSON.parse(raw); return typeof parsed === "string" ? parsed : undefined; } catch { return undefined; } }
-    if (!/^[A-Za-z0-9][A-Za-z0-9 _.,:;()/?@+-]*$/.test(raw) || /:\s/.test(raw)) return undefined;
-    if (raw === "true") return true;
-    if (raw === "false") return false;
-    if (raw === "null") return null;
+    if (!/^[A-Za-z0-9][A-Za-z0-9 _.,:;()/?@+-]*$/.test(raw) || /:(?:\s|$)/.test(raw)) return undefined;
+    if (/^(?:true|yes|on|y)$/i.test(raw)) return true;
+    if (/^(?:false|no|off|n)$/i.test(raw)) return false;
+    if (/^null$/i.test(raw)) return null;
     if (/^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$/.test(raw)) return Number(raw);
+    if (/^[0-9]/.test(raw)) return undefined;
     return raw;
   };
   const fields = new Map<string, string | number | boolean | null>();
