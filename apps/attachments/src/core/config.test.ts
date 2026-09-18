@@ -58,7 +58,7 @@ describe("getConfig", () => {
     expect(cfg.s3.accessKeyId).toBe("");
     expect(cfg.s3.secretAccessKey).toBe("");
     expect(cfg.server.port).toBe(3459);
-    expect(cfg.server.baseUrl).toBe("http://localhost:3459");
+    expect(cfg.server.baseUrl).toBe("https://api.hasna.com/attachments");
     expect(cfg.server.publicPath).toBe("/a");
     expect(cfg.storage.maxSizeBytes).toBe(10 * 1024 * 1024 * 1024);
     expect(cfg.defaults.expiry).toBe("7d");

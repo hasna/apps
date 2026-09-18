@@ -1,8 +1,8 @@
 // Absolute-origin resolution for fleet services.
 //
 // Behind the api.hasna.com gateway the origin is reached via Cloudflare egress
-// and the ALB; the public URL a client used (`https://api.hasna.com/<app>/...`
-// or `https://<app>.hasna.xyz/...`) is only recoverable from the forwarding
+// and the ALB; the public URL a client used (`https://api.hasna.com/<app>/...`)
+// is only recoverable from the forwarding
 // headers: `x-forwarded-proto` (https) and `x-forwarded-host` (api.hasna.com
 // for the gateway). Naively splicing raw header values into a URL is how
 // CRLF/header-injection garbage becomes part of served links, so every piece

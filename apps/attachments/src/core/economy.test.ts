@@ -77,6 +77,15 @@ describe("trackUploadCost", () => {
     expect(mockFetch).not.toHaveBeenCalled()
   })
 
+  it("fails closed without an explicit Economy authority", async () => {
+    process.env["ATTACHMENTS_TRACK_COSTS"] = "1"
+    const mockFetch = mock(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }))
+
+    await trackUploadCost({ filename: "test.txt", sizeBytes: 1024, _fetch: mockFetch })
+
+    expect(mockFetch).not.toHaveBeenCalled()
+  })
+
   it("POSTs to economy server when ATTACHMENTS_TRACK_COSTS=1", async () => {
     process.env["ATTACHMENTS_TRACK_COSTS"] = "1"
 

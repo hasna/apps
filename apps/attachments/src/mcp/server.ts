@@ -22,6 +22,20 @@ import { getConfig, parseExpiryStrict } from "../core/config.js";
 // ---------------------------------------------------------------------------
 interface AttachmentAgent { id: string; name: string; session_id?: string; last_seen_at: string; project_id?: string; }
 const agentRegistry = new Map<string, AttachmentAgent>();
+const DEFAULT_AGENT_PAGE_LIMIT = 20;
+const MAX_AGENT_PAGE_LIMIT = 100;
+
+function agentPage(value: { limit?: unknown; offset?: unknown }): { limit: number; offset: number } {
+  const limit = value.limit === undefined ? DEFAULT_AGENT_PAGE_LIMIT : value.limit;
+  const offset = value.offset === undefined ? 0 : value.offset;
+  if (typeof limit !== "number" || !Number.isInteger(limit) || limit <= 0 || limit > MAX_AGENT_PAGE_LIMIT) {
+    throw new Error(`limit must be an integer from 1 to ${MAX_AGENT_PAGE_LIMIT}.`);
+  }
+  if (typeof offset !== "number" || !Number.isInteger(offset) || offset < 0) {
+    throw new Error("offset must be a non-negative integer.");
+  }
+  return { limit, offset };
+}
 
 function registerAttachmentAgent(name: string, sessionId?: string): AttachmentAgent {
   const existing = [...agentRegistry.values()].find(a => a.name === name);
@@ -522,10 +536,13 @@ const LEAN_TOOLS = [
   },
   {
     name: "list_agents",
-    description: "List all registered agents with their last_seen_at timestamps.",
+    description: "List a bounded page of registered agents with their last_seen_at timestamps.",
     inputSchema: {
       type: "object" as const,
-      properties: {},
+      properties: {
+        limit: { type: "number", minimum: 1, maximum: MAX_AGENT_PAGE_LIMIT, description: `Maximum rows (default ${DEFAULT_AGENT_PAGE_LIMIT}).` },
+        offset: { type: "number", minimum: 0, description: "Rows to skip." },
+      },
     },
   },
   {
@@ -1150,7 +1167,19 @@ export function buildServer(): Server {
           break;
         }
         case "list_agents": {
-          result = [...agentRegistry.values()];
+          const page = agentPage(args as { limit?: unknown; offset?: unknown });
+          const agents = [...agentRegistry.values()];
+          const items = agents.slice(page.offset, page.offset + page.limit);
+          const nextOffset = page.offset + items.length < agents.length ? page.offset + items.length : null;
+          result = {
+            items,
+            count: items.length,
+            total: agents.length,
+            limit: page.limit,
+            offset: page.offset,
+            next_offset: nextOffset,
+            has_more: nextOffset !== null,
+          };
           break;
         }
         case "send_feedback": {

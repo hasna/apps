@@ -235,6 +235,19 @@ describe("CLI JSON workflow", () => {
     expect(rows[0].destination_url).toBe("https://example.com/three");
   });
 
+  test("bounds JSON collection output unless a larger limit is explicit", () => {
+    expect(runCli(["init", "--domain", "has.na"]).exitCode).toBe(0);
+    for (let index = 0; index < 25; index += 1) {
+      expect(runCli(["create", `https://example.com/${index}`, "--slug", `item-${index}`]).exitCode).toBe(0);
+    }
+
+    const defaults = JSON.parse(runCli(["link", "list"]).stdout.toString());
+    expect(defaults).toHaveLength(20);
+
+    const explicit = JSON.parse(runCli(["link", "list", "--limit", "25"]).stdout.toString());
+    expect(explicit).toHaveLength(25);
+  });
+
   test("summarizes stats and doctor in human mode without full object dumps", () => {
     expect(runCli(["init", "--domain", "has.na"]).exitCode).toBe(0);
     expect(runCli(["create", "https://example.com", "--slug", "home"]).exitCode).toBe(0);

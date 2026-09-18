@@ -55,8 +55,8 @@ Classes:
 | 21 | economy | C | rows only (migrations 0001) | — | — | — |
 | 22 | secrets | C | values stored encrypted as TEXT in DB (`src/db.ts` value/value_blob, AES-GCM); no object store | — | — | — |
 | 23 | messages | C | rows only | — | — | — |
-| 24 | identities | C | (source in hasna-internal/internal-apps) JSONB identity store + audit rows; voice/avatar media generated **on stations** (`src/media.ts` → home-dir writes), nothing hosted | — | — | — |
-| 25 | subscriptions | C | (source in hasna-internal/internal-apps) `subscriptions`/`custom_tools` JSONB rows, aliases, auth status (migrations 0001–0008); no bytes | — | — | — |
+| 24 | identities | C | External producer accessed read-only via API; JSONB identity store + audit rows; voice/avatar media generated **on stations**, nothing hosted | — | — | — |
+| 25 | subscriptions | C | External producer accessed read-only via API; subscription/custom-tool JSONB rows, aliases, auth status; no bytes | — | — | — |
 
 **Totals: A = 7 · B = 5 · C = 13 (25 hosted).** No other hosted app stores bytes today.
 
@@ -105,6 +105,6 @@ Kit consumers: skills (#1630), projects (#1593), knowledge (#1633), recordings (
 ## Verification notes
 
 - Read on origin/main: migrations/schema + storage code for all 25 hosted apps; S3 env-var/API usage across `apps/*`; deploy lanes `.github/workflows/deploy-{conversations,mementos,projects,skills,todos}.yml`.
-- identities and subscriptions sources live in hasna-internal/internal-apps (read-only via API); both classified C.
+- identities and subscriptions are external producer sources accessed read-only via API; both are classified C.
 - attachments/files/emails are the only hosted apps with production S3 today (all class B).
 - No hosted app ships versioned immutable artefacts to a durable remote today; skills is the only A-class app with the kit mechanics merged and unexercised in prod.

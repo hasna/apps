@@ -135,8 +135,9 @@ shortlinks --json link get home
 ```
 
 `--json` remains the machine-readable path and keeps full objects where commands
-already returned them. Prefer `--json` for automation and `--verbose` for human
-debugging.
+already returned them. Collection commands return at most 20 rows by default;
+pass an explicit positive `--limit` when a larger page is required. Prefer
+`--json` for automation and `--verbose` for human debugging.
 
 Example compact output:
 

@@ -23,7 +23,7 @@ export interface TrackUploadCostOptions {
   sizeBytes: number
   operation?: "upload" | "download"
   agentId?: string
-  /** Economy server base URL. Defaults to ATTACHMENTS_ECONOMY_URL env var or http://localhost:3456 */
+  /** Economy server base URL. Required via this option or ATTACHMENTS_ECONOMY_URL when cost tracking is enabled. */
   economyUrl?: string
   /** Injectable fetch function (for testing). Defaults to globalThis.fetch */
   _fetch?: typeof fetch
@@ -39,8 +39,8 @@ export async function trackUploadCost(opts: TrackUploadCostOptions): Promise<voi
 
   const baseUrl =
     opts.economyUrl ??
-    process.env["ATTACHMENTS_ECONOMY_URL"] ??
-    "http://localhost:3456"
+    process.env["ATTACHMENTS_ECONOMY_URL"]
+  if (!baseUrl) return
 
   const operation = opts.operation ?? "upload"
   const costUsd = estimateUploadCostUsd(opts.sizeBytes)
