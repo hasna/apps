@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Config, ProfileAssetBinding, ProfileConfigBinding } from "../types/index.js";
-import { configAssetDigest, configAssetLocator, selectAssetCapability } from "./asset-plan.js";
+import { compileAssetPlan, configAssetDigest, configAssetLocator, selectAssetCapability } from "./asset-plan.js";
 import { planProfileSessionRender } from "./instruction-graph.js";
 import { applySessionRender, restoreSessionRenderSnapshot } from "./session-apply.js";
 import { refreshSessionRender } from "./session-refresh.js";
@@ -26,7 +26,7 @@ describe("native custom-agent asset refresh", () => {
       binding: { schema: "hasna.instructions.profile-asset-binding/v1", assetKey: "scoped-auditor", kind: "custom-agent", enabled: true, required: true,
         selector: { provider: tool, versionRange: version, surface, scope: "global" },
         source: { kind: "custom-agent", locator: configAssetLocator(role.id, role.version), digest: configAssetDigest(role.content), immutable: true, allowed: true },
-        destination: { strategy: "emit-file", root: "target-home", relativePath: "agents/auditor.md" }, uninstall: "remove-managed", rollback: "snapshot" } });
+        destination: { strategy: "emit-file", root: "target-home", relativePath: "agents/./auditor.md" }, uninstall: "remove-managed", rollback: "snapshot" } });
     let assetBinding = asset();
     const selector = { schema: "hasna.instructions.hosted-profile-selector/v1" as const, authority: "https://instructions.example.test/v1", profileId: profile.id, providerVersion: version, manual: [], codewithNativeImports: false, allowEmptySources: false, stationProfile: false, checkGlobalCoverage: false, assetScope: "global" as const, assetSurface: surface };
     const plan = planProfileSessionRender({ tool, profile: profile.slug, profile_id: profile.id, provider_version: version, targetHome, configs: [rule], bindings, asset_configs: [role], asset_bindings: [assetBinding], asset_scope: "global", asset_surface: surface, asset_plan_mode: "apply", refreshSelector: selector });
@@ -52,5 +52,23 @@ describe("native custom-agent asset refresh", () => {
     expect(selectAssetCapability("codex", "0.155.0", "cli", "custom-agent").support).toBe("unsupported");
     expect(selectAssetCapability("sumi", "0.3.0", "cli", "custom-agent").support).toBe("unsupported");
     expect(selectAssetCapability("claude", "2.1.100", "code", "custom-agent").support).toBe("unsupported");
+  });
+  test.each(["claude", "sumi"] as const)("%s refuses custom-agent destinations outside its native scoped directory", (provider) => {
+    const role = config("role-source", "---\nname: auditor\ndescription: Synthetic scoped reviewer\n---\nSCOPED_ROLE\n");
+    const version = provider === "claude" ? "2.1.276" : "0.2.22";
+    const surface = provider === "claude" ? "code" : "cli";
+    const binding: ProfileAssetBinding = { profile_id: "profile-role", source_config_id: role.id, sort_order: 0, binding: {
+      schema: "hasna.instructions.profile-asset-binding/v1", assetKey: "auditor", kind: "custom-agent", enabled: true, required: true,
+      selector: { provider, versionRange: version, surface, scope: "global" },
+      source: { kind: "custom-agent", locator: configAssetLocator(role.id, role.version), digest: configAssetDigest(role.content), immutable: true, allowed: true },
+      destination: { strategy: "emit-file", root: "target-home", relativePath: "agents/auditor.md" }, uninstall: "remove-managed", rollback: "snapshot",
+    } };
+    const compile = () => compileAssetPlan({ profileId: binding.profile_id, provider, providerVersion: version, surface, scope: "global", mode: "apply", configs: [role], bindings: [binding] });
+    for (const relativePath of ["rules/auditor.md", "AGENTS.md", "CLAUDE.md", "agents/../rules/auditor.md", "agents/auditor.txt", "agents/nested/auditor.md"]) {
+      binding.binding.destination.relativePath = relativePath;
+      expect(compile).toThrow("ASSET_CUSTOM_AGENT_DESTINATION_UNSUPPORTED");
+    }
+    binding.binding.destination = { strategy: "emit-file", root: "project-root", relativePath: "agents/auditor.md" };
+    expect(compile).toThrow("ASSET_CUSTOM_AGENT_DESTINATION_UNSUPPORTED");
   });
 });

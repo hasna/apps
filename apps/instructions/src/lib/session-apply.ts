@@ -7,7 +7,7 @@ import {
   readdirSync,
   statSync,
 } from "node:fs";
-import { dirname, isAbsolute, join, parse, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, parse, posix, relative, resolve } from "node:path";
 import {
   observeProjectContextSessionGuard,
   removeProjectContextCoordinatedFile,
@@ -338,6 +338,12 @@ function applySessionRenderUnlocked(
     snapshotPath = rollback.snapshotPath;
     options.test_hooks?.before_apply_writes?.({ plan, results });
     assertManifestPrecondition(manifestPath, targetHome, options.expectedManifestSha256);
+    // Check the entire transaction before its first payload write. Per-file
+    // checks below still protect races that occur during the write sequence.
+    for (const result of results) {
+      coordination?.assert_held();
+      assertExpectedSessionFileHash(result.path, targetHome, result.previousSha256);
+    }
     const resultsByPath = new Map(results.map((result) => [result.path, result]));
     for (const file of payloadFiles) {
       applyPlannedFile(
@@ -453,7 +459,7 @@ function exactPreimageCandidates(plan: SessionRenderPlan): SessionRenderFile[] {
   const customAgentPaths = new Set((plan.assetPlan?.assets ?? [])
     .filter((asset) => asset.kind === "custom-agent" && asset.support === "supported"
       && asset.action === "write" && asset.destination.strategy === "emit-file")
-    .map((asset) => asset.destination.relativePath));
+    .map((asset) => posix.normalize(asset.destination.relativePath)));
   return [...plan.files, ...(plan.assetFiles ?? []).filter((file) => customAgentPaths.has(file.relativePath))];
 }
 

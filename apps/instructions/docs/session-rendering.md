@@ -254,7 +254,10 @@ retained outputs, symlinks, unknown ownership, and stale manifest hashes fail cl
 Hosted profile assets support emitted Markdown `custom-agent` definitions for
 Claude Code 2.1.276 through 2.x, Sumi 0.2.22 through 0.2.x, and supported OpenCode
 versions. Bind an immutable source version/digest to its explicit native
-`agents/<name>.md` destination and scope. Preserve native frontmatter in the source
+`agents/<name>.md` destination and scope. Claude and Sumi require this destination
+beneath an explicit `target-home`; a generic `project-root` does not select their
+native agent directory. Names use letters, digits, hyphens or underscores, beginning
+with a letter or digit. Preserve native frontmatter in the source
 bytes; the asset is emitted separately from global instruction prose. These
 reviewed outputs accept exact `--adopt-file` and `--reconcile-file` preconditions
 and participate in hosted session refresh and snapshots. Updating source bytes

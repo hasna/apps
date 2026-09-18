@@ -418,6 +418,17 @@ function validateAssetSourceAndDestination(
     pathSafe = false;
     diagnostics.push(diagnostic("error", "ASSET_DESTINATION_UNSAFE", binding.assetKey, (error as Error).message));
   }
+  // These adapters are proved against the native agent registry beneath an
+  // explicit provider home. Never let a role binding become an always-loaded
+  // rules file or infer a provider home from a project-root destination.
+  if (pathSafe && binding.kind === "custom-agent" && binding.destination.strategy === "emit-file"
+    && (binding.selector.provider === "claude" || binding.selector.provider === "sumi")
+    && (binding.destination.root !== "target-home"
+      || !/^agents\/[A-Za-z0-9][A-Za-z0-9_-]*\.md$/.test(safeRelativePath(binding.destination.relativePath)))) {
+    pathSafe = false;
+    diagnostics.push(diagnostic("error", "ASSET_CUSTOM_AGENT_DESTINATION_UNSUPPORTED", binding.assetKey,
+      "Native custom-agent definitions require agents/<name>.md beneath an explicit target-home."));
+  }
   const expectedLocator = bundle.locator;
   if (!binding.source.immutable || binding.source.locator !== expectedLocator) {
     diagnostics.push(diagnostic("error", "ASSET_SOURCE_MUTABLE_OR_UNPINNED", binding.assetKey, `Asset source must be pinned to ${expectedLocator}.`));

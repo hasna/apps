@@ -62,8 +62,13 @@ describe("exact obsolete managed-file retirement", () => {
   });
   test("preserves changed bytes and stale manifests after prewrite races", () => {
     const f = fixture();
+    const originalEntrypoint = readFileSync(join(f.targetHome, "CLAUDE.md"), "utf8");
+    const newFragment = f.next.files.find((file) => file.role === "fragment")!;
     expect(() => applySessionRender(f.next, { ...f.options, test_hooks: { before_apply_writes: () => writeFileSync(f.file.path, "Concurrent edit.") } })).toThrow("changed after planning");
     expect(readFileSync(f.file.path, "utf8")).toBe("Concurrent edit.");
+    expect(readFileSync(join(f.targetHome, "CLAUDE.md"), "utf8")).toBe(originalEntrypoint);
+    expect(readFileSync(f.next.manifestFile.path, "utf8")).toBe(f.manifest);
+    expect(existsSync(newFragment.path)).toBe(false);
     const other = fixture();
     expect(() => applySessionRender(other.next, { ...other.options, test_hooks: { before_apply_writes: () => writeFileSync(other.next.manifestFile.path, "Concurrent manifest.") } })).toThrow("manifest SHA-256 precondition");
     expect(readFileSync(other.file.path, "utf8")).toBe(other.content);
