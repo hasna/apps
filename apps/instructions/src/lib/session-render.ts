@@ -1837,9 +1837,25 @@ function normalizeOpenCodeInstructions(value: unknown): string[] {
 
 function pathIsManagedOpenCodeInstruction(path: string, managedDir: string, targetHome: string): boolean {
   const normalized = posix.normalize(path.replaceAll("\\", "/")).replace(/^\.\//, "");
-  const absoluteManagedDir = posix.join(targetHome.replaceAll("\\", "/"), managedDir);
-  return normalized === managedDir || normalized.startsWith(`${managedDir}/`)
-    || normalized === absoluteManagedDir || normalized.startsWith(`${absoluteManagedDir}/`);
+  const normalizedManagedDir = posix.normalize(managedDir.replaceAll("\\", "/"));
+  const absoluteManagedDir = posix.join(targetHome.replaceAll("\\", "/"), normalizedManagedDir);
+  if (
+    normalized === normalizedManagedDir || normalized.startsWith(`${normalizedManagedDir}/`)
+    || normalized === absoluteManagedDir || normalized.startsWith(`${absoluteManagedDir}/`)
+  ) return true;
+
+  // An absolute reference into another renderer profile's reserved namespace
+  // leaks that profile's private instructions into this OpenCode identity. The
+  // other home is not necessarily present on this machine during planning, so
+  // namespace ownership must be decided from the absolute path itself. Keep
+  // absolute and relative paths outside the reserved namespace untouched.
+  const portableAbsolute = posix.isAbsolute(normalized)
+    || /^[A-Za-z]:\//.test(normalized)
+    || normalized.startsWith("//");
+  return portableAbsolute && (
+    normalized.endsWith(`/${normalizedManagedDir}`)
+    || normalized.includes(`/${normalizedManagedDir}/`)
+  );
 }
 
 function buildAntigravityRuleFiles(

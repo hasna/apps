@@ -123,6 +123,47 @@ describe("native custom-agent asset refresh", () => {
     expect(readFileSync(manifestPath, "utf8")).toBe(originalManifest);
     expect(readFileSync(join(targetHome, "agents/auditor.md"), "utf8")).toBe(role.content);
   });
+  test.each(["claude", "sumi"] as const)("%s direct apply preserves manifest ownership when an obsolete managed role asset is missing", (tool) => {
+    const targetHome = makeTempRoot("instructions-missing-role-retirement-"); roots.push(targetHome);
+    const version = tool === "claude" ? "2.1.276" : "0.2.22";
+    const surface = tool === "claude" ? "code" : "cli";
+    const profile = { id: "profile-role", name: "profile-role", slug: "profile-role" };
+    const rule = config("shared-base", "Synthetic shared base.");
+    const role = config("role-source", "---\nname: auditor\ndescription: Synthetic scoped reviewer\n---\nROLE_BODY\n");
+    const bindings: ProfileConfigBinding[] = [{ profile_id: profile.id, config_id: rule.id, sort_order: 0, binding: { schema: "hasna.instructions.profile-config-binding/v1", activation: { mode: "always" }, required: true, fallback: "fail" } }];
+    const asset: ProfileAssetBinding = { profile_id: profile.id, source_config_id: role.id, sort_order: 0, binding: {
+      schema: "hasna.instructions.profile-asset-binding/v1", assetKey: "auditor", kind: "custom-agent", enabled: true, required: true,
+      selector: { provider: tool, versionRange: version, surface, scope: "global" },
+      source: { kind: "custom-agent", locator: configAssetLocator(role.id, role.version), digest: configAssetDigest(role.content), immutable: true, allowed: true },
+      destination: { strategy: "emit-file", root: "target-home", relativePath: "agents/auditor.md" }, uninstall: "remove-managed", rollback: "snapshot",
+    } };
+    const build = (assetBindings: ProfileAssetBinding[]) => planProfileSessionRender({
+      tool, profile: profile.slug, profile_id: profile.id, provider_version: version, targetHome,
+      configs: [rule], bindings, asset_configs: [role], asset_bindings: assetBindings,
+      asset_scope: "global", asset_surface: surface, asset_plan_mode: "apply",
+    });
+    expect(applySessionRender(build([asset])).applied).toBe(true);
+    const manifestPath = join(targetHome, ".hasna/session-render-manifest.json");
+    const previousManifest = readFileSync(manifestPath, "utf8");
+    const rolePath = join(targetHome, "agents/auditor.md");
+    rmSync(rolePath);
+
+    const blocked = applySessionRender(build([]));
+    expect(blocked.applied).toBe(false);
+    expect(blocked.snapshotPath).toBeNull();
+    expect(blocked.conflicts).toContainEqual(expect.objectContaining({
+      relativePath: "agents/auditor.md",
+      role: "asset",
+      action: "conflict",
+      previousSha256: null,
+      reason: expect.stringContaining("obsolete managed asset is missing"),
+    }));
+    expect(readFileSync(manifestPath, "utf8")).toBe(previousManifest);
+    expect(JSON.parse(readFileSync(manifestPath, "utf8")).files).toContainEqual(expect.objectContaining({
+      relativePath: "agents/auditor.md",
+      role: "asset",
+    }));
+  });
   test.each(["claude", "sumi"] as const)("%s refuses custom-agent destinations outside its native scoped directory", (provider) => {
     const role = config("role-source", "---\nname: auditor\ndescription: Synthetic scoped reviewer\n---\nSCOPED_ROLE\n");
     const version = provider === "claude" ? "2.1.276" : "0.2.22";

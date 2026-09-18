@@ -554,7 +554,7 @@ describe("session render planner", () => {
     });
   });
 
-  test("anchors OpenCode managed instruction references to their owner home across project working directories", () => {
+  test("anchors OpenCode managed references and removes cross-profile instruction leakage", () => {
     const targetHome = join(tmpRoot, "opencode-global-anchor");
     mkdirSync(targetHome, { recursive: true });
     const first = planSessionRender({ tool: "opencode", profile: "global", targetHome,
@@ -563,11 +563,24 @@ describe("session render planner", () => {
     const fragment = first.files.find((file) => file.role === "fragment")!;
     const config = JSON.parse(configFile.content);
     expect(config.instructions).toEqual([fragment.path]);
-    writeFileSync(configFile.path, JSON.stringify({ ...config, instructions: [...config.instructions, "team-rules.md", "/other-profile/.hasna/instructions/private.md"] }));
+    writeFileSync(configFile.path, JSON.stringify({
+      ...config,
+      instructions: [
+        ...config.instructions,
+        "team-rules.md",
+        "/opt/team/review.md",
+        "/other-profile/.hasna/instructions/private.md",
+      ],
+    }));
     const next = planSessionRender({ tool: "opencode", profile: "global", targetHome,
       providerSurface: "opencode-config-instructions", sources: [agentIdentity] });
     const updated = JSON.parse(next.files.find((file) => file.relativePath === "opencode.json")!.content);
-    expect(updated.instructions).toEqual(["team-rules.md", "/other-profile/.hasna/instructions/private.md", next.files.find((file) => file.role === "fragment")!.path]);
+    expect(updated.instructions).toEqual([
+      "team-rules.md",
+      "/opt/team/review.md",
+      next.files.find((file) => file.role === "fragment")!.path,
+    ]);
+    expect(updated.instructions).not.toContain("/other-profile/.hasna/instructions/private.md");
   });
 
   test("preserves OpenCode settings and unmanaged instruction entries", () => {

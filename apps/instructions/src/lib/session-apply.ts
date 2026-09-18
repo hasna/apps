@@ -1543,7 +1543,19 @@ function planStaleFileResult(
   retiredHash?: string,
 ): SessionApplyFileResult | null {
   const target = resolveManifestRelativePath(file.relativePath, targetHome);
-  if (!existsSync(target)) return null;
+  if (!existsSync(target)) {
+    if (file.role !== "asset") return null;
+    return {
+      path: target,
+      relativePath: file.relativePath,
+      role: file.role,
+      action: "conflict",
+      changed: true,
+      previousSha256: null,
+      newSha256: "",
+      reason: "obsolete managed asset is missing; preserve manifest ownership until its reviewed preimage is restored and retired exactly",
+    };
+  }
   const previousContent = readFileSync(target, "utf-8");
   const previousSha256 = sha256(previousContent);
   if (retiredHash !== undefined) {

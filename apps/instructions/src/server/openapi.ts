@@ -306,6 +306,20 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
             binding: { $ref: "#/components/schemas/ProfileConfigBindingSpec" },
           },
         },
+        NativeAgentMetadata: {
+          type: "object",
+          additionalProperties: false,
+          required: ["name", "description"],
+          properties: {
+            name: { type: "string", minLength: 1, maxLength: 128, pattern: "^[A-Za-z0-9][A-Za-z0-9_-]*$" },
+            description: { type: "string", minLength: 1, maxLength: 4096, pattern: "^[^\r\n\u0000]+$" },
+            frontmatter: {
+              type: "string",
+              maxLength: 16384,
+              description: "Optional complete reviewed newline-terminated flat YAML header; runtime validation requires its name and description scalars to match the explicit metadata.",
+            },
+          },
+        },
         ProfileAssetBindingSpec: {
           type: "object",
           required: ["schema", "assetKey", "kind", "enabled", "required", "selector", "source", "destination", "uninstall", "rollback"],
@@ -345,6 +359,7 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
                 relativePath: { type: "string", minLength: 1 },
               },
             },
+            nativeAgent: { $ref: "#/components/schemas/NativeAgentMetadata" },
             uninstall: { type: "string", enum: ["remove-managed", "retain"] },
             rollback: { type: "string", enum: ["snapshot", "installer-receipt", "none"] },
           },
