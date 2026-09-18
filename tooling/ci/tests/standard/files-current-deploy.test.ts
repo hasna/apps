@@ -8,6 +8,7 @@ const rollout = readFileSync(join(root, "tooling/deploy/files-current/verify-ecs
 const ledgerProbe = readFileSync(join(root, "tooling/deploy/files-current/ledger-probe.sh"), "utf8");
 const migrationRunner = readFileSync(join(root, "tooling/deploy/files-current/run-migration.sh"), "utf8");
 const readiness = readFileSync(join(root, "tooling/deploy/files-current/verify-readiness.sh"), "utf8");
+const restore = readFileSync(join(root, "tooling/deploy/files-current/restore-service-anchor.sh"), "utf8");
 
 describe("Files current-server deployment lane", () => {
   test("is manual, exact-current-main, and CI-bound", () => {
@@ -85,6 +86,10 @@ describe("Files current-server deployment lane", () => {
     expect(workflow).toContain("steps.ledger-classify.outputs.schema_advanced == 'false'");
     expect(workflow).toContain("steps.ledger-classify.outputs.schema_advanced == 'true'");
     expect(workflow).not.toContain("Restore rollback anchor after a failed service rollout");
+    expect(workflow).toContain("restore-service-anchor.sh");
+    expect(restore).toContain("concurrent_service_change_before_rollback");
+    expect(restore).toContain('automatic_rollback_performed:false');
+    expect(restore.indexOf("describe-services")).toBeLessThan(restore.indexOf("update-service"));
     expect(ledgerProbe).toContain("SELECT id, checksum FROM schema_migrations ORDER BY id ASC");
     expect(ledgerProbe).toContain("applied ledger is unknown to or checksum-incompatible with this candidate");
     expect(ledgerProbe).toContain("ledger probe task identity mismatch");

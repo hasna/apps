@@ -122,8 +122,9 @@ identity, so it cannot satisfy production admission. The Postgres backend fails
 closed unless the deployment controller supplies canonical
 `HASNA_FILES_DEPLOY_SOURCE_COMMIT` (40 lowercase hex) and
 `HASNA_FILES_DEPLOY_IMAGE_DIGEST` (`sha256:` plus 64 lowercase hex), and echoes
-both as `source_commit` and `image_digest`. It then checks PostgreSQL
-reachability and verifies that the migration ledger has no pending entries.
+both as `source_commit` and `image_digest`. Whitespace is never trimmed or
+normalized: padded identity is invalid. It then checks PostgreSQL reachability
+and verifies that the migration ledger has no pending entries.
 
 Every `/v1` request requires an API key. Reads require `files:read`; other HTTP
 methods require `files:write`. The built-in API store sends the configured key

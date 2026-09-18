@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -7,6 +7,7 @@ const root = join(import.meta.dir, "../../../..");
 const anchor = join(root, "tooling/deploy/files-current/assert-service-anchor.sh");
 const readiness = join(root, "tooling/deploy/files-current/verify-readiness.sh");
 const migration = join(root, "tooling/deploy/files-current/run-migration.sh");
+const restore = join(root, "tooling/deploy/files-current/restore-service-anchor.sh");
 const scratch: string[] = [];
 afterEach(() => { for (const dir of scratch.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 
@@ -20,6 +21,7 @@ async function run(script: string, args: string[], env: Record<string, string>) 
 
 const task21 = "arn:aws:ecs:us-east-1:789877399345:task-definition/files-prod:21";
 const task22 = "arn:aws:ecs:us-east-1:789877399345:task-definition/files-prod:22";
+const task23 = "arn:aws:ecs:us-east-1:789877399345:task-definition/files-prod:23";
 const migrate20 = "arn:aws:ecs:us-east-1:789877399345:task-definition/files-prod-migrate:20";
 const taskArn = "arn:aws:ecs:us-east-1:789877399345:task/oss-fleet-prod/0123456789abcdef";
 const source = "a".repeat(40);
@@ -42,6 +44,36 @@ exit 9
     const raced = await run(anchor, ["oss-fleet-prod", "files-prod", task21], { ...env, FAKE_DRIFT: "1" });
     expect(raced.code).toBe(1);
     expect(raced.stderr).toContain("service anchor changed before mutation");
+  });
+
+  test("rollback refuses to overwrite a concurrent newer deployment", async () => {
+    const dir = temp();
+    const updateLog = join(dir, "update-called");
+    executable(join(dir, "aws"), `#!/usr/bin/env bash
+if [[ "$*" == *"ecs describe-services"* ]]; then
+  printf '{"failures":[],"services":[{"status":"ACTIVE","taskDefinition":"${task23}","deployments":[{"status":"PRIMARY","rolloutState":"COMPLETED","taskDefinition":"${task23}","desiredCount":1,"runningCount":1,"pendingCount":0}]}]}\n'
+  exit 0
+fi
+if [[ "$*" == *"ecs update-service"* ]]; then printf called > "$FAKE_UPDATE_LOG"; exit 0; fi
+exit 9
+`);
+    const rollback = join(dir, "rollback.json");
+    const reconciliation = join(dir, "reconciliation.json");
+    const result = await run(restore, ["oss-fleet-prod", "files-prod", task22, task21, source, image, "old@sha256:" + "e".repeat(64), rollback, reconciliation], {
+      PATH: `${dir}:${process.env.PATH}`,
+      FAKE_UPDATE_LOG: updateLog,
+    });
+    expect(result.code).toBe(1);
+    expect(existsSync(updateLog)).toBe(false);
+    expect(existsSync(rollback)).toBe(false);
+    expect(JSON.parse(readFileSync(reconciliation, "utf8"))).toMatchObject({
+      status: "RECONCILIATION_REQUIRED",
+      reason: "concurrent_service_change_before_rollback",
+      candidate: { task_definition: task22 },
+      previous: { task_definition: task21 },
+      observed: { task_definition: task23 },
+      automatic_rollback_performed: false,
+    });
   });
 
   test("canonical readiness rejects redirects, identityless, stale, and misrouted bodies", async () => {

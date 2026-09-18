@@ -29,6 +29,18 @@ describe("Files readiness deployment identity", () => {
       [FILES_DEPLOY_SOURCE_COMMIT_ENV]: source,
       [FILES_DEPLOY_IMAGE_DIGEST_ENV]: "open-files:latest",
     })).toEqual({ ok: false, identity: null, reason: "invalid" });
+    for (const padded of [` ${source}`, `${source} `, `\t${source}`, `${source}\n`]) {
+      expect(resolveDeploymentIdentity(true, {
+        [FILES_DEPLOY_SOURCE_COMMIT_ENV]: padded,
+        [FILES_DEPLOY_IMAGE_DIGEST_ENV]: digest,
+      })).toEqual({ ok: false, identity: null, reason: "invalid" });
+    }
+    for (const padded of [` ${digest}`, `${digest} `, `\t${digest}`, `${digest}\n`]) {
+      expect(resolveDeploymentIdentity(true, {
+        [FILES_DEPLOY_SOURCE_COMMIT_ENV]: source,
+        [FILES_DEPLOY_IMAGE_DIGEST_ENV]: padded,
+      })).toEqual({ ok: false, identity: null, reason: "invalid" });
+    }
   });
 
   test("labels local development explicitly and cannot resemble production", () => {

@@ -642,20 +642,22 @@ jobs:
           echo "::error title=Files recovery review required::Schema advanced; automatic rollback to the unproven previous binary is forbidden."
 
       - name: Restore rollback anchor only when the ledger did not advance
+        id: rollback
         if: ${{ failure() && steps.deploy.outputs.service_mutated == 'true' && steps.ledger-classify.outputs.schema_advanced == 'false' }}
         env:
           CLUSTER: ${{ steps.manifest.outputs.cluster }}
           SERVICE: ${{ steps.manifest.outputs.service }}
+          CANDIDATE_TASK_DEFINITION: ${{ steps.deploy.outputs.deployed_task_definition }}
+          CANDIDATE_IMAGE: ${{ steps.image.outputs.digest_image }}
           PREVIOUS_TASK_DEFINITION: ${{ steps.before.outputs.previous_task_definition }}
+          PREVIOUS_IMAGE: ${{ steps.before.outputs.previous_image }}
         run: |
           set -Eeuo pipefail
-          aws ecs update-service \
-            --cluster "${CLUSTER}" \
-            --service "${SERVICE}" \
-            --task-definition "${PREVIOUS_TASK_DEFINITION}" >/dev/null
-          aws ecs wait services-stable --cluster "${CLUSTER}" --services "${SERVICE}"
-          live="$(aws ecs describe-services --cluster "${CLUSTER}" --services "${SERVICE}" --query 'services[0].taskDefinition' --output text)"
-          [[ "${live}" == "${PREVIOUS_TASK_DEFINITION}" ]] || { echo "rollback did not restore the previous task definition" >&2; exit 1; }
+          bash ../../tooling/deploy/files-current/restore-service-anchor.sh \
+            "${CLUSTER}" "${SERVICE}" \
+            "${CANDIDATE_TASK_DEFINITION}" "${PREVIOUS_TASK_DEFINITION}" \
+            "${SOURCE_SHA}" "${CANDIDATE_IMAGE}" "${PREVIOUS_IMAGE}" \
+            rollback-receipt.json reconciliation-required.json
 
       - name: Upload deployment evidence
         if: ${{ always() }}
@@ -673,6 +675,7 @@ jobs:
             apps/files/readiness-canonical.json
             apps/files/uncertain-state.json
             apps/files/reconciliation-required.json
+            apps/files/rollback-receipt.json
             apps/files/deploy-evidence.json
           if-no-files-found: warn
           retention-days: 30
@@ -694,5 +697,5 @@ jobs:
             echo "- pre/post ledger digest: \`${{ steps.ledger-classify.outputs.pre_ledger_digest || 'not-read' }}\` / \`${{ steps.ledger-classify.outputs.post_ledger_digest || 'not-read' }}\`"
             echo "- schema advanced: \`${{ steps.ledger-classify.outputs.schema_advanced || 'unknown' }}\`"
             echo "- deployed task definition: \`${{ steps.deploy.outputs.deployed_task_definition || 'not-deployed' }}\`"
-            echo "- reconciliation receipt: \`${{ steps.ledger-classify.outcome == 'failure' && 'uncertain-state.json' || (steps.deploy.outcome == 'failure' && steps.ledger-classify.outputs.schema_advanced == 'true' && 'reconciliation-required.json' || 'not-required') }}\`"
+            echo "- reconciliation receipt: \`${{ steps.ledger-classify.outcome == 'failure' && 'uncertain-state.json' || (steps.deploy.outcome == 'failure' && steps.ledger-classify.outputs.schema_advanced == 'true' && 'reconciliation-required.json' || (steps.rollback.outcome == 'failure' && 'reconciliation-required.json' || 'not-required')) }}\`"
           } >> "${GITHUB_STEP_SUMMARY}"

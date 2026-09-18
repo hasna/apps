@@ -40,9 +40,11 @@ export function resolveDeploymentIdentity(
     };
   }
 
-  const sourceCommit = env[FILES_DEPLOY_SOURCE_COMMIT_ENV]?.trim();
-  const imageDigest = env[FILES_DEPLOY_IMAGE_DIGEST_ENV]?.trim();
-  if (!sourceCommit || !imageDigest) return { ok: false, identity: null, reason: "missing" };
+  const sourceCommit = env[FILES_DEPLOY_SOURCE_COMMIT_ENV];
+  const imageDigest = env[FILES_DEPLOY_IMAGE_DIGEST_ENV];
+  if (sourceCommit === undefined || sourceCommit === "" || imageDigest === undefined || imageDigest === "") {
+    return { ok: false, identity: null, reason: "missing" };
+  }
   if (!SOURCE_COMMIT.test(sourceCommit) || !IMAGE_DIGEST.test(imageDigest)) {
     return { ok: false, identity: null, reason: "invalid" };
   }

@@ -184,6 +184,31 @@ describe("files-serve readiness identity", () => {
     });
   });
 
+  test("rejects whitespace-padded production identity before touching storage", async () => {
+    const { handleReadinessProbe } = await import("./serve.js");
+    let storageTouched = false;
+    const response = await handleReadinessProbe({
+      production: true,
+      env: {
+        HASNA_FILES_DEPLOY_SOURCE_COMMIT: ` ${sourceCommit}`,
+        HASNA_FILES_DEPLOY_IMAGE_DIGEST: `${imageDigest} `,
+      },
+      client: {
+        get: async () => { storageTouched = true; return { ok: 1 }; },
+        many: async () => { storageTouched = true; return []; },
+      } as never,
+    });
+    expect(response.status).toBe(503);
+    expect(storageTouched).toBe(false);
+    expect(await response.json()).toMatchObject({
+      status: "error",
+      storage: "postgres",
+      source_commit: null,
+      image_digest: null,
+      error: "deployment identity invalid",
+    });
+  });
+
   test("serves exact immutable identity only when production storage is ready", async () => {
     const { handleReadinessProbe } = await import("./serve.js");
     const { CLOUD_MIGRATIONS } = await import("../db/cloud-migrations.js");
