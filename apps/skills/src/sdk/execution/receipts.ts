@@ -59,6 +59,7 @@ export function createReceiptService(store: RunExecutionStore): ReceiptService {
         runtimeImageDigest: input.admission.runtimeImageDigest,
         bundleDigest: input.admission.bundleDigest,
         dependencyLayerTag: input.admission.dependencyLayerTag,
+        ...(input.admission.executionContract ? { executionContract: { ...input.admission.executionContract } } : {}),
         policy: input.admission.policy,
         limits: input.admission.limits,
         exitCode: null,

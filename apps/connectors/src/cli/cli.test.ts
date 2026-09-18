@@ -450,8 +450,12 @@ describe("CLI", () => {
     });
 
     test("list --json supports --limit and --offset pagination", async () => {
-      const { stdout: fullStdout } = await run("list --json");
+      // Bound the reference read to the exact prefix this assertion needs. The
+      // full connector catalog is intentionally large, and piping it twice in
+      // the same suite can truncate a child-process stream under CI load.
+      const { stdout: fullStdout } = await run("list --json --limit 7");
       const full = JSON.parse(fullStdout);
+      expect(full).toHaveLength(7);
 
       const { stdout, exitCode } = await run("list --json --offset 2 --limit 5");
       expect(exitCode).toBe(0);

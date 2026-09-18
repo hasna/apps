@@ -562,9 +562,25 @@ describe("session render planner", () => {
   ]> = [
     ["absolute cross-profile path", ({ otherHome }) => join(otherHome, ".hasna/instructions/private.md"), false],
     ["file URL", ({ otherHome }) => pathToFileURL(join(otherHome, ".hasna/instructions/private.md")).href, false],
+    ["mixed-case POSIX file URL", ({ otherHome }) => pathToFileURL(join(otherHome, ".HASNA/INSTRUCTIONS/private.md")).href, false],
     ["encoded file URL", ({ otherHome }) => `${pathToFileURL(otherHome).href}/%2ehasna%2finstructions%2fprivate.md`, false],
     ["encoded file URL traversal", ({ otherHome }) => `${pathToFileURL(join(otherHome, ".hasna/cache")).href}/%2e%2e/instructions/private.md`, false],
     ["encoded Windows absolute path", () => "C%3A%5Cother-profile%5C%2ehasna%5Cinstructions%5Cprivate.md", false],
+    ["raw mixed-case Windows path", () => String.raw`C:\Other/Profile\.HASNA\Instructions/private.md`, false],
+    ["encoded mixed-case Windows path", () => "c%3A%5COther/Profile%5C%2eHaSnA%5CInStRuCtIoNs/private.md", false],
+    ["raw drive-root-relative Windows path", () => String.raw`\Users\Other\.HASNA\Instructions\private.md`, false],
+    ["encoded drive-root-relative Windows path", () => "%5CUsers%5COther%5C%2eHaSnA%5CInStRuCtIoNs%5Cprivate.md", false],
+    ["mixed drive-root-relative Windows path", () => String.raw`\Users/Other\.HaSnA/Instructions\private.md`, false],
+    ["raw trailing-dot Windows components", () => String.raw`C:\Other\.HASNA.\Instructions.\private.md`, false],
+    ["encoded interleaved trailing-dot and space Windows components", () => "C%3A%5COther%5C%2eHaSnA%20%2e%20%5CInstructions%2e%20%2e%5Cprivate.md", false],
+    ["raw mixed-case UNC path", () => String.raw`\\Server\Share\.HaSnA\InStRuCtIoNs\private.md`, false],
+    ["encoded mixed-case UNC path", () => "%5C%5CServer%5CShare%5C%2eHASNA%5CInstructions%5Cprivate.md", false],
+    ["UNC trailing-dot and space components", () => String.raw`\\Server\Share\.HASNA.\Instructions \private.md`, false],
+    ["mixed-case Windows file URL", () => "file:///C:/Other/Profile/.HASNA/Instructions/private.md", false],
+    ["encoded mixed-case Windows file URL", () => "file:///C:/Other/Profile/%2eHaSnA%2fInStRuCtIoNs/private.md", false],
+    ["mixed-case UNC file URL", () => "file://Server/Share/.HaSnA/InStRuCtIoNs/private.md", false],
+    ["file URL trailing-dot components", () => "file:///C:/Other/.HASNA./Instructions./private.md", false],
+    ["encoded file URL trailing-space components", () => "file:///C:/Other/%2eHaSnA%20/Instructions%2e%20/private.md", false],
     ["target-home relative traversal", () => "../other-home/.hasna/cache/../instructions/private.md", false],
     ["active-project relative traversal", () => "../instructions/private.md", true],
     ["encoded active-project traversal", () => "%2e%2e%2finstructions%2fprivate.md", true],
@@ -606,6 +622,14 @@ describe("session render planner", () => {
     ["encoded unmanaged file URL", ({ sharedRoot }) => `${pathToFileURL(sharedRoot).href}/review%20rules.md`, false],
     ["encoded unmanaged file URL traversal", ({ sharedRoot }) => `${pathToFileURL(join(sharedRoot, "cache")).href}/%2e%2e/review.md`, false],
     ["encoded Windows unmanaged path", () => "C%3A%5Cteam%5Creview.md", false],
+    ["POSIX case-variant namespace", ({ sharedRoot }) => join(sharedRoot, ".HASNA/INSTRUCTIONS/review.md"), false],
+    ["POSIX trailing-component lookalike", ({ sharedRoot }) => join(sharedRoot, ".HASNA./Instructions./review.md"), false],
+    ["drive-root-relative namespace lookalike", () => String.raw`\Users\Other\.HASNA\Instruction-Set\review.md`, false],
+    ["Windows namespace lookalike", () => String.raw`C:\Team\.HASNA\Instruction-Set\review.md`, false],
+    ["Windows trailing-component lookalike", () => String.raw`C:\Team\.HASNA.\Instruction-Set.\review.md`, false],
+    ["UNC namespace lookalike", () => String.raw`\\Server\Share\.HASNA\Instruction-Set\review.md`, false],
+    ["file URL namespace lookalike", () => "file:///C:/Team/.HASNA/Instruction-Set/review.md", false],
+    ["file URL trailing-component lookalike", () => "file:///C:/Team/.HASNA./Instruction-Set./review.md", false],
     ["target-home relative traversal", () => "../shared/review.md", false],
     ["active-project relative traversal", () => "../shared/review.md", true],
     ["encoded unmanaged traversal", () => "%2e%2e%2fshared%2freview.md", true],
@@ -634,6 +658,31 @@ describe("session render planner", () => {
       reference,
       plan.files.find((file) => file.role === "fragment")!.path,
     ]);
+  });
+
+  test.each([
+    "C:",
+    "C:foo",
+    String.raw`c:foo\bar`,
+    "C%3A",
+    "C%3Afoo",
+    "%43%3Afoo",
+    "c%3Afoo%5Cbar",
+    "Z:%2e%2e/%2eHaSnA/Instructions/private.md",
+    String.raw`D:..\other\private.md`,
+    "file:///C:foo",
+    "file:///%43%3Afoo",
+  ])("refuses Win32 drive-relative OpenCode reference %s", (reference) => {
+    const targetHome = join(tmpRoot, "opencode-drive-relative");
+    mkdirSync(targetHome, { recursive: true });
+    writeFileSync(join(targetHome, "opencode.json"), JSON.stringify({ instructions: [reference] }));
+    expect(() => planSessionRender({
+      tool: "opencode",
+      profile: "global",
+      targetHome,
+      providerSurface: "opencode-config-instructions",
+      sources: [globalIdentity],
+    })).toThrow("Win32 drive-relative paths");
   });
 
   test.each([

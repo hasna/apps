@@ -193,3 +193,65 @@ cancellation, immutable completion, stopped-task recovery, SQLite restart and
 concurrent claims. `runtime-postgres.test.ts` runs the same storage invariants
 against a fresh database when `HASNA_SKILLS_TEST_DATABASE_URL` is supplied.
 The image build runs the native guard's network-denial/identity self-test.
+
+
+## Versioned pure contract
+
+`regex-test.v1` is a narrowly defined, credential-free interface for a reviewed
+self-contained Bun executable. It does not execute arbitrary uploaded packages.
+Input is exactly `{pattern,text,flags}`: pattern at most 512 UTF-8 bytes, text at
+most 4096, total JSON at most 8192, unique JavaScript flags and no simultaneous
+`u`/`v`. Unknown fields and duplicate JSON keys (including escaped keys) are
+refused. The API does not compile or evaluate patterns.
+
+The trusted adapter passes no skill arguments and supplies only
+`SKILLS_INPUT_JSON` containing those values plus `format:"json"`. A successful
+stdout must be one JSON object with `pattern`, `flags`, and `matches`; each match
+has `match`, `groups` (strings/null), `namedGroups` (string map/null), and a UTF-16
+`index` into the admitted text. The API and supervisor both validate the output.
+Output caps are 16 KiB stdout and 8 KiB stderr; artifacts are forbidden.
+
+An operator-reviewed pure `reviewedBundles` entry requires `slug`, `version`,
+`sha256`, `tenantId`, `imageDigest` equal to the configured image, and
+`executionContract:{id:"regex-test.v1",descriptorDigest,entrypoint,entrypointDigest}`.
+The descriptor digest is the canonical SHA256 of `PURE_DESCRIPTOR` in the
+runtime source. This binds the versioned adapter, input/output contract and
+limits. Entry digest covers the exact entrypoint; bundle digest covers every
+sibling file. The manifest must declare an executable Bun entrypoint and empty
+runtime env; package dependencies and lifecycle scripts are refused.
+
+Before adding an entry, independently review the entire bundle and prove it
+under the exact image and architecture, including its descendant behavior.
+Bun Worker compatibility must be demonstrated in that image; a library version
+or local unguarded success is insufficient. Publishing, local execution grants,
+and profile selection do not authorize cloud execution. Private admission
+records and operational bundles remain in the owner's private storage.
+
+`GET /skills/v1/executions/:slug/eligibility?version=1.0.0&bundleDigest=<sha256>`
+checks visibility, tenant, exact review and bundle integrity without launching
+or reconciling a task. A visible unreviewed version returns `eligible:false`;
+other tenants cannot discover private versions. CLI `executions eligibility`,
+MCP `cloud_skill_eligibility`, and SDK `CloudExecutionClient.eligibility` expose
+this metadata. Eligibility describes reviewed configuration, not a live proof.
+Pure POST submissions require both `workspaceId` and `bundleDigest`. The frozen
+admission includes the contract identity. Reusing an idempotency key after its
+contract or image changed refuses with 409 rather than rewriting the old run.
+A new explicit key starts a new pure job, including after an image upgrade;
+legacy PDF admissions retain their existing digest-tuple deduplication, contract
+and output semantics.
+
+The pure supervisor requires the Linux guard. It extracts a fresh bundle, does
+not link PDF dependencies, disables automatic dependency installation and dotenv
+loading, and constructs a new environment without supervisor credentials. The
+guard closes inherited descriptors (including those above the new open-file
+limit), drops child identity and denies networking and process-group escape.
+Its monitor owns one child group, enforces a five-second wall deadline and
+cleans up descendants on exit, cancellation and supervisor death. CPU limit is
+five seconds per process; task cgroup limits remain 256 CPU units and 512 MiB.
+Pure output files are limited to 16 KiB and never become artifacts.
+
+Source support alone does not activate this lane. Deployment still requires a
+new exact-image build/security review, the dedicated no-task-role/read-only-root
+Fargate definition described above, API rollout, private tenant/bundle/entry/image
+admission, and an independently reviewed bounded live proof. No operational
+bundle, credential or admission record belongs in this public repository.

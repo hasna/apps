@@ -2790,7 +2790,7 @@ export function registerTaskCommands(program: Command) {
     // corpus tells agents to use; without it they hit an unknown-command error.
     .alias("complete")
     .description("Mark a task as completed (alias: complete)")
-    .option("--attach-ids <ids>", "Comma-separated attachment IDs to link as evidence")
+    .option("--attach-ids <ids>", "Comma-separated @hasna/attachments IDs to link as evidence")
     .option("--files-changed <files>", "Comma-separated list of files changed")
     .option("--test-results <results>", "Test results summary")
     .option("--commit-hash <hash>", "Git commit hash")

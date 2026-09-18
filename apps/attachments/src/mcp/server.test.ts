@@ -1,0 +1,1635 @@
+beforeEach(() => {
+  process.env.HASNA_HOME = mkdtempSync(join(tmpdir(), "attachments-mcp-"));
+  process.env.HASNA_TODOS_API_URL = "https://todos.example.test";
+  process.env.HASNA_TODOS_API_KEY = "remote-key";
+  process.env.HASNA_SESSIONS_API_URL = "https://sessions.example.test";
+  process.env.HASNA_SESSIONS_API_KEY = "test-session-key";
+});
+import { describe, it, expect, mock, beforeAll, beforeEach, afterEach, afterAll, spyOn } from "bun:test";
+import { tmpdir } from "os";
+import { join } from "path";
+
+// Keep the server under test on the local store: with
+// HASNA_ATTACHMENTS_API_URL/KEY present in the operator's environment, the
+// server routes to the hosted attachments API (core/cloud-v1.ts) and these
+// mocked-module tests fail against live state. The one test that exercises
+// cloud routing sets the variables itself.
+delete process.env.HASNA_ATTACHMENTS_API_URL;
+delete process.env.HASNA_ATTACHMENTS_API_KEY;
+import { join } from "path";
+import { mkdirSync, mkdtempSync, rmSync } from "fs";
+import * as configModule from "../core/config";
+
+// ---------------------------------------------------------------------------
+// Mock all core modules before importing the server
+// ---------------------------------------------------------------------------
+
+const mockUploadFile = mock(async (_path: string, _opts: object) => ({
+  id: "att_test001",
+  filename: "test.txt",
+  s3Key: "attachments/2024-01-01/att_test001/test.txt",
+  bucket: "my-bucket",
+  size: 1024,
+  contentType: "text/plain",
+  link: "https://example.com/presigned-url",
+  expiresAt: 1700000000000,
+  createdAt: 1699000000000,
+}));
+
+const mockDownloadAttachment = mock(
+  async (_idOrUrl: string, _dest?: string) => ({
+    path: "/tmp/test.txt",
+    filename: "test.txt",
+    size: 1024,
+  })
+);
+
+const mockFindAll = mock(() => [
+  {
+    id: "att_test001",
+    filename: "test.txt",
+    s3Key: "attachments/2024-01-01/att_test001/test.txt",
+    bucket: "my-bucket",
+    size: 2048,
+    contentType: "text/plain",
+    link: "https://example.com/link",
+    expiresAt: 1700000000000,
+    createdAt: 1699000000000,
+  },
+]);
+
+const mockFindById = mock((_id: string) => ({
+  id: "att_test001",
+  filename: "test.txt",
+  s3Key: "attachments/2024-01-01/att_test001/test.txt",
+  bucket: "my-bucket",
+  size: 2048,
+  contentType: "text/plain",
+  link: "https://example.com/link",
+  expiresAt: 1700000000000,
+  createdAt: 1699000000000,
+}));
+
+function resetMockFindById(): void {
+  mockFindById.mockImplementation((_id: string) => ({
+    id: "att_test001",
+    filename: "test.txt",
+    s3Key: "attachments/2024-01-01/att_test001/test.txt",
+    bucket: "my-bucket",
+    size: 2048,
+    contentType: "text/plain",
+    link: "https://example.com/link",
+    expiresAt: 1700000000000,
+    createdAt: 1699000000000,
+  }));
+}
+
+const mockDelete = mock((_id: string) => {});
+const mockUpdateLink = mock((_id: string, _link: string, _expiresAt?: number | null) => {});
+const mockMarkReady = mock((_input: unknown) => {});
+const mockClose = mock(() => {});
+
+// Use real config module with temp config file — avoids module cache pollution
+let _mcpTestConfigDir: string;
+const mockSetConfig = spyOn(configModule, "setConfig").mockImplementation((_partial: object) => {});
+const mockValidateS3Config = spyOn(configModule, "validateS3Config").mockImplementation(() => {});
+
+const mockGeneratePresignedLink = mock(
+  async (_s3: object, _key: string, _expiryMs: number | null) =>
+    "https://example.com/new-presigned-url"
+);
+const mockGenerateServerLink = mock(
+  (_id: string, _baseUrl: string) => "http://localhost:3459/a/att_test001"
+);
+const mockGenerateShareLink = mock(
+  (_token: string, _baseUrl: string) => "http://localhost:3459/a/share_test001"
+);
+const mockGetLinkType = mock(() => "presigned" as const);
+
+const mockDbInsert = mock((_att: unknown) => {});
+const mockDbCreateShareLink = mock((_input: unknown) => ({ shareLink: {}, token: "share_test001" }));
+
+const mockS3ClientInstance = {
+  upload: mock(async () => {}),
+  download: mock(async () => Buffer.from("data")),
+  delete: mock(async () => {}),
+  head: mock(async (_key: string) => ({ contentLength: 4096, contentType: "application/pdf" })),
+  presign: mock(async () => "https://presigned"),
+  presignPut: mock(async (_key: string, _contentType: string, _expiresIn: number) => "https://example.com/presigned-put-url"),
+  // The server's multipart routes call these on S3Client; mirror the api
+  // harness's mock so a leaked registration still satisfies the whole graph.
+  createMultipartUpload: mock(async () => "upload_test123"),
+  presignUploadPart: mock(async () => "https://example.com/presigned-part-url"),
+  completeMultipartUpload: mock(async () => {}),
+  abortMultipart: mock(async () => {}),
+};
+
+const mockUploadFromUrl = mock(async (_url: string, _opts: object) => ({
+  id: "att_url001",
+  filename: "remote.txt",
+  s3Key: "attachments/2024-01-01/att_url001/remote.txt",
+  bucket: "my-bucket",
+  size: 2048,
+  contentType: "text/plain",
+  link: "https://example.com/presigned-url-from-url",
+  expiresAt: 1700000000000,
+  createdAt: 1699000000000,
+}));
+
+const mockUploadFromBuffer = mock(async (_buffer: Buffer, filename: string, _opts: object) => ({
+  id: "att_buf001",
+  filename,
+  s3Key: `attachments/2024-01-01/att_buf001/${filename}`,
+  bucket: "my-bucket",
+  size: 512,
+  contentType: "text/markdown",
+  link: "https://example.com/presigned-buf",
+  expiresAt: 1700000000000,
+  createdAt: 1699000000000,
+}));
+
+const mockUploadStreamAttachment = mock(async (_stream: unknown, filename: string) => ({
+  id: "att_stream001",
+  filename,
+  s3Key: `attachments/2024-01-01/att_stream001/${filename}`,
+  bucket: "my-bucket",
+  size: 256,
+  contentType: "application/octet-stream",
+  link: "https://example.com/presigned-stream",
+  expiresAt: 1700000000000,
+  createdAt: 1699000000000,
+}));
+
+mock.module("../core/upload.js", () => ({ uploadFile: mockUploadFile, uploadFromUrl: mockUploadFromUrl, uploadFromBuffer: mockUploadFromBuffer, uploadStreamAttachment: mockUploadStreamAttachment }));
+// The export set mirrors src/core/download.ts so that a leaked registration in
+// the shared single-process registry still satisfies every named import in the
+// server graph (api routes need isExpired/openAttachmentStream/streamAttachment).
+mock.module("../core/download.js", () => ({
+  downloadAttachment: mockDownloadAttachment,
+  streamAttachment: mock(async (_id: string) => ({
+    body: new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode("x")); c.close(); } }),
+    contentLength: 1,
+    contentType: "text/plain",
+    status: 200,
+  })),
+  openAttachmentStream: mock(async (_id: string) => ({
+    body: new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode("x")); c.close(); } }),
+    contentLength: 1,
+    contentType: "text/plain",
+    status: 200,
+  })),
+  isExpired: mock((_att: unknown) => false),
+  extractId: mock((id: string) => id),
+  extractShareToken: mock((id: string) => id),
+}));
+mock.module("../core/db.js", () => ({
+  AttachmentsDB: class MockAttachmentsDB {
+    findAll = mockFindAll;
+    findById = mockFindById;
+    delete = mockDelete;
+    updateLink = mockUpdateLink;
+    markReady = mockMarkReady;
+    close = mockClose;
+    insert = mockDbInsert;
+    createShareLink = mockDbCreateShareLink;
+    // Mirror the api harness's mock: the server graph (store.ts, public
+    // routes) calls these, so a leaked registration still satisfies every
+    // named method on the class.
+    findShareLinksByAttachmentId = mock((_id: string) => []);
+    findShareLinkByToken = mock((_token: string) => null);
+    consumeShareLink = mock((_id: string) => true);
+    releaseShareLink = mock((_id: string) => true);
+    incrementDownloads = mock((_id: string) => {});
+  },
+}));
+// Set up real config with test values
+beforeAll(() => {
+  _mcpTestConfigDir = join(tmpdir(), `mcp-test-cfg-${Date.now()}`);
+  mkdirSync(_mcpTestConfigDir, { recursive: true });
+  configModule.setConfigPath(join(_mcpTestConfigDir, "config.json"));
+  configModule.setConfig({
+    s3: { bucket: "my-bucket", region: "us-east-1", accessKeyId: "AK" + "IATEST", secretAccessKey: "secret" },
+    server: { port: 3459, baseUrl: "http://localhost:3459" },
+    defaults: { expiry: "7d", linkType: "presigned" },
+  });
+});
+const actualLinks = await import("../core/links.js");
+mock.module("../core/links.js", () => ({
+  ...actualLinks,
+  generatePresignedLink: mockGeneratePresignedLink,
+  generateServerLink: mockGenerateServerLink,
+  generateShareLink: mockGenerateShareLink,
+  getLinkType: mockGetLinkType,
+}));
+mock.module("../core/s3.js", () => ({
+  S3Client: class MockS3Client {
+    constructor(_config: object) {}
+    upload = mockS3ClientInstance.upload;
+    download = mockS3ClientInstance.download;
+    delete = mockS3ClientInstance.delete;
+    head = mockS3ClientInstance.head;
+    presign = mockS3ClientInstance.presign;
+    presignPut = mockS3ClientInstance.presignPut;
+    createMultipartUpload = mockS3ClientInstance.createMultipartUpload;
+    presignUploadPart = mockS3ClientInstance.presignUploadPart;
+    completeMultipartUpload = mockS3ClientInstance.completeMultipartUpload;
+    abortMultipart = mockS3ClientInstance.abortMultipart;
+  },
+}));
+
+// Hosted (/v1) path: resolveStore() returns an ApiStore when the cloud env is
+// present, which must route presign through the API transport, not the
+// local-only gate. The mock mirrors the real resolver's env flip.
+const mockV1PresignUpload = mock(async (_filename: string, _contentType: string | undefined, _expiryMs: number) => ({
+  id: "att_cloud1",
+  uploadUrl: "https://bucket.example.com/put?X-Amz-Signature=cloud",
+  contentType: "application/pdf",
+  filename: "report.pdf",
+}));
+const mockV1PresignComplete = mock(async (_id: string, _opts: object) => ({
+  attachment: {
+    id: "att_cloud1",
+    filename: "report.pdf",
+    s3Key: "attachments/2026-08-18/att_cloud1/report.pdf",
+    bucket: "cloud",
+    size: 4096,
+    contentType: "application/pdf",
+    link: "https://has.na/a/abc",
+    expiresAt: Date.now() + 3600000,
+    createdAt: Date.now(),
+    storageBackend: "s3",
+    status: "ready",
+  },
+  link: "https://has.na/a/abc",
+  size: 4096,
+}));
+
+mock.module("../core/cloud-v1.js", () => ({
+  resolveAttachmentsV1: (env: NodeJS.ProcessEnv) => {
+    if (env.HASNA_ATTACHMENTS_API_URL && env.HASNA_ATTACHMENTS_API_KEY) {
+      return {
+        transport: "cloud-http",
+        store: { presignUpload: mockV1PresignUpload, presignComplete: mockV1PresignComplete },
+      };
+    }
+    return { transport: "local", store: null };
+  },
+}));
+
+// Import server AFTER mocks are set up
+const { MockedStoreFixture } = await import("../testing/mocked-store-fixture");
+const actualStore = await import("../core/store");
+const productionResolveStore = actualStore.resolveStore;
+mock.module("../core/store.js", () => ({ ...actualStore, resolveStore: (env = process.env) => env.HASNA_ATTACHMENTS_API_URL && env.HASNA_ATTACHMENTS_API_KEY ? productionResolveStore(env) : new MockedStoreFixture() }));
+
+const { createServer, getMcpHelp, getToolsForProfile } = await import("./server.js");
+
+// Restore all mocks after this file's tests complete
+afterAll(() => {
+  mock.restore();
+  try { rmSync(_mcpTestConfigDir, { recursive: true, force: true }); } catch {}
+});
+
+function retiredToolName(suffix: string): string {
+  return ["clo", "ud", suffix].join("");
+}
+
+// ---------------------------------------------------------------------------
+// Helper: simulate a tool call via the server's request handler
+// ---------------------------------------------------------------------------
+
+async function callTool(
+  server: ReturnType<typeof createServer>,
+  toolName: string,
+  toolArgs: Record<string, unknown> = {}
+) {
+  // Access the internal request handler registered for CallToolRequest
+  // We do this by emitting the request through the handler directly.
+  // The Server class stores handlers via setRequestHandler — we test it
+  // through the public API by manually invoking the registered handler.
+  const handler = (server as unknown as {
+    _requestHandlers: Map<string, (req: unknown) => Promise<unknown>>;
+  })._requestHandlers.get("tools/call");
+
+  if (!handler) throw new Error("No tools/call handler registered");
+
+  return handler({
+    method: "tools/call",
+    params: { name: toolName, arguments: toolArgs },
+  });
+}
+
+async function listTools(server: ReturnType<typeof createServer>) {
+  const handler = (server as unknown as {
+    _requestHandlers: Map<string, (req: unknown) => Promise<unknown>>;
+  })._requestHandlers.get("tools/list");
+
+  if (!handler) throw new Error("No tools/list handler registered");
+  return handler({ method: "tools/list", params: {} });
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+describe("MCP Server — tools/list", () => {
+  it("returns 13 standard tools by default (no ATTACHMENTS_PROFILE set)", async () => {
+    delete process.env.ATTACHMENTS_PROFILE;
+    const server = createServer();
+    const result = (await listTools(server)) as { tools: Array<{ name: string }> };
+    expect(result.tools).toHaveLength(13);
+    const names = result.tools.map((t) => t.name);
+    expect(names).toContain("upload_attachment");
+    expect(names).toContain("download_attachment");
+    expect(names).toContain("get_link");
+    expect(names).toContain("list_attachments");
+    expect(names).toContain("delete_attachment");
+    expect(names).toContain("complete_task_with_files");
+    expect(names).toContain("save_session");
+    expect(names).toContain("report_stats");
+    expect(names).toContain("get_context");
+  });
+});
+
+describe("MCP Server — help", () => {
+  it("documents the default HTTP transport and port", () => {
+    const help = getMcpHelp();
+    expect(help).toContain("Streamable HTTP transport by default");
+    expect(help).toContain("--stdio");
+    expect(help).toContain("default: 8850");
+    expect(help).not.toContain("default: 8800");
+  });
+});
+
+describe("ATTACHMENTS_PROFILE — getToolsForProfile()", () => {
+  it("minimal profile returns exactly 3 tools", () => {
+    const tools = getToolsForProfile("minimal");
+    expect(tools).toHaveLength(3);
+    const names = tools.map((t) => t.name);
+    expect(names).toContain("upload_attachment");
+    expect(names).toContain("download_attachment");
+    expect(names).toContain("get_link");
+  });
+
+  it("standard profile returns exactly 13 tools", () => {
+    const tools = getToolsForProfile("standard");
+    expect(tools).toHaveLength(13);
+    const names = tools.map((t) => t.name);
+    expect(names).toContain("upload_attachment");
+    expect(names).toContain("download_attachment");
+    expect(names).toContain("get_link");
+    expect(names).toContain("list_attachments");
+    expect(names).toContain("delete_attachment");
+    expect(names).toContain("complete_task_with_files");
+    expect(names).toContain("save_session");
+    expect(names).toContain("report_stats");
+    expect(names).toContain("get_context");
+  });
+
+  it("full profile returns all 22 tools", () => {
+    const tools = getToolsForProfile("full");
+    expect(tools).toHaveLength(22);
+    const names = tools.map((t) => t.name);
+    expect(names).toContain("upload_attachment");
+    expect(names).toContain("upload_attachments");
+    expect(names).toContain("download_attachment");
+    expect(names).toContain("list_attachments");
+    expect(names).toContain("delete_attachment");
+    expect(names).toContain("get_link");
+    expect(names).toContain("configure_s3");
+    expect(names).toContain("presign_upload");
+    expect(names).toContain("complete_presigned_upload");
+    expect(names).toContain("describe_tools");
+    expect(names).toContain("search_tools");
+    expect(names).toContain("link_to_task");
+    expect(names).toContain("complete_task_with_files");
+    expect(names).toContain("save_session");
+    expect(names).toContain("check_attachment_health");
+    expect(names).not.toContain("storage_status");
+    expect(names).not.toContain("storage_push");
+    expect(names).not.toContain("storage_pull");
+    expect(names).not.toContain("storage_sync");
+    expect(names).not.toContain(retiredToolName("_status"));
+    expect(names).not.toContain(retiredToolName("_push"));
+    expect(names).not.toContain(retiredToolName("_pull"));
+    expect(names).not.toContain(retiredToolName("_sync"));
+  });
+
+  it("no argument (reads process.env.ATTACHMENTS_PROFILE) defaults to standard (13 tools)", () => {
+    delete process.env.ATTACHMENTS_PROFILE;
+    const tools = getToolsForProfile();
+    expect(tools).toHaveLength(13);
+  });
+
+  it("ATTACHMENTS_PROFILE=minimal env var returns 3 tools", () => {
+    process.env.ATTACHMENTS_PROFILE = "minimal";
+    const tools = getToolsForProfile();
+    expect(tools).toHaveLength(3);
+    delete process.env.ATTACHMENTS_PROFILE;
+  });
+
+  it("ATTACHMENTS_PROFILE=full env var returns 22 tools", () => {
+    process.env.ATTACHMENTS_PROFILE = "full";
+    const tools = getToolsForProfile();
+    expect(tools).toHaveLength(22);
+    delete process.env.ATTACHMENTS_PROFILE;
+  });
+});
+
+describe("MCP Server — list_agents", () => {
+  it("returns a bounded page with truthful continuation metadata", async () => {
+    const server = createServer();
+    for (let index = 0; index < 25; index += 1) {
+      await callTool(server, "register_agent", { name: `paged-agent-${index}` });
+    }
+
+    const first = (await callTool(server, "list_agents")) as { content: Array<{ text: string }> };
+    const firstPage = JSON.parse(first.content[0]!.text);
+    expect(firstPage.items).toHaveLength(20);
+    expect(firstPage.count).toBe(20);
+    expect(firstPage.total).toBeGreaterThanOrEqual(25);
+    expect(firstPage.next_offset).toBe(20);
+    expect(firstPage.has_more).toBe(true);
+
+    const second = (await callTool(server, "list_agents", { offset: firstPage.next_offset, limit: 20 })) as { content: Array<{ text: string }> };
+    const secondPage = JSON.parse(second.content[0]!.text);
+    expect(secondPage.items.length).toBeGreaterThanOrEqual(5);
+    expect(secondPage.items.map((agent: { id: string }) => agent.id)).not.toContain(firstPage.items[0]!.id);
+    expect(secondPage.next_offset).toBeNull();
+    expect(secondPage.has_more).toBe(false);
+  });
+
+  it("rejects invalid limits before returning registry data", async () => {
+    const server = createServer();
+    const result = (await callTool(server, "list_agents", { limit: 101 })) as { content: Array<{ text: string }>; isError?: boolean };
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain("limit must be an integer from 1 to 100");
+  });
+});
+
+describe("MCP Server — upload_attachment", () => {
+  beforeEach(() => mockUploadFile.mockClear());
+
+  it("calls uploadFile with path and opts", async () => {
+    const server = createServer();
+    const result = (await callTool(server, "upload_attachment", {
+      path: "/tmp/file.txt",
+      expiry: "24h",
+      tag: "test-tag",
+    })) as { content: Array<{ text: string }> };
+
+    expect(mockUploadFile).toHaveBeenCalledTimes(1);
+    // LocalStore routes through coreUploadFile(path, options, { db, config }).
+    const call = mockUploadFile.mock.calls[0]!;
+    expect(call[0]).toBe("/tmp/file.txt");
+    expect(call[1]).toMatchObject({ expiry: "24h", tag: "test-tag" });
+
+    const parsed = JSON.parse(result.content[0]!.text);
+    expect(parsed.id).toBe("att_test001");
+    expect(parsed.filename).toBe("test.txt");
+    expect(parsed.size).toBe(1024);
+    expect(parsed.link).toBe("https://example.com/presigned-url");
+  });
+
+  it("calls uploadFile with only path when no optional args", async () => {
+    const server = createServer();
+    await callTool(server, "upload_attachment", { path: "/tmp/file.txt" });
+
+    const call = mockUploadFile.mock.calls[0]!;
+    expect(call[0]).toBe("/tmp/file.txt");
+    expect(call[1]).toMatchObject({ expiry: undefined, tag: undefined });
+  });
+
+  it("calls uploadFromUrl when url is provided instead of path", async () => {
+    mockUploadFromUrl.mockClear();
+    const server = createServer();
+    const result = (await callTool(server, "upload_attachment", {
+      url: "https://example.com/remote-file.txt",
+      expiry: "24h",
+    })) as { content: Array<{ text: string }> };
+
+    expect(mockUploadFromUrl).toHaveBeenCalledTimes(1);
+    const urlCall = mockUploadFromUrl.mock.calls[0]!;
+    expect(urlCall[0]).toBe("https://example.com/remote-file.txt");
+    expect(urlCall[1]).toMatchObject({ expiry: "24h", tag: undefined });
+    expect(mockUploadFile).not.toHaveBeenCalled();
+
+    const parsed = JSON.parse(result.content[0]!.text);
+    expect(parsed.id).toBe("att_url001");
+    expect(parsed.filename).toBe("remote.txt");
+  });
+
+  it("returns error when neither path nor url is provided", async () => {
+    const server = createServer();
+    const result = (await callTool(server, "upload_attachment", {
+      expiry: "24h",
+    })) as { content: Array<{ text: string }>; isError: boolean };
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain("Either 'path' or 'url' must be provided");
+  });
+
+  it("returns error when both path and url are provided", async () => {
+    const server = createServer();
+    const result = (await callTool(server, "upload_attachment", {
+      path: "/tmp/file.txt",
+      url: "https://example.com/file.txt",
+    })) as { content: Array<{ text: string }>; isError: boolean };
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain("Provide either 'path' or 'url', not both");
+  });
+});
+
+describe("MCP Server — upload_attachments (batch)", () => {
+  let callCount: number;
+
+  beforeEach(() => {
+    mockUploadFile.mockClear();
+    callCount = 0;
+  });
+
+  it("uploads 2 files and returns compact results for each", async () => {
+    // Return distinct results per call
+    mockUploadFile
+      .mockImplementationOnce(async () => ({
+        id: "att_batch01",
+        filename: "a.txt",
+        s3Key: "attachments/2024-01-01/att_batch01/a.txt",
+        bucket: "my-bucket",
+        size: 100,
+        contentType: "text/plain",
+        link: "https://example.com/a",
+        expiresAt: null,
+        createdAt: 1699000000000,
+      }))
+      .mockImplementationOnce(async () => ({
+        id: "att_batch02",
+        filename: "b.txt",
+        s3Key: "attachments/2024-01-01/att_batch02/b.txt",
+        bucket: "my-bucket",
+        size: 200,
+        contentType: "text/plain",
+        link: "https://example.com/b",
+        expiresAt: null,
+        createdAt: 1699000000000,
+      }));
+
+    const server = createServer();
+    const result = (await callTool(server, "upload_attachments", {
+      paths: ["/tmp/a.txt", "/tmp/b.txt"],
+      expiry: "7d",
+      tag: "batch-tag",
+    })) as { content: Array<{ text: string }> };
+
+    expect(mockUploadFile).toHaveBeenCalledTimes(2);
+    expect(mockUploadFile.mock.calls[0]![0]).toBe("/tmp/a.txt");
+    expect(mockUploadFile.mock.calls[0]![1]).toMatchObject({ expiry: "7d", tag: "batch-tag" });
+    expect(mockUploadFile.mock.calls[1]![0]).toBe("/tmp/b.txt");
+    expect(mockUploadFile.mock.calls[1]![1]).toMatchObject({ expiry: "7d", tag: "batch-tag" });
+
+    const parsed = JSON.parse(result.content[0]!.text);
+    expect(parsed).toHaveLength(2);
+    expect(parsed[0].id).toBe("att_batch01");
+    expect(parsed[0].filename).toBe("a.txt");
+    expect(parsed[0].size).toBe(100);
+    expect(parsed[0].link).toBe("https://example.com/a");
+    expect(parsed[1].id).toBe("att_batch02");
+    expect(parsed[1].filename).toBe("b.txt");
+  });
+
+  it("includes per-file error when one file fails", async () => {
+    mockUploadFile
+      .mockImplementationOnce(async () => ({
+        id: "att_ok",
+        filename: "ok.txt",
+        s3Key: "attachments/2024-01-01/att_ok/ok.txt",
+        bucket: "my-bucket",
+        size: 50,
+        contentType: "text/plain",
+        link: "https://example.com/ok",
+        expiresAt: null,
+        createdAt: 1699000000000,
+      }))
+      .mockImplementationOnce(async () => {
+        throw new Error("File not found: /tmp/missing.txt");
+      });
+
+    const server = createServer();
+    const result = (await callTool(server, "upload_attachments", {
+      paths: ["/tmp/ok.txt", "/tmp/missing.txt"],
+    })) as { content: Array<{ text: string }>; isError?: boolean };
+
+    // The batch itself should NOT be an error — errors are per-file
+    expect(result.isError).toBeUndefined();
+
+    const parsed = JSON.parse(result.content[0]!.text);
+    expect(parsed).toHaveLength(2);
+    expect(parsed[0].id).toBe("att_ok");
+    expect(parsed[1].path).toBe("/tmp/missing.txt");
+    expect(parsed[1].error).toContain("File not found");
+  });
+
+  it("returns empty array for empty paths", async () => {
+    const server = createServer();
+    const result = (await callTool(server, "upload_attachments", {
+      paths: [],
+    })) as { content: Array<{ text: string }> };
+
+    const parsed = JSON.parse(result.content[0]!.text);
+    expect(parsed).toEqual([]);
+    expect(mockUploadFile).not.toHaveBeenCalled();
+  });
+});
+
+describe("MCP Server — download_attachment", () => {
+  beforeEach(() => mockDownloadAttachment.mockClear());
+
+  it("calls downloadAttachment with id_or_url and dest", async () => {
+    const server = createServer();
+    const result = (await callTool(server, "download_attachment", {
+      id_or_url: "att_test001",
+      dest: "/tmp/downloads/",
+    })) as { content: Array<{ text: string }> };
+
+    expect(mockDownloadAttachment).toHaveBeenCalledTimes(1);
+    // LocalStore routes through downloadAttachment(idOrUrl, output, { db, config }, opts).
+    const dlCall = mockDownloadAttachment.mock.calls[0]!;
+    expect(dlCall[0]).toBe("att_test001");
+    expect(dlCall[1]).toBe("/tmp/downloads/");
+
+    const parsed = JSON.parse(result.content[0]!.text);
+    expect(parsed.path).toBe("/tmp/test.txt");
+    expect(parsed.filename).toBe("test.txt");
+    expect(parsed.size).toBe(1024);
+  });
+
+  it("calls downloadAttachment without dest when not provided", async () => {
+    const server = createServer();
+    await callTool(server, "download_attachment", {
+      id_or_url: "https://localhost:3459/d/att_test001",
+    });
+
+    const dlCall = mockDownloadAttachment.mock.calls[0]!;
+    expect(dlCall[0]).toBe("https://localhost:3459/d/att_test001");
+    expect(dlCall[1]).toBeUndefined();
+  });
+});
+
+describe("MCP Server — list_attachments", () => {
+  beforeEach(() => mockFindAll.mockClear());
+
+  it("returns compact string by default", async () => {
+    const server = createServer();
+    const result = (await callTool(server, "list_attachments", {})) as {
+      content: Array<{ text: string }>;
+    };
+
+    expect(mockFindAll).toHaveBeenCalledTimes(1);
+    // compact string contains the attachment id
+    expect(result.content[0]!.text).toContain("att_test001");
+    expect(result.content[0]!.text).toContain("test.txt");
+  });
+
+  it("returns JSON array when format=json", async () => {
+    const server = createServer();
+    const result = (await callTool(server, "list_attachments", {
+      format: "json",
+    })) as { content: Array<{ text: string }> };
+
+    const parsed = JSON.parse(result.content[0]!.text);
+    expect(Array.isArray(parsed)).toBe(true);
+    expect(parsed[0].id).toBe("att_test001");
+  });
+
+  it("passes limit to findAll", async () => {
+    const server = createServer();
+    await callTool(server, "list_attachments", { limit: 5 });
+
+    expect(mockFindAll).toHaveBeenCalledWith({ limit: 5, tag: undefined });
+  });
+
+  it("passes tag to findAll when provided", async () => {
+    const server = createServer();
+    await callTool(server, "list_attachments", { tag: "session-123" });
+
+    expect(mockFindAll).toHaveBeenCalledWith({ limit: undefined, tag: "session-123" });
+  });
+});
+
+describe("MCP Server — delete_attachment", () => {
+  beforeEach(() => mockDelete.mockClear());
+
+  it("calls db.delete with the given id", async () => {
+    const server = createServer();
+    const result = (await callTool(server, "delete_attachment", {
+      id: "att_test001",
+    })) as { content: Array<{ text: string }> };
+
+    expect(mockDelete).toHaveBeenCalledTimes(1);
+    expect(mockDelete).toHaveBeenCalledWith("att_test001");
+    expect(result.content[0]!.text).toBe("deleted: att_test001");
+  });
+});
+
+describe("MCP Server — get_link", () => {
+  beforeEach(() => {
+    mockFindById.mockClear();
+    mockUpdateLink.mockClear();
+    mockDbCreateShareLink.mockClear();
+    mockGeneratePresignedLink.mockClear();
+    mockGenerateShareLink.mockClear();
+  });
+
+  it("returns existing link without regenerating", async () => {
+    const server = createServer();
+    const result = (await callTool(server, "get_link", {
+      id: "att_test001",
+    })) as { content: Array<{ text: string }> };
+
+    expect(mockFindById).toHaveBeenCalledWith("att_test001");
+    expect(mockGeneratePresignedLink).not.toHaveBeenCalled();
+    expect(mockUpdateLink).not.toHaveBeenCalled();
+
+    const parsed = JSON.parse(result.content[0]!.text);
+    expect(parsed.link).toBe("https://example.com/link");
+  });
+
+  it("regenerates presigned link when regenerate=true", async () => {
+    const server = createServer();
+    const result = (await callTool(server, "get_link", {
+      id: "att_test001",
+      regenerate: true,
+      expiry: "24h",
+    })) as { content: Array<{ text: string }> };
+
+    expect(mockGeneratePresignedLink).toHaveBeenCalledTimes(1);
+    expect(mockUpdateLink).toHaveBeenCalledTimes(1);
+
+    const parsed = JSON.parse(result.content[0]!.text);
+    expect(parsed.link).toBe("https://example.com/new-presigned-url");
+  });
+
+  it("returns error for unknown attachment", async () => {
+    mockFindById.mockReturnValueOnce(null as unknown as ReturnType<typeof mockFindById>);
+    const server = createServer();
+    const result = (await callTool(server, "get_link", {
+      id: "att_unknown",
+    })) as { content: Array<{ text: string }>; isError: boolean };
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain("not found");
+  });
+
+  it("creates a share link when linkType is server", async () => {
+    mockGetLinkType.mockImplementation(() => "server" as const);
+
+    const server = createServer();
+    const result = (await callTool(server, "get_link", {
+      id: "att_test001",
+      regenerate: true,
+    })) as { content: Array<{ text: string }> };
+
+    expect(mockDbCreateShareLink).toHaveBeenCalledTimes(1);
+    expect(mockGenerateShareLink).toHaveBeenCalledTimes(1);
+    expect(mockGeneratePresignedLink).not.toHaveBeenCalled();
+
+    const parsed = JSON.parse(result.content[0]!.text);
+    expect(parsed.link).toBe("http://localhost:3459/a/share_test001");
+  });
+});
+
+describe("MCP Server — retired configure_s3", () => {
+  beforeEach(() => mockSetConfig.mockClear());
+  for (const args of [{ bucket: "bucket", region: "region", access_key: "fixture", secret_key: "sensitive" }, { bucket: "bucket", region: "region", base_url: "https://example.test" }, { bucket: "bucket", region: "region" }, { bucket: "bucket", access_key: "partial" }]) it("never persists server credentials on the client", async () => {
+    const result = await callTool(createServer(), "configure_s3", args) as { isError?: boolean; content: Array<{text:string}> };
+    expect(result.isError).toBe(true); expect(mockSetConfig).not.toHaveBeenCalled(); expect(result.content[0]!.text).not.toContain("sensitive");
+  });
+});
+
+describe("MCP Server — describe_tools", () => {
+  it("returns full schema for a specific tool", async () => {
+    const server = createServer();
+    const result = (await callTool(server, "describe_tools", {
+      tool_name: "upload_attachment",
+    })) as { content: Array<{ text: string }> };
+
+    const parsed = JSON.parse(result.content[0]!.text);
+    expect(parsed.name).toBe("upload_attachment");
+    expect(parsed.description).toBeTruthy();
+    expect(parsed.inputSchema.properties.path.description).toBeTruthy();
+  });
+
+  it("returns all schemas when tool_name is omitted", async () => {
+    const server = createServer();
+    const result = (await callTool(server, "describe_tools", {})) as {
+      content: Array<{ text: string }>;
+    };
+
+    const parsed = JSON.parse(result.content[0]!.text);
+    expect(Object.keys(parsed)).toHaveLength(17);
+    expect(parsed.upload_attachment).toBeDefined();
+    expect(parsed.upload_attachments).toBeDefined();
+    expect(parsed.presign_upload).toBeDefined();
+    expect(parsed.complete_presigned_upload).toBeDefined();
+    expect(parsed.describe_tools).toBeDefined();
+    expect(parsed.complete_task_with_files).toBeDefined();
+    expect(parsed.save_session).toBeDefined();
+    expect(parsed.report_stats).toBeDefined();
+  });
+
+  it("returns error for unknown tool_name", async () => {
+    const server = createServer();
+    const result = (await callTool(server, "describe_tools", {
+      tool_name: "nonexistent_tool",
+    })) as { content: Array<{ text: string }>; isError: boolean };
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain("Unknown tool");
+  });
+});
+
+describe("MCP Server — search_tools", () => {
+  it("returns matching tool names as newline-separated string", async () => {
+    const server = createServer();
+    const result = (await callTool(server, "search_tools", {
+      query: "attachment",
+    })) as { content: Array<{ text: string }> };
+
+    const lines = result.content[0]!.text.split("\n").filter(Boolean);
+    expect(lines).toContain("upload_attachment");
+    expect(lines).toContain("upload_attachments");
+    expect(lines).toContain("download_attachment");
+    expect(lines).toContain("list_attachments");
+    expect(lines).toContain("delete_attachment");
+    // get_link and configure_s3 don't contain "attachment"
+    expect(lines).not.toContain("get_link");
+    expect(lines).not.toContain("configure_s3");
+  });
+
+  it("finds presign_upload when searching for 'presign'", async () => {
+    const server = createServer();
+    const result = (await callTool(server, "search_tools", {
+      query: "presign",
+    })) as { content: Array<{ text: string }> };
+
+    const lines = result.content[0]!.text.split("\n").filter(Boolean);
+    expect(lines).toContain("presign_upload");
+    expect(lines).toContain("complete_presigned_upload");
+  });
+
+  it("returns empty string when no matches", async () => {
+    const server = createServer();
+    const result = (await callTool(server, "search_tools", {
+      query: "zzz_no_match",
+    })) as { content: Array<{ text: string }> };
+
+    expect(result.content[0]!.text).toBe("");
+  });
+});
+
+describe("MCP Server — presign_upload", () => {
+  beforeEach(() => {
+    mockS3ClientInstance.presignPut.mockClear();
+    mockS3ClientInstance.presignPut.mockImplementation(
+      async () => "https://example.com/presigned-put-url"
+    );
+    mockS3ClientInstance.head.mockClear();
+    mockS3ClientInstance.head.mockImplementation(async () => ({ contentLength: 4096, contentType: "application/pdf" }));
+    mockS3ClientInstance.delete.mockClear();
+    mockGeneratePresignedLink.mockClear();
+    mockGeneratePresignedLink.mockImplementation(
+      async () => "https://example.com/new-presigned-url"
+    );
+    mockDbCreateShareLink.mockClear();
+    mockDbCreateShareLink.mockImplementation(() => ({ shareLink: {}, token: "share_test001" }));
+    mockDbInsert.mockClear();
+    mockFindById.mockClear();
+    resetMockFindById();
+    mockMarkReady.mockClear();
+    mockDelete.mockClear();
+    mockClose.mockClear();
+  });
+
+  it("returns presigned PUT URL with id and expires_at", async () => {
+    const server = createServer();
+    const result = (await callTool(server, "presign_upload", {
+      filename: "report.pdf",
+      expiry: "2h",
+    })) as { content: Array<{ text: string }> };
+
+    const parsed = JSON.parse(result.content[0]!.text);
+    expect(parsed.upload_url).toBe("https://example.com/presigned-put-url");
+    expect(parsed.id).toMatch(/^att_/);
+    expect(parsed.expires_at).toBeGreaterThan(Date.now());
+    expect(parsed.finalize_tool).toBe("complete_presigned_upload");
+  });
+
+  it("calls s3.presignPut with correct expiry in seconds", async () => {
+    const server = createServer();
+    await callTool(server, "presign_upload", {
+      filename: "data.csv",
+      expiry: "1h",
+    });
+
+    expect(mockS3ClientInstance.presignPut).toHaveBeenCalledTimes(1);
+    const [key, contentType, expiresIn] = mockS3ClientInstance.presignPut.mock.calls[0] as [string, string, number];
+    expect(key).toMatch(/^attachments\/global\/uploads\/att_[A-Za-z0-9_-]+$/);
+    expect(contentType).toBe("text/csv");
+    expect(expiresIn).toBe(3600);
+  });
+
+  it("inserts a DB record with size 0", async () => {
+    const server = createServer();
+    await callTool(server, "presign_upload", {
+      filename: "test.txt",
+    });
+
+    expect(mockDbInsert).toHaveBeenCalledTimes(1);
+    const [att] = mockDbInsert.mock.calls[0] as [{ size: number; filename: string }];
+    expect(att.size).toBe(0);
+    expect(att.filename).toBe("test.txt");
+  });
+
+  it("defaults expiry to 1h", async () => {
+    const server = createServer();
+    await callTool(server, "presign_upload", {
+      filename: "file.txt",
+    });
+
+    const [, , expiresIn] = mockS3ClientInstance.presignPut.mock.calls[0] as [string, string, number];
+    expect(expiresIn).toBe(3600);
+  });
+
+  it("uses custom content_type when provided", async () => {
+    const server = createServer();
+    await callTool(server, "presign_upload", {
+      filename: "file.bin",
+      content_type: "application/octet-stream",
+    });
+
+    const [, contentType] = mockS3ClientInstance.presignPut.mock.calls[0] as [string, string, number];
+    expect(contentType).toBe("application/octet-stream");
+  });
+
+  it("returns error for invalid expiry", async () => {
+    const server = createServer();
+    const result = (await callTool(server, "presign_upload", {
+      filename: "file.txt",
+      expiry: "invalid",
+    })) as { content: Array<{ text: string }>; isError: boolean };
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain("Invalid expiry format");
+  });
+
+  it("finalizes a pending upload and generates a share link", async () => {
+    mockFindById.mockImplementation(() => ({
+      id: "att_pending",
+      filename: "report.pdf",
+      s3Key: "attachments/2026-06-19/att_pending/report.pdf",
+      bucket: "my-bucket",
+      size: 0,
+      contentType: "application/pdf",
+      link: null,
+      tag: null,
+      expiresAt: Date.now() + 3600000,
+      createdAt: Date.now(),
+      storageBackend: "s3",
+      status: "pending",
+    }));
+
+    const server = createServer();
+    const result = (await callTool(server, "complete_presigned_upload", {
+      id: "att_pending",
+      link_type: "presigned",
+    })) as { content: Array<{ text: string }> };
+
+    const parsed = JSON.parse(result.content[0]!.text);
+    expect(parsed.id).toBe("att_pending");
+    expect(parsed.size).toBe(4096);
+    expect(parsed.link).toBe("https://example.com/new-presigned-url");
+    expect(mockS3ClientInstance.head).toHaveBeenCalledWith("attachments/2026-06-19/att_pending/report.pdf");
+    expect(mockMarkReady).toHaveBeenCalledWith(expect.objectContaining({
+      id: "att_pending",
+      size: 4096,
+      contentType: "application/pdf",
+      link: "https://example.com/new-presigned-url",
+    }));
+  });
+
+  it("finalizes to a server link when max downloads are set", async () => {
+    mockFindById.mockImplementation(() => ({
+      id: "att_pending",
+      filename: "report.pdf",
+      s3Key: "attachments/2026-06-19/att_pending/report.pdf",
+      bucket: "my-bucket",
+      size: 0,
+      contentType: "application/pdf",
+      link: null,
+      tag: null,
+      expiresAt: Date.now() + 3600000,
+      createdAt: Date.now(),
+      storageBackend: "s3",
+      status: "pending",
+    }));
+
+    const server = createServer();
+    const result = (await callTool(server, "complete_presigned_upload", {
+      id: "att_pending",
+      max_downloads: 1,
+    })) as { content: Array<{ text: string }> };
+
+    const parsed = JSON.parse(result.content[0]!.text);
+    expect(parsed.link).toBe("http://localhost:3459/a/share_test001");
+    expect(mockDbCreateShareLink).toHaveBeenCalledWith(expect.objectContaining({
+      attachmentId: "att_pending",
+      maxUses: 1,
+    }));
+  });
+
+  it("rejects and removes oversized completed uploads", async () => {
+    mockFindById.mockImplementation(() => ({
+      id: "att_pending",
+      filename: "huge.bin",
+      s3Key: "attachments/2026-06-19/att_pending/huge.bin",
+      bucket: "my-bucket",
+      size: 0,
+      contentType: "application/octet-stream",
+      link: null,
+      tag: null,
+      expiresAt: Date.now() + 3600000,
+      createdAt: Date.now(),
+      storageBackend: "s3",
+      status: "pending",
+    }));
+    mockS3ClientInstance.head.mockImplementation(async () => ({ contentLength: 11 * 1024 * 1024 * 1024, contentType: "application/octet-stream" }));
+
+    const server = createServer();
+    const result = (await callTool(server, "complete_presigned_upload", {
+      id: "att_pending",
+    })) as { content: Array<{ text: string }>; isError: boolean };
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain("File too large");
+    expect(mockS3ClientInstance.delete).toHaveBeenCalledWith("attachments/2026-06-19/att_pending/huge.bin");
+    expect(mockDelete).toHaveBeenCalledWith("att_pending");
+  });
+});
+
+describe("MCP Server — link_to_task", () => {
+  let originalFetch: typeof fetch;
+
+  beforeEach(() => {
+    mockFindById.mockClear();
+    resetMockFindById();
+    mockClose.mockClear();
+    originalFetch = globalThis.fetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("links attachment to task and returns success message", async () => {
+    globalThis.fetch = mock(async (_url: unknown, init?: RequestInit) => ({
+      ok: true, status: 200,
+      json: async () => ({ task: { id: "TASK-001", version: init?.method === "PATCH" ? 2 : 1, metadata: init?.method === "PATCH" ? JSON.parse(String(init.body)).metadata : {} } }),
+    })) as unknown as typeof fetch;
+
+    const server = createServer();
+    const result = (await callTool(server, "link_to_task", {
+      attachment_id: "att_test001",
+      task_id: "TASK-001",
+    })) as { content: Array<{ text: string }> };
+
+    expect(result.content[0]!.text).toContain("Linked att_test001 → task TASK-001");
+  });
+
+  it("calls PATCH on correct todos URL with attachment metadata", async () => {
+    process.env.HASNA_TODOS_API_URL = "https://custom.example.test";
+    let capturedUrl = "";
+    let capturedBody = "";
+    globalThis.fetch = mock(async (url: unknown, opts: unknown) => {
+      capturedUrl = String(url);
+      capturedBody = (opts as RequestInit).body as string;
+      return { ok: true, status: 200, json: async () => ({ task: { id: "TASK-001", version: (opts as RequestInit)?.method === "PATCH" ? 2 : 1, metadata: (opts as RequestInit)?.method === "PATCH" ? JSON.parse(String((opts as RequestInit).body)).metadata : {} } }) } as Response;
+    }) as unknown as typeof fetch;
+
+    const server = createServer();
+    await callTool(server, "link_to_task", {
+      attachment_id: "att_test001",
+      task_id: "TASK-001",
+      todos_url: "https://custom.example.test",
+    });
+
+    expect(capturedUrl).toBe("https://custom.example.test/v1/tasks/TASK-001");
+    const body = JSON.parse(capturedBody);
+    expect(body.metadata._attachments[0].id).toBe("att_test001");
+    expect(body.metadata._attachments[0].filename).toBe("test.txt");
+  });
+
+  it("returns error when attachment not found", async () => {
+    mockFindById.mockReturnValueOnce(null as unknown as ReturnType<typeof mockFindById>);
+
+    const server = createServer();
+    const result = (await callTool(server, "link_to_task", {
+      attachment_id: "att_missing",
+      task_id: "TASK-001",
+    })) as { content: Array<{ text: string }>; isError: boolean };
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain("not found");
+  });
+
+  it("returns error when task not found (404)", async () => {
+    globalThis.fetch = mock(async () => ({
+      ok: false,
+      status: 404,
+      text: async () => "not found",
+    })) as unknown as typeof fetch;
+
+    const server = createServer();
+    const result = (await callTool(server, "link_to_task", {
+      attachment_id: "att_test001",
+      task_id: "TASK-999",
+    })) as { content: Array<{ text: string }>; isError: boolean };
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain("TASK-999");
+  });
+
+  it("defaults todos_url to https://todos.example.test", async () => {
+    let capturedUrl = "";
+    globalThis.fetch = mock(async (url: unknown, opts?: unknown) => {
+      capturedUrl = String(url);
+      return { ok: true, status: 200, json: async () => ({ task: { id: "TASK-001", version: (opts as RequestInit)?.method === "PATCH" ? 2 : 1, metadata: (opts as RequestInit)?.method === "PATCH" ? JSON.parse(String((opts as RequestInit).body)).metadata : {} } }) } as Response;
+    }) as unknown as typeof fetch;
+
+    const server = createServer();
+    await callTool(server, "link_to_task", {
+      attachment_id: "att_test001",
+      task_id: "TASK-001",
+    });
+
+    expect(capturedUrl).toContain("https://todos.example.test");
+  });
+});
+
+describe("MCP Server — complete_task_with_files", () => {
+  let originalFetch: typeof fetch;
+
+  beforeEach(() => {
+    mockUploadFile.mockClear();
+    originalFetch = globalThis.fetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("uploads files and completes task with attachment_ids", async () => {
+    mockUploadFile
+      .mockImplementationOnce(async () => ({
+        id: "att_ev001",
+        filename: "screenshot.png",
+        s3Key: "attachments/2024-01-01/att_ev001/screenshot.png",
+        bucket: "my-bucket",
+        size: 50000,
+        contentType: "image/png",
+        link: "https://example.com/att_ev001",
+        expiresAt: null,
+        createdAt: 1699000000000,
+      }))
+      .mockImplementationOnce(async () => ({
+        id: "att_ev002",
+        filename: "output.txt",
+        s3Key: "attachments/2024-01-01/att_ev002/output.txt",
+        bucket: "my-bucket",
+        size: 1024,
+        contentType: "text/plain",
+        link: "https://example.com/att_ev002",
+        expiresAt: null,
+        createdAt: 1699000000000,
+      }));
+
+    const urls: string[] = [];
+    let patchBody = "";
+    globalThis.fetch = mock(async (url: unknown, opts: unknown) => {
+      const method = ((opts as RequestInit | undefined)?.method ?? "GET").toUpperCase();
+      urls.push(String(url));
+      if (method === "GET") {
+        return { ok: true, status: 200, json: async () => ({ task: { id: "TASK-001", version: 1, metadata: {} } }), text: async () => "" } as Response;
+      }
+      if (method === "PATCH") {
+        patchBody = (opts as RequestInit).body as string;
+      }
+      return { ok: true, status: 200, json: async () => ({ task: { id: "TASK-001", version: method === "PATCH" ? 2 : 3, status: method === "POST" ? "completed" : "pending", metadata: JSON.parse(patchBody).metadata } }) } as Response;
+    }) as unknown as typeof fetch;
+
+    const server = createServer();
+    const result = (await callTool(server, "complete_task_with_files", {
+      task_id: "TASK-001",
+      paths: ["/tmp/screenshot.png", "/tmp/output.txt"],
+      todos_url: "https://todos.example.test",
+    })) as { content: Array<{ text: string }> };
+
+    expect(mockUploadFile).toHaveBeenCalledTimes(2);
+    // GET + PATCH the task, then POST /complete
+    expect(urls).toEqual([
+      "https://todos.example.test/v1/tasks/TASK-001",
+      "https://todos.example.test/v1/tasks/TASK-001",
+      "https://todos.example.test/v1/tasks/TASK-001/complete",
+    ]);
+
+    // Evidence persisted into the task metadata (retrievable by resolve-evidence).
+    const patch = JSON.parse(patchBody);
+    const evidence = patch.metadata._evidence;
+    expect(evidence.attachments.map((a: { id: string }) => a.id)).toEqual(["att_ev001", "att_ev002"]);
+
+    const parsed = JSON.parse(result.content[0]!.text);
+    expect(parsed.task_id).toBe("TASK-001");
+    expect(parsed.attachment_ids).toEqual(["att_ev001", "att_ev002"]);
+    expect(parsed.links).toEqual(["https://example.com/att_ev001", "https://example.com/att_ev002"]);
+  });
+
+  it("stores notes in the persisted evidence metadata when provided", async () => {
+    mockUploadFile.mockImplementationOnce(async () => ({
+      id: "att_ev003",
+      filename: "result.txt",
+      s3Key: "key",
+      bucket: "my-bucket",
+      size: 100,
+      contentType: "text/plain",
+      link: null,
+      expiresAt: null,
+      createdAt: 1699000000000,
+    }));
+
+    let patchBody = "";
+    globalThis.fetch = mock(async (_url: unknown, opts: unknown) => {
+      const method = ((opts as RequestInit | undefined)?.method ?? "GET").toUpperCase();
+      if (method === "GET") {
+        return { ok: true, status: 200, json: async () => ({ task: { id: "TASK-002", version: 1, metadata: {} } }), text: async () => "" } as Response;
+      }
+      if (method === "PATCH") {
+        patchBody = (opts as RequestInit).body as string;
+      }
+      return { ok: true, status: 200, json: async () => ({ task: { id: "TASK-002", version: method === "PATCH" ? 2 : 3, status: method === "POST" ? "completed" : "pending", metadata: JSON.parse(patchBody).metadata } }) } as Response;
+    }) as unknown as typeof fetch;
+
+    const server = createServer();
+    await callTool(server, "complete_task_with_files", {
+      task_id: "TASK-002",
+      paths: ["/tmp/result.txt"],
+      notes: "All tests green",
+    });
+
+    const patch = JSON.parse(patchBody);
+    expect(patch.metadata._evidence.notes).toBe("All tests green");
+  });
+
+  it("returns error when task not found (404)", async () => {
+    mockUploadFile.mockImplementationOnce(async () => ({
+      id: "att_ev004",
+      filename: "file.txt",
+      s3Key: "key",
+      bucket: "my-bucket",
+      size: 100,
+      contentType: "text/plain",
+      link: null,
+      expiresAt: null,
+      createdAt: 1699000000000,
+    }));
+
+    globalThis.fetch = mock(async () => ({
+      ok: false,
+      status: 404,
+      text: async () => "not found",
+    })) as unknown as typeof fetch;
+
+    const server = createServer();
+    const result = (await callTool(server, "complete_task_with_files", {
+      task_id: "TASK-999",
+      paths: ["/tmp/file.txt"],
+    })) as { content: Array<{ text: string }>; isError: boolean };
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain("TASK-999");
+  });
+
+  it("returns error when paths array is empty", async () => {
+    const server = createServer();
+    const result = (await callTool(server, "complete_task_with_files", {
+      task_id: "TASK-001",
+      paths: [],
+    })) as { content: Array<{ text: string }>; isError: boolean };
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain("non-empty array");
+    expect(mockUploadFile).not.toHaveBeenCalled();
+  });
+
+  it("defaults todos_url to https://todos.example.test", async () => {
+    mockUploadFile.mockImplementationOnce(async () => ({
+      id: "att_ev005",
+      filename: "file.txt",
+      s3Key: "key",
+      bucket: "my-bucket",
+      size: 100,
+      contentType: "text/plain",
+      link: null,
+      expiresAt: null,
+      createdAt: 1699000000000,
+    }));
+
+    let capturedUrl = "";
+    let metadata = {};
+    globalThis.fetch = mock(async (url: unknown, init?: RequestInit) => {
+      capturedUrl = String(url);
+      if (init?.method === "PATCH") metadata = JSON.parse(String(init.body)).metadata;
+      return { ok: true, status: 200, json: async () => ({ task: { id: "TASK-001", version: init?.method === "POST" ? 3 : init?.method === "PATCH" ? 2 : 1, status: init?.method === "POST" ? "completed" : "pending", metadata } }) } as Response;
+    }) as unknown as typeof fetch;
+
+    const server = createServer();
+    const result = await callTool(server, "complete_task_with_files", {
+      task_id: "TASK-001",
+      paths: ["/tmp/file.txt"],
+    });
+
+    expect((result as { isError?: boolean }).isError).not.toBe(true);
+    expect(capturedUrl).toContain("https://todos.example.test");
+  });
+});
+
+describe("MCP Server — save_session", () => {
+  let originalFetch: typeof fetch;
+
+  beforeEach(() => {
+    mockUploadFromBuffer.mockClear();
+    originalFetch = globalThis.fetch;
+    globalThis.fetch = mock(async (_url: unknown) => ({
+      ok: true,
+      status: 200,
+      json: async () => [
+        { role: "user", content: "Hello", timestamp: 1700000000000 },
+        { role: "assistant", content: "Hi there" },
+      ],
+    })) as unknown as typeof fetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("fetches session messages and uploads as markdown by default", async () => {
+    const server = createServer();
+    const result = (await callTool(server, "save_session", {
+      session_id: "ses_abc",
+    })) as { content: Array<{ text: string }> };
+
+    expect(mockUploadFromBuffer).toHaveBeenCalledTimes(1);
+    const [buf, filename] = mockUploadFromBuffer.mock.calls[0] as [Buffer, string, unknown];
+    expect(filename).toEndWith(".md");
+    const content = buf.toString("utf-8");
+    expect(content).toContain("# Session Snapshot");
+    expect(content).toContain("Hello");
+
+    const parsed = JSON.parse(result.content[0]!.text);
+    expect(parsed.id).toBe("att_buf001");
+    expect(parsed.link).toBe("https://example.com/presigned-buf");
+    expect(parsed.filename).toEndWith(".md");
+  });
+
+  it("uploads as HTML when format=html", async () => {
+    const server = createServer();
+    await callTool(server, "save_session", {
+      session_id: "ses_html",
+      format: "html",
+    });
+
+    const [buf, filename] = mockUploadFromBuffer.mock.calls[0] as [Buffer, string, unknown];
+    expect(filename).toEndWith(".html");
+    expect(buf.toString("utf-8")).toContain("<!DOCTYPE html>");
+  });
+
+  it("uses custom sessions_url when provided", async () => {
+    process.env.HASNA_SESSIONS_API_URL = "https://custom-sessions.example.test";
+    let capturedUrl = "";
+    globalThis.fetch = mock(async (url: unknown) => {
+      capturedUrl = String(url);
+      return { ok: true, status: 200, json: async () => [] };
+    }) as unknown as typeof fetch;
+
+    const server = createServer();
+    await callTool(server, "save_session", {
+      session_id: "ses_custom",
+      sessions_url: "https://custom-sessions.example.test",
+    });
+
+    expect(capturedUrl).toContain("custom-sessions.example.test");
+    expect(capturedUrl).toContain("ses_custom");
+  });
+
+  it("passes expiry and tag to uploadFromBuffer", async () => {
+    const server = createServer();
+    await callTool(server, "save_session", {
+      session_id: "ses_opts",
+      expiry: "7d",
+      tag: "qa-run",
+    });
+
+    const [, , opts] = mockUploadFromBuffer.mock.calls[0] as [Buffer, string, { expiry?: string; tag?: string }];
+    expect(opts.expiry).toBe("7d");
+    expect(opts.tag).toBe("qa-run");
+  });
+
+  it("returns error when sessions API is unreachable", async () => {
+    globalThis.fetch = mock(async () => ({
+      ok: false,
+      status: 503,
+      json: async () => ({}),
+    })) as unknown as typeof fetch;
+
+    const server = createServer();
+    const result = (await callTool(server, "save_session", {
+      session_id: "ses_fail",
+    })) as { content: Array<{ text: string }>; isError: boolean };
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain("Sessions request failed");
+  });
+});
+
+describe("MCP Server — report_stats", () => {
+  beforeEach(() => mockFindAll.mockClear());
+
+  it("returns report with correct shape", async () => {
+    const server = createServer();
+    const result = (await callTool(server, "report_stats", {})) as {
+      content: Array<{ text: string }>;
+    };
+
+    const parsed = JSON.parse(result.content[0]!.text);
+    expect(parsed).toHaveProperty("period");
+    expect(parsed).toHaveProperty("uploads");
+    expect(parsed).toHaveProperty("total");
+    expect(parsed).toHaveProperty("expiringSoon");
+    expect(parsed).toHaveProperty("alreadyExpired");
+    expect(parsed).toHaveProperty("topTags");
+    expect(parsed).toHaveProperty("largestUploads");
+  });
+
+  it("uses default 7 days when days is not provided", async () => {
+    const server = createServer();
+    const result = (await callTool(server, "report_stats", {})) as {
+      content: Array<{ text: string }>;
+    };
+
+    const parsed = JSON.parse(result.content[0]!.text);
+    expect(parsed.period.days).toBe(7);
+  });
+
+  it("respects custom days param", async () => {
+    const server = createServer();
+    const result = (await callTool(server, "report_stats", { days: 30 })) as {
+      content: Array<{ text: string }>;
+    };
+
+    const parsed = JSON.parse(result.content[0]!.text);
+    expect(parsed.period.days).toBe(30);
+  });
+
+  it("passes tag to db.findAll when provided", async () => {
+    const server = createServer();
+    await callTool(server, "report_stats", { tag: "project:foo" });
+
+    expect(mockFindAll).toHaveBeenCalledTimes(1);
+    const [opts] = mockFindAll.mock.calls[0] as [{ tag?: string; includeExpired?: boolean }];
+    expect(opts?.tag).toBe("project:foo");
+  });
+
+  it("passes includeExpired: true to db.findAll", async () => {
+    const server = createServer();
+    await callTool(server, "report_stats", {});
+
+    const [opts] = mockFindAll.mock.calls[0] as [{ includeExpired?: boolean }];
+    expect(opts?.includeExpired).toBe(true);
+  });
+
+  it("returns error for days < 1", async () => {
+    const server = createServer();
+    const result = (await callTool(server, "report_stats", { days: 0 })) as {
+      content: Array<{ text: string }>;
+      isError: boolean;
+    };
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain("positive integer");
+  });
+});
+
+describe("MCP Server — get_context", () => {
+  beforeEach(() => mockFindAll.mockClear());
+
+  it("returns text summary by default", async () => {
+    const server = createServer();
+    const result = (await callTool(server, "get_context", {})) as {
+      content: Array<{ text: string }>;
+    };
+
+    const text = result.content[0]!.text;
+    expect(text).toContain("Attachments:");
+    expect(text).toContain("total");
+    expect(text).toContain("active");
+    expect(text).toContain("expired");
+  });
+
+  it("returns JSON object when format=json", async () => {
+    const server = createServer();
+    const result = (await callTool(server, "get_context", { format: "json" })) as {
+      content: Array<{ text: string }>;
+    };
+
+    const parsed = JSON.parse(result.content[0]!.text);
+    expect(parsed).toHaveProperty("attachments");
+    expect(parsed).toHaveProperty("active");
+    expect(parsed).toHaveProperty("expired");
+    expect(parsed).toHaveProperty("expiring_soon");
+    expect(parsed).toHaveProperty("summary");
+    expect(typeof parsed.attachments).toBe("number");
+  });
+});
+
+describe("MCP Server — unknown tool", () => {
+  it("returns an error for unknown tool name", async () => {
+    const server = createServer();
+    const result = (await callTool(server, "totally_unknown_tool", {})) as {
+      content: Array<{ text: string }>;
+      isError: boolean;
+    };
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain("Unknown tool");
+  });
+});
+describe("MCP Server — presigned upload on the hosted (/v1) backend", () => {
+  function withCloudEnv<T>(fn: () => Promise<T>): Promise<T> {
+    const prevUrl = process.env.HASNA_ATTACHMENTS_API_URL;
+    const prevKey = process.env.HASNA_ATTACHMENTS_API_KEY;
+    process.env.HASNA_ATTACHMENTS_API_URL = "https://attachments.example.com";
+    process.env.HASNA_ATTACHMENTS_API_KEY = "k";
+    return Promise.resolve()
+      .then(fn)
+      .finally(() => {
+        if (prevUrl === undefined) delete process.env.HASNA_ATTACHMENTS_API_URL;
+        else process.env.HASNA_ATTACHMENTS_API_URL = prevUrl;
+        if (prevKey === undefined) delete process.env.HASNA_ATTACHMENTS_API_KEY;
+        else process.env.HASNA_ATTACHMENTS_API_KEY = prevKey;
+      });
+  }
+
+  it("presign_upload works in self_hosted/cloud mode (no local-only gate)", async () => {
+    mockV1PresignUpload.mockClear();
+    await withCloudEnv(async () => {
+      const server = createServer();
+      const result = (await callTool(server, "presign_upload", {
+        filename: "report.pdf",
+        expiry: "1h",
+        content_type: "application/pdf",
+      })) as { content: Array<{ text: string }> };
+
+      expect(mockV1PresignUpload).toHaveBeenCalledTimes(1);
+      const [filename, contentType, expiryMs] = mockV1PresignUpload.mock.calls[0] as [string, string, number];
+      expect(filename).toBe("report.pdf");
+      expect(contentType).toBe("application/pdf");
+      expect(expiryMs).toBe(3600000);
+
+      const parsed = JSON.parse(result.content[0]!.text);
+      expect(parsed.upload_url).toBe("https://bucket.example.com/put?X-Amz-Signature=cloud");
+      expect(parsed.id).toBe("att_cloud1");
+      expect(parsed.finalize_tool).toBe("complete_presigned_upload");
+    });
+  });
+
+  it("complete_presigned_upload works in self_hosted/cloud mode and returns the link", async () => {
+    mockV1PresignComplete.mockClear();
+    await withCloudEnv(async () => {
+      const server = createServer();
+      const result = (await callTool(server, "complete_presigned_upload", {
+        id: "att_cloud1",
+        link_type: "server",
+      })) as { content: Array<{ text: string }> };
+
+      expect(mockV1PresignComplete).toHaveBeenCalledTimes(1);
+      const [id, opts] = mockV1PresignComplete.mock.calls[0] as [string, { linkType: string; maxDownloads: number | undefined }];
+      expect(id).toBe("att_cloud1");
+      expect(opts.linkType).toBe("server");
+
+      const parsed = JSON.parse(result.content[0]!.text);
+      expect(parsed.link).toBe("https://has.na/a/abc");
+      expect(parsed.size).toBe(4096);
+      expect(parsed.id).toBe("att_cloud1");
+    });
+  });
+});

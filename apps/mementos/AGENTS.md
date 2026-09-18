@@ -141,7 +141,7 @@ agent-workflow-<name>  -- process knowledge
 |------|------------|
 | **@hasna/sessions** | `session_extract()` after session ingest → auto-save learnings |
 | **@hasna/todos** | Include `session_id` in memory_save when working on a task |
-| **Attachments service** | Store attachment IDs as memory values |
+| **@hasna/attachments** | Store attachment IDs as memory values |
 | **@hasna/conversations** | `update_agent(active_project_id)` → mementos as agent registry |
 | **@hasna/instructions** | `memory_inject()` for context; config decisions as `fact` memories |
 

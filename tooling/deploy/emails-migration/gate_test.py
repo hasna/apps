@@ -16,14 +16,27 @@ SOURCE = "a" * 40
 
 
 class GateTest(unittest.TestCase):
-    def test_execute_phase_is_disabled_before_artifact_or_aws_authority(self):
+    def test_mutating_phases_are_disabled_before_artifact_or_aws_authority(self):
         self.assertEqual(g.require_phase("reconcile"), None)
-        self.assertEqual(g.require_phase("prepare"), None)
+        self.assertEqual(g.require_phase("image"), None)
+        with self.assertRaisesRegex(ValueError, "MIGRATION_PREPARE_DISABLED"):
+            g.require_phase("prepare")
         with self.assertRaisesRegex(ValueError, "MIGRATION_EXECUTION_DISABLED"):
             g.require_phase("execute")
         with patch.object(g, "gh", side_effect=AssertionError("GitHub read must not occur")):
+            with self.assertRaisesRegex(ValueError, "MIGRATION_PREPARE_DISABLED"):
+                g.validate(SimpleNamespace(phase="prepare"), Path("unused"))
             with self.assertRaisesRegex(ValueError, "MIGRATION_EXECUTION_DISABLED"):
                 g.validate(SimpleNamespace(phase="execute"), Path("unused"))
+
+    def test_image_phase_requires_exact_main_ci_but_no_prior_artifact(self):
+        args = SimpleNamespace(phase="image", source=SOURCE)
+        ci = {"head_sha": SOURCE, "head_branch": "main", "event": "push", "status": "completed", "conclusion": "success", "path": ".github/workflows/ci.yml", "name": "ci"}
+        values = [{"object": {"sha": SOURCE}}, {"workflow_runs": [ci]}]
+        environment = {"GITHUB_REPOSITORY": g.REPO, "GITHUB_REF": "refs/heads/main", "GITHUB_EVENT_NAME": "workflow_dispatch", "GITHUB_SHA": SOURCE}
+        with patch.dict(g.os.environ, environment), patch.object(g, "gh", side_effect=values) as github, patch.object(g, "artifact", side_effect=AssertionError("prior artifact read")):
+            self.assertIsNone(g.validate(args, Path("unused")))
+        self.assertEqual(github.call_count, 2)
 
     def test_migration_receipt_requires_separate_kms_anchor(self):
         value = {"schema": "emails.current-migration-reconciliation.v1", "sourceCommit": SOURCE, "migrationDefinitionChanged": True, "awsMutationCalls": 0, "historicalCandidateAppDiffersFromCurrent": True, "historicalAnchor": {"taskDefinition": "old"}, "anchor": {"taskDefinition": "new"}, "failedCandidates": [{"taskBefore": "old"}, {"taskBefore": "old"}], "kmsBaselineConfigured": True}

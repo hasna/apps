@@ -110,10 +110,6 @@
  * DELETED — apps/router left the public tree entirely (npm registry 404 for
  * @hasna/router), so the member no longer exists here and its recorded
  * exceptions are stale under the two-sided contract.
- * 2026-09-17 (internal-apps move): attachments and shortlinks left the public
- * producer tree. Neither member had a surface or conformance exception entry,
- * so the live filesystem census drops them without a registry deletion; their
- * hosted fleet entries remain externally produced in hosted-apps.json.
  * 2026-09-07 (hasna/apps#1720 validation, telephony fix lane): telephony's
  * SDK exception entry DELETED — the member now exports ./sdk
  * (package.json exports + manifest exportSubpath), so the recorded
@@ -388,11 +384,6 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
     task: "fleet-alignment wave 2026-09-11 (W2 census) — owner: changelog lane; declare the two bins and the api/mcp surfaces or waive them",
   },
   {
-    member: "contacts",
-    cause: "credential_seam_compliance: src/cli/status-domain.preload.ts:45 reads HASNA_CONTACTS_API_KEY straight from the process environment (in-tree kit 1.0.2; first measured failing when validation moved in-tree).",
-    task: "fleet-alignment wave 2026-09-11 (W2 census) — owner: contacts lane; resolve through @hasna/contracts/client",
-  },
-  {
     member: "conversations",
     cause: "bins_match_package: conversations-inbox and conversations-hook undeclared; storage_capabilities: storage.pgTestGate required; public_manifest_safety: secret-ref values at storage.databaseUrlSecretRef, metadata.service.signingSecretSecretRef, metadata.service.databaseUrlOwnerSecretRef; published_artifact_gate: metadata.release.artifactScan.script required (in-tree kit 1.0.2).",
     task: "todos ee9fbb4d (import row — conversations)",
@@ -401,11 +392,6 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
     member: "economy",
     cause: "bins_match_package: package.json ships bin economy-otel that the manifest cannot declare (-otel is not an allowlisted suffix) (in-tree kit 1.0.2).",
     task: "todos 2a70ece0-d4af-4aae-bea8-4dff128a38ca (contracts task — economy)",
-  },
-  {
-    member: "emails",
-    cause: "credential_seam_compliance: src/cli/commands/domain-setup.test-support.ts:21 reads HASNA_EMAILS_API_KEY straight from the process environment (in-tree kit 1.0.2; first measured failing when validation moved in-tree).",
-    task: "fleet-alignment wave 2026-09-11 (W2 census) — owner: emails lane (W6); resolve through @hasna/contracts/client",
   },
   {
     member: "events",
@@ -424,8 +410,8 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
   },
   {
     member: "hooks",
-    cause: "no_cloud_guard: hasna.contract.json carries a legacy .hasna/cloud runtime-config reference (in-tree kit 1.0.2; first measured failing when validation moved in-tree).",
-    task: "fleet-alignment wave 2026-09-11 (W2 census) — owner: hooks lane (W6); remove the retired location from the manifest",
+    cause: "surface_bindings: serviceSurfaces[3].generatedFrom is required for a supported service SDK (cli-with-store repo shipping hooks-serve; in-tree kit 1.2.1). The recorded no_cloud_guard cause was fixed 2026-09-18 (AGE11-00571): the retired .hasna/cloud literal was removed from the manifest description.",
+    task: "fleet-alignment wave 2026-09-11 (W2 census) — owner: hooks lane (W6); the SDK is hand-written, so generatedFrom can only be declared once the client is generated from the served /openapi.json document",
   },
   {
     member: "logs",

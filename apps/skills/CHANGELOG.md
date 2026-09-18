@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.12
+
+### Patch Changes
+
+- 6f98eed: Add an explicitly reviewed, versioned Claude settings witness that tolerates typed display preferences and recognized built-in model selection changes while preserving exact hooks, native skill protections, discovery configuration and unknown fields. Legacy raw witnesses still require deliberate migration through normal hook installation.
+
 ## 0.8.11
 
 ### Patch Changes
