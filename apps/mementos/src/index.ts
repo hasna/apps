@@ -115,6 +115,20 @@ export {
 } from "./db/locks.js";
 export type { ResourceLock, ResourceType, LockType } from "./db/locks.js";
 
+// Immutable memory audit log
+export {
+  getMemoryAuditTrail,
+  getMemoryAuditTrailPage,
+  exportAuditLog,
+  exportAuditLogPage,
+  getAuditStats,
+  AUDIT_TRAIL_CONTRACT,
+  AUDIT_EXPORT_CONTRACT,
+  AUDIT_STATS_CONTRACT,
+  AUDIT_OPERATIONS,
+} from "./db/audit.js";
+export type { AuditEntry, AuditFilters, AuditOperation, AuditPage, AuditStats } from "./db/audit.js";
+
 // Memory locking (concurrent write coordination)
 export {
   acquireMemoryWriteLock,

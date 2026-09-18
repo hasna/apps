@@ -66,5 +66,5 @@ jobs:
           set -euo pipefail
           bun -e 'const u = new URL(process.env.MEMENTOS_TEST_DATABASE_URL); if (u.protocol !== "postgres:" || u.hostname !== "127.0.0.1" || u.port !== "5432" || u.pathname !== "/mementos_test" || u.username !== "mementos_test" || u.password || u.search || u.hash) throw new Error("Refusing a non-isolated integration database");'
           bun run test:pg > "$RUNNER_TEMP/mementos-live-postgres.log" 2>&1
-          grep -Fq '[pg-test-gate] PASS: 10 live PostgreSQL checks' "$RUNNER_TEMP/mementos-live-postgres.log"
-          echo "Mementos live PostgreSQL gate passed all ten checks"
+          grep -Fq '[pg-test-gate] PASS: 11 live PostgreSQL checks' "$RUNNER_TEMP/mementos-live-postgres.log"
+          echo "Mementos live PostgreSQL gate passed all eleven checks"
