@@ -6,6 +6,8 @@ const root = join(import.meta.dir, "../../../..");
 const workflow = readFileSync(join(root, ".github/workflows/files-current-server-deploy.yml"), "utf8");
 const rollout = readFileSync(join(root, "tooling/deploy/files-current/verify-ecs-rollout.sh"), "utf8");
 const ledgerProbe = readFileSync(join(root, "tooling/deploy/files-current/ledger-probe.sh"), "utf8");
+const migrationRunner = readFileSync(join(root, "tooling/deploy/files-current/run-migration.sh"), "utf8");
+const readiness = readFileSync(join(root, "tooling/deploy/files-current/verify-readiness.sh"), "utf8");
 
 describe("Files current-server deployment lane", () => {
   test("is manual, exact-current-main, and CI-bound", () => {
@@ -16,7 +18,9 @@ describe("Files current-server deployment lane", () => {
     expect(workflow).toContain("refs/remotes/origin/main");
     expect(workflow).toContain("head_sha=${source_sha}");
     expect(workflow).toContain('conclusion == "success"');
-    expect(workflow).toContain('[[ "${GATED_SHA}" == "${main_tip}" ]]');
+    expect(workflow).toContain('[[ "${GITHUB_SHA}" == "${main_tip}" ]]');
+    expect(workflow).toContain('source_sha="${GITHUB_SHA}"');
+    expect(workflow).toContain('[[ "$(git rev-parse HEAD)" == "${GITHUB_SHA}" ]]');
   });
 
   test("builds and scans the exact ARM64 Files server before AWS authority", () => {
@@ -43,6 +47,15 @@ describe("Files current-server deployment lane", () => {
     expect(workflow).toContain('ready_url="${HEALTH_URL%/health}/ready"');
     expect(workflow).toContain('https://api.hasna.com/files/ready');
     expect(workflow).toContain("hasna.files.production_deploy.v1");
+    expect(workflow).toContain('describe-task-definition --task-definition "${PREVIOUS_TASK_DEFINITION}"');
+    expect(workflow).not.toContain('describe-task-definition --task-definition "${WEB_FAMILY}"');
+    const anchorCheck = workflow.indexOf("assert-service-anchor.sh");
+    const mutation = workflow.indexOf("aws ecs update-service", anchorCheck);
+    expect(anchorCheck).toBeGreaterThan(0);
+    expect(mutation).toBeGreaterThan(anchorCheck);
+    expect(readiness).toContain("--max-redirs 0");
+    expect(readiness).toContain('HTTP_STATUS" == "200"');
+    expect(readiness).toContain('.status == "ok" and .storage == "postgres" and .version == $version');
     expect(rollout).toContain('LIVE_TD" != "$EXPECTED_TASK_DEF');
   });
 
