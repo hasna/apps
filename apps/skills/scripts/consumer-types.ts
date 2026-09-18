@@ -73,7 +73,7 @@ import { inspectSkillSession, reconcileSkillSession, type SessionReconciliationI
 import { reconcileSkillSession as reconcileFromRoot } from "@hasna/skills";
 declare const sessionReconciliation: SessionReconciliationInput;
 declare const sessionOptions: SessionReconciliationOptions;
-const sessionMetadata: { receiptSha256: string; profileId: string } = inspectSkillSession("session", sessionOptions);
+const sessionMetadata: { receiptSha256: string; generation: number; profileId: string } = inspectSkillSession("session", sessionOptions);
 const sessionReconciliationResult = reconcileSkillSession(sessionReconciliation, sessionOptions);
 const sessionReconciliationFromRoot: typeof reconcileSkillSession = reconcileFromRoot;
 import { resolveSelectedRun, executeSelectedLocal, prepareSelectedSecretBindings, readSelectedSecretBindings,

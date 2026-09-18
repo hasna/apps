@@ -15,7 +15,17 @@ export class SkillSelectionError extends Error {
 }
 export interface SelectionCacheOptions { cacheDir?: string; now?: () => number }
 export interface CachedSelectionProfile { schemaVersion: 1; verifiedAt: string; profile: ResolvedSkillProfile }
-export interface SkillSessionReceipt extends CachedSelectionProfile { sessionId: string; loaded: string[] }
+export interface SkillSessionParentBinding { sessionId: string; generation: number; receiptSha256: string }
+export interface SkillSessionReceipt extends CachedSelectionProfile {
+  sessionId: string;
+  loaded: string[];
+  /** Monotonic across sanctioned receipt writes. Legacy receipts without it are generation zero. */
+  generation?: number;
+  /** Private local metadata binding a child receipt to the exact parent snapshot it inherited. */
+  parent?: SkillSessionParentBinding;
+}
+export interface SkillSessionSnapshot extends SkillSessionParentBinding { path: string; bytes: Uint8Array; receipt: SkillSessionReceipt; sha256: string }
+export interface SkillSessionWritePrecondition { current: SkillSessionParentBinding | null; parent?: SkillSessionParentBinding }
 export const MAX_CACHED_PROFILE_AGE_MS = 24 * 60 * 60 * 1000;
 export const SELECTION_LOCK_FILE = "selection.lock.json";
 
@@ -214,66 +224,126 @@ export function sessionReceiptPath(sessionId: string, options: SelectionCacheOpt
   return join(selectionCacheRoot(options), "sessions", `${hash(sessionId)}.json`);
 }
 export function readSkillSession(sessionId: string, options: SelectionCacheOptions = {}): SkillSessionReceipt | null {
-  const receipt = readSelectionJson<SkillSessionReceipt>(sessionReceiptPath(sessionId, options));
-  if (receipt) validateSkillSessionReceipt(receipt, sessionId);
-  return receipt;
+  return readSkillSessionSnapshotIfExists(sessionId, options)?.receipt ?? null;
+}
+function skillSessionGeneration(receipt: SkillSessionReceipt): number { return receipt.generation ?? 0; }
+function validateSkillSessionBinding(binding: SkillSessionParentBinding): void {
+  if (!binding || typeof binding.sessionId !== "string" || !binding.sessionId.trim() || binding.sessionId.length > MAX_SKILL_SESSION_ID_CHARS
+      || !Number.isSafeInteger(binding.generation) || binding.generation < 0 || !/^[a-f0-9]{64}$/.test(binding.receiptSha256)) {
+    throw new SkillSelectionError("INVALID_RECEIPT", "The Skills session receipt contains an invalid parent snapshot binding.");
+  }
 }
 function validateSkillSessionReceipt(receipt: SkillSessionReceipt, sessionId: string): void {
   validateSelectionReceipt(receipt);
   const keys = new Set(receipt.profile.selections.map(selectionKey));
   if (receipt.sessionId !== sessionId || !Array.isArray(receipt.loaded) || receipt.loaded.length > keys.size
-      || new Set(receipt.loaded).size !== receipt.loaded.length || !receipt.loaded.every(key => keys.has(key))) {
+      || new Set(receipt.loaded).size !== receipt.loaded.length || !receipt.loaded.every(key => keys.has(key))
+      || (receipt.generation !== undefined && (!Number.isSafeInteger(receipt.generation) || receipt.generation < 1))) {
     throw new SkillSelectionError("INVALID_RECEIPT", "The Skills session receipt is invalid.");
+  }
+  if (receipt.parent) {
+    validateSkillSessionBinding(receipt.parent);
+    if (receipt.parent.sessionId === sessionId) throw new SkillSelectionError("INVALID_RECEIPT", "A Skills child session cannot name itself as its parent.");
   }
 }
 
-export function readSkillSessionSnapshot(sessionId: string, options: SelectionCacheOptions = {}) {
+export function readSkillSessionSnapshotIfExists(sessionId: string, options: SelectionCacheOptions = {}): SkillSessionSnapshot | null {
   const path = sessionReceiptPath(sessionId, options), bytes = readRegularFile(path, MAX_PROFILE_DOCUMENT_BYTES);
-  if (!bytes) throw new SkillSelectionError("SESSION_NOT_FOUND", "The requested Skills session receipt does not exist.");
+  if (!bytes) return null;
   let receipt: SkillSessionReceipt;
   try { receipt = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)); }
   catch { throw new SkillSelectionError("INVALID_RECEIPT", "The Skills session receipt is unreadable."); }
   validateSkillSessionReceipt(receipt, sessionId);
-  return { path, bytes, receipt, sha256: sha256Hex(bytes) };
+  const sha256 = sha256Hex(bytes);
+  return { path, bytes, receipt, sha256, sessionId, generation: skillSessionGeneration(receipt), receiptSha256: sha256 };
+}
+export function readSkillSessionSnapshot(sessionId: string, options: SelectionCacheOptions = {}): SkillSessionSnapshot {
+  const snapshot = readSkillSessionSnapshotIfExists(sessionId, options);
+  if (!snapshot) throw new SkillSelectionError("SESSION_NOT_FOUND", "The requested Skills session receipt does not exist.");
+  return snapshot;
+}
+export function skillSessionSnapshotBinding(snapshot: SkillSessionSnapshot): SkillSessionParentBinding {
+  return { sessionId: snapshot.sessionId, generation: snapshot.generation, receiptSha256: snapshot.receiptSha256 };
 }
 
-/** Shared by normal receipt writers and explicit reconciliation. Never steal a lock. */
-function withSessionWriteLock<T>(sessionId: string, options: SelectionCacheOptions, action: (assertOwned: () => void) => T): T {
-  const path = `${sessionReceiptPath(sessionId, options)}.write-lock`;
-  assertRegularPath(path, true);
-  let fd: number;
-  try { fd = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600); }
-  catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new SkillSelectionError("SESSION_WRITE_LOCKED", "Another Skills process owns this session write lock; retry after it completes. A surviving lock requires explicit recovery review.");
-    throw error;
-  }
-  const owned = fstatSync(fd);
+interface OwnedSessionLock { path: string; fd: number; dev: number; ino: number }
+function withSessionWriteLocks<T>(sessionIds: string[], options: SelectionCacheOptions, action: (assertOwned: () => void) => T): T {
+  const operationId = randomUUID();
+  const locks = [...new Set(sessionIds)].map(sessionId => ({ sessionId, path: `${sessionReceiptPath(sessionId, options)}.write-lock` }))
+    .sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+  const owned: OwnedSessionLock[] = [];
   const assertOwned = () => {
-    const current = lstatSync(path, { throwIfNoEntry: false });
-    if (!current?.isFile() || current.dev !== owned.dev || current.ino !== owned.ino) {
-      throw new SkillSelectionError("SESSION_WRITE_LOCK_CHANGED", "The session write lock changed during the operation; no replacement is permitted.");
+    for (const lock of owned) {
+      const current = lstatSync(lock.path, { throwIfNoEntry: false });
+      if (!current?.isFile() || current.dev !== lock.dev || current.ino !== lock.ino) {
+        throw new SkillSelectionError("SESSION_WRITE_LOCK_CHANGED", "A session write lock changed during the operation; no replacement is permitted.");
+      }
     }
   };
   try {
-    writeFileSync(fd, `${JSON.stringify({ schemaVersion: 1, operationId: randomUUID(), pid: process.pid })}\n`);
+    for (const lock of locks) {
+      assertRegularPath(lock.path, true);
+      let fd: number;
+      try { fd = openSync(lock.path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new SkillSelectionError("SESSION_WRITE_LOCKED", "Another Skills process owns a required session write lock; retry after it completes. A surviving lock requires explicit recovery review.");
+        throw error;
+      }
+      const stat = fstatSync(fd);
+      owned.push({ path: lock.path, fd, dev: stat.dev, ino: stat.ino });
+      writeFileSync(fd, `${JSON.stringify({ schemaVersion: 1, operationId, sessionId: lock.sessionId, pid: process.pid })}\n`);
+    }
     return action(assertOwned);
   } finally {
-    closeSync(fd);
-    const current = lstatSync(path, { throwIfNoEntry: false });
-    if (current?.isFile() && current.dev === owned.dev && current.ino === owned.ino) unlinkSync(path);
+    for (const lock of owned.reverse()) {
+      closeSync(lock.fd);
+      const current = lstatSync(lock.path, { throwIfNoEntry: false });
+      if (current?.isFile() && current.dev === lock.dev && current.ino === lock.ino) unlinkSync(lock.path);
+    }
   }
 }
+function withSessionWriteLock<T>(sessionId: string, options: SelectionCacheOptions, action: (assertOwned: () => void) => T): T {
+  return withSessionWriteLocks([sessionId], options, action);
+}
+function sameSnapshot(actual: SkillSessionSnapshot | null, expected: SkillSessionParentBinding | null): boolean {
+  return actual === null ? expected === null : expected !== null && actual.sessionId === expected.sessionId
+    && actual.generation === expected.generation && actual.receiptSha256 === expected.receiptSha256;
+}
+export function nextSkillSessionGeneration(generation: number): number {
+  if (!Number.isSafeInteger(generation) || generation < 0 || generation >= Number.MAX_SAFE_INTEGER) {
+    throw new SkillSelectionError("SESSION_GENERATION_EXHAUSTED", "The Skills session generation cannot advance safely; preserve the receipt and review recovery before continuing.");
+  }
+  return generation + 1;
+}
+function parentChanged(): never {
+  throw new SkillSelectionError("SESSION_PARENT_CHANGED", "The parent Skills session changed while the child was resolving; resolve the child again from the current parent pin.");
+}
 
-/** A context resolved before reconciliation must not overwrite the new pin. */
-export function writeSkillSession(receipt: SkillSessionReceipt, expected: SkillSessionReceipt | null, options: SelectionCacheOptions = {}): void {
+/** Receipt creation and updates are exact-snapshot CAS operations. Child creation also fences its parent. */
+export function writeSkillSession(receipt: SkillSessionReceipt, expected: SkillSessionWritePrecondition, options: SelectionCacheOptions = {}): void {
   validateSkillSessionReceipt(receipt, receipt.sessionId);
-  withSessionWriteLock(receipt.sessionId, options, assertOwned => {
-    const current = readSkillSession(receipt.sessionId, options);
-    if ((!current && expected) || (current && !isDeepStrictEqual(current.profile, receipt.profile))) {
-      throw new SkillSelectionError("SESSION_RECEIPT_CHANGED", "The Skills session pin changed while context was loading; resolve context again without replacing the new pin.");
+  if (expected.parent) validateSkillSessionBinding(expected.parent);
+  if (expected.parent?.sessionId === receipt.sessionId) throw new SkillSelectionError("INVALID_RECEIPT", "A Skills child session cannot name itself as its parent.");
+  const lockIds = expected.parent ? [receipt.sessionId, expected.parent.sessionId] : [receipt.sessionId];
+  withSessionWriteLocks(lockIds, options, assertOwned => {
+    const current = readSkillSessionSnapshotIfExists(receipt.sessionId, options);
+    if (!sameSnapshot(current, expected.current) || (current && !isDeepStrictEqual(current.receipt.profile, receipt.profile))) {
+      throw new SkillSelectionError("SESSION_RECEIPT_CHANGED", "The Skills session receipt changed while context was loading; resolve context again without replacing the current pin.");
     }
-    const next = current ? { ...current, loaded: [...new Set([...current.loaded, ...receipt.loaded])] } : receipt;
+    let parent: SkillSessionSnapshot | null = null;
+    if (expected.parent) {
+      parent = readSkillSessionSnapshotIfExists(expected.parent.sessionId, options);
+      if (!sameSnapshot(parent, expected.parent) || !parent || !isDeepStrictEqual(parent.receipt.profile, receipt.profile)) parentChanged();
+    }
+    const generation = nextSkillSessionGeneration(current?.generation ?? 0);
+    const next: SkillSessionReceipt = current
+      ? { ...current.receipt, generation, loaded: [...new Set([...current.receipt.loaded, ...receipt.loaded])] }
+      : { ...receipt, generation, ...(expected.parent ? { parent: expected.parent } : {}) };
     assertOwned();
+    if (expected.parent) {
+      parent = readSkillSessionSnapshotIfExists(expected.parent.sessionId, options);
+      if (!sameSnapshot(parent, expected.parent)) parentChanged();
+    }
     writeSelectionJson(sessionReceiptPath(receipt.sessionId, options), next);
   });
 }
@@ -290,13 +360,14 @@ function archiveBytes(path: string, bytes: Uint8Array): void {
 }
 
 /** Preserve both sides before the single atomic replacement; failures retain recovery evidence. */
-export function replaceSkillSession(snapshotSha256: string, replacement: SkillSessionReceipt, plan: unknown, options: SelectionCacheOptions = {}) {
+export function replaceSkillSession(expected: SkillSessionParentBinding, replacement: SkillSessionReceipt, plan: unknown, options: SelectionCacheOptions = {}, beforeCommit: () => void = () => {}) {
   validateSkillSessionReceipt(replacement, replacement.sessionId);
   const bytes = Buffer.from(`${JSON.stringify(replacement)}\n`);
   if (bytes.length > MAX_PROFILE_DOCUMENT_BYTES) throw new SkillSelectionError("RECEIPT_TOO_LARGE", "The Skills selection receipt exceeds its size limit.");
   return withSessionWriteLock(replacement.sessionId, options, assertOwned => {
     const before = readSkillSessionSnapshot(replacement.sessionId, options);
-    if (before.sha256 !== snapshotSha256) throw new SkillSelectionError("SESSION_RECEIPT_CHANGED", "The Skills session receipt changed after review; inspect it and prepare a new plan.");
+    if (!sameSnapshot(before, expected)) throw new SkillSelectionError("SESSION_RECEIPT_CHANGED", "The Skills session receipt generation or bytes changed after review; inspect it and prepare a new plan.");
+    if (replacement.generation !== nextSkillSessionGeneration(before.generation)) throw new SkillSelectionError("SESSION_GENERATION_CHANGED", "The replacement Skills session must advance exactly one generation.");
     if (before.receipt.profile.authority !== replacement.profile.authority || before.receipt.profile.workspaceId !== replacement.profile.workspaceId) {
       throw new SkillSelectionError("PROFILE_IDENTITY_MISMATCH", "A session reconciliation cannot change its Skills authority or workspace.");
     }
@@ -305,13 +376,14 @@ export function replaceSkillSession(snapshotSha256: string, replacement: SkillSe
     const afterSha256 = sha256Hex(bytes);
     archiveBytes(archivePath, before.bytes);
     archiveBytes(replacementPath, bytes);
-    const receipt = { schemaVersion: 1, status: "prepared", sessionId: replacement.sessionId, beforeSha256: before.sha256, afterSha256, archivePath, replacementPath, plan };
+    const receipt = { schemaVersion: 1, status: "prepared", sessionId: replacement.sessionId, beforeGeneration: before.generation, afterGeneration: replacement.generation, beforeSha256: before.sha256, afterSha256, archivePath, replacementPath, plan };
     archiveBytes(receiptPath, Buffer.from(`${JSON.stringify(receipt)}\n`));
     syncDirectory(directory); syncDirectory(dirname(directory)); syncDirectory(selectionCacheRoot(options));
     if (sha256Hex(readRegularFile(archivePath, MAX_PROFILE_DOCUMENT_BYTES)!) !== before.sha256
-        || readSkillSessionSnapshot(replacement.sessionId, options).sha256 !== snapshotSha256) {
+        || !sameSnapshot(readSkillSessionSnapshot(replacement.sessionId, options), expected)) {
       throw new SkillSelectionError("SESSION_RECEIPT_CHANGED", "The session or its preservation archive changed before replacement; retained evidence must be reviewed.");
     }
+    beforeCommit();
     assertOwned();
     try {
       atomicWrite(before.path, bytes, 0o600, true);

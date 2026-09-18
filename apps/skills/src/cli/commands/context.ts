@@ -38,6 +38,8 @@ export function registerContextCommands(parent: Command): void {
     .requiredOption("--profile-revision <revision>", "Expected current API target revision")
     .option("--apply", "Archive the old receipt and atomically apply the reviewed plan", false)
     .option("--plan-digest <sha256>", "Exact reviewed plan digest; required with --apply")
+    .option("--plan-issued-at <timestamp>", "Exact reviewed plan issuedAt; required with --apply")
+    .option("--plan-expires-at <timestamp>", "Exact reviewed plan expiresAt; required with --apply")
     .option("--json", "Return the plan or application receipt as JSON", false)
     .description("Plan an intentional migration of one session pin; ordinary hooks never migrate pins")
     .action(async (id: string, options: Omit<SessionReconciliationInput, "sessionId"> & { json?: boolean }) => {
@@ -45,7 +47,7 @@ export function registerContextCommands(parent: Command): void {
         const result = await reconcileSkillSession({ ...options, sessionId: id });
         await writeCliOutput(options.json ? JSON.stringify(result) : result.applied
           ? `Reconciled ${JSON.stringify(id)} to ${result.plan.target.profileId} at ${result.plan.target.profileRevision}.\nPreserved original receipt: ${result.archivePath}`
-          : `Planned one session reconciliation. Review --json output, then use --apply --plan-digest ${result.planDigest}.`);
+          : `Planned one session reconciliation. Review --json output, then use --apply --plan-digest ${result.planDigest} --plan-issued-at ${result.plan.issuedAt} --plan-expires-at ${result.plan.expiresAt}.`);
       } catch (error) { reportContextError(error, options.json); }
     });
   parent.command("load <skill>")
