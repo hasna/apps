@@ -8,13 +8,13 @@ on:
     inputs:
       phase:
         type: choice
-        options: [prepare, promote, rollback]
+        options: [prepare, reconcile, promote, rollback]
         default: prepare
         required: true
       prepared_run_id:
         type: string
         default: ""
-        description: Successful preparation run, required for promotion
+        description: Successful preparation run, required for reconciliation, promotion, or rollback
       prepared_sha256:
         type: string
         default: ""

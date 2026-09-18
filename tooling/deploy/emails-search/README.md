@@ -34,7 +34,25 @@ No image command, package manager, migration or provider operation executes.
    successful preparation run id. Task environments/config values are never
    included in artifacts. Keep the existing service's deployment window
    exclusive; GitHub concurrency cannot lock an external operator.
-4. Dispatch `phase=promote` with that run id and file SHA256. Both gate and
+4. Before any new deployment, dispatch `phase=reconcile` with that same run id
+   and file SHA256. The historical preparation must be a successful main run
+   whose exact source is an ancestor of the current exact-main dispatch. This
+   phase is read-only: it reconstructs the reviewed image at that historical
+   source, verifies task definitions 88 and 89 byte-for-byte, reads the selected service
+   revision and running task image digests, and emits `emails-search-reconciled`.
+   If a later manually registered revision is selected, it is admitted only when
+   every task field except the web image matches task 89 and that image is an exact
+   one-layer descendant preserving all parent layers, rootfs history, runtime
+   configuration and prior labels. The receipt records only added label names,
+   never label values, task environment values or secret references. Any task,
+   image, lineage, health, or mixed-rollout drift refuses instead of authorizing a
+   retry or rollback. The appended compressed layer is read back, decompressed and
+   hashed to the appended rootfs diff ID; metadata-only history entries are refused.
+   Running task ARNs, definitions, health and image digests are sampled twice around
+   a final service-state read, and any change refuses without a receipt. The selected
+   stable task is a pre-migration anchor only; it
+   is explicitly invalid after a forward schema migration.
+5. Dispatch `phase=promote` with that run id and file SHA256. Both gate and
    protected job verify the successful preparation's source/path/event and
    digest. The job reconstructs and verifies the immutable image, re-reads the
    current complete task and service, and compares them to the reviewed plan.
@@ -42,7 +60,7 @@ No image command, package manager, migration or provider operation executes.
    update. Only metadata receipts are retained. Actual running healthy tasks
    must all use the exact new revision/image; independent normal API search
    acceptance remains a separate live proof.
-5. Any uncertain mutation stops. Inspect the retained intent/registration/update
+6. Any uncertain mutation stops. Inspect the retained intent/registration/update
    receipts and actual AWS state before deciding whether another action is
    needed. The code never blindly retries or automatically rolls back.
    `phase=rollback`, using the same reviewed preparation, is a separate protected
@@ -50,7 +68,7 @@ No image command, package manager, migration or provider operation executes.
    candidate and the old revision is unchanged. It repoints only to that captured
    previous revision, verifies stability, and registers/deregisters nothing.
 
-A newer main commit makes an old prepare/promote/rollback dispatch fail closed.
+A newer main commit makes an old prepare/reconcile/promote/rollback dispatch fail closed.
 If main advances during a rollout that needs recovery, prepare a freshly reviewed
 recovery source/plan; do not disable the exact-main gate or replay a stale job.
 ECS has no atomic compare-and-swap for UpdateService. Fresh checks plus the
