@@ -1,3 +1,4 @@
+import { checkSchemaReadiness } from "./schema-readiness.js";
 import { deriveReplyHeaders, ReplyHeaderError, replyMailboxes } from "../../lib/reply-headers.js";
 import { findSendBodyUrlBoundary } from "../../lib/send-body-boundary.js";
 import { messageSearchErrorResponse } from "./search-admission.js";
@@ -39,7 +40,7 @@ import { runDomainOperation, DomainOperationError, type DomainOperation } from "
 
 import { hasAllScopes, type ApiKeyVerifier } from "@hasna/contracts/auth";
 import { createHash } from "node:crypto";
-import { migrationAcceptsChecksum, type TypedQueryClient, type Migration } from "../../storage-kit/index.js";
+import type { TypedQueryClient, Migration } from "../../storage-kit/index.js";
 import { checkHealth } from "../../storage-kit/index.js";
 import {
   EmailsSelfHostedStore,
@@ -126,13 +127,6 @@ export {
   canonicalizeClientDialectPathname,
 } from "../../lib/self-hosted-paths.js";
 
-interface ReadyResult {
-  ok: boolean;
-  latencyMs: number;
-  pendingMigrations: string[];
-  migrationIssues: string[];
-}
-
 const MAX_JSON_BODY_BYTES = 1024 * 1024;
 
 /**
@@ -166,42 +160,6 @@ const MESSAGE_PATCH_FIELDS = new Set([
 ]);
 
 class RequestBodyTooLargeError extends Error {}
-
-/**
- * SELECT-only readiness: reachable AND every defined migration is recorded in
- * `schema_migrations`. Unlike the kit's `checkReady`, this never issues DDL, so
- * it works under the least-privileged app role (which has no CREATE on public).
- */
-async function readinessCheck(deps: SelfHostedServiceDeps): Promise<ReadyResult> {
-  const start = Date.now();
-  try {
-    const rows = await deps.client.many<{ id: string; checksum: string }>(`SELECT id, checksum FROM schema_migrations`);
-    const expected = new Map(deps.migrations.map((migration) => [migration.id, migration.checksum]));
-    const applied = new Map(rows.map((row) => [row.id, row.checksum]));
-    const pending = deps.migrations.filter((migration) => !applied.has(migration.id)).map((migration) => migration.id);
-    const drifted = rows
-      .filter((row) => {
-        const migration = deps.migrations.find((item) => item.id === row.id);
-        return migration !== undefined && !migrationAcceptsChecksum(migration, row.checksum);
-      })
-      .map((row) => `checksum mismatch: ${row.id}`);
-    const unknown = rows.filter((row) => !expected.has(row.id)).map((row) => `unknown migration: ${row.id}`);
-    const migrationIssues = [...drifted, ...unknown];
-    return {
-      ok: pending.length === 0 && migrationIssues.length === 0,
-      latencyMs: Date.now() - start,
-      pendingMigrations: pending,
-      migrationIssues,
-    };
-  } catch {
-    return {
-      ok: false,
-      latencyMs: Date.now() - start,
-      pendingMigrations: [],
-      migrationIssues: ["migration ledger unavailable"],
-    };
-  }
-}
 
 export interface SelfHostedServiceDeps {
   managedProviderSecrets?: (tenant:string)=>ManagedProviderSecrets;
@@ -962,7 +920,7 @@ export async function handleSelfHostedRequest(
   }
 
   if (path === "/ready") {
-    const ready = await readinessCheck(deps);
+    const ready = await checkSchemaReadiness(deps);
     return json(ready.ok ? 200 : 503, {
       status: ready.ok ? "ready" : "not_ready",
       version: deps.version,
