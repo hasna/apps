@@ -10,7 +10,7 @@ const gate = readFileSync(join(root, "tooling/deploy/emails-migration/gate.py"),
 const task = readFileSync(join(root, "tooling/deploy/emails-migration/task_receipt.js"), "utf8");
 
 describe("Emails migration-aware current deployment", () => {
-  test("is manual, exact-main, reviewed in three phases, and delegates AWS authority", () => {
+  test("is manual and exact-main, with migration execution disabled", () => {
     expect(workflow).toContain("name: emails-current-migration-deploy");
     expect(workflow).toContain("options: [reconcile, prepare, execute]");
     expect(workflow).not.toMatch(/^\s+push:/m);
@@ -22,9 +22,11 @@ describe("Emails migration-aware current deployment", () => {
     expect(reusable).toContain("migration_execute");
     expect(gate).toContain("EXACT_MAIN_CI_REQUIRED");
     expect(gate).toContain("MIGRATION_PLAN_REVIEW_BINDING");
+    expect(gate).toContain('require(phase != "execute", "MIGRATION_EXECUTION_DISABLED")');
+    expect(deploy).toContain("MIGRATION_EXECUTION_ENABLED = False");
   });
 
-  test("orders expected drift, registration, reviewed plan, one migration, one service update, and final proofs", () => {
+  test("keeps the draft ordered execution behind the disabled gate", () => {
     const reconcile = deploy.indexOf("def reconcile(");
     const prepare = deploy.indexOf("def prepare(");
     const execute = deploy.indexOf("def execute(");

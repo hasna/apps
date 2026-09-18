@@ -48,7 +48,17 @@ The planner directly selects the existing production ledger and performs no DDL
 or migration. Review and hash
 `emails-current-migration-prepared/prepared.json`.
 
-## 3. Execute
+## 3. Execute — disabled pending a separate reviewed activation
+
+The workflow still displays `execute`, but the exact-main gate and deployment
+entrypoint both reject it
+with `MIGRATION_EXECUTION_DISABLED` before assuming AWS authority or running a
+migration. Do not use the following draft behavior as an operational runbook.
+
+Activation requires a separately reviewed migration identity and transaction or
+lock boundary, data-preservation proof for forced-RLS tables, quiesced old
+writers, paired API/ingest-worker cutover, a recovery point, and durable
+reconciliation of an uncertain one-shot task launch.
 
 `phase=execute` requires the exact reviewed plan and reconciliation. It repeats
 the read-only ledger plan and candidate KMS round trip before writing a migration

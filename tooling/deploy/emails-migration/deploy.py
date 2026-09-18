@@ -26,6 +26,7 @@ TASK_PATTERN = re.compile(r"arn:aws:ecs:us-east-1:789877399345:task-definition/e
 DIGEST_PATTERN = re.compile(r"sha256:[0-9a-f]{64}")
 SHA64 = re.compile(r"[0-9a-f]{64}")
 RECEIPT_MARKER = "EMAILS_MIGRATION_RECEIPT:"
+MIGRATION_EXECUTION_ENABLED = False  # Requires atomic migration and paired API/worker cutover review.
 
 
 def require(ok, code):
@@ -560,6 +561,7 @@ def verify_candidate(prepared):
 
 
 def execute(source, inputs, out):
+    require(MIGRATION_EXECUTION_ENABLED, "MIGRATION_EXECUTION_DISABLED")
     reconciled = load_migration_reconciliation(inputs)
     prepared = load_prepared(inputs)
     require(reconciled.get("sourceCommit") == source == prepared.get("sourceCommit"), "EXECUTION_SOURCE")

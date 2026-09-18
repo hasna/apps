@@ -25,6 +25,11 @@ def require(ok, code):
         raise ValueError(code)
 
 
+def require_phase(phase):
+    require(phase != "execute", "MIGRATION_EXECUTION_DISABLED")
+    require(phase in {"reconcile", "prepare"}, "PHASE")
+
+
 def gh(path):
     result = subprocess.run(["gh", "api", path], stdin=subprocess.DEVNULL, capture_output=True, timeout=60)
     require(result.returncode == 0 and len(result.stdout) <= MAX, "GITHUB_READ_REFUSED")
@@ -162,6 +167,7 @@ def migration_plan(source, run_id, expected_sha, reconciliation_sha, destination
 
 
 def validate(args, destination):
+    require_phase(args.phase)
     source = args.source
     require(os.environ.get("GITHUB_REPOSITORY") == REPO, "REPOSITORY")
     require(os.environ.get("GITHUB_REF") == "refs/heads/main" and os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch", "MAIN_DISPATCH_ONLY")
@@ -169,7 +175,6 @@ def validate(args, destination):
     require(gh(f"repos/{REPO}/git/ref/heads/main")["object"]["sha"] == source, "SUPERSEDED_SOURCE")
     runs = gh(f"repos/{REPO}/actions/workflows/ci.yml/runs?branch=main&event=push&status=completed&head_sha={source}&per_page=100").get("workflow_runs", [])
     require(exact_ci_success(runs, source), "EXACT_MAIN_CI_REQUIRED")
-    require(args.phase in {"reconcile", "prepare", "execute"}, "PHASE")
     if args.phase == "reconcile":
         anchor_input(source, args.anchor_run, args.anchor_sha256, destination / "anchor")
         require(len(args.failed_run) == 2 and len(set(args.failed_run)) == 2, "FAILED_RUN_SET")

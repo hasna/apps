@@ -23,6 +23,10 @@ OLD_IMAGE = "sha256:" + "c" * 64
 
 
 class DeployTest(unittest.TestCase):
+    def test_execution_is_disabled_at_the_entrypoint(self):
+        with self.assertRaisesRegex(ValueError, "MIGRATION_EXECUTION_DISABLED"):
+            d.execute(SOURCE, Path("unused"), Path("unused"))
+
     def test_reconcile_binds_historical_failures_to_old_anchor_and_kms_to_live_anchor(self):
         historical = {"family": p.SERVICE, "containerDefinitions": [{"name": "emails", "image": p.REPOSITORY + "@" + OLD_IMAGE, "environment": [{"name": "X", "value": "same"}]}]}
         baseline = copy.deepcopy(historical)
@@ -137,7 +141,7 @@ class DeployTest(unittest.TestCase):
             out = root / "out"
             stable = copy.deepcopy(service)
             stable["deploymentConfiguration"]["deploymentCircuitBreaker"]["rollback"] = False
-            with patch.object(d, "require_main_source"), patch.object(d, "service_matches_reconciliation", return_value=service), patch.object(d, "verify_candidate", return_value={}), patch.object(d, "run_receipt_task", side_effect=[(preflight, {"taskArnSha256": "p"}), (kms_proof, {"taskArnSha256": "k"}), (applied, {"taskArnSha256": "m"})]) as tasks, patch.object(p, "aws", side_effect=aws), patch.object(p, "current_service", return_value=service), patch.object(d, "wait_roll_forward", return_value=stable), patch.object(d, "running_snapshot", return_value=([], "running")):
+            with patch.object(d, "MIGRATION_EXECUTION_ENABLED", True), patch.object(d, "require_main_source"), patch.object(d, "service_matches_reconciliation", return_value=service), patch.object(d, "verify_candidate", return_value={}), patch.object(d, "run_receipt_task", side_effect=[(preflight, {"taskArnSha256": "p"}), (kms_proof, {"taskArnSha256": "k"}), (applied, {"taskArnSha256": "m"})]) as tasks, patch.object(p, "aws", side_effect=aws), patch.object(p, "current_service", return_value=service), patch.object(d, "wait_roll_forward", return_value=stable), patch.object(d, "running_snapshot", return_value=([], "running")):
                 d.execute(SOURCE, root, out)
             self.assertEqual([call.args[2] for call in tasks.call_args_list], ["plan", "kms", "apply"])
             self.assertEqual(calls.count(("ecs", "update-service")), 1)
@@ -150,7 +154,7 @@ class DeployTest(unittest.TestCase):
             calls.clear()
             bad_proof = {**kms_proof, "roundTrip": False}
             refused = root / "refused"
-            with patch.object(d, "service_matches_reconciliation", return_value=service), patch.object(d, "verify_candidate", return_value={}), patch.object(d, "run_receipt_task", side_effect=[(preflight, {"taskArnSha256": "p"}), (bad_proof, {"taskArnSha256": "k"})]) as tasks, patch.object(p, "aws", side_effect=aws):
+            with patch.object(d, "MIGRATION_EXECUTION_ENABLED", True), patch.object(d, "service_matches_reconciliation", return_value=service), patch.object(d, "verify_candidate", return_value={}), patch.object(d, "run_receipt_task", side_effect=[(preflight, {"taskArnSha256": "p"}), (bad_proof, {"taskArnSha256": "k"})]) as tasks, patch.object(p, "aws", side_effect=aws):
                 with self.assertRaisesRegex(ValueError, "KMS_PROOF"):
                     d.execute(SOURCE, root, refused)
             self.assertEqual([call.args[2] for call in tasks.call_args_list], ["plan", "kms"])
