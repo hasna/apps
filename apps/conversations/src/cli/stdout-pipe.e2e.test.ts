@@ -78,7 +78,8 @@ describe("conversations --json over a pipe", () => {
     });
   }
 
-  const LIST_JSON = "bun run src/cli/index.tsx channel list -j";
+  const LIST_JSON = "bun run src/cli/index.tsx channel list -j --full";
+  const COMPACT_LIST_JSON = "bun run src/cli/index.tsx channel list -j";
 
   let fixture: { dir: string; authority: string };
   beforeAll(async () => {
@@ -121,6 +122,19 @@ describe("conversations --json over a pipe", () => {
       expect(Array.isArray(parsed)).toBe(true);
       expect(parsed.length).toBe(CHANNEL_ROWS);
     }
+  }, SPAWN_TIMEOUT_MS);
+
+  test("compact channel JSON stays bounded, parseable, and identical through a pipe", () => {
+    const { dir, authority } = fixture;
+    const outFile = join(dir, "compact-redirected.json");
+    const redirected = pipeline(`${COMPACT_LIST_JSON} > ${JSON.stringify(outFile)}`, authority);
+    expect(redirected.exitCode).toBe(0);
+    const expected = readFileSync(outFile);
+    const page = JSON.parse(expected.toString("utf8"));
+    expect(page).toMatchObject({ count: 10, limit: 10, compact: true, has_more: true });
+    const piped = pipeline(`${COMPACT_LIST_JSON} | cat`, authority);
+    expect(piped.exitCode).toBe(0);
+    expect(Buffer.compare(Buffer.from(piped.stdout), expected)).toBe(0);
   }, SPAWN_TIMEOUT_MS);
 
   test("human-readable collection output stays bounded and identical through a pipe", () => {

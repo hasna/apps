@@ -21,6 +21,7 @@ import { createPollHealth, type PollHealthReporter } from "../lib/poll-health.js
 import type { ConversationsStore } from "../lib/store/index.js";
 import { getStore } from "../lib/store/index.js";
 import { env } from "../lib/env.js";
+import { canonicalConversationsServer } from "./profile.js";
 // Routed reads/writes: every read/write goes through the Store (local or cloud API).
 
 const DEFAULT_POLL_INTERVAL_MS = 1000;
@@ -70,10 +71,11 @@ type SessionState = {
 const sessions = new WeakMap<McpServer, SessionState>();
 
 function sessionFor(server: McpServer): SessionState {
-  let state = sessions.get(server);
+  const canonical = canonicalConversationsServer(server);
+  let state = sessions.get(canonical);
   if (!state) {
     state = { agentId: null, claudeSessionId: null };
-    sessions.set(server, state);
+    sessions.set(canonical, state);
   }
   return state;
 }

@@ -14,8 +14,9 @@ import { identityFor } from "../identity.js";
 import { pageQueriedItems, summarizeMessage, windowItems } from "../../lib/compact-output.js";
 import { compactPreviewPage, jsonText, resolveMcpPageOptions, resolveMcpWindow } from "../compact.js";
 import { MENTION_LIST_ORDER } from "../../lib/list-order.js";
+import type { ConversationsToolCatalog } from "../profile.js";
 
-export function registerAdvancedTools(server: McpServer, pkgVersion: string): void {
+export function registerAdvancedTools(server: McpServer, pkgVersion: string, toolCatalog?: ConversationsToolCatalog): void {
   // Bound to this connection: see ../identity.ts.
   const resolveIdentity = identityFor(server);
 
@@ -490,159 +491,36 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
   // ---- Meta Tools ----
 
   registerMcpTool(server, "search_tools", {
-    description: "List tool names by keyword.",
+    description: "Search the complete dynamically registered MCP inventory.",
     inputSchema: {
       query: z.string().optional(),
+      limit: z.coerce.number().optional(),
+      cursor: z.coerce.number().optional(),
     },
   }, async (args: Record<string, any>) => {
-    const { query } = args;
-    const all = [
-      "send_message", "read_messages", "get_message", "read_digest", "list_sessions", "reply",
-      "mark_read", "search_messages", "export_messages",
-      "create_channel", "list_channels", "send_to_channel", "read_channel",
-      "join_channel", "leave_channel", "update_channel", "archive_channel", "unarchive_channel",
-      "subscribe_channel_notifications", "unsubscribe_channel_notifications", "list_channel_subscriptions", "read_channel_notifications", "mark_channel_notifications_read",
-      "create_project", "list_projects", "get_project", "update_project", "delete_project",
-      "delete_message", "edit_message", "pin_message", "unpin_message", "get_pinned_messages",
-      "build_graph", "get_related", "get_agent_network", "graph_stats",
-      "get_summary",
-      "get_topics", "trending_topics",
-      "get_session_activity", "hot_sessions",
-      "add_reaction", "remove_reaction", "get_reactions", "get_reaction_summary",
-      "acquire_lock", "bulk_acquire_lock", "release_lock", "check_lock", "list_locks", "clean_expired_locks",
-      "get_thread_replies",
-      "set_focus", "get_focus", "unfocus",
-      "register_agent", "heartbeat", "list_agents", "get_blockers", "remove_agent", "rename_agent",
-      "search_tools", "describe_tools",
-      // Task tools
-      "create_task", "get_task", "list_tasks", "start_task", "complete_task", "cancel_task", "block_task", "unblock_task", "reopen_task", "assign_task", "set_task_priority", "delete_task",
-      "add_comment", "get_comments",
-      "get_subtasks", "get_task_tree",
-      "add_dependency", "remove_dependency", "get_dependencies", "get_dependents",
-      "get_task_activity",
-    ];
-    const q = query?.toLowerCase();
-    const matches = q ? all.filter(n => n.includes(q)) : all;
-    return { content: [{ type: "text" as const, text: matches.join(", ") }] };
+    const matches = toolCatalog?.search(String(args.query ?? "")) ?? [];
+    const limit = Math.max(1, Math.min(100, Math.trunc(Number(args.limit ?? 20))));
+    const cursor = Math.max(0, Math.trunc(Number(args.cursor ?? 0)));
+    const items = matches.slice(cursor, cursor + limit);
+    const nextCursor = cursor + items.length < matches.length ? cursor + items.length : null;
+    return { content: [{ type: "text" as const, text: JSON.stringify({
+      items, count: items.length, total: matches.length, cursor, next_cursor: nextCursor,
+      has_more: nextCursor !== null, complete_inventory: true,
+      hint: "Restart with HASNA_CONVERSATIONS_MCP_PROFILE=full to make specialist tools callable.",
+    }) }] };
   });
 
   registerMcpTool(server, "describe_tools", {
-    description: "Get descriptions for tools by name.",
-    inputSchema: {
-      names: z.array(z.string()),
-    },
+    description: "Describe selected tools from the complete dynamically registered inventory.",
+    inputSchema: { names: z.array(z.string()).max(20) },
   }, async (args: Record<string, any>) => {
-    const names = Array.isArray(args.names) ? args.names.map((name: unknown) => String(name)) : [];
-    const descriptions: Record<string, string> = {
-      // DM tools
-      send_message: "Send DM to agent. Required: to, content. Optional: from?, priority?(low|normal|high|urgent), blocking?",
-      read_messages: "Peek at messages with filters. NON-MUTATING by default. Returns a bounded preview page carrying has_more, next_cursor, skipped_count, byte_length, max_bytes and timeout_ms. Optional: session_id?, from?, to?, channel?, since?(ISO), limit?, cursor?, max_bytes?, preview_bytes?, timeout_ms?, unread_only?, mark_read?(default false \u2014 pass true to acknowledge exactly the ids returned)",
-      get_message: "Get the full content of a specific message by id. Required: id",
-      read_digest: "Cursored byte-capped digest — preview snippets only, no full bodies, non-destructive unless mark_read:true. Returns { digest_id, message_ids, next_cursor, messages, byte_length }. Optional: channel?, session_id?, to?, since?(ISO), cursor?(message id), max_bytes?, limit?, unread_only?, mark_read?, project_id?",
-      list_sessions: "List all DM sessions. Optional: agent?(filter by participant)",
-      reply: "Reply to a specific message, creating a thread (sets reply_to). Use read_thread to retrieve. Required: message_id, content. Optional: from?",
-      mark_read: "Mark messages as read. Optional: from?, ids?(array), all?(bool \u2014 mark all unread)",
-      mark_channel_read: "Mark ALL messages in a channel as read without fetching. Required: channel. Optional: from?",
-      search_messages: "Full-text search messages. Required: query. Optional: channel?, from?, to?, limit?",
-      export_messages: "Export messages as JSON or CSV. Optional: channel?, session_id?, from?, since?, until?, format?(json|csv)",
-      // Channel tools
-      create_channel: "Create channel and auto-join. Required: name. Optional: from?, description?, topic?, project_id?",
-      list_unread_counts: "Get unread message counts per channel (no content). Ideal for session start triage. Optional: agent?(filter to agent's channels)",
-      list_channels: "List channels with member/message counts. Optional: project_id?, include_archived?",
-      send_to_channel: "Post message to channel. Required: channel, content. Optional: from?, priority?(low|normal|high|urgent), blocking?",
-      read_channel: "Peek at messages in a channel. NON-MUTATING by default \u2014 records no read receipt and consumes no notification. Required: channel. Optional: since?(ISO), limit?, cursor?, max_bytes?, preview_bytes?, timeout_ms?, mark_read?(default false \u2014 pass true to acknowledge exactly the ids returned)",
-      join_channel: "Join a channel. Required: channel. Optional: from?",
-      leave_channel: "Leave a channel. Required: channel. Optional: from?",
-      update_channel: "Update channel fields. Required: name. Optional: description?, topic?(use 'null' to remove), project_id?(use 'null' to remove)",
-      archive_channel: "Archive a channel (hidden from default list). Required: name",
-      unarchive_channel: "Restore archived channel. Required: name",
-      subscribe_channel_notifications: "Subscribe to preview-only notifications for a channel. Required: channel. Optional: from?, preview_chars?",
-      unsubscribe_channel_notifications: "Stop preview-only notifications for a channel. Required: channel. Optional: from?",
-      list_channel_subscriptions: "List preview-only channel notification subscriptions for the current agent. Optional: from?, channel?",
-      read_channel_notifications: "Peek at preview-only notifications from subscribed channels. Returns blurbs, never full message bodies \u2014 use get_message with an exact id for one body. NON-MUTATING by default. Optional: from?, channel?, unread_only?, since?, limit?, mark_read?(default false)",
-      mark_channel_notifications_read: "Mark preview-only channel notifications as read. Optional: from?, ids?(array), channel?, all?(bool)",
-      // Project tools
-      create_project: "Create a project. Required: name. Optional: from?, description?, path?, repository?, tags?(JSON array), metadata?(JSON), settings?(JSON)",
-      list_projects: "List projects. Optional: status?(active|archived)",
-      get_project: "Get project by UUID or name. Required: id",
-      update_project: "Update project fields. Required: id. Optional: name?, description?, path?, status?(active|archived), repository?, tags?(JSON), metadata?(JSON), settings?(JSON)",
-      delete_project: "Delete project (fails if channels reference it). Required: id",
-      // Message management
-      delete_message: "Delete a message (sender only). Required: id. Optional: from?",
-      edit_message: "Edit message content (sender only). Required: id, content. Optional: from?",
-      pin_message: "Pin a message. Required: id",
-      unpin_message: "Unpin a message. Required: id",
-      get_pinned_messages: "Get pinned messages. Optional: channel?, session_id?, limit?",
-      // Graph
-      build_graph: "Build/rebuild knowledge graph from messages, channels, projects. Returns edge counts.",
-      get_related: "Find entities related to a given entity. Required: entity_type, entity_id",
-      get_agent_network: "Agent's communication network: contacts, channels, projects. Required: agent",
-      graph_stats: "Knowledge graph stats: total edges, by relation type",
-      // Summary
-      get_summary: "Structured conversation summary: participants, topics, key messages, blockers. Required: session_id? or channel?. Optional: limit?",
-      // Topics
-      get_topics: "Extract topics from channel or session. Optional: channel?, session_id?, limit?",
-      trending_topics: "Trending topics across all messages. Optional: hours?, project_id?, top_n?",
-      set_channel_topic: "Set current topic/status of a channel. Required: channel, topic (pass null to clear).",
-      get_channel_topic: "Get current topic/status of a channel. Required: channel.",
-      // Session activity
-      get_session_activity: "Get activity metrics for a session: velocity, agents, reply ratio, reactions, trending. Required: session_id",
-      // Hot conversations
-      hot_sessions: "List conversations by hotness score (velocity, reactions, replies, priority, blockers). Optional: limit?, min_score?, channel?, project_id?",
-      // Reaction tools
-      add_reaction: "Add emoji reaction to a message. Required: message_id, emoji. Optional: from?",
-      remove_reaction: "Remove emoji reaction from a message. Required: message_id, emoji. Optional: from?",
-      get_reactions: "Get all reactions for a message. Required: message_id",
-      get_reaction_summary: "Get emoji counts + agent lists for a message. Required: message_id",
-      // Lock tools
-      acquire_lock: "Acquire advisory/exclusive lock on a resource. On conflict, auto-DMs the holding agent. Required: resource_type, resource_id. Optional: lock_type?(advisory|exclusive), expiry_ms?, from?, auto_dm?(default true)",
-      bulk_acquire_lock: "Atomically acquire multiple locks (all-or-nothing). Required: resources[]{resource_type,resource_id,lock_type?,expiry_ms?}. Optional: from?, auto_dm?(default true). Returns blocked_by on conflict.",
-      release_lock: "Release lock held by agent. Required: resource_type, resource_id. Optional: from?",
-      check_lock: "Check if resource is locked and who holds it. Required: resource_type, resource_id",
-      list_locks: "List active locks enriched with agent presence + time context. Optional: resource_type?, agent_id?",
-      clean_expired_locks: "Release expired locks + locks held by agents with stale heartbeat (>30 min). Returns {released_stale_agent, released_expired, total}",
-      // Thread tools
-      get_thread_replies: "Get all replies in a thread. Required: message_id. Optional: limit?",
-      read_thread: "Alias for get_thread_replies. Required: message_id. Optional: limit?",
-      // Focus mode tools
-      set_focus: "Set agent focus to a project. All read tools default to this scope. Required: project_id. Optional: from?",
-      get_focus: "Get current focus: session focus, DB project_id, effective project_id. Optional: from?",
-      unfocus: "Clear agent focus (session + DB). Optional: from?",
-      // Presence tools
-      register_agent: "Register agent with conflict detection (30min active window). Required: name, session_id. Optional: role?. Returns AgentConflictError if another session is active.",
-      heartbeat: "Register/refresh agent presence. Optional: from?, status?(online|busy|idle, default: online)",
-      list_agents: "List agents with presence timestamps. Optional: online_only?(only agents seen in last 60s)",
-      get_blockers: "Get unread blocking messages for agent. Optional: from?",
-      remove_agent: "Remove agent from presence list. Optional: from?, agent?(defaults to self)",
-      rename_agent: "Rename agent in presence list. Required: new_name. Optional: from?",
-      // Meta tools
-      search_tools: "Search tool names by keyword. Optional: query?",
-      describe_tools: "Get full descriptions for tools. Required: names(array of tool names)",
-      // Task tools
-      create_task: "Create a new task. Required: subject, reporter. Optional: description?, assignee?, priority?(low|medium|high|critical), project_id?, channel?, parent_id?(subtask), depends_on?(array of task ids), tags?(array), metadata?(JSON), due_at?(ISO date)",
-      get_task: "Get a task by id or uuid. Returns enriched TaskInfo with subtask_count, comment_count, dependency_count, blocker_info. Required: id? or uuid?",
-      list_tasks: "List tasks with filters. Optional: status?(pending|in_progress|completed|cancelled|blocked), assignee?, reporter?, project_id?, channel?, parent_id?(null for top-level), priority?, tag?, limit?(default 50), offset?, include_archived?",
-      start_task: "Mark task in_progress. Fails if any dependency not completed. Required: id. Optional: agent?",
-      complete_task: "Mark task completed. Auto-unblocks dependent tasks with all deps met. Required: id. Optional: agent?, evidence?",
-      cancel_task: "Cancel a task with optional reason. Required: id. Optional: agent?, reason?",
-      block_task: "Manually block a task. Required: id. Optional: agent?, reason?",
-      unblock_task: "Unblock a task to pending if all deps completed, stays blocked otherwise. Required: id. Optional: agent?",
-      reopen_task: "Reopen completed/cancelled task back to pending. Re-checks dependencies. Required: id. Optional: agent?",
-      assign_task: "Assign a task to an agent. Required: id, assignee. Optional: agent?",
-      set_task_priority: "Change task priority. Required: id, priority(low|medium|high|critical). Optional: agent?",
-      delete_task: "Delete a task. Fails if subtasks exist. Required: id. Optional: agent?",
-      add_comment: "Add a comment to a task. Required: task_id, content. Optional: agent?",
-      get_comments: "Get all comments on a task ordered by creation time. Required: task_id",
-      get_subtasks: "Get direct children (subtasks) of a parent task. Required: parent_id",
-      get_task_tree: "Get task with full subtask tree (recursive, max depth 5). Required: parent_id. Optional: max_depth?",
-      add_dependency: "Add dependency: task_id depends on depends_on_id. Prevents circular deps. Auto-blocks if dep not completed. Required: task_id, depends_on_id",
-      remove_dependency: "Remove a dependency. Required: task_id, depends_on_id",
-      get_dependencies: "Get tasks this task depends on (must complete first). Required: task_id",
-      get_dependents: "Get tasks that depend on this task (blocked by this). Required: task_id",
-      get_task_activity: "Get activity log: status changes, comments, dep changes. Required: task_id. Optional: limit?(default 50)",
-    };
-    const result = names.map((n: string) => `${n}: ${descriptions[n] || "See tool schema"}`).join("\n");
-    return { content: [{ type: "text" as const, text: result }] };
+    const names = Array.isArray(args.names) ? args.names.map(String).slice(0, 20) : [];
+    const described = toolCatalog?.describe(names) ?? { items: [], missing: names };
+    return { content: [{ type: "text" as const, text: JSON.stringify({
+      ...described, count: described.items.length, requested: names.length,
+      complete: described.missing.length === 0,
+      hint: "Restart with HASNA_CONVERSATIONS_MCP_PROFILE=full to make specialist tools callable.",
+    }) }] };
   });
 
   // ---- send_feedback tool ----
