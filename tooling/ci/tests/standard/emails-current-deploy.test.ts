@@ -22,7 +22,9 @@ describe("Emails complete current-server deploy lane", () => {
     expect(workflow).toContain("--run \"$RECONCILIATION_RUN\"");
     expect(workflow).toContain("--reconciled-sha256 \"$RECONCILED_SHA256\"");
     expect(gate).toContain('run.get("path") == ".github/workflows/emails-search-promotion.yml"');
-    expect(gate).toContain('run.get("head_sha") == args.source');
+    expect(gate).toContain("RECONCILIATION_SOURCE_NOT_ANCESTOR");
+    expect(gate).toContain("RECONCILIATION_SCOPE_DRIFT");
+    expect(gate).toContain('"apps/emails/**"');
     expect(gate).toContain('row.get("path") == ".github/workflows/ci.yml"');
     expect(reusable).toContain("This reusable workflow path is the IAM trust-bound sanctioned authority");
     expect(reusable).toContain("Retain metadata-only search preparation and mutation receipts");

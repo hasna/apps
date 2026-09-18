@@ -9,6 +9,15 @@ import re
 import subprocess
 import tempfile
 
+RELEVANT_PATHS = (
+    "apps/emails/**",
+    ".github/workflows/emails-current-server-deploy.yml",
+    ".github/workflows/emails-search-promotion.yml",
+    ".github/workflows/emails-search-promotion-execute.yml",
+    "tooling/deploy/emails-current/**",
+    "tooling/deploy/emails-search/**",
+)
+
 
 def require(ok, code):
     if not ok:
@@ -33,6 +42,29 @@ def exact_ci_success(runs, source):
         for row in runs
     )
 
+
+
+def admit_reconciliation_source(reconciliation_source, current_source):
+    require(re.fullmatch(r"[0-9a-f]{40}", reconciliation_source or ""), "RECONCILIATION_SOURCE")
+    require(
+        subprocess.run(
+            ["git", "merge-base", "--is-ancestor", reconciliation_source, current_source],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            timeout=30,
+        ).returncode == 0,
+        "RECONCILIATION_SOURCE_NOT_ANCESTOR",
+    )
+    require(
+        subprocess.run(
+            ["git", "diff", "--quiet", reconciliation_source, current_source, "--", *RELEVANT_PATHS],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            timeout=30,
+        ).returncode == 0,
+        "RECONCILIATION_SCOPE_DRIFT",
+    )
+    return reconciliation_source
 
 def validate_reconciled(value, source, expected_sha):
     require(set(value) == {
@@ -138,23 +170,24 @@ def main():
     runs = gh(f"repos/{repo}/actions/workflows/ci.yml/runs?branch=main&event=push&status=completed&head_sha={args.source}&per_page=100")["workflow_runs"]
     require(exact_ci_success(runs, args.source), "EXACT_MAIN_CI_REQUIRED")
     run = gh(f"repos/{repo}/actions/runs/{args.run}")
+    reconciliation_source = run.get("head_sha")
     require(
-        run.get("head_sha") == args.source
-        and run.get("head_branch") == "main"
+        run.get("head_branch") == "main"
         and run.get("event") == "workflow_dispatch"
         and run.get("status") == "completed"
         and run.get("conclusion") == "success"
         and run.get("path") == ".github/workflows/emails-search-promotion.yml",
         "RECONCILIATION_RUN_NOT_TRUSTED",
     )
+    admit_reconciliation_source(reconciliation_source, args.source)
     artifacts = gh(f"repos/{repo}/actions/runs/{args.run}/artifacts?per_page=100")["artifacts"]
     rows = [row for row in artifacts if row.get("name") == "emails-search-reconciled" and not row.get("expired")]
     require(len(rows) == 1, "RECONCILED_ARTIFACT_COUNT")
     if args.download is not None:
-        download(repo, args.run, args.download, args.reconciled_sha256, args.source)
+        download(repo, args.run, args.download, args.reconciled_sha256, reconciliation_source)
     else:
         with tempfile.TemporaryDirectory(prefix="emails-reconciled-gate-") as temporary:
-            download(repo, args.run, Path(temporary) / "artifact", args.reconciled_sha256, args.source)
+            download(repo, args.run, Path(temporary) / "artifact", args.reconciled_sha256, reconciliation_source)
     print("Exact-main CI and reconciled Emails runtime admission passed")
 
 
