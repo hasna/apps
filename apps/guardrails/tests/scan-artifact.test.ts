@@ -51,7 +51,11 @@ function rootCiViolations(workflow: RootCi): string[] {
     if (JSON.stringify(value) !== JSON.stringify(expected)) violations.push(message);
   };
   equal(needs(shard), ["affected-plan"], "shards must depend on the frozen plan");
-  equal([...needs(aggregate)].sort(), ["affected-plan", "affected-shard"], "aggregate must depend on planner and all shards");
+  // Additional hard gates may join the aggregate without removing its frozen
+  // plan or shard prerequisites (for example the live PostgreSQL proof).
+  if (!["affected-plan", "affected-shard"].every((name) => needs(aggregate).includes(name))) {
+    violations.push("aggregate must depend on planner and all shards");
+  }
   equal(shard?.strategy?.matrix, "${{ fromJSON(needs.affected-plan.outputs.matrix) }}", "all planned shards must execute");
   equal(shard?.strategy?.["fail-fast"], false, "a failed shard must not cancel other planned tests");
   for (const job of [shard, aggregate]) {
@@ -59,6 +63,12 @@ function rootCiViolations(workflow: RootCi): string[] {
   }
   equal(shard?.env?.AFFECTED_SHARD, "${{ matrix.shard }}", "each runner must execute its selected shard");
   equal(aggregate?.env?.AFFECTED_MATRIX_RESULT, "${{ needs.affected-shard.result }}", "aggregate must receive the actual shard result");
+  equal(
+    aggregate?.env?.LOOPS_LIVE_POSTGRES_RESULT,
+    "${{ needs.loops-live-postgres.result }}",
+    "aggregate must receive the live PostgreSQL import result",
+  );
+  stepIndex("build-test", 'test "$LOOPS_LIVE_POSTGRES_RESULT" = "success"', always);
   stepIndex("gates", "bun tooling/ci/check-manifests.ts --self-test");
   stepIndex("gates", "bun tooling/ci/check-manifests.ts");
   stepIndex("publish-guard", "bun tooling/ci/check-publish-guard.ts --self-test");
@@ -232,6 +242,21 @@ describe("scan:artifact release gate", () => {
     expect(turbo.tasks.test.dependsOn).toContain("build");
     expect(turbo.tasks.build.outputs).toContain("dist/**");
     expect(rootCiViolations(rootCi())).toEqual([]);
+  });
+
+  test("additional aggregate gates preserve mandatory planner and shard coverage", () => {
+    const extended = rootCi();
+    const aggregate = extended.jobs!["build-test"]!;
+    const originalNeeds = aggregate.needs as string[];
+    extended.jobs!["additional-hard-gate"] = { steps: [{ run: "test 1 = 1" }] };
+    aggregate.needs = [...originalNeeds, "additional-hard-gate"];
+    expect(rootCiViolations(extended)).toEqual([]);
+
+    for (const required of ["affected-plan", "affected-shard"]) {
+      const missing = structuredClone(extended);
+      missing.jobs!["build-test"]!.needs = (aggregate.needs as string[]).filter((name) => name !== required);
+      expect(rootCiViolations(missing)).toContain("aggregate must depend on planner and all shards");
+    }
   });
 
   test("root CI coverage checks reject missing, skipped and softened lanes", () => {

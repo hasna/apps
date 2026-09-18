@@ -34,6 +34,14 @@ describe("verify:generated", () => {
     expect(STAMP_PATTERN.test(STAMP_COUNTER_FIXTURE)).toBe(false);
   });
 
+  it("keeps offset in the public listCalls and listMessages signatures", () => {
+    const generated = readFileSync(GENERATED_FILE, "utf8");
+    const calls = generated.match(/async listCalls\(query\?: \{[^\n]+/)?.[0] ?? "";
+    const messages = generated.match(/async listMessages\(query\?: \{[^\n]+/)?.[0] ?? "";
+    expect(calls).toContain('"offset"?: number');
+    expect(messages).toContain('"offset"?: number');
+  });
+
   it("requires the committed generated header to carry the package version", () => {
     const expected = packageVersion();
     expect(committedStamp(), `${GENERATED_FILE} stamp != package.json (${expected}) — run \`bun run generate:sdk\` and commit the result`).toBe(expected);

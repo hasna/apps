@@ -36,9 +36,9 @@ const AWS_GLOBAL_BUNDLE_SHA256 =
   "e5bb2084ccf45087bda1c9bffdea0eb15ee67f0b91646106e466714f9de3c7e3";
 
 describe("knowledge image RDS CA contract (O15-00668)", () => {
-  test("copies the RDS CA bundle into the image", () => {
+  test("copies the RDS CA bundle with permissions readable by the runtime user", () => {
     expect(dockerfile).toContain(
-      `COPY ${BUNDLE_RELATIVE} ${CA_TARGET}`,
+      `COPY --chmod=0644 ${BUNDLE_RELATIVE} ${CA_TARGET}`,
     );
   });
 

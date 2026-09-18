@@ -107,7 +107,17 @@ Codewith native imports are selected by `--codewith-native-imports` or
 `HASNA_CONFIGS_CODEWITH_NATIVE_IMPORTS=1|true`. Native mode writes managed
 fragments below `.hasna/instructions` and imports them from `CODEWITH.md`.
 
-OpenCode preserves existing non-managed `instructions` entries. If a profile
+OpenCode preserves existing `instructions` entries only when their canonical
+filesystem targets are outside every Instructions-managed `.hasna/instructions`
+namespace. Generated fragment references are absolute paths anchored to their
+owning target home because OpenCode resolves relative entries against the active
+project directory. Before preservation, refresh percent-decodes and normalizes
+local path references, including `file://` URLs and `..` traversals, against the
+explicit active project root when supplied and the active provider home. Any
+reference that resolves into the current or another managed namespace is removed;
+relative, encoded, URL, and absolute aliases cannot import another profile's
+private instructions. Truly unmanaged filesystem paths and non-file URLs remain
+unchanged. Malformed or ambiguous `file://` references fail planning. If a profile
 contains OpenCode config rows, the newest equivalent provider config is used;
 conflicting provider configs fail.
 
@@ -235,6 +245,49 @@ new plan and use the project-context lock during apply. The reserved source ID
 [Project context](project-context.md).
 
 ## Source eligibility and profile scope
+
+### Reviewed obsolete files and custom agents
+
+To retire an obsolete manifest-owned fragment, rule, or asset, pass
+`--retire-file relative/path.md=<observed-sha256>` together with
+`--expected-manifest-sha256 <observed-manifest-sha256>`. The target must be absent
+from the new plan and owned by the prior manifest for the same provider home.
+This explicit precondition can accept reviewed local edits without `--force`.
+The before-image and prior manifest are retained in the normal restore snapshot;
+the new manifest retains retirement provenance. Missing files, changed preimages,
+retained outputs, symlinks, unknown ownership, and stale manifest hashes fail closed.
+
+Hosted profile assets support emitted Markdown `custom-agent` definitions for
+Claude Code 2.1.276 through 2.x, Sumi 0.2.22 through 0.2.x, and supported OpenCode
+versions. Bind an immutable source version/digest to its explicit native
+`agents/<name>.md` destination and scope. Claude and Sumi require this destination
+beneath an explicit `target-home`; a generic `project-root` does not select their
+native agent directory. Names use letters, digits, hyphens or underscores, beginning
+with a letter or digit. Preserve native frontmatter in the source
+bytes; the asset is emitted separately from global instruction prose. These
+reviewed outputs accept exact `--adopt-file` and `--reconcile-file` preconditions
+and participate in hosted session refresh and snapshots. Updating source bytes
+requires reviewing and repinning the asset binding; a stale digest fails closed.
+Removing, disabling or renaming a managed asset blocks refresh and preserves the
+existing ownership manifest until its old destination is explicitly retired with
+`--retire-file` and `--expected-manifest-sha256`. The retirement snapshot restores
+both the original bytes and their ownership.
+Other executable asset kinds cannot use this custom-agent adoption exception.
+Codex custom-agent file loading remains unsupported. A generated file is not
+proof that a running provider loaded the role; verify the native consumer and
+keep existing sessions intact.
+
+Canonical role prose can use explicit `nativeAgent: { name, description }` asset
+binding metadata. The adapter prepends a quoted native YAML header while preserving
+every byte of the canonical body. To retain existing native restrictions, supply
+`nativeAgent.frontmatter` containing the complete reviewed newline-terminated
+header. Its flat scalar fields must be unique, and its name/description must match
+the explicit metadata. The header is preserved exactly; complex or ambiguous YAML
+is refused. The name must match the destination filename. Metadata, header bytes
+and source digest participate in the asset plan digest and ownership manifest.
+Do not drop existing tools, model or permission restrictions when adopting a role;
+preserve the reviewed header or refuse adoption. A source that already includes
+frontmatter uses the existing byte-preserving path without `nativeAgent` metadata.
 
 Session profiles contain reviewed instruction prose: `rules` records in Markdown
 or text, with templates resolved before injection. Compiling a mixed machine

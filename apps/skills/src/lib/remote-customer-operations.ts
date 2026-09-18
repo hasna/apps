@@ -1,3 +1,4 @@
+import type { RemoteCreditCheckoutOptions } from "./remote-credit-checkout.js";
 import type { RemoteSkillsClient } from "./remote-client.js";
 
 /** Shared customer operation declarations for MCP registration and its discovery contract. */
@@ -7,7 +8,7 @@ export const REMOTE_CUSTOMER_OPERATIONS = [
   { name: "list_remote_skills", title: "List Remote Skills", parameter: null, mutates: false, invoke: (client: RemoteSkillsClient) => client.listSkills() },
   { name: "get_billing_status", title: "Get Billing Status", parameter: null, mutates: false, invoke: (client: RemoteSkillsClient) => client.getBillingStatus() },
   { name: "list_credit_packs", title: "List Credit Packs", parameter: null, mutates: false, invoke: (client: RemoteSkillsClient) => client.listCreditPacks() },
-  { name: "create_credit_checkout", title: "Create Credit Checkout", parameter: "pack_id", mutates: true, invoke: (client: RemoteSkillsClient, value: string) => client.createCreditCheckout(value) },
+  { name: "create_credit_checkout", title: "Create Credit Checkout", parameter: "pack_id", mutates: true, invoke: (client: RemoteSkillsClient, value: string, options?: RemoteCreditCheckoutOptions) => client.createCreditCheckout(value, options) },
   { name: "get_billing_usage", title: "Get Billing Usage", parameter: null, mutates: false, invoke: (client: RemoteSkillsClient) => client.getUsage() },
   { name: "list_invoices", title: "List Invoices", parameter: null, mutates: false, invoke: (client: RemoteSkillsClient) => client.listInvoices() },
   { name: "create_billing_checkout", title: "Create Billing Checkout", parameter: null, mutates: true, invoke: (client: RemoteSkillsClient) => client.createBillingCheckout() },

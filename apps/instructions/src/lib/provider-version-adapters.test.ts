@@ -51,9 +51,9 @@ function countSentinel(value: string): number {
 function providerLoadedSentinelCount(plan: ReturnType<typeof planProfileSessionRender>): number {
   const configFile = plan.files.find((file) => file.relativePath === "opencode.json");
   const providerConfig = configFile ? JSON.parse(configFile.content) as { instructions?: string[] } : {};
-  const instructionFiles = new Set((providerConfig.instructions ?? []).filter((path) => path.startsWith(".hasna/instructions/")));
+  const instructionFiles = new Set(providerConfig.instructions ?? []);
   return plan.files.reduce((count, file) => {
-    const loaded = file.relativePath === "AGENTS.md" || instructionFiles.has(file.relativePath);
+    const loaded = file.relativePath === "AGENTS.md" || instructionFiles.has(file.relativePath) || instructionFiles.has(file.path);
     return count + (loaded ? countSentinel(file.content) : 0);
   }, 0);
 }

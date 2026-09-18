@@ -1,6 +1,0 @@
-name = "shortlinks"
-main = "shortlinks.js"
-compatibility_date = "2026-05-01"
-
-[vars]
-SHORTLINKS_ORIGIN = "https://shortlinks.example.com"

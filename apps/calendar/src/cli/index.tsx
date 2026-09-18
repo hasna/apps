@@ -58,6 +58,7 @@ listCommand("org-list")
     outputList(orgs, opts, {
       empty: "No orgs",
       hint: "Use --verbose or calendar org-show <id> for details.",
+      json: (o) => ({ id: o.id, slug: o.slug, name: o.name }),
       row: (o) => opts.verbose
         ? `${o.id}  ${o.slug}  ${truncate(o.name, 36)}  desc=${truncate(o.description)}`
         : `${o.id}  ${o.slug}  ${truncate(o.name, 48)}`,
@@ -106,7 +107,8 @@ listCommand("agents")
     const agents = await getStore().listAgents();
     outputList(agents, opts, {
       empty: "No agents",
-      hint: "Use --verbose for role/session fields. Use --json for full records.",
+      hint: "Use --verbose for an expanded preview or --json --full for the legacy array.",
+      json: (a) => ({ id: a.id, name: a.name, status: a.status, role: a.role, last_seen_at: a.last_seen_at }),
       row: (a) => opts.verbose
         ? `${a.id}  ${a.name}  status=${a.status}  role=${a.role || "-"}  last_seen=${a.last_seen_at}  dir=${truncate(a.working_dir)}`
         : `${a.id}  ${a.name}  ${a.status}  ${a.role || "-"}`,
@@ -174,7 +176,8 @@ listCommand("cal-list")
     const cals = await getStore().listCalendars(opts.org || undefined);
     outputList(cals, opts, {
       empty: "No calendars",
-      hint: "Use --verbose for org/timezone fields. Use --json for full records.",
+      hint: "Use --verbose for an expanded preview or --json --full for the legacy array.",
+      json: (c) => ({ id: c.id, slug: c.slug, name: c.name, timezone: c.timezone, visibility: c.visibility }),
       row: (c) => opts.verbose
         ? `${c.id}  ${c.slug}  ${truncate(c.name, 36)}  org=${c.org_id}  tz=${c.timezone}  visibility=${c.visibility}  desc=${truncate(c.description)}`
         : `${c.id}  ${c.slug}  ${truncate(c.name, 48)}  ${c.visibility}`,
@@ -264,6 +267,7 @@ listCommand("list")
     outputList(events, opts, {
       empty: "No events",
       hint: "Use --verbose or calendar show <id> for details.",
+      json: (e) => ({ id: e.id, title: truncate(e.title, 80), start_at: e.start_at, end_at: e.end_at, status: e.status, calendar_id: e.calendar_id, location: truncate(e.location, 60) }),
       row: (e) => opts.verbose
         ? `${e.id}  ${e.start_at} -> ${e.end_at}  ${e.status}  ${truncate(e.title, 44)}  calendar=${e.calendar_id}  location=${truncate(e.location)}  desc=${truncate(e.description)}`
         : `${e.id}  ${e.start_at} -> ${e.end_at}  ${e.status}  ${truncate(e.title, 56)}`,
@@ -314,6 +318,7 @@ listCommand("search <query>")
     outputList(events, opts, {
       empty: "No results",
       hint: "Use --verbose or calendar show <id> for details.",
+      json: (e) => ({ id: e.id, title: truncate(e.title, 80), start_at: e.start_at, end_at: e.end_at, status: e.status, calendar_id: e.calendar_id, location: truncate(e.location, 60) }),
       row: (e) => opts.verbose
         ? `${e.id}  ${e.start_at} -> ${e.end_at}  ${e.status}  ${truncate(e.title, 44)}  location=${truncate(e.location)}  desc=${truncate(e.description)}`
         : `${e.id}  ${e.start_at}  ${truncate(e.title, 64)}`,
@@ -329,6 +334,7 @@ listCommand("conflicts <calendarId>")
     outputList(conflicts, opts, {
       empty: "No conflicts",
       hint: "Use --verbose or calendar show <id> for details.",
+      json: (e) => ({ id: e.id, title: truncate(e.title, 80), start_at: e.start_at, end_at: e.end_at, status: e.status, calendar_id: e.calendar_id, location: truncate(e.location, 60) }),
       row: (e) => opts.verbose
         ? `${e.id}  ${e.start_at} -> ${e.end_at}  ${e.status}  ${truncate(e.title, 44)}  location=${truncate(e.location)}`
         : `${e.id}  ${e.start_at} -> ${e.end_at}  ${truncate(e.title, 56)}`,
@@ -394,7 +400,8 @@ listCommand("availability-show <agentId>")
     const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
     outputList(avail, opts, {
       empty: "No availability set",
-      hint: "Use --verbose for IDs/org fields. Use --json for full records.",
+      hint: "Use --verbose for an expanded preview or --json --full for the legacy array.",
+      json: (a) => ({ agent_id: a.agent_id, org_id: a.org_id, day_of_week: a.day_of_week, start_time: a.start_time, end_time: a.end_time }),
       row: (a) => opts.verbose
         ? `${a.id}  ${days[a.day_of_week]}  ${a.start_time}-${a.end_time}  org=${a.org_id}  agent=${a.agent_id}`
         : `${days[a.day_of_week]}  ${a.start_time}-${a.end_time}  org=${a.org_id}`,
@@ -426,7 +433,8 @@ listCommand("members <orgId>")
     const members = await getStore().getMembershipsForOrg(orgId);
     outputList(members, opts, {
       empty: "No members",
-      hint: "Use --verbose for membership IDs. Use --json for full records.",
+      hint: "Use --verbose for an expanded preview or --json --full for the legacy array.",
+      json: (m) => ({ org_id: m.org_id, agent_id: m.agent_id, role: m.role }),
       row: (m) => opts.verbose
         ? `${m.id}  agent=${m.agent_id}  role=${m.role}  created=${m.created_at}`
         : `${m.agent_id}  ${m.role}`,
@@ -448,7 +456,8 @@ listCommand("agent-orgs <agentId>")
     const orgs = await getStore().getOrgsForAgent(agentId);
     outputList(orgs, opts, {
       empty: "No orgs",
-      hint: "Use --verbose for membership IDs. Use --json for full records.",
+      hint: "Use --verbose for an expanded preview or --json --full for the legacy array.",
+      json: (m) => ({ org_id: m.org_id, agent_id: m.agent_id, role: m.role }),
       row: (m) => opts.verbose
         ? `${m.id}  org=${m.org_id}  role=${m.role}  created=${m.created_at}`
         : `${m.org_id}  ${m.role}`,
@@ -555,9 +564,10 @@ function calendarCommand(name: string) {
 
 function listCommand(name: string) {
   return calendarCommand(name)
-    .option("--limit <n>", `Max rows for human output (default ${DEFAULT_PAGE_LIMIT}, max ${MAX_PAGE_LIMIT})`, parseInteger)
+    .option("--limit <n>", `Maximum rows per page (default ${DEFAULT_PAGE_LIMIT}, max ${MAX_PAGE_LIMIT})`, parseInteger)
     .option("--cursor <n>", "Zero-based row offset for the next page", parseInteger)
-    .option("--verbose", "Show additional fields without switching to JSON");
+    .option("--verbose", "Show an expanded preview with additional fields")
+    .option("--full", "Return the legacy complete full JSON array (requires --json)");
 }
 
 function parseInteger(value: string): number {
@@ -585,28 +595,41 @@ function truncate(value: string | null | undefined, max = 72): string {
   return text.length > max ? `${text.slice(0, Math.max(0, max - 3))}...` : text;
 }
 
-function pageItems<T>(items: T[], opts: { json?: boolean; limit?: number; cursor?: number }) {
-  const jsonUnpaged = wantsJson(opts) && opts.limit === undefined && opts.cursor === undefined;
-  const cursor = opts.cursor ?? 0;
-  const requestedLimit = opts.limit ?? (jsonUnpaged ? Math.max(items.length, 1) : DEFAULT_PAGE_LIMIT);
+function pageItems<T>(items: T[], opts: { json?: boolean; limit?: number; cursor?: number; full?: boolean }) {
+  const cursor = opts.full ? 0 : (opts.cursor ?? 0);
+  const requestedLimit = opts.full ? Math.max(items.length, 1) : (opts.limit ?? DEFAULT_PAGE_LIMIT);
   if (cursor < 0) fail("--cursor must be zero or greater");
   if (requestedLimit <= 0) fail("--limit must be greater than zero");
-  const limit = jsonUnpaged ? requestedLimit : Math.min(requestedLimit, MAX_PAGE_LIMIT);
+  if (!opts.full && requestedLimit > MAX_PAGE_LIMIT) fail(`--limit must be ${MAX_PAGE_LIMIT} or less; use --full for the legacy complete array`);
+  const limit = requestedLimit;
   const rows = items.slice(cursor, cursor + limit);
   const nextCursor = cursor + rows.length < items.length ? cursor + rows.length : null;
-  return { rows, cursor, limit, nextCursor, total: items.length, jsonUnpaged };
+  return { rows, cursor, limit, nextCursor, total: items.length };
 }
 
 function outputList<T>(
   items: T[],
-  opts: { json?: boolean; verbose?: boolean; limit?: number; cursor?: number },
-  config: { empty: string; hint: string; row: (item: T) => string },
+  opts: { json?: boolean; verbose?: boolean; full?: boolean; limit?: number; cursor?: number },
+  config: { empty: string; hint: string; row: (item: T) => string; json: (item: T) => unknown },
 ) {
+  if (opts.full && !wantsJson(opts)) fail("--full requires --json");
   const page = pageItems(items, opts);
   if (wantsJson(opts)) {
-    output(JSON.stringify(page.jsonUnpaged
-      ? page.rows
-      : { items: page.rows, total: page.total, limit: page.limit, cursor: page.cursor, next_cursor: page.nextCursor }));
+    if (opts.full) {
+      output(JSON.stringify(items));
+      return;
+    }
+    output(JSON.stringify({
+      items: opts.verbose ? page.rows : page.rows.map(config.json),
+      total: page.total,
+      limit: page.limit,
+      cursor: page.cursor,
+      next_cursor: page.nextCursor,
+      compact: !opts.verbose,
+      hint: page.nextCursor === null
+        ? "Set --verbose for an expanded page preview, or --full for the legacy complete array."
+        : `Continue with --cursor ${page.nextCursor}; set --verbose for an expanded page preview, or --full for the legacy complete array.`,
+    }));
     return;
   }
   if (page.rows.length === 0) {

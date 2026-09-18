@@ -7,7 +7,7 @@ import {
   readdirSync,
   statSync,
 } from "node:fs";
-import { dirname, isAbsolute, join, parse, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, parse, posix, relative, resolve } from "node:path";
 import {
   observeProjectContextSessionGuard,
   removeProjectContextCoordinatedFile,
@@ -86,6 +86,8 @@ export interface SessionApplyResult {
   adoptions: SessionFileAdoptionReceipt[];
   /** Verified drifted preimages selected for reconciliation; qualified by applied. */
   reconciliations: SessionFileReconciliationReceipt[];
+  /** Exact reviewed obsolete managed files removed by this transaction. */
+  retirements: SessionFileRetirementReceipt[];
 }
 
 export interface SessionFileAdoption {
@@ -106,6 +108,14 @@ export interface SessionFileReconciliationReceipt extends SessionFileAdoptionRec
   previousManagedSha256: string;
 }
 
+export interface SessionFileRetirementReceipt {
+  path: string;
+  relativePath: string;
+  preimageSha256: string;
+  previousManagedSha256: string;
+  sourceIds: string[];
+}
+
 export interface SessionRollbackReceipt {
   schema: "hasna.configs.session-render-rollback/v1";
   status: "available" | "not-required" | "unsupported" | "blocked";
@@ -123,6 +133,8 @@ export interface SessionApplyOptions {
   adoptFiles?: SessionFileAdoption[];
   /** Exact reviewed drift on owned outputs; requires expectedManifestSha256. */
   reconcileFiles?: SessionFileAdoption[];
+  /** Exact reviewed obsolete owned outputs; requires the manifest preimage. */
+  retireFiles?: SessionFileAdoption[];
   /** Compare-and-swap precondition captured before resolving hosted sources. */
   expectedManifestSha256?: string;
   /**
@@ -203,6 +215,7 @@ interface SessionRenderSnapshot {
   afterFiles: SessionRenderSnapshotAfterFileV1[];
   adoptions?: SessionFileAdoptionReceipt[];
   reconciliations?: SessionFileReconciliationReceipt[];
+  retirements?: SessionFileRetirementReceipt[];
 }
 
 interface StoredSessionRenderSnapshot extends Omit<SessionRenderSnapshot, "targetKind" | "afterFiles"> {
@@ -259,14 +272,16 @@ function applySessionRenderUnlocked(
   const adoptedHashes = new Map(adoptions.map((entry) => [entry.relativePath, entry.preimageSha256]));
   const reconciliations = validateFileReconciliations(plan, targetHome, previousManifest, options);
   const reconciledHashes = new Map(reconciliations.map((entry) => [entry.relativePath, entry.preimageSha256]));
-  const manifestFile = manifestWithFileProvenance(plan, previousManifest, adoptions, reconciliations);
+  const retirements = validateFileRetirements(plan, targetHome, previousManifest, options);
+  const retiredHashes = new Map(retirements.map((entry) => [entry.relativePath, entry.preimageSha256]));
+  const manifestFile = manifestWithFileProvenance(plan, previousManifest, adoptions, reconciliations, retirements);
   const files = [...payloadFiles, manifestFile];
   const currentRelativePaths = new Set(files.map((file) => file.relativePath));
   const drift = checkSessionRenderDrift(targetHome, manifestPath);
 
   const results = [
     ...files.map((file) => planFileResult(plan, file, targetHome, previousHashes, previousManifest, options, adoptedHashes, reconciledHashes)),
-    ...planStaleFileResults(plan, targetHome, previousManifest, currentRelativePaths, options),
+    ...planStaleFileResults(plan, targetHome, previousManifest, currentRelativePaths, options, retiredHashes),
   ];
   assertNotSilentManagedWipeout(plan, results);
   const conflicts = results.filter((result) => result.action === "conflict");
@@ -291,6 +306,7 @@ function applySessionRenderUnlocked(
       drift,
       adoptions,
       reconciliations,
+      retirements,
     };
   }
 
@@ -317,10 +333,17 @@ function applySessionRenderUnlocked(
       forcePortableFileOps,
       adoptions,
       reconciliations,
+      retirements,
     );
     snapshotPath = rollback.snapshotPath;
     options.test_hooks?.before_apply_writes?.({ plan, results });
     assertManifestPrecondition(manifestPath, targetHome, options.expectedManifestSha256);
+    // Check the entire transaction before its first payload write. Per-file
+    // checks below still protect races that occur during the write sequence.
+    for (const result of results) {
+      assertExpectedSessionFileHash(result.path, targetHome, result.previousSha256);
+      coordination?.assert_held();
+    }
     const resultsByPath = new Map(results.map((result) => [result.path, result]));
     for (const file of payloadFiles) {
       applyPlannedFile(
@@ -373,6 +396,7 @@ function applySessionRenderUnlocked(
     drift,
     adoptions,
     reconciliations,
+    retirements,
   };
 }
 
@@ -409,9 +433,9 @@ function validateFileAdoptions(
       throw new SessionApplyError(`Duplicate file adoption target: ${request.relativePath}`);
     }
     seen.add(request.relativePath);
-    // Only native instruction outputs can be adopted, never the ownership
-    // manifest, assets, stale outputs, or paths outside this exact plan.
-    const candidates = plan.files.filter((file) => file.relativePath === request.relativePath);
+    // Include explicitly supported emitted custom-agent definitions, but never
+    // generic executable assets, the manifest, stale outputs, or other paths.
+    const candidates = exactPreimageCandidates(plan).filter((file) => file.relativePath === request.relativePath);
     if (candidates.length !== 1 || candidates[0]!.role === "manifest") {
       throw new SessionApplyError(`File adoption target is not a unique planned instruction output: ${request.relativePath}`);
     }
@@ -431,11 +455,19 @@ function validateFileAdoptions(
   });
 }
 
+function exactPreimageCandidates(plan: SessionRenderPlan): SessionRenderFile[] {
+  const customAgentPaths = new Set((plan.assetPlan?.assets ?? [])
+    .filter((asset) => asset.kind === "custom-agent" && asset.support === "supported"
+      && asset.action === "write" && asset.destination.strategy === "emit-file")
+    .map((asset) => posix.normalize(asset.destination.relativePath)));
+  return [...plan.files, ...(plan.assetFiles ?? []).filter((file) => customAgentPaths.has(file.relativePath))];
+}
+
 function readExactFilePreimage(
   path: string,
   targetHome: string,
   request: SessionFileAdoption,
-  operation: "adoption" | "reconciliation",
+  operation: "adoption" | "reconciliation" | "retirement",
 ): string {
   if (currentSessionFileHash(path, targetHome) === null) {
     throw new SessionApplyError(`File ${operation} target does not exist: ${request.relativePath}`);
@@ -482,7 +514,7 @@ function validateFileReconciliations(
       throw new SessionApplyError(`Duplicate file reconciliation target: ${request.relativePath}`);
     }
     seen.add(request.relativePath);
-    const candidates = plan.files.filter((file) => file.relativePath === request.relativePath);
+    const candidates = exactPreimageCandidates(plan).filter((file) => file.relativePath === request.relativePath);
     if (candidates.length !== 1 || candidates[0]!.role === "manifest") {
       throw new SessionApplyError(`File reconciliation target is not a unique planned instruction output: ${request.relativePath}`);
     }
@@ -513,15 +545,62 @@ function validateFileReconciliations(
   });
 }
 
+function validateFileRetirements(
+  plan: SessionRenderPlan,
+  targetHome: string,
+  previousManifest: SessionRenderManifest | null,
+  options: SessionApplyOptions,
+): SessionFileRetirementReceipt[] {
+  const requests = options.retireFiles ?? [];
+  if (!Array.isArray(requests)) throw new SessionApplyError("Session file retirements must be an array.");
+  if (requests.length === 0) return [];
+  if (options.force) throw new SessionApplyError("Exact file retirement cannot be combined with force.");
+  if (options.expectedManifestSha256 === undefined) {
+    throw new SessionApplyError("Exact file retirement requires an expected manifest SHA-256 precondition.");
+  }
+  if (!previousManifest || previousManifest.targetOwner?.writer?.id !== SESSION_RENDERER_OWNER_ID
+    || previousManifest.tool !== plan.tool || previousManifest.targetHome !== targetHome) {
+    throw new SessionApplyError("File retirement requires this renderer's manifest for the same tool and target home.");
+  }
+  const seen = new Set<string>();
+  return requests.map((request) => {
+    if (!request || typeof request.relativePath !== "string" || typeof request.sha256 !== "string"
+      || !/^[a-f0-9]{64}$/.test(request.sha256)) {
+      throw new SessionApplyError("Each file retirement requires a plan-relative path and a 64-character lowercase SHA-256.");
+    }
+    if (seen.has(request.relativePath)) throw new SessionApplyError(`Duplicate file retirement target: ${request.relativePath}`);
+    seen.add(request.relativePath);
+    if (plan.allFiles.some((file) => file.relativePath === request.relativePath)) {
+      throw new SessionApplyError(`File retirement target is retained by the new plan: ${request.relativePath}`);
+    }
+    const owned = previousManifest.files.filter((entry) => entry.relativePath === request.relativePath);
+    const path = resolveManifestRelativePath(request.relativePath, targetHome);
+    if (owned.length !== 1 || owned[0]!.path !== path || !/^[a-f0-9]{64}$/.test(owned[0]!.sha256)
+      || !Array.isArray(owned[0]!.sourceIds) || owned[0]!.sourceIds.some((id) => typeof id !== "string")
+      || (!isPlanManagedFile(plan, request.relativePath, owned[0]!.role) && owned[0]!.role !== "asset")) {
+      throw new SessionApplyError(`File retirement target is not an obsolete managed fragment, rule, or asset: ${request.relativePath}`);
+    }
+    return {
+      path,
+      relativePath: request.relativePath,
+      preimageSha256: readExactFilePreimage(path, targetHome, request, "retirement"),
+      previousManagedSha256: owned[0]!.sha256,
+      sourceIds: [...owned[0]!.sourceIds],
+    };
+  });
+}
+
 function manifestWithFileProvenance(
   plan: SessionRenderPlan,
   previousManifest: SessionRenderManifest | null,
   adoptions: SessionFileAdoptionReceipt[],
   reconciliations: SessionFileReconciliationReceipt[],
+  retirements: SessionFileRetirementReceipt[],
 ): SessionRenderFile {
   if (
     adoptions.length === 0 && previousManifest?.adoptions === undefined
     && reconciliations.length === 0 && previousManifest?.reconciliations === undefined
+    && retirements.length === 0 && previousManifest?.retirements === undefined
   ) return plan.manifestFile;
   if (previousManifest?.adoptions !== undefined && !Array.isArray(previousManifest.adoptions)) {
     throw new SessionApplyError("Previous session manifest adoption provenance is invalid.");
@@ -575,11 +654,28 @@ function manifestWithFileProvenance(
     };
     reconciledEntries.set(JSON.stringify(canonical), canonical);
   }
+  if (previousManifest?.retirements !== undefined && !Array.isArray(previousManifest.retirements)) {
+    throw new SessionApplyError("Previous session manifest retirement provenance is invalid.");
+  }
+  const retiredEntries = new Map<string, NonNullable<SessionRenderManifest["retirements"]>[number]>();
+  for (const entry of [...(previousManifest?.retirements ?? []), ...retirements.map(({ path: _path, ...receipt }) => receipt)]) {
+    if (!entry || typeof entry.relativePath !== "string" || !/^[a-f0-9]{64}$/.test(entry.preimageSha256)
+      || !/^[a-f0-9]{64}$/.test(entry.previousManagedSha256) || !Array.isArray(entry.sourceIds)
+      || entry.sourceIds.some((id) => typeof id !== "string")) {
+      throw new SessionApplyError("Previous session manifest retirement provenance is invalid.");
+    }
+    resolveManifestRelativePath(entry.relativePath, plan.targetHome);
+    const canonical = { relativePath: entry.relativePath, preimageSha256: entry.preimageSha256,
+      previousManagedSha256: entry.previousManagedSha256, sourceIds: [...entry.sourceIds] };
+    retiredEntries.set(JSON.stringify(canonical), canonical);
+  }
   const manifest = {
     ...plan.manifest,
     ...(adoptions.length > 0 || previousManifest?.adoptions !== undefined ? { adoptions: [...entries.values()] } : {}),
     ...(reconciliations.length > 0 || previousManifest?.reconciliations !== undefined
       ? { reconciliations: [...reconciledEntries.values()] } : {}),
+    ...(retirements.length > 0 || previousManifest?.retirements !== undefined
+      ? { retirements: [...retiredEntries.values()] } : {}),
   };
   const content = `${JSON.stringify(manifest, null, 2)}\n`;
   return { ...plan.manifestFile, content, sha256: sha256(content) };
@@ -1430,12 +1526,13 @@ function planStaleFileResults(
   previousManifest: SessionRenderManifest | null,
   currentRelativePaths: Set<string>,
   options: SessionApplyOptions,
+  retiredHashes: Map<string, string>,
 ): SessionApplyFileResult[] {
   if (!previousManifest) return [];
   return previousManifest.files
     .filter((file) => !currentRelativePaths.has(file.relativePath))
-    .filter((file) => isPlanManagedFile(plan, file.relativePath, file.role))
-    .map((file) => planStaleFileResult(file, targetHome, options))
+    .filter((file) => isPlanManagedFile(plan, file.relativePath, file.role) || file.role === "asset" || retiredHashes.has(file.relativePath))
+    .map((file) => planStaleFileResult(file, targetHome, options, retiredHashes.get(file.relativePath)))
     .filter((result): result is SessionApplyFileResult => result !== null);
 }
 
@@ -1443,11 +1540,33 @@ function planStaleFileResult(
   file: SessionRenderManifest["files"][number],
   targetHome: string,
   options: SessionApplyOptions,
+  retiredHash?: string,
 ): SessionApplyFileResult | null {
   const target = resolveManifestRelativePath(file.relativePath, targetHome);
-  if (!existsSync(target)) return null;
+  if (!existsSync(target)) {
+    if (file.role !== "asset") return null;
+    return {
+      path: target,
+      relativePath: file.relativePath,
+      role: file.role,
+      action: "conflict",
+      changed: true,
+      previousSha256: null,
+      newSha256: "",
+      reason: "obsolete managed asset is missing; preserve manifest ownership until its reviewed preimage is restored and retired exactly",
+    };
+  }
   const previousContent = readFileSync(target, "utf-8");
   const previousSha256 = sha256(previousContent);
+  if (retiredHash !== undefined) {
+    if (previousSha256 !== retiredHash) throw new SessionApplyError(`File retirement preimage changed after validation: ${file.relativePath}`);
+    return { path: target, relativePath: file.relativePath, role: file.role, action: "delete", changed: true,
+      previousSha256, newSha256: "", reason: "exact reviewed obsolete managed file retired" };
+  }
+  if (file.role === "asset") {
+    return { path: target, relativePath: file.relativePath, role: file.role, action: "conflict", changed: true,
+      previousSha256, newSha256: "", reason: "obsolete managed asset requires exact retirement; preserve ownership until --retire-file and --expected-manifest-sha256 are supplied" };
+  }
   if (!options.force && previousSha256 !== file.sha256) {
     return {
       path: target,
@@ -1601,6 +1720,7 @@ function writeSessionSnapshot(
   forcePortableFileOps: boolean,
   adoptions: SessionFileAdoptionReceipt[],
   reconciliations: SessionFileReconciliationReceipt[],
+  retirements: SessionFileRetirementReceipt[],
 ): SessionRollbackReceipt {
   const existingFiles = results
     .filter((result) => result.action === "update" || result.action === "delete")
@@ -1657,9 +1777,10 @@ function writeSessionSnapshot(
     afterFiles,
     ...(adoptions.length > 0 ? { adoptions } : {}),
     ...(reconciliations.length > 0 ? { reconciliations } : {}),
+    ...(retirements.length > 0 ? { retirements } : {}),
   };
   const snapshotContent = `${JSON.stringify(snapshot, null, 2)}\n`;
-  if ((adoptions.length > 0 || reconciliations.length > 0) && Buffer.byteLength(snapshotContent, "utf8") > 32 * 1024 * 1024) {
+  if ((adoptions.length > 0 || reconciliations.length > 0 || retirements.length > 0) && Buffer.byteLength(snapshotContent, "utf8") > 32 * 1024 * 1024) {
     throw new SessionApplyError("Exact file preimage snapshot exceeds the 32 MiB restore limit.");
   }
   coordination?.assert_held();

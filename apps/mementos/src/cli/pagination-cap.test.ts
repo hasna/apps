@@ -1,54 +1,70 @@
-// Regression tests for the silent row-cap family (BUG 2796806b):
-//   (1) `mementos list --json` with no --limit returned exactly 50 rows, rc=0,
-//       bare array, no truncation notice.
-//   (2) `mementos stale --days 30` capped at 100 server-side; stale_count
-//       mirrored the page length; no has_more / next_cursor.
-//   (3) a high-limit read could hit a truncated cloud response and the CLI
-//       reported its own parse failure as an error object on stdout.
+// Regression coverage for two deliberately separate structured-output modes:
+//   - historical --json / --format json: full bare arrays, preserved for
+//     compatibility (including implicit exhaustion and high explicit limits);
+//   - explicit --agent-json: compact, byte-bounded page receipts with guarded
+//     --all / --full controls.
 //
-// The contract this file locks:
-//   - structured `list`/`history` with no --limit returns the FULL population
-//     (a bare array cannot carry a truncation marker, so a silent default page
-//     is the defect);
-//   - `list --limit N` returns exactly N rows;
-//   - `stale` JSON exposes the TRUE count plus has_more / next_cursor, never a
-//     count that mirrors the returned page;
-//   - a high-limit read walks bounded server pages and returns the full
-//     population instead of one giant response;
-//   - a truncated cloud response is reported as a cloud-response failure, not
-//     as "the CLI's own output is unparseable".
+// Offset continuations are stable and non-overlapping only while the query's
+// result set is unchanged. Equal sort keys are made deterministic by the DB's
+// final id DESC tie-breaker; concurrent writes still require a fresh traversal.
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync, unlinkSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { getDatabase, resetDatabase } from "../db/database.js";
-import { createMemory, touchMemory } from "../db/memories.js";
 import {
   assertLocalStoreBackend,
   blankLlmProviderEnv,
   isolatedStoreEnv,
+  stubApiEnv,
 } from "../test-support/store-isolation.js";
-import {
-  API_URL_ENV_KEYS,
-  API_KEY_ENV_KEYS,
-  DATABASE_URL_ENV_KEYS,
-  DB_PATH_ENV_KEYS,
-} from "../db/api-mode.js";
 
 const DB_PATH = join(tmpdir(), `mementos-pagination-cap-${Date.now()}.db`);
 const CLI_PATH = new URL("./index.tsx", import.meta.url).pathname;
 const CLI_ENV = isolatedStoreEnv(DB_PATH, { extra: blankLlmProviderEnv() });
+const API_HOME = mkdtempSync(join(tmpdir(), "mementos-pagination-api-home-"));
+
+function apiEnv(baseUrl: string): Record<string, string> {
+  return {
+    ...stubApiEnv(baseUrl, { apiKey: "test-key" }),
+    HOME: API_HOME,
+    HASNA_HOME: API_HOME,
+    HASNA_CONFIG_HOME: API_HOME,
+    HASNA_STATION: "mementos-pagination-no-keychain",
+    ...blankLlmProviderEnv(),
+  };
+}
+
+interface StructuredPage<T = Record<string, unknown>> {
+  memories: T[];
+  _meta: {
+    receipt: string;
+    count: number;
+    limit: number | null;
+    offset: number;
+    next_cursor: number | null;
+    has_more: boolean;
+    complete: boolean;
+    all: boolean;
+    detail: "compact" | "full";
+    max_rows: number;
+    max_bytes: number;
+    response_bytes: number;
+    truncated: boolean;
+    truncation_reason: "limit" | "cursor" | "max_bytes" | null;
+    omitted_from_page: number;
+    next_arguments: Record<string, unknown> | null;
+    continuation_scope: "unchanged_snapshot";
+  };
+}
 
 async function runCli(
   env: Record<string, string>,
   ...args: string[]
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-  // Capture via files, never pipes: the full-population outputs are hundreds
-  // of KB, and a piped capture truncates at one 64 KiB pipe buffer with no
-  // error (the capture-path rule — a CLI read must be redirected). Spawn `bun`
-  // directly — a bash wrapper would source BASH_ENV and re-inject the ambient
-  // production API selectors over the stub env this harness builds.
+  // Capture via files, never pipes: compatibility arrays and explicit --all
+  // output can approach or exceed one pipe buffer.
   const outFile = join(tmpdir(), `mementos-pcap-out-${Date.now()}-${Math.random()}.txt`);
   const errFile = join(tmpdir(), `mementos-pcap-err-${Date.now()}-${Math.random()}.txt`);
   const proc = Bun.spawn(["bun", "run", CLI_PATH, ...args], {
@@ -59,43 +75,49 @@ async function runCli(
   const exitCode = await proc.exited;
   const stdout = existsSync(outFile) ? (await Bun.file(outFile).text()).trim() : "";
   const stderr = existsSync(errFile) ? (await Bun.file(errFile).text()).trim() : "";
-  for (const f of [outFile, errFile]) {
-    if (existsSync(f)) unlinkSync(f);
+  for (const file of [outFile, errFile]) {
+    if (existsSync(file)) unlinkSync(file);
   }
   return { stdout, stderr, exitCode };
 }
 
-// ---------------------------------------------------------------------------
-// Local-store fixtures: >50 memories, >1000 of them stale, >50 accessed ones.
-// ---------------------------------------------------------------------------
+const TOTAL_COUNT = 2_205;
+const HISTORY_COUNT = 1_105;
+const STALE_COUNT = TOTAL_COUNT - HISTORY_COUNT;
+const TIED_TIMESTAMP = "2026-09-18T10:00:00.000Z";
 
-const SEED_COUNT = 120;
-const STALE_COUNT = 1200;
+function fixtureId(index: number): string {
+  return `fixture-memory-${String(index).padStart(5, "0")}`;
+}
+
+function descendingIds(highest: number, count: number): string[] {
+  return Array.from({ length: count }, (_, offset) => fixtureId(highest - offset));
+}
 
 function seedLocalDb(): void {
   const db = getDatabase(DB_PATH);
-  for (let i = 0; i < STALE_COUNT; i++) {
-    createMemory(
-      {
-        key: `stale-key-${String(i).padStart(4, "0")}`,
-        value: `stale value ${i}`,
-        scope: "shared",
-        category: "knowledge",
-      },
-      "create",
-      db,
-    );
-  }
-  // The first SEED_COUNT rows also get accessed_at set so they are NOT stale
-  // and ARE part of the history surface.
-  const fresh = db
-    .query(
-      "SELECT id FROM memories ORDER BY created_at ASC LIMIT ?",
-    )
-    .all(SEED_COUNT) as Array<{ id: string }>;
-  for (const row of fresh) {
-    touchMemory(row.id, db);
-  }
+  const insert = db.prepare(`
+    INSERT INTO memories (
+      id, key, value, category, scope, summary, tags, importance, source,
+      status, pinned, metadata, access_count, version, created_at, updated_at,
+      accessed_at
+    ) VALUES (?, ?, ?, 'knowledge', 'shared', ?, '[]', 5, 'agent',
+      'active', FALSE, ?, 0, 1, ?, ?, ?)
+  `);
+  db.transaction(() => {
+    for (let index = 0; index < TOTAL_COUNT; index += 1) {
+      insert.run(
+        fixtureId(index),
+        `fixture-key-${String(index).padStart(5, "0")}`,
+        `fixture value ${index} ${"v".repeat(96)}`,
+        `fixture summary ${index} ${"s".repeat(48)}`,
+        JSON.stringify({ fixture: true, index, detail: "m".repeat(64) }),
+        TIED_TIMESTAMP,
+        TIED_TIMESTAMP,
+        index < HISTORY_COUNT ? TIED_TIMESTAMP : null,
+      );
+    }
+  });
 }
 
 beforeAll(async () => {
@@ -105,64 +127,199 @@ beforeAll(async () => {
 
 afterAll(() => {
   resetDatabase();
+  rmSync(API_HOME, { recursive: true, force: true });
   for (const suffix of ["", "-wal", "-shm"]) {
     const file = DB_PATH + suffix;
     if (existsSync(file)) unlinkSync(file);
   }
 });
 
-// ---------------------------------------------------------------------------
-// (1) list: no-limit structured output must return the full population
-// ---------------------------------------------------------------------------
-
-describe("list pagination contract (local store)", () => {
-  test("list --format json with no --limit returns the FULL population, not a 50-row page", async () => {
+describe("historical JSON compatibility", () => {
+  test("list --format json remains a full bare array with full objects", async () => {
     const result = await runCli(CLI_ENV, "list", "--format", "json");
     expect(result.exitCode).toBe(0);
-    expect(result.stderr).not.toContain("error:");
-    const parsed = JSON.parse(result.stdout) as Array<{ id: string }>;
-    expect(parsed.length).toBe(STALE_COUNT);
+    const memories = JSON.parse(result.stdout) as Array<{
+      id: string;
+      value: string;
+      metadata: { fixture: boolean };
+    }>;
+    expect(Array.isArray(memories)).toBe(true);
+    expect(memories).toHaveLength(TOTAL_COUNT);
+    expect(memories[0]?.metadata.fixture).toBe(true);
+    expect(memories[0]?.value).toContain("v".repeat(96));
+    expect(memories.slice(0, 20).map((memory) => memory.id)).toEqual(
+      descendingIds(TOTAL_COUNT - 1, 20),
+    );
   });
 
-  test("list --format json --limit 60 returns exactly 60 rows", async () => {
-    const result = await runCli(CLI_ENV, "list", "--format", "json", "--limit", "60");
+  test("list --json preserves explicit high limits without receipt-mode caps", async () => {
+    const result = await runCli(CLI_ENV, "list", "--json", "--limit", "2000");
     expect(result.exitCode).toBe(0);
-    const parsed = JSON.parse(result.stdout) as Array<{ id: string }>;
-    expect(parsed.length).toBe(60);
+    const memories = JSON.parse(result.stdout) as Array<{ id: string }>;
+    expect(Array.isArray(memories)).toBe(true);
+    expect(memories).toHaveLength(2_000);
   });
 
-  test("list --format json --limit 2000 returns the full population (no silent server page)", async () => {
-    const result = await runCli(CLI_ENV, "list", "--format", "json", "--limit", "2000");
-    expect(result.exitCode).toBe(0);
-    const parsed = JSON.parse(result.stdout) as Array<{ id: string }>;
-    expect(parsed.length).toBe(STALE_COUNT);
+  test("history --json and --format json remain full bare arrays", async () => {
+    const jsonFlag = await runCli(CLI_ENV, "history", "--json");
+    const formatFlag = await runCli(CLI_ENV, "history", "--format", "json");
+    expect(jsonFlag.exitCode).toBe(0);
+    expect(formatFlag.exitCode).toBe(0);
+    const first = JSON.parse(jsonFlag.stdout) as Array<{ id: string; metadata: unknown }>;
+    const second = JSON.parse(formatFlag.stdout) as Array<{ id: string; metadata: unknown }>;
+    expect(Array.isArray(first)).toBe(true);
+    expect(first).toHaveLength(HISTORY_COUNT);
+    expect(second).toEqual(first);
+    expect(first.slice(0, 10).map((memory) => memory.id)).toEqual(
+      descendingIds(HISTORY_COUNT - 1, 10),
+    );
+  });
+
+  test("receipt-only controls fail unless --agent-json is explicit", async () => {
+    for (const args of [
+      ["--json", "list", "--all"],
+      ["--json", "list", "--full"],
+      ["--json", "history", "--max-bytes", "4096"],
+    ]) {
+      const result = await runCli(CLI_ENV, ...args);
+      expect(result.exitCode).toBe(1);
+      expect((JSON.parse(result.stdout) as { error: string }).error).toContain("--agent-json");
+    }
   });
 });
 
-// ---------------------------------------------------------------------------
-// (2) stale: JSON must expose the true count plus a pagination signal
-// ---------------------------------------------------------------------------
+describe("list agent JSON page contract (local store)", () => {
+  test("default receipt is a compact 20-row byte-bounded page", async () => {
+    const result = await runCli(CLI_ENV, "list", "--agent-json");
+    expect(result.exitCode).toBe(0);
+    const page = JSON.parse(result.stdout) as StructuredPage<{ id: string; metadata?: unknown }>;
+    expect(page.memories).toHaveLength(20);
+    expect(page.memories.every((memory) => !("metadata" in memory))).toBe(true);
+    expect(page.memories.map((memory) => memory.id)).toEqual(descendingIds(TOTAL_COUNT - 1, 20));
+    expect(page._meta).toMatchObject({
+      receipt: "mementos.list.page.v1",
+      count: 20,
+      limit: 20,
+      offset: 0,
+      next_cursor: 20,
+      has_more: true,
+      complete: false,
+      all: false,
+      detail: "compact",
+      max_rows: 1_000,
+      max_bytes: 32_768,
+      truncated: true,
+      truncation_reason: "limit",
+      continuation_scope: "unchanged_snapshot",
+    });
+    expect(page._meta.response_bytes).toBe(Buffer.byteLength(`${result.stdout}\n`));
+    expect(page._meta.response_bytes).toBeLessThanOrEqual(page._meta.max_bytes);
+  });
 
-describe("stale pagination contract (local store)", () => {
-  test("stale --format json exposes the TRUE stale count and a pagination signal", async () => {
+  test("equal-importance/equal-timestamp pages do not overlap while the snapshot is unchanged", async () => {
+    const first = JSON.parse((await runCli(CLI_ENV, "list", "--agent-json")).stdout) as StructuredPage<{ id: string }>;
+    const second = JSON.parse((await runCli(
+      CLI_ENV,
+      "list", "--agent-json", "--cursor", String(first._meta.next_cursor),
+    )).stdout) as StructuredPage<{ id: string }>;
+    expect(first.memories.map((memory) => memory.id)).toEqual(descendingIds(TOTAL_COUNT - 1, 20));
+    expect(second.memories.map((memory) => memory.id)).toEqual(descendingIds(TOTAL_COUNT - 21, 20));
+    const firstIds = new Set(first.memories.map((memory) => memory.id));
+    expect(second.memories.some((memory) => firstIds.has(memory.id))).toBe(false);
+    expect(second._meta).toMatchObject({ offset: 20, next_cursor: 40, continuation_scope: "unchanged_snapshot" });
+  });
+
+  test("--full preserves complete row detail but remains a bounded receipt page", async () => {
+    const result = await runCli(CLI_ENV, "list", "--agent-json", "--full", "--limit", "2");
+    expect(result.exitCode).toBe(0);
+    const page = JSON.parse(result.stdout) as StructuredPage<{ metadata: { fixture: boolean } }>;
+    expect(page.memories).toHaveLength(2);
+    expect(page.memories[0]?.metadata.fixture).toBe(true);
+    expect(page._meta).toMatchObject({ detail: "full", limit: 2, has_more: true, complete: false });
+  });
+
+  test("--all explicitly exhausts >1000 rows and proves whole-query completeness", async () => {
+    const result = await runCli(CLI_ENV, "list", "--agent-json", "--all");
+    expect(result.exitCode).toBe(0);
+    const page = JSON.parse(result.stdout) as StructuredPage<{ id: string }>;
+    expect(page.memories).toHaveLength(TOTAL_COUNT);
+    expect(new Set(page.memories.map((memory) => memory.id)).size).toBe(TOTAL_COUNT);
+    expect(page._meta).toMatchObject({
+      count: TOTAL_COUNT,
+      limit: null,
+      offset: 0,
+      next_cursor: null,
+      has_more: false,
+      complete: true,
+      all: true,
+      max_rows: 5_000,
+      max_bytes: 1_048_576,
+      truncated: false,
+      truncation_reason: null,
+    });
+  });
+
+  test("byte clipping advances without overlap while the snapshot is unchanged", async () => {
+    const firstResult = await runCli(
+      CLI_ENV,
+      "list", "--agent-json", "--limit", "100", "--max-bytes", "4096",
+    );
+    expect(firstResult.exitCode).toBe(0);
+    const first = JSON.parse(firstResult.stdout) as StructuredPage<{ id: string }>;
+    expect(first.memories.length).toBeGreaterThan(0);
+    expect(first.memories.length).toBeLessThan(100);
+    expect(first._meta).toMatchObject({
+      has_more: true,
+      next_cursor: first.memories.length,
+      truncated: true,
+      truncation_reason: "max_bytes",
+      max_bytes: 4096,
+      continuation_scope: "unchanged_snapshot",
+    });
+    expect(Buffer.byteLength(`${firstResult.stdout}\n`)).toBeLessThanOrEqual(4096);
+
+    const secondResult = await runCli(
+      CLI_ENV,
+      "list", "--agent-json", "--limit", "100",
+      "--cursor", String(first._meta.next_cursor), "--max-bytes", "4096",
+    );
+    const second = JSON.parse(secondResult.stdout) as StructuredPage<{ id: string }>;
+    const firstIds = new Set(first.memories.map((memory) => memory.id));
+    expect(second.memories.some((memory) => firstIds.has(memory.id))).toBe(false);
+    expect(second._meta.offset).toBe(first._meta.next_cursor);
+  });
+
+  test("receipt mode enforces hard page-row and exhaustive-byte ceilings", async () => {
+    const rowCap = await runCli(CLI_ENV, "--json", "list", "--agent-json", "--limit", "1001");
+    expect(rowCap.exitCode).toBe(1);
+    expect((JSON.parse(rowCap.stdout) as { error: string }).error).toContain("agent JSON page ceiling");
+
+    const byteCap = await runCli(
+      CLI_ENV,
+      "--json", "list", "--agent-json", "--all", "--max-bytes", "1024",
+    );
+    expect(byteCap.exitCode).toBe(1);
+    expect((JSON.parse(byteCap.stdout) as { error: string }).error).toContain("hard safety limit");
+  });
+});
+
+describe("stale pagination contract remains unchanged", () => {
+  test("stale JSON exposes the true count plus a pagination signal", async () => {
     const result = await runCli(CLI_ENV, "stale", "--days", "30", "--format", "json");
     expect(result.exitCode).toBe(0);
     const parsed = JSON.parse(result.stdout) as {
       stale_count: number;
-      returned?: number;
       has_more?: boolean;
       next_cursor?: number | null;
       memories: Array<{ id: string }>;
     };
-    // 120 of the 1200 memories were touched => 1080 stale. stale_count must be
-    // the TRUE count, never the returned page length.
-    expect(parsed.stale_count).toBe(STALE_COUNT - SEED_COUNT);
+    expect(parsed.stale_count).toBe(STALE_COUNT);
     expect(parsed.memories.length).toBeLessThan(parsed.stale_count);
     expect(parsed.has_more).toBe(true);
     expect(typeof parsed.next_cursor).toBe("number");
   });
 
-  test("stale --limit 1000 --format json returns a full page AND keeps the true count + signal", async () => {
+  test("stale --limit 1000 keeps the true count and continuation", async () => {
     const result = await runCli(
       CLI_ENV,
       "stale", "--days", "30", "--limit", "1000", "--format", "json",
@@ -174,127 +331,226 @@ describe("stale pagination contract (local store)", () => {
       next_cursor: number | null;
       memories: Array<{ id: string }>;
     };
-    expect(parsed.stale_count).toBe(STALE_COUNT - SEED_COUNT);
-    expect(parsed.memories.length).toBe(1000);
+    expect(parsed.stale_count).toBe(STALE_COUNT);
+    expect(parsed.memories).toHaveLength(1000);
     expect(parsed.has_more).toBe(true);
     expect(parsed.next_cursor).toBe(1000);
   });
+});
 
-  test("stale --limit 5000 --format json walks pages to honor the requested limit", async () => {
-    const result = await runCli(
+describe("history agent JSON page contract (local store)", () => {
+  test("default receipt is a compact 10-row page with deterministic tied ordering", async () => {
+    const result = await runCli(CLI_ENV, "history", "--agent-json");
+    expect(result.exitCode).toBe(0);
+    const page = JSON.parse(result.stdout) as StructuredPage<{ id: string; accessed_at: string }>;
+    expect(page.memories).toHaveLength(10);
+    expect(page.memories.map((memory) => memory.id)).toEqual(descendingIds(HISTORY_COUNT - 1, 10));
+    expect(page.memories.every((memory) => memory.accessed_at === TIED_TIMESTAMP)).toBe(true);
+    expect(page._meta).toMatchObject({
+      receipt: "mementos.history.page.v1",
+      count: 10,
+      limit: 10,
+      next_cursor: 10,
+      has_more: true,
+      complete: false,
+      detail: "compact",
+      max_bytes: 32_768,
+      continuation_scope: "unchanged_snapshot",
+    });
+  });
+
+  test("equal-access-time pages do not overlap while the snapshot is unchanged", async () => {
+    const first = JSON.parse((await runCli(CLI_ENV, "history", "--agent-json")).stdout) as StructuredPage<{ id: string }>;
+    const second = JSON.parse((await runCli(
       CLI_ENV,
-      "stale", "--days", "30", "--limit", "5000", "--format", "json",
-    );
-    expect(result.exitCode).toBe(0);
-    const parsed = JSON.parse(result.stdout) as {
-      stale_count: number;
-      memories: Array<{ id: string }>;
-    };
-    expect(parsed.stale_count).toBe(STALE_COUNT - SEED_COUNT);
-    expect(parsed.memories.length).toBe(STALE_COUNT - SEED_COUNT);
+      "history", "--agent-json", "--cursor", String(first._meta.next_cursor),
+    )).stdout) as StructuredPage<{ id: string }>;
+    expect(first.memories.map((memory) => memory.id)).toEqual(descendingIds(HISTORY_COUNT - 1, 10));
+    expect(second.memories.map((memory) => memory.id)).toEqual(descendingIds(HISTORY_COUNT - 11, 10));
+    const firstIds = new Set(first.memories.map((memory) => memory.id));
+    expect(second.memories.some((memory) => firstIds.has(memory.id))).toBe(false);
+    expect(second._meta).toMatchObject({ offset: 10, continuation_scope: "unchanged_snapshot" });
+  });
+
+  test("history --full and --all remain explicit receipt-mode escape hatches", async () => {
+    const fullResult = await runCli(CLI_ENV, "history", "--agent-json", "--full", "--limit", "1");
+    const full = JSON.parse(fullResult.stdout) as StructuredPage<{ metadata: { fixture: boolean } }>;
+    expect(fullResult.exitCode).toBe(0);
+    expect(full.memories[0]?.metadata.fixture).toBe(true);
+    expect(full._meta).toMatchObject({ detail: "full", limit: 1, has_more: true });
+
+    const allResult = await runCli(CLI_ENV, "history", "--agent-json", "--all");
+    expect(allResult.exitCode).toBe(0);
+    const all = JSON.parse(allResult.stdout) as StructuredPage<{ id: string }>;
+    expect(all.memories).toHaveLength(HISTORY_COUNT);
+    expect(new Set(all.memories.map((memory) => memory.id)).size).toBe(HISTORY_COUNT);
+    expect(all._meta).toMatchObject({ all: true, complete: true, has_more: false, next_cursor: null });
   });
 });
-
-// ---------------------------------------------------------------------------
-// history (same family): no-limit structured output must return the full
-// population, and the server page must not be silently capped.
-// ---------------------------------------------------------------------------
-
-describe("history pagination contract (local store)", () => {
-  test("history --json with no --limit returns the full accessed population", async () => {
-    const result = await runCli(CLI_ENV, "history", "--json");
-    expect(result.exitCode).toBe(0);
-    const parsed = JSON.parse(result.stdout) as Array<{ id: string }>;
-    expect(parsed.length).toBe(SEED_COUNT);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// (3) API mode: high-limit reads walk bounded pages; a truncated cloud
-// response is reported as a cloud failure, never as the CLI's own parse error.
-// ---------------------------------------------------------------------------
-
-function apiModeEnv(baseUrl: string): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const k of Object.keys(process.env)) {
-    env[k] = process.env[k] ?? "";
-  }
-  for (const k of [
-    ...API_URL_ENV_KEYS,
-    ...API_KEY_ENV_KEYS,
-    ...DATABASE_URL_ENV_KEYS,
-    ...DB_PATH_ENV_KEYS,
-  ]) {
-    delete env[k];
-  }
-  env[API_URL_ENV_KEYS[0]] = baseUrl;
-  env[API_KEY_ENV_KEYS[0]] = "test-key";
-  return { ...env, ...blankLlmProviderEnv() };
-}
 
 describe("list pagination contract (cloud API)", () => {
-  test("list --limit 40000 walks capped server pages and returns the full population", async () => {
-    // Stub server that behaves like the NEW contract: pages capped at 1000
-    // rows with has_more / next_cursor. The CLI must walk and return all rows.
-    const total = 2750;
-    const memories = Array.from({ length: total }, (_, i) => ({
-      id: `mem-${String(i).padStart(5, "0")}`,
-      key: `key-${i}`,
-      value: `value ${i}`,
-      importance: 1,
-      scope: "shared",
-      category: "knowledge",
-    }));
+  test("historical JSON walks bounded /v1 pages and returns the full bare array", async () => {
+    const total = 2_750;
+    const requests: Array<{ path: string; limit: number; offset: number }> = [];
     const server = Bun.serve({
       port: 0,
       fetch(req) {
-        const u = new URL(req.url);
-        if (u.pathname === "/v1/memories") {
-          const limit = Math.min(Number(u.searchParams.get("limit")) || 1000, 1000);
-          const offset = Number(u.searchParams.get("offset")) || 0;
-          const page = memories.slice(offset, offset + limit);
-          const has_more = offset + page.length < memories.length;
-          return Response.json({
-            memories: page,
-            count: page.length,
-            total: memories.length,
-            limit,
-            has_more,
-            next_cursor: has_more ? offset + page.length : null,
-          });
-        }
-        return Response.json({ error: "not found" }, { status: 404 });
+        const url = new URL(req.url);
+        if (url.pathname !== "/v1/memories") return Response.json({ error: "not found" }, { status: 404 });
+        const limit = Math.min(Number(url.searchParams.get("limit")) || 1000, 1000);
+        const offset = Number(url.searchParams.get("offset")) || 0;
+        requests.push({ path: url.pathname, limit, offset });
+        const count = Math.min(limit, total - offset);
+        const memories = Array.from({ length: count }, (_, index) => ({
+          id: `mem-${String(offset + index).padStart(5, "0")}`,
+          key: `key-${offset + index}`,
+          value: `value ${offset + index}`,
+          importance: 1,
+          scope: "shared",
+          category: "knowledge",
+        }));
+        const has_more = offset + memories.length < total;
+        return Response.json({ memories, has_more, next_cursor: has_more ? offset + memories.length : null });
       },
     });
     try {
-      const result = await runCli(
-        apiModeEnv(`http://127.0.0.1:${server.port}`),
-        "list", "--limit", "40000", "--format", "json",
-      );
+      const result = await runCli(apiEnv(`http://127.0.0.1:${server.port}`), "list", "--format", "json");
       expect(result.exitCode).toBe(0);
-      expect(result.stderr).not.toContain("error:");
-      const parsed = JSON.parse(result.stdout) as Array<{ id: string }>;
-      expect(parsed.length).toBe(total);
+      const memories = JSON.parse(result.stdout) as Array<{ id: string }>;
+      expect(Array.isArray(memories)).toBe(true);
+      expect(memories).toHaveLength(total);
+      expect(requests).toEqual([
+        { path: "/v1/memories", limit: 1000, offset: 0 },
+        { path: "/v1/memories", limit: 1000, offset: 1000 },
+        { path: "/v1/memories", limit: 1000, offset: 2000 },
+      ]);
     } finally {
       server.stop();
     }
   });
 
-  test("a truncated cloud response is reported as a cloud failure, not the CLI's own parse error", async () => {
-    // Stub server returning HTTP 200 with a body cut mid-string (simulates a
-    // proxy response cap). The CLI must not emit the raw V8 "JSON Parse error"
-    // message as its own error; the error must name the cloud response.
+  test("--agent-json reads one bounded page from exactly /v1/memories", async () => {
+    const total = 2_750;
+    const requests: Array<{ path: string; limit: number; offset: number }> = [];
+    const server = Bun.serve({
+      port: 0,
+      fetch(req) {
+        const url = new URL(req.url);
+        if (url.pathname !== "/v1/memories") return Response.json({ error: "not found" }, { status: 404 });
+        const limit = Math.min(Number(url.searchParams.get("limit")) || 1000, 1000);
+        const offset = Number(url.searchParams.get("offset")) || 0;
+        requests.push({ path: url.pathname, limit, offset });
+        const count = Math.min(limit, total - offset);
+        const memories = Array.from({ length: count }, (_, index) => ({
+          id: `mem-${String(offset + index).padStart(5, "0")}`,
+          key: `key-${offset + index}`,
+          value: `value ${offset + index}`,
+          importance: 1,
+          scope: "shared",
+          category: "knowledge",
+        }));
+        const has_more = offset + memories.length < total;
+        return Response.json({ memories, has_more, next_cursor: has_more ? offset + memories.length : null });
+      },
+    });
+    try {
+      const result = await runCli(apiEnv(`http://127.0.0.1:${server.port}`), "list", "--agent-json");
+      expect(result.exitCode).toBe(0);
+      const page = JSON.parse(result.stdout) as StructuredPage<{ id: string }>;
+      expect(page.memories).toHaveLength(20);
+      expect(page._meta.next_cursor).toBe(20);
+      expect(requests).toEqual([{ path: "/v1/memories", limit: 21, offset: 0 }]);
+    } finally {
+      server.stop();
+    }
+  });
+
+  test("explicit agent JSON --all walks bounded server pages", async () => {
+    const total = 2_750;
+    const requests: Array<{ limit: number; offset: number }> = [];
+    const server = Bun.serve({
+      port: 0,
+      fetch(req) {
+        const url = new URL(req.url);
+        const limit = Math.min(Number(url.searchParams.get("limit")) || 1000, 1000);
+        const offset = Number(url.searchParams.get("offset")) || 0;
+        requests.push({ limit, offset });
+        const count = Math.min(limit, total - offset);
+        const memories = Array.from({ length: count }, (_, index) => ({
+          id: `mem-${offset + index}`,
+          key: `key-${offset + index}`,
+          value: "v",
+          importance: 1,
+          scope: "shared",
+          category: "knowledge",
+        }));
+        const has_more = offset + memories.length < total;
+        return Response.json({ memories, has_more, next_cursor: has_more ? offset + memories.length : null });
+      },
+    });
+    try {
+      const result = await runCli(apiEnv(`http://127.0.0.1:${server.port}`), "list", "--agent-json", "--all");
+      expect(result.exitCode).toBe(0);
+      const page = JSON.parse(result.stdout) as StructuredPage<{ id: string }>;
+      expect(page.memories).toHaveLength(total);
+      expect(page._meta).toMatchObject({ all: true, complete: true, has_more: false });
+      expect(requests).toEqual([
+        { limit: 1000, offset: 0 },
+        { limit: 1000, offset: 1000 },
+        { limit: 1000, offset: 2000 },
+      ]);
+    } finally {
+      server.stop();
+    }
+  });
+
+  test("agent JSON --all refuses a 5001st row", async () => {
+    const total = 5_001;
+    const requestLimits: number[] = [];
+    const server = Bun.serve({
+      port: 0,
+      fetch(req) {
+        const url = new URL(req.url);
+        const limit = Math.min(Number(url.searchParams.get("limit")) || 1000, 1000);
+        const offset = Number(url.searchParams.get("offset")) || 0;
+        requestLimits.push(limit);
+        const count = Math.min(limit, total - offset);
+        const memories = Array.from({ length: count }, (_, index) => ({
+          id: `cap-${offset + index}`,
+          key: `cap-key-${offset + index}`,
+          value: "v",
+          importance: 1,
+          scope: "shared",
+          category: "knowledge",
+        }));
+        const has_more = offset + memories.length < total;
+        return Response.json({ memories, has_more, next_cursor: has_more ? offset + memories.length : null });
+      },
+    });
+    try {
+      const result = await runCli(
+        apiEnv(`http://127.0.0.1:${server.port}`),
+        "--json", "list", "--agent-json", "--all",
+      );
+      expect(result.exitCode).toBe(1);
+      expect((JSON.parse(result.stdout) as { error: string }).error).toContain("5000 rows");
+      expect(requestLimits).toEqual([1000, 1000, 1000, 1000, 1000, 1]);
+    } finally {
+      server.stop();
+    }
+  });
+
+  test("a truncated cloud response is reported as a cloud failure", async () => {
     const full = JSON.stringify({
-      memories: Array.from({ length: 200 }, (_, i) => ({
-        id: `mem-${i}`, key: `key-${i}`, value: "v".repeat(3000),
+      memories: Array.from({ length: 200 }, (_, index) => ({
+        id: `mem-${index}`, key: `key-${index}`, value: "v".repeat(3000),
       })),
       count: 200,
     });
-    const truncated = full.slice(0, 100000); // cut mid-string
     const server = Bun.serve({
       port: 0,
       fetch() {
-        return new Response(truncated, {
+        return new Response(full.slice(0, 100000), {
           status: 200,
           headers: { "Content-Type": "application/json" },
         });
@@ -302,7 +558,7 @@ describe("list pagination contract (cloud API)", () => {
     });
     try {
       const result = await runCli(
-        apiModeEnv(`http://127.0.0.1:${server.port}`),
+        apiEnv(`http://127.0.0.1:${server.port}`),
         "list", "--format", "json",
       );
       expect(result.exitCode).toBe(1);

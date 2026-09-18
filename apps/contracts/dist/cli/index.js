@@ -24158,6 +24158,140 @@ function runCheckKit(targetRepo, options) {
     process.exitCode = 1;
 }
 
+// src/client/transport.ts
+import { isIP } from "net";
+
+// src/client/credentials.ts
+import { createRequire } from "module";
+
+// src/client/installed-secrets.ts
+var MAX_PACKAGE_BYTES = 1024 * 1024;
+
+// src/client/credentials.ts
+var MAX_CREDENTIAL_FILE_BYTES = 64 * 1024;
+var INSPECT_CUSTOM = Symbol.for("nodejs.util.inspect.custom");
+var CREDENTIAL_SEAL = Symbol.for("hasna:contracts:sealedCredential");
+var AMBIENT_ENVIRONMENT = Symbol.for("hasna:contracts:ambientClientEnvironment");
+var requireSecretsSdk = createRequire(import.meta.url);
+// src/client/transport.ts
+var ASCII_CONTROL_PATTERN = /[\u0000-\u001f\u007f]/;
+var DNS_LABEL_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
+function isValidDnsDomain(value) {
+  if (value.length === 0 || value.length > 253 || ASCII_CONTROL_PATTERN.test(value) || /[^\x00-\x7f]/.test(value)) {
+    return false;
+  }
+  return value.split(".").every((label) => label.length <= 63 && !label.startsWith("xn--") && DNS_LABEL_PATTERN.test(label));
+}
+function rawAuthority(value) {
+  const match = /^[a-z][a-z0-9+.-]*:\/\//i.exec(value);
+  if (!match)
+    throw new Error("API URL must be absolute.");
+  const afterScheme = value.slice(match[0].length);
+  const boundary = afterScheme.search(/[/?#]/);
+  const authority = boundary === -1 ? afterScheme : afterScheme.slice(0, boundary);
+  if (!authority)
+    throw new Error("API URL must include a hostname.");
+  return authority;
+}
+function assertCanonicalPort(port) {
+  if (!/^[0-9]+$/.test(port) || port.length > 1 && port.startsWith("0")) {
+    throw new Error("API URL authority must contain a canonical port between 1 and 65535.");
+  }
+  const numericPort = Number(port);
+  if (!Number.isSafeInteger(numericPort) || numericPort < 1 || numericPort > 65535) {
+    throw new Error("API URL authority must contain a canonical port between 1 and 65535.");
+  }
+}
+function canonicalAuthorityHostname(authority) {
+  let rawHostname;
+  if (authority.startsWith("[")) {
+    const closingBracket = authority.indexOf("]");
+    if (closingBracket === -1) {
+      throw new Error("API URL authority must contain a canonical hostname.");
+    }
+    rawHostname = authority.slice(0, closingBracket + 1);
+    const portSuffix = authority.slice(closingBracket + 1);
+    if (portSuffix) {
+      if (!portSuffix.startsWith(":")) {
+        throw new Error("API URL authority must contain a canonical hostname and port.");
+      }
+      assertCanonicalPort(portSuffix.slice(1));
+    }
+    if (isIP(rawHostname.slice(1, -1)) !== 6) {
+      throw new Error("API URL authority must contain a canonical IPv6 literal.");
+    }
+  } else {
+    const firstColon = authority.indexOf(":");
+    const lastColon = authority.lastIndexOf(":");
+    if (firstColon !== lastColon) {
+      throw new Error("IPv6 API URL authorities must use brackets.");
+    }
+    if (lastColon !== -1) {
+      const port = authority.slice(lastColon + 1);
+      assertCanonicalPort(port);
+      rawHostname = authority.slice(0, lastColon);
+    } else {
+      rawHostname = authority;
+    }
+    const ipVersion = isIP(rawHostname);
+    const numericAddressParts = rawHostname.split(".");
+    const looksLikeNonCanonicalIpv4 = numericAddressParts.every((part) => /^(?:0x[0-9a-f]+|[0-9]+)$/i.test(part));
+    if (ipVersion !== 4 && looksLikeNonCanonicalIpv4 || ipVersion !== 4 && !isValidDnsDomain(rawHostname.toLowerCase())) {
+      throw new Error("API URL authority must contain a canonical ASCII hostname.");
+    }
+  }
+  return rawHostname.toLowerCase();
+}
+function isDeliberateLoopbackHttpAuthority(authority) {
+  return /^(?:localhost|127\.0\.0\.1|\[::1\])(?::[0-9]+)?$/i.test(authority);
+}
+function toV1BaseUrl(apiUrl) {
+  if (ASCII_CONTROL_PATTERN.test(apiUrl)) {
+    throw new Error("API URL must not contain ASCII control characters.");
+  }
+  const input = apiUrl.trim();
+  const authority = rawAuthority(input);
+  if (authority.includes("@") || authority.includes("\\") || authority.includes("%") || /[^\x00-\x7f]/.test(authority)) {
+    throw new Error("API URL authority must be canonical ASCII without credentials.");
+  }
+  const canonicalHostname = canonicalAuthorityHostname(authority);
+  const url = new URL(input);
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error("API URL must use http or https.");
+  }
+  if (url.username || url.password) {
+    throw new Error("API URL must not include credentials.");
+  }
+  if (!url.hostname || url.hostname.endsWith(".")) {
+    throw new Error("API URL must include a canonical hostname.");
+  }
+  if (url.hostname.toLowerCase() !== canonicalHostname) {
+    throw new Error("API URL authority must not rely on parser hostname normalization.");
+  }
+  if (url.hostname.split(".").some((label) => label.toLowerCase().startsWith("xn--"))) {
+    throw new Error("API URL must not use IDN or punycode hostnames.");
+  }
+  if (url.protocol === "http:" && !isDeliberateLoopbackHttpAuthority(authority)) {
+    throw new Error("API URL may use http only for an exact loopback authority.");
+  }
+  if (url.search || url.hash) {
+    throw new Error("API URL must not include a query string or fragment.");
+  }
+  let path = url.pathname.replace(/\/+$/, "");
+  if (path.endsWith("/v1"))
+    path = path.slice(0, -"/v1".length);
+  url.pathname = `${path}/v1`;
+  return url.toString().replace(/\/+$/, "");
+}
+var IDEMPOTENT_METHODS = new Set(["GET", "HEAD", "PUT", "DELETE", "OPTIONS"]);
+var AUTHORITY_OVERRIDE_HEADERS = new Set([
+  "host",
+  ":authority",
+  "forwarded",
+  "x-forwarded-host",
+  "x-original-host"
+]);
+
 // src/auth/store.ts
 var DEFAULT_API_KEYS_TABLE = "api_keys";
 var API_KEY_ISSUANCE_PENDING_REASON = "credential_delivery_pending";
@@ -24445,16 +24579,13 @@ function ownEnv(env, key) {
   return typeof value === "string" && value.trim().length > 0 ? value : undefined;
 }
 function normalizeSecretsBaseUrl(value) {
-  let url;
+  if (/[?#]/.test(value))
+    throw new SecretsConfigurationError("invalid_secrets_config");
   try {
-    url = new URL(value);
+    return toV1BaseUrl(value).replace(/\/v1$/, "");
   } catch {
     throw new SecretsConfigurationError("invalid_secrets_config");
   }
-  if (url.protocol !== "http:" && url.protocol !== "https:" || url.username.length > 0 || url.password.length > 0 || url.pathname !== "/" || url.search.length > 0 || url.hash.length > 0) {
-    throw new SecretsConfigurationError("invalid_secrets_config");
-  }
-  return url.origin;
 }
 function resolveSecretsAlias(env, urlEnv, keyEnv) {
   const rawUrl = ownEnv(env, urlEnv);

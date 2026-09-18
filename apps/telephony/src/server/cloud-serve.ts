@@ -143,6 +143,12 @@ function clampLimit(raw: string | null, def = 50, max = 200): number {
   return Math.min(Math.max(Math.trunc(n), 1), max);
 }
 
+function clampOffset(raw: string | null): number {
+  const n = raw == null ? 0 : Number(raw);
+  if (!Number.isFinite(n)) return 0;
+  return Math.min(Math.max(Math.trunc(n), 0), 1_000_000);
+}
+
 /**
  * The window after which an agent's held session is considered stale — matches
  * the local db/agents.ts default (30 min, overridable via
@@ -679,6 +685,7 @@ export function createServeHandler(deps: ServeDeps): (req: Request) => Promise<R
         await authOrThrow(req, ["telephony:read"]);
         const spec = listOnly[path]!;
         const limit = clampLimit(url.searchParams.get("limit"));
+        const offset = clampOffset(url.searchParams.get("offset"));
         const where: string[] = [];
         const params: unknown[] = [];
         for (const col of spec.filters) {
@@ -708,11 +715,15 @@ export function createServeHandler(deps: ServeDeps): (req: Request) => Promise<R
           }
         }
         const clause = where.length > 0 ? `WHERE ${where.join(" AND ")}` : "";
-        const rows = await db.many<Row>(
-          `SELECT * FROM ${spec.table} ${clause} ORDER BY ${spec.order} LIMIT ${limit}`,
+        const totalRow = await db.get<{ count: string }>(
+          `SELECT COUNT(*)::text AS count FROM ${spec.table} ${clause}`,
           params,
         );
-        return json({ items: rows.map(spec.map), total: rows.length });
+        const rows = await db.many<Row>(
+          `SELECT * FROM ${spec.table} ${clause} ORDER BY ${spec.order} LIMIT ${limit} OFFSET ${offset}`,
+          params,
+        );
+        return json({ items: rows.map(spec.map), total: Number(totalRow?.count ?? 0) });
       }
       // ---- Twilio provider passthrough (server-side proxy) ----
       // Live reads against the Twilio API using the server's Twilio credential
@@ -1649,6 +1660,7 @@ export function telephonyOpenApi(version: string): Record<string, unknown> {
           summary: "List messages",
           parameters: [
             { name: "limit", in: "query", schema: { type: "integer" } },
+            { name: "offset", in: "query", schema: { type: "integer" } },
             { name: "agent_id", in: "query", schema: { type: "string" } },
             { name: "project_id", in: "query", schema: { type: "string" } },
             { name: "type", in: "query", schema: { type: "string" } },
@@ -1666,6 +1678,7 @@ export function telephonyOpenApi(version: string): Record<string, unknown> {
           summary: "List calls",
           parameters: [
             { name: "limit", in: "query", schema: { type: "integer" } },
+            { name: "offset", in: "query", schema: { type: "integer" } },
             { name: "twilio_sid", in: "query", schema: { type: "string" }, description: "Exact Twilio SID filter — finds the call row a provider webhook refers to" },
           ],
           responses: {
