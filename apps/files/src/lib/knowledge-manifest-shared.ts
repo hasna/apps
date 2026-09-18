@@ -223,7 +223,7 @@ export function buildHostedManifestFileItem(
     && snapshot.extraction.revision_id === snapshot.revision.id
     && snapshot.status !== "deleted";
   const extractionStatus = extractionAvailable
-    ? "available"
+    ? snapshot.extraction.status === "partial" ? "partial" : "available"
     : snapshot.status === "deleted" || snapshot.extraction.status === "ready" || snapshot.extraction.status === "partial"
       ? "unavailable"
       : snapshot.extraction.status;
@@ -625,12 +625,13 @@ export function validateHostedKnowledgeManifest(value: unknown): KnowledgeSource
     if (
       typeof extraction.text_available !== "boolean"
       || typeof extraction.status !== "string"
-      || !["available", "unavailable", "unsupported", "error", "stale"].includes(extraction.status)
+      || !["available", "partial", "unavailable", "unsupported", "error", "stale"].includes(extraction.status)
     ) {
       throw new Error("Hosted knowledge manifest response is incompatible.");
     }
     const available = extraction.text_available === true;
-    if (available !== (extraction.status === "available") || available !== (typeof extraction.extracted_text_ref === "string")) {
+    const availableStatus = extraction.status === "available" || extraction.status === "partial";
+    if (available !== availableStatus || available !== (typeof extraction.extracted_text_ref === "string")) {
       throw new Error("Hosted knowledge manifest response is incompatible.");
     }
   }

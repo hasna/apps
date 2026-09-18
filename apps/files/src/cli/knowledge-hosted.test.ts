@@ -155,6 +155,19 @@ beforeEach(() => {
         }
         manifestQueries.push(url.searchParams);
         if (url.searchParams.get("tag") === "malformed") return Response.json({ items: [] });
+        if (url.searchParams.get("tag") === "partial") {
+          return Response.json({
+            ...HOSTED_MANIFEST,
+            items: [{
+              ...HOSTED_MANIFEST.items[0],
+              extraction: {
+                text_available: true,
+                status: "partial",
+                extracted_text_ref: `${HOSTED_MANIFEST.items[0].source_ref}/text`,
+              },
+            }],
+          });
+        }
         return Response.json(HOSTED_MANIFEST);
       }
       if (req.method === "GET" && path === `/files/${HOSTED_FILE.id}`) {
@@ -386,6 +399,18 @@ describe("files knowledge manifest on the hosted transport", () => {
     expect(written).toHaveLength(1);
     expect((JSON.parse(written[0]!) as { file_id: string }).file_id).toBe("f_know1");
     expect(hits).toEqual(["GET /knowledge/manifest"]);
+    expect(databaseFilesUnder(testDir)).toEqual([]);
+  });
+
+  test("accepts a truthful current-revision partial extraction from the hosted validator", async () => {
+    const result = await runCli(["knowledge", "manifest", "--tag", "partial", "--json"]);
+    expect(result.exitCode).toBe(0);
+    const manifest = JSON.parse(result.stdout) as { items: Array<{ extraction: Record<string, unknown> }> };
+    expect(manifest.items[0]!.extraction).toEqual({
+      text_available: true,
+      status: "partial",
+      extracted_text_ref: "open-files://file/f_know1/text",
+    });
     expect(databaseFilesUnder(testDir)).toEqual([]);
   });
 

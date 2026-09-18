@@ -162,10 +162,21 @@ describe("GET /v1/knowledge/manifest", () => {
       status_reason: undefined,
     });
 
-    const staleRevision = handler({ rows: [change(9, "f_1", { extraction: { status: "ready", revision_id: "rev_old" } })] });
-    const staleItem = (await (await get(staleRevision.h)).json() as KnowledgeSourceManifest).items[0] as KnowledgeSourceManifestFileItem;
-    expect(staleItem.extraction.text_available).toBe(false);
-    expect(staleItem.extraction.extracted_text_ref).toBeUndefined();
+    const currentPartial = handler({ rows: [change(9, "f_1", { extraction: { status: "partial", revision_id: "rev_1" } })] });
+    const partialItem = (await (await get(currentPartial.h)).json() as KnowledgeSourceManifest).items[0] as KnowledgeSourceManifestFileItem;
+    expect(partialItem.extraction).toEqual({
+      text_available: true,
+      status: "partial",
+      extracted_text_ref: "open-files://file/f_1/text",
+      status_reason: undefined,
+    });
+
+    for (const status of ["ready", "partial"] as const) {
+      const staleRevision = handler({ rows: [change(10, "f_1", { extraction: { status, revision_id: "rev_old" } })] });
+      const staleItem = (await (await get(staleRevision.h)).json() as KnowledgeSourceManifest).items[0] as KnowledgeSourceManifestFileItem;
+      expect(staleItem.extraction).toMatchObject({ text_available: false, status: "unavailable" });
+      expect(staleItem.extraction.extracted_text_ref).toBeUndefined();
+    }
   });
 
   test("returns deleted snapshots as tombstones", async () => {

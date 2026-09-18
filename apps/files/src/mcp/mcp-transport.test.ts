@@ -252,6 +252,19 @@ async function startFakeServer(): Promise<FakeServer> {
           }, { status: 400 });
         }
         if (url.searchParams.get("tag") === "malformed") return Response.json({ items: [] });
+        if (url.searchParams.get("tag") === "partial") {
+          return Response.json({
+            ...HOSTED_MANIFEST,
+            items: [{
+              ...HOSTED_MANIFEST.items[0],
+              extraction: {
+                text_available: true,
+                status: "partial",
+                extracted_text_ref: `${HOSTED_MANIFEST.items[0].source_ref}/text`,
+              },
+            }],
+          });
+        }
         return Response.json(HOSTED_MANIFEST);
       }
       const f = path.match(/^\/files\/([^/]+)$/);
@@ -706,6 +719,25 @@ describe("ported read-side MCP tools on the hosted (api) transport", () => {
       expect(manifest.high_watermark).toBe("12");
       expect(manifest.items[0].file_id).toBe("f_hosted1");
       expect(fake.hits.map((h) => `${h.method} ${h.path}`)).toEqual(["GET /knowledge/manifest"]);
+    } finally {
+      await close();
+    }
+  });
+
+  test("export_knowledge_manifest accepts truthful partial extraction", async () => {
+    const { client, close } = await connectedClient();
+    try {
+      const result = await client.callTool({
+        name: "export_knowledge_manifest",
+        arguments: { tag: "partial" },
+      });
+      expect(result.isError).not.toBe(true);
+      const item = JSON.parse(callText(result)).items[0];
+      expect(item.extraction).toEqual({
+        text_available: true,
+        status: "partial",
+        extracted_text_ref: "open-files://file/f_hosted1/text",
+      });
     } finally {
       await close();
     }

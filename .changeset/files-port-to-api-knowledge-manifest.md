@@ -24,6 +24,9 @@ The hosted projection omits station identity, local/source paths, S3
 bucket/prefix/region/object keys, and hashes derived from those coordinates.
 Extraction is reported available only when a tenant-bound materialized
 extraction matches the current revision; MIME capability alone is not evidence.
+Current-revision partial extractions preserve the `partial` status while
+remaining readable with an explicit extraction reference; stale-revision
+partial rows remain unavailable.
 
 OpenAPI now defines the complete query, success, item, cursor, and refusal
 schemas, and the generated SDK returns the typed manifest contract. CLI and MCP
