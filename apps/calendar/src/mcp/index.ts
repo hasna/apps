@@ -37,7 +37,7 @@ export function buildServer(): McpServer {
     pageArgsSchema(),
     async (input) => {
       const orgs = await getStore().listOrgs();
-      return toolResult(compactPage(orgs, input, compactOrg, "Set verbose=true or call get_org for full records."));
+      return toolResult(compactPage(orgs, input, compactOrg, "Set verbose=true for an expanded preview or call get_org for focused details."));
     },
   );
 
@@ -72,7 +72,7 @@ export function buildServer(): McpServer {
     "List all registered agents",
     pageArgsSchema(),
     async (input) => {
-      return toolResult(compactPage(await getStore().listAgents(), input, compactAgent, "Set verbose=true for session/capability fields."));
+      return toolResult(compactPage(await getStore().listAgents(), input, compactAgent, "Set verbose=true for an expanded preview with session/capability fields."));
     },
   );
 
@@ -109,7 +109,7 @@ export function buildServer(): McpServer {
     "List calendars, optionally filtered by org",
     { org_id: z.string().optional(), ...pageArgsSchema() },
     async ({ org_id, ...page }) => {
-      return toolResult(compactPage(await getStore().listCalendars(org_id), page, compactCalendar, "Set verbose=true for descriptions/metadata."));
+      return toolResult(compactPage(await getStore().listCalendars(org_id), page, compactCalendar, "Set verbose=true for an expanded preview with descriptions/metadata."));
     },
   );
 
@@ -149,10 +149,10 @@ export function buildServer(): McpServer {
       before: z.string().optional().describe("Events starting before this ISO date"),
       limit: z.number().int().positive().max(MAX_TOOL_LIMIT).optional(),
       cursor: z.number().int().nonnegative().optional(),
-      verbose: z.boolean().optional().describe("Return full records for the selected page"),
+      verbose: z.boolean().optional().describe("Return an expanded preview for the selected page"),
     },
     async ({ limit, cursor, verbose, ...filter }) => {
-      return toolResult(compactPage(await getStore().listEvents(filter), { limit, cursor, verbose }, compactEvent, "Set verbose=true or call get_event for full event records."));
+      return toolResult(compactPage(await getStore().listEvents(filter), { limit, cursor, verbose }, compactEvent, "Set verbose=true for an expanded preview or call get_event for focused details."));
     },
   );
 
@@ -201,7 +201,7 @@ export function buildServer(): McpServer {
       ...pageArgsSchema(),
     },
     async ({ query, org_id, ...page }) => {
-      return toolResult(compactPage(await getStore().searchEvents(query, org_id), page, compactEvent, "Set verbose=true or call get_event for full event records."));
+      return toolResult(compactPage(await getStore().searchEvents(query, org_id), page, compactEvent, "Set verbose=true for an expanded preview or call get_event for focused details."));
     },
   );
 
@@ -214,7 +214,7 @@ export function buildServer(): McpServer {
       ...pageArgsSchema(),
     },
     async ({ calendar_id, start, end, ...page }) => {
-      return toolResult(compactPage(await getStore().findConflicts(calendar_id, { start, end }), page, compactEvent, "Set verbose=true or call get_event for full event records."));
+      return toolResult(compactPage(await getStore().findConflicts(calendar_id, { start, end }), page, compactEvent, "Set verbose=true for an expanded preview or call get_event for focused details."));
     },
   );
 
@@ -238,7 +238,7 @@ export function buildServer(): McpServer {
     "List all attendees for an event",
     { event_id: z.string().describe("Event ID"), ...pageArgsSchema() },
     async ({ event_id, ...page }) => {
-      return toolResult(compactPage(await getStore().getAttendeesForEvent(event_id), page, compactAttendee, "Set verbose=true for response comments."));
+      return toolResult(compactPage(await getStore().getAttendeesForEvent(event_id), page, compactAttendee, "Set verbose=true for an expanded preview with response comments."));
     },
   );
 
@@ -278,7 +278,7 @@ export function buildServer(): McpServer {
       ...pageArgsSchema(),
     },
     async ({ agent_id, org_id, ...page }) => {
-      return toolResult(compactPage(await getStore().getAvailabilityForAgent(agent_id, org_id), page, compactAvailability, "Set verbose=true for IDs and timestamps."));
+      return toolResult(compactPage(await getStore().getAvailabilityForAgent(agent_id, org_id), page, compactAvailability, "Set verbose=true for an expanded preview with IDs and timestamps."));
     },
   );
 
@@ -300,7 +300,7 @@ export function buildServer(): McpServer {
     "List all members of an org",
     { org_id: z.string(), ...pageArgsSchema() },
     async ({ org_id, ...page }) => {
-      return toolResult(compactPage(await getStore().getMembershipsForOrg(org_id), page, compactMembership, "Set verbose=true for membership IDs."));
+      return toolResult(compactPage(await getStore().getMembershipsForOrg(org_id), page, compactMembership, "Set verbose=true for an expanded preview with membership IDs."));
     },
   );
 
@@ -324,10 +324,10 @@ export function buildServer(): McpServer {
       const events = (orgId && calendars.length > 0) ? await store.listEvents({ org_id: orgId, after: now }) : [];
       return toolResult({
         agent: page.verbose ? agent : compactAgent(agent),
-        orgs: compactPage(orgs, page, compactMembership, "Set verbose=true for full membership records."),
-        calendars: compactPage(calendars, page, compactCalendar, "Set verbose=true for full calendar records."),
-        upcoming: compactPage(events, page, compactEvent, "Set verbose=true or call get_event for full event records."),
-        hint: "Use limit/cursor to page each section; set verbose=true for full records.",
+        orgs: compactPage(orgs, page, compactMembership, "Set verbose=true for expanded membership previews."),
+        calendars: compactPage(calendars, page, compactCalendar, "Set verbose=true for expanded calendar previews."),
+        upcoming: compactPage(events, page, compactEvent, "Set verbose=true for an expanded preview or call get_event for focused details."),
+        hint: "Use limit/cursor to page each section; set verbose=true for expanded previews.",
       });
     },
   );
@@ -341,7 +341,7 @@ function pageArgsSchema() {
   return {
     limit: z.number().int().positive().max(MAX_TOOL_LIMIT).optional().describe(`Max returned items (default ${DEFAULT_TOOL_LIMIT}, max ${MAX_TOOL_LIMIT})`),
     cursor: z.number().int().nonnegative().optional().describe("Zero-based item offset for the next page"),
-    verbose: z.boolean().optional().describe("Return full records for the selected page"),
+    verbose: z.boolean().optional().describe("Return an expanded preview for the selected page"),
   };
 }
 

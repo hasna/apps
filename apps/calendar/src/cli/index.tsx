@@ -107,7 +107,7 @@ listCommand("agents")
     const agents = await getStore().listAgents();
     outputList(agents, opts, {
       empty: "No agents",
-      hint: "Use --verbose for full page fields or --json --full for the legacy array.",
+      hint: "Use --verbose for an expanded preview or --json --full for the legacy array.",
       json: (a) => ({ id: a.id, name: a.name, status: a.status, role: a.role, last_seen_at: a.last_seen_at }),
       row: (a) => opts.verbose
         ? `${a.id}  ${a.name}  status=${a.status}  role=${a.role || "-"}  last_seen=${a.last_seen_at}  dir=${truncate(a.working_dir)}`
@@ -176,7 +176,7 @@ listCommand("cal-list")
     const cals = await getStore().listCalendars(opts.org || undefined);
     outputList(cals, opts, {
       empty: "No calendars",
-      hint: "Use --verbose for full page fields or --json --full for the legacy array.",
+      hint: "Use --verbose for an expanded preview or --json --full for the legacy array.",
       json: (c) => ({ id: c.id, slug: c.slug, name: c.name, timezone: c.timezone, visibility: c.visibility }),
       row: (c) => opts.verbose
         ? `${c.id}  ${c.slug}  ${truncate(c.name, 36)}  org=${c.org_id}  tz=${c.timezone}  visibility=${c.visibility}  desc=${truncate(c.description)}`
@@ -400,7 +400,7 @@ listCommand("availability-show <agentId>")
     const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
     outputList(avail, opts, {
       empty: "No availability set",
-      hint: "Use --verbose for full page fields or --json --full for the legacy array.",
+      hint: "Use --verbose for an expanded preview or --json --full for the legacy array.",
       json: (a) => ({ agent_id: a.agent_id, org_id: a.org_id, day_of_week: a.day_of_week, start_time: a.start_time, end_time: a.end_time }),
       row: (a) => opts.verbose
         ? `${a.id}  ${days[a.day_of_week]}  ${a.start_time}-${a.end_time}  org=${a.org_id}  agent=${a.agent_id}`
@@ -433,7 +433,7 @@ listCommand("members <orgId>")
     const members = await getStore().getMembershipsForOrg(orgId);
     outputList(members, opts, {
       empty: "No members",
-      hint: "Use --verbose for full page fields or --json --full for the legacy array.",
+      hint: "Use --verbose for an expanded preview or --json --full for the legacy array.",
       json: (m) => ({ org_id: m.org_id, agent_id: m.agent_id, role: m.role }),
       row: (m) => opts.verbose
         ? `${m.id}  agent=${m.agent_id}  role=${m.role}  created=${m.created_at}`
@@ -456,7 +456,7 @@ listCommand("agent-orgs <agentId>")
     const orgs = await getStore().getOrgsForAgent(agentId);
     outputList(orgs, opts, {
       empty: "No orgs",
-      hint: "Use --verbose for full page fields or --json --full for the legacy array.",
+      hint: "Use --verbose for an expanded preview or --json --full for the legacy array.",
       json: (m) => ({ org_id: m.org_id, agent_id: m.agent_id, role: m.role }),
       row: (m) => opts.verbose
         ? `${m.id}  org=${m.org_id}  role=${m.role}  created=${m.created_at}`
@@ -566,7 +566,7 @@ function listCommand(name: string) {
   return calendarCommand(name)
     .option("--limit <n>", `Maximum rows per page (default ${DEFAULT_PAGE_LIMIT}, max ${MAX_PAGE_LIMIT})`, parseInteger)
     .option("--cursor <n>", "Zero-based row offset for the next page", parseInteger)
-    .option("--verbose", "Show full fields within the selected page")
+    .option("--verbose", "Show an expanded preview with additional fields")
     .option("--full", "Return the legacy complete full JSON array (requires --json)");
 }
 
@@ -627,8 +627,8 @@ function outputList<T>(
       next_cursor: page.nextCursor,
       compact: !opts.verbose,
       hint: page.nextCursor === null
-        ? "Set --verbose for full fields in this page, or --full for the legacy complete array."
-        : `Continue with --cursor ${page.nextCursor}; set --verbose for full fields in a page, or --full for the legacy complete array.`,
+        ? "Set --verbose for an expanded page preview, or --full for the legacy complete array."
+        : `Continue with --cursor ${page.nextCursor}; set --verbose for an expanded page preview, or --full for the legacy complete array.`,
     }));
     return;
   }

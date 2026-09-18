@@ -269,7 +269,9 @@ describe("calendar CLI", () => {
       const result = await runCalendar(["list", "--help"], join(tempDir, "calendar.db"));
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("Maximum rows per page (default 20, max 100)");
+      expect(result.stdout).toContain("Show an expanded preview with additional fields");
       expect(result.stdout).not.toContain("human output");
+      expect(result.stdout).not.toContain("full fields");
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
@@ -321,12 +323,14 @@ describe("calendar CLI", () => {
 
       expect(result.exitCode).toBe(0);
       expect(result.stderr).toBe("");
-      const page = JSON.parse(result.stdout) as { items: Array<Record<string, unknown>>; total: number; limit: number; next_cursor: number };
+      const page = JSON.parse(result.stdout) as { items: Array<Record<string, unknown>>; total: number; limit: number; next_cursor: number; hint: string };
       expect(page.items).toHaveLength(20);
       expect(page.total).toBe(105);
       expect(page.limit).toBe(20);
       expect(page.next_cursor).toBe(20);
       expect(page.items[0]!.description).toBeUndefined();
+      expect(page.hint).toContain("expanded page preview");
+      expect(page.hint).not.toContain("full fields");
       expect(Buffer.byteLength(result.stdout)).toBeLessThan(12_000);
 
       const full = await runCalendar(["list", "--calendar", calendar.id, "--json", "--full"], dbPath);
