@@ -85,7 +85,7 @@ describe("telephony CLI fails closed without the fleet API env", () => {
   test("a store-backed verb exits non-zero, names the required env + the local opt-in, and creates no local data dir", async () => {
     const home = scratchHome();
     try {
-      const result = await runEntry(CLI_ENTRY, ["agent", "list"], home);
+      const result = await runEntry(CLI_ENTRY, ["agent", "list", "--full"], home);
       expect(result.timedOut).toBe(false);
       expect(result.code).not.toBe(0);
       // Actionable error on stderr names the required env and the explicit
@@ -152,7 +152,7 @@ describe("telephony CLI explicit local opt-in", () => {
   test("HASNA_TELEPHONY_LOCAL=1 lets a store-backed verb run locally (opt-in still works)", async () => {
     const home = scratchHome();
     try {
-      const result = await runEntry(CLI_ENTRY, ["agent", "list"], home, {
+      const result = await runEntry(CLI_ENTRY, ["agent", "list", "--full"], home, {
         HASNA_TELEPHONY_LOCAL: "1",
       });
       expect(result.timedOut).toBe(false);

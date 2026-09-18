@@ -17,7 +17,7 @@ import {
   TELEPHONY_API_URL_ENV_KEYS,
 } from "../client-transport.js";
 import { HasnaHttpError } from "@hasna/contracts";
-import type { Agent, AgentConflictError, Call } from "../../types/index.js";
+import type { Agent, AgentConflictError, Call, Message } from "../../types/index.js";
 
 const CLIENT_ENV = [
   "HASNA_TELEPHONY_API_URL",
@@ -215,6 +215,33 @@ describe("ApiStore cloud filters (parity with LocalStore)", () => {
     };
     return { client, calls };
   }
+
+  it("preserves hosted message totals and forwards non-overlapping offsets", async () => {
+    const rows = Array.from({ length: 45 }, (_, index) => ({ id: `message-${index}` })) as Message[];
+    const calls: Array<Record<string, unknown>> = [];
+    const client = {
+      name: "telephony", baseUrl: "https://telephony.invalid/v1", transport: {} as never,
+      async list(resource: string, options?: { query?: Record<string, number> }) {
+        const limit = Number(options?.query?.limit ?? 50); const offset = Number(options?.query?.offset ?? 0);
+        calls.push({ resource, limit, offset }); const items = rows.slice(offset, offset + limit);
+        return { items, total: rows.length, cursor: null, raw: { items, total: rows.length } };
+      },
+      async get() { return null; }, async create() { return {} as never; }, async update() { return {} as never; }, async delete() {},
+    };
+    const store = new ApiStore(client as never);
+    const first = await store.listMessagesPage({ limit: 20, offset: 0 });
+    const second = await store.listMessagesPage({ limit: 20, offset: 20 });
+    const third = await store.listMessagesPage({ limit: 20, offset: 40 });
+    expect(calls).toEqual([
+      { resource: "messages", limit: 20, offset: 0 },
+      { resource: "messages", limit: 20, offset: 20 },
+      { resource: "messages", limit: 20, offset: 40 },
+    ]);
+    expect(first.total).toBe(45); expect(second.total).toBe(45); expect(third.total).toBe(45);
+    const ids = [...first.items, ...second.items, ...third.items].map((row) => row.id);
+    expect(new Set(ids).size).toBe(45);
+    expect(third.items).toHaveLength(5);
+  });
 
   it("sends the listened filter to /v1/voicemails (--unheard not dropped)", async () => {
     const { client, calls } = captureClient();
