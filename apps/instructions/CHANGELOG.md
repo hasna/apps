@@ -1,3 +1,9 @@
+## 0.7.4
+
+### Patch Changes
+
+- Add read-only native harness discovery with explicit path precedence, installation and symlink evidence, and portable template inputs. Stop inventing a Workspace directory when no workspace is configured.
+
 ## 0.7.3
 
 ### Patch Changes
