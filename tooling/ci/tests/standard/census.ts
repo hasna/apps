@@ -398,11 +398,6 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
     task: "todos 2a70ece0-d4af-4aae-bea8-4dff128a38ca (contracts task — economy)",
   },
   {
-    member: "emails",
-    cause: "credential_seam_compliance: src/cli/commands/domain-setup.test-support.ts:21 reads HASNA_EMAILS_API_KEY straight from the process environment (in-tree kit 1.0.2; first measured failing when validation moved in-tree).",
-    task: "fleet-alignment wave 2026-09-11 (W2 census) — owner: emails lane (W6); resolve through @hasna/contracts/client",
-  },
-  {
     member: "events",
     cause: "bins_match_package: package.json ships bin hasna-events (alias of events, npm parity with 0.1.15) that the manifest does not declare and cannot allowlist (in-tree kit 1.0.2).",
     task: "todos 9b78ba7e-d859-4928-a999-3184fa6baf97 (contracts task — events)",
