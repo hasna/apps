@@ -262,6 +262,10 @@ bytes; the asset is emitted separately from global instruction prose. These
 reviewed outputs accept exact `--adopt-file` and `--reconcile-file` preconditions
 and participate in hosted session refresh and snapshots. Updating source bytes
 requires reviewing and repinning the asset binding; a stale digest fails closed.
+Removing, disabling or renaming a managed asset blocks refresh and preserves the
+existing ownership manifest until its old destination is explicitly retired with
+`--retire-file` and `--expected-manifest-sha256`. The retirement snapshot restores
+both the original bytes and their ownership.
 Other executable asset kinds cannot use this custom-agent adoption exception.
 Codex custom-agent file loading remains unsupported. A generated file is not
 proof that a running provider loaded the role; verify the native consumer and

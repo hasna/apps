@@ -341,8 +341,8 @@ function applySessionRenderUnlocked(
     // Check the entire transaction before its first payload write. Per-file
     // checks below still protect races that occur during the write sequence.
     for (const result of results) {
-      coordination?.assert_held();
       assertExpectedSessionFileHash(result.path, targetHome, result.previousSha256);
+      coordination?.assert_held();
     }
     const resultsByPath = new Map(results.map((result) => [result.path, result]));
     for (const file of payloadFiles) {
@@ -1531,7 +1531,7 @@ function planStaleFileResults(
   if (!previousManifest) return [];
   return previousManifest.files
     .filter((file) => !currentRelativePaths.has(file.relativePath))
-    .filter((file) => isPlanManagedFile(plan, file.relativePath, file.role) || retiredHashes.has(file.relativePath))
+    .filter((file) => isPlanManagedFile(plan, file.relativePath, file.role) || file.role === "asset" || retiredHashes.has(file.relativePath))
     .map((file) => planStaleFileResult(file, targetHome, options, retiredHashes.get(file.relativePath)))
     .filter((result): result is SessionApplyFileResult => result !== null);
 }
@@ -1550,6 +1550,10 @@ function planStaleFileResult(
     if (previousSha256 !== retiredHash) throw new SessionApplyError(`File retirement preimage changed after validation: ${file.relativePath}`);
     return { path: target, relativePath: file.relativePath, role: file.role, action: "delete", changed: true,
       previousSha256, newSha256: "", reason: "exact reviewed obsolete managed file retired" };
+  }
+  if (file.role === "asset") {
+    return { path: target, relativePath: file.relativePath, role: file.role, action: "conflict", changed: true,
+      previousSha256, newSha256: "", reason: "obsolete managed asset requires exact retirement; preserve ownership until --retire-file and --expected-manifest-sha256 are supplied" };
   }
   if (!options.force && previousSha256 !== file.sha256) {
     return {

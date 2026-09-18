@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Config, ProfileAssetBinding, ProfileConfigBinding } from "../types/index.js";
 import { compileAssetPlan, configAssetDigest, configAssetLocator, selectAssetCapability } from "./asset-plan.js";
@@ -52,6 +52,40 @@ describe("native custom-agent asset refresh", () => {
     expect(selectAssetCapability("codex", "0.155.0", "cli", "custom-agent").support).toBe("unsupported");
     expect(selectAssetCapability("sumi", "0.3.0", "cli", "custom-agent").support).toBe("unsupported");
     expect(selectAssetCapability("claude", "2.1.100", "code", "custom-agent").support).toBe("unsupported");
+  });
+  for (const tool of ["claude", "sumi"] as const) test.each(["remove", "disable", "rename"] as const)(`${tool} preserves role ownership until exact retirement after %s`, async (change) => {
+    const targetHome = makeTempRoot("instructions-role-retirement-"); roots.push(targetHome);
+    const version = tool === "claude" ? "2.1.276" : "0.2.22"; const surface = tool === "claude" ? "code" : "cli";
+    const profile = { id: "profile-role", name: "profile-role", slug: "profile-role" };
+    const rule = config("shared-base", "Synthetic shared base.");
+    const role = config("role-source", "---\nname: auditor\ndescription: Synthetic scoped reviewer\n---\nROLE_BODY\n");
+    const bindings: ProfileConfigBinding[] = [{ profile_id: profile.id, config_id: rule.id, sort_order: 0, binding: { schema: "hasna.instructions.profile-config-binding/v1", activation: { mode: "always" }, required: true, fallback: "fail" } }];
+    const row: ProfileAssetBinding = { profile_id: profile.id, source_config_id: role.id, sort_order: 0, binding: {
+      schema: "hasna.instructions.profile-asset-binding/v1", assetKey: "auditor", kind: "custom-agent", enabled: true, required: true,
+      selector: { provider: tool, versionRange: version, surface, scope: "global" },
+      source: { kind: "custom-agent", locator: configAssetLocator(role.id, role.version), digest: configAssetDigest(role.content), immutable: true, allowed: true },
+      destination: { strategy: "emit-file", root: "target-home", relativePath: "agents/auditor.md" }, uninstall: "remove-managed", rollback: "snapshot",
+    } };
+    let assets = [row];
+    const selector = { schema: "hasna.instructions.hosted-profile-selector/v1" as const, authority: "https://instructions.example.test/v1", profileId: profile.id, providerVersion: version, manual: [], codewithNativeImports: false, allowEmptySources: false, stationProfile: false, checkGlobalCoverage: false, assetScope: "global" as const, assetSurface: surface };
+    const plan = () => planProfileSessionRender({ tool, profile: profile.slug, profile_id: profile.id, provider_version: version, targetHome, configs: [rule], bindings, asset_configs: [role], asset_bindings: assets, asset_scope: "global", asset_surface: surface, asset_plan_mode: "apply", refreshSelector: selector });
+    expect(applySessionRender(plan()).applied).toBe(true);
+    const manifestPath = join(targetHome, ".hasna/session-render-manifest.json"); const originalManifest = readFileSync(manifestPath, "utf8");
+    if (change === "remove") assets = [];
+    else if (change === "disable") row.binding.enabled = false;
+    else row.binding.destination.relativePath = "agents/reviewer.md";
+    const store = { mode: "api", v1BaseUrl: selector.authority, getProfile: async () => profile, getProfileConfigs: async () => [rule], getProfileConfigBindings: async () => bindings,
+      getProfileAssetBindings: async () => assets, getConfigById: async () => role, listConfigs: async () => [] } as unknown as ConfigStore;
+    expect((await refreshSessionRender({ targetHome, store })).status).toBe("blocked");
+    expect(readFileSync(manifestPath, "utf8")).toBe(originalManifest);
+    expect(readFileSync(join(targetHome, "agents/auditor.md"), "utf8")).toBe(role.content);
+    expect(existsSync(join(targetHome, "agents/reviewer.md"))).toBe(false);
+    const retired = applySessionRender(plan(), { expectedManifestSha256: hash(originalManifest), retireFiles: [{ relativePath: "agents/auditor.md", sha256: hash(role.content) }] });
+    expect(retired.applied).toBe(true); expect(existsSync(join(targetHome, "agents/auditor.md"))).toBe(false);
+    expect(existsSync(join(targetHome, "agents/reviewer.md"))).toBe(change === "rename");
+    expect(restoreSessionRenderSnapshot(retired.snapshotPath!).restored).toBe(true);
+    expect(readFileSync(manifestPath, "utf8")).toBe(originalManifest);
+    expect(readFileSync(join(targetHome, "agents/auditor.md"), "utf8")).toBe(role.content);
   });
   test.each(["claude", "sumi"] as const)("%s refuses custom-agent destinations outside its native scoped directory", (provider) => {
     const role = config("role-source", "---\nname: auditor\ndescription: Synthetic scoped reviewer\n---\nSCOPED_ROLE\n");
