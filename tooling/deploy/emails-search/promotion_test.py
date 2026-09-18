@@ -112,8 +112,19 @@ class AdditionalControls(unittest.TestCase):
   self.assertTrue(g.admit_runs([row],"a"*40))
   for key,value in [("head_sha","b"*40),("head_branch","other"),("event","pull_request"),("status","in_progress"),("conclusion","failure"),("name","other"),("path","other")]:
    self.assertFalse(g.admit_runs([{**row,key:value}],"a"*40))
-  prep={**row,"event":"workflow_dispatch","path":".github/workflows/emails-search-promotion.yml"};g.admit_preparation(prep,"a"*40)
+  prep={**row,"event":"workflow_dispatch","path":".github/workflows/emails-search-promotion.yml"}
+  self.assertEqual(g.admit_preparation(prep,"a"*40),"a"*40)
+  self.assertEqual(g.admit_preparation(prep,None),"a"*40)
+  with self.assertRaises(ValueError):g.admit_preparation(prep,"b"*40)
   with self.assertRaises(ValueError):g.admit_preparation({**prep,"path":"other"},"a"*40)
+ def test_prepared_file_binds_immutable_bytes_to_the_admitted_run_source(self):
+  spec=importlib.util.spec_from_file_location("gate",pathlib.Path(__file__).with_name("gate.py"));g=importlib.util.module_from_spec(spec);spec.loader.exec_module(g)
+  source="a"*40;plan={"schema":"emails.promotion-prepared.v1","sourceCommit":source};raw=m.encode(plan);expected=hashlib.sha256(raw).hexdigest()
+  with tempfile.TemporaryDirectory() as tmp:
+   path=pathlib.Path(tmp)/"prepared.json";path.write_bytes(raw)
+   self.assertEqual(g.verify_prepared_file(path,expected,source),plan)
+   with self.assertRaisesRegex(ValueError,"^PREPARED_RUN_SOURCE_DRIFT$"):g.verify_prepared_file(path,expected,"b"*40)
+   with self.assertRaisesRegex(ValueError,"^PREPARED_ARTIFACT_DIGEST$"):g.verify_prepared_file(path,"0"*64,source)
  def test_unreviewed_plan_refuses_before_any_aws(self):
   with tempfile.TemporaryDirectory() as tmp:
    d=pathlib.Path(tmp);p=d/"prepared.json";p.write_bytes(b"{}")
@@ -158,7 +169,7 @@ class FakeCloud:
   if kind==("ecs","wait"):return {}
   if kind==("ecs","list-tasks"):return {"taskArns":["observed-task"]}
   if kind==("ecs","describe-tasks"):
-   return {"tasks":[{"taskDefinitionArn":self.new,"lastStatus":"RUNNING","healthStatus":"HEALTHY","containers":[{"name":"emails","imageDigest":self.image}]}]}
+   return {"tasks":[{"taskArn":"observed-task","taskDefinitionArn":self.new,"lastStatus":"RUNNING","healthStatus":"HEALTHY","containers":[{"name":"emails","imageDigest":self.image}]}]}
   raise AssertionError("UNEXPECTED_AWS_CALL:"+str(kind))
  def mutations(self, operation):return [r for r in self.calls if r["args"][:2]==("ecs",operation)]
 
@@ -211,5 +222,169 @@ class OrchestrationControls(unittest.TestCase):
   cloud,error,receipts=self.execute("foreign_rollback",True);self.assertEqual(str(error),"ROLLBACK_FOREIGN_DEPLOYMENT");self.assertEqual(cloud.mutations("register-task-definition"),[]);self.assertEqual(cloud.mutations("update-service"),[])
  def test_exact_candidate_rolls_back_only_to_reviewed_revision(self):
   cloud,error,receipts=self.execute(rollback=True);self.assertIsNone(error);self.assertEqual(cloud.mutations("register-task-definition"),[]);self.assertEqual(len(cloud.mutations("update-service")),1);self.assertEqual(cloud.mutations("update-service")[0]["args"][-1],cloud.old);self.assertEqual(receipts["rolled-back.json"]["taskAfter"],cloud.old)
+
+class ReconciliationControls(unittest.TestCase):
+ def fixture(self,current="candidate",healthy=True):
+  base=PromotionControls();base.setUp();before=copy.deepcopy(base.base)
+  before["taskDefinitionArn"]=f"arn:aws:ecs:{m.REGION}:{m.ACCOUNT}:task-definition/emails-prod:88"
+  image="sha256:"+"1"*64
+  child_image="sha256:"+"2"*64
+  candidate_payload=m.task_candidate(before,image)
+  candidate={**copy.deepcopy(candidate_payload),"taskDefinitionArn":f"arn:aws:ecs:{m.REGION}:{m.ACCOUNT}:task-definition/emails-prod:89","revision":89,"status":"ACTIVE"}
+  descendant_payload=copy.deepcopy(candidate_payload)
+  next(c for c in descendant_payload["containerDefinitions"] if c["name"]=="emails")["image"]=m.REPOSITORY+"@"+child_image
+  descendant={**descendant_payload,"taskDefinitionArn":f"arn:aws:ecs:{m.REGION}:{m.ACCOUNT}:task-definition/emails-prod:90","revision":90,"status":"ACTIVE"}
+  plan={"schema":"emails.promotion-prepared.v1","sourceCommit":"a"*40,"recipeSha256":"f"*64,"taskDefinitionBefore":before["taskDefinitionArn"],"taskBeforeDigest":m.digest(m.encode(before)),"taskAfterDigest":m.digest(m.encode(candidate_payload)),"desiredCount":1,"image":{"imageDigest":image}}
+  current_task={"candidate":candidate,"base":before,"descendant":descendant}[current]
+  current_arn=current_task["taskDefinitionArn"]
+  current_image={"candidate":image,"base":m.BASE,"descendant":child_image}[current]
+  service={"serviceName":m.SERVICE,"status":"ACTIVE","desiredCount":1,"runningCount":1,"pendingCount":0,"taskDefinition":current_arn,"deployments":[{"status":"PRIMARY","taskDefinition":current_arn,"rolloutState":"COMPLETED" if healthy else "IN_PROGRESS","desiredCount":1,"runningCount":1,"pendingCount":0}]}
+  def cloud(*args,**kwargs):
+   if args[:2]==("ecs","list-tasks"):return {"taskArns":["task"]}
+   if args[:2]==("ecs","describe-tasks"):return {"tasks":[{"taskArn":"task","taskDefinitionArn":current_arn,"lastStatus":"RUNNING","healthStatus":"HEALTHY","containers":[{"name":"emails","imageDigest":current_image}]}]}
+   raise AssertionError("UNEXPECTED_AWS_CALL:"+str(args[:2]))
+  return before,candidate,descendant,plan,service,cloud
+ def execute(self,current="candidate",healthy=True):
+  before,candidate,descendant,plan,service,cloud=self.fixture(current,healthy)
+  lookup={row["taskDefinitionArn"]:row for row in (before,candidate,descendant)}
+  lineage={"parentImageDigest":plan["image"]["imageDigest"],"childImageDigest":next(c for c in descendant["containerDefinitions"] if c["name"]=="emails")["image"].split("@",1)[1],"runtimeConfigurationPreserved":True,"parentLayersPreserved":True}
+  with tempfile.TemporaryDirectory() as tmp:
+   out=pathlib.Path(tmp)
+   with patch.object(m,"historical_reviewed_plan",return_value=(plan,plan["image"],"a"*40)),patch.object(m,"task_read",side_effect=lambda arn: lookup[arn]),patch.object(m,"current_service",return_value=service),patch.object(m,"aws",side_effect=cloud),patch.object(m,"descendant_overlay_lineage",return_value=lineage):
+    m.reconcile("b"*40,out,out/"prepared.json","e"*64)
+   return json.loads((out/"reconciled.json").read_bytes())
+ def test_candidate_live_reconciliation_is_read_only_and_complete(self):
+  row=self.execute()
+  self.assertEqual(row["state"],"candidate_live_stable")
+  self.assertTrue(row["service"]["stable"]);self.assertTrue(row["service"]["healthy"])
+  self.assertIsNone(row["descendant"])
+  self.assertFalse(row["rollback"]["automatic"]);self.assertTrue(row["rollback"]["requiresSeparateReview"])
+  self.assertFalse(row["rollback"]["validAfterForwardMigration"])
+  self.assertEqual(row["sourceCommit"],"b"*40);self.assertEqual(row["preparedSourceCommit"],"a"*40)
+  self.assertEqual(set(row),{"schema","sourceCommit","preparedSourceCommit","preparedSha256","task88","task89","descendant","service","state","rollback"})
+ def test_historical_plan_requires_ancestor_and_runs_real_reviewed_plan(self):
+  prepared_source="a"*40;current_source="b"*40
+  manifest={"schemaVersion":2,"mediaType":m.OCI_MANIFEST,"config":{},"layers":[]}
+  receipt={"imageDigest":m.digest(m.encode(manifest)),"runtimeConfigurationPreserved":True}
+  plan={
+   "schema":"emails.promotion-prepared.v1",
+   "sourceCommit":prepared_source,
+   "recipeSha256":hashlib.sha256((m.ROOT/"recipe.json").read_bytes()).hexdigest(),
+   "image":receipt,
+  }
+  raw=m.encode(plan);expected=hashlib.sha256(raw).hexdigest()
+  with tempfile.TemporaryDirectory() as tmp:
+   path=pathlib.Path(tmp)/"prepared.json";path.write_bytes(raw)
+   class Result:returncode=0
+   with patch.object(m.subprocess,"run",return_value=Result()) as run,patch.object(m,"build",return_value=(manifest,b"config",b"layer",receipt)) as build,patch.object(m,"image_manifest",return_value=manifest) as readback:
+    actual=m.historical_reviewed_plan(current_source,path,expected)
+   self.assertEqual(actual,(plan,receipt,prepared_source))
+   self.assertEqual(run.call_args.args[0],["git","merge-base","--is-ancestor",prepared_source,current_source])
+   build.assert_called_once_with(prepared_source);readback.assert_called_once_with(receipt["imageDigest"])
+  with tempfile.TemporaryDirectory() as tmp:
+   path=pathlib.Path(tmp)/"prepared.json";path.write_bytes(raw)
+   class Refused:returncode=1
+   with patch.object(m.subprocess,"run",return_value=Refused()),patch.object(m,"build",side_effect=AssertionError("MUST_NOT_BUILD")):
+    with self.assertRaisesRegex(ValueError,"^PREPARED_SOURCE_NOT_ANCESTOR$"):m.historical_reviewed_plan(current_source,path,expected)
+ def test_descendant_overlay_is_reconciled_only_when_task_and_image_lineage_are_exact(self):
+  row=self.execute("descendant")
+  self.assertEqual(row["state"],"descendant_overlay_live_stable")
+  self.assertEqual(row["descendant"]["taskDefinition"].rsplit(":",1)[-1],"90")
+  self.assertTrue(row["descendant"]["lineage"]["runtimeConfigurationPreserved"])
+  self.assertEqual(row["rollback"]["preMigrationAnchor"],row["descendant"]["taskDefinition"])
+  self.assertTrue(row["rollback"]["tasks88And89AreHistoricalOnly"])
+ def test_descendant_image_lineage_preserves_parent_runtime_and_adds_one_layer(self):
+  parent_digest="sha256:"+"1"*64;child_digest="sha256:"+"2"*64
+  parent_layer={"mediaType":m.OCI_LAYER,"digest":"sha256:"+"3"*64,"size":10}
+  layer_bytes=b"reviewed descendant layer\0";compressed=gzip.compress(layer_bytes,mtime=0)
+  child_layer={"mediaType":m.OCI_LAYER,"digest":m.digest(compressed),"size":len(compressed)}
+  parent_manifest={"schemaVersion":2,"mediaType":m.OCI_MANIFEST,"config":{"mediaType":m.OCI_CONFIG,"digest":"sha256:"+"5"*64,"size":1},"layers":[parent_layer]}
+  child_manifest={"schemaVersion":2,"mediaType":m.OCI_MANIFEST,"config":{"mediaType":m.OCI_CONFIG,"digest":"sha256:"+"6"*64,"size":1},"layers":[parent_layer,child_layer]}
+  runtime={"Env":["KEEP=1"],"Entrypoint":["bun"],"User":"1000"}
+  parent_config={"architecture":"amd64","os":"linux","created":"time","config":{**runtime,"Labels":{"keep":"same"}},"rootfs":{"type":"layers","diff_ids":["sha256:"+"7"*64]},"history":[{"created_by":"base"}]}
+  child_config={"architecture":"amd64","os":"linux","created":"time","config":{**runtime,"Labels":{"keep":"same","com.hasna.review.patch-sha256":"a"*64}},"rootfs":{"type":"layers","diff_ids":["sha256:"+"7"*64,m.digest(layer_bytes)]},"history":[{"created_by":"base"},{"created_by":"overlay"}]}
+  with patch.object(m,"image_manifest",side_effect=[parent_manifest,child_manifest]),patch.object(m,"blob",side_effect=[m.encode(parent_config),m.encode(child_config),compressed]):
+   row=m.descendant_overlay_lineage(parent_digest,child_digest)
+  self.assertEqual(row["layerDigest"],child_layer["digest"]);self.assertEqual(row["diffId"],m.digest(layer_bytes))
+  self.assertEqual(row["addedLabelNames"],["com.hasna.review.patch-sha256"])
+  drift=copy.deepcopy(child_config);drift["config"]["Env"]=["CHANGED=1"]
+  with patch.object(m,"image_manifest",side_effect=[parent_manifest,child_manifest]),patch.object(m,"blob",side_effect=[m.encode(parent_config),m.encode(drift),compressed]):
+   with self.assertRaisesRegex(ValueError,"^RECONCILE_DESCENDANT_RUNTIME_DRIFT$"):m.descendant_overlay_lineage(parent_digest,child_digest)
+  wrong_diff=copy.deepcopy(child_config);wrong_diff["rootfs"]["diff_ids"][-1]="sha256:"+"9"*64
+  with patch.object(m,"image_manifest",side_effect=[parent_manifest,child_manifest]),patch.object(m,"blob",side_effect=[m.encode(parent_config),m.encode(wrong_diff),compressed]):
+   with self.assertRaisesRegex(ValueError,"^RECONCILE_DESCENDANT_DIFF_ID_BINDING$"):m.descendant_overlay_lineage(parent_digest,child_digest)
+  empty_history=copy.deepcopy(child_config);empty_history["history"][-1]={"created_by":"metadata only","empty_layer":True}
+  with patch.object(m,"image_manifest",side_effect=[parent_manifest,child_manifest]),patch.object(m,"blob",side_effect=[m.encode(parent_config),m.encode(empty_history),compressed]):
+   with self.assertRaisesRegex(ValueError,"^RECONCILE_DESCENDANT_HISTORY_LAYER$"):m.descendant_overlay_lineage(parent_digest,child_digest)
+ def test_base_live_reconciliation_records_registered_candidate_without_mutation(self):
+  row=self.execute("base")
+  self.assertEqual(row["state"],"base_live_stable")
+  self.assertTrue(row["service"]["healthy"])
+ def test_unstable_or_mixed_service_refuses_without_a_receipt(self):
+  before,candidate,descendant,plan,service,cloud=self.fixture("candidate",False)
+  lookup={row["taskDefinitionArn"]:row for row in (before,candidate,descendant)}
+  with tempfile.TemporaryDirectory() as tmp:
+   out=pathlib.Path(tmp)
+   with patch.object(m,"historical_reviewed_plan",return_value=(plan,plan["image"],"a"*40)),patch.object(m,"task_read",side_effect=lambda arn: lookup[arn]),patch.object(m,"current_service",return_value=service),patch.object(m,"aws",side_effect=cloud):
+    with self.assertRaisesRegex(ValueError,"^DEPLOYMENT_NOT_STABLE$"):m.reconcile("b"*40,out,out/"prepared.json","e"*64)
+   self.assertFalse((out/"reconciled.json").exists())
+  mixed=copy.deepcopy(service);mixed["deployments"].append({"status":"ACTIVE","taskDefinition":before["taskDefinitionArn"],"rolloutState":"COMPLETED","desiredCount":0,"runningCount":0,"pendingCount":0})
+  with tempfile.TemporaryDirectory() as tmp:
+   out=pathlib.Path(tmp)
+   with patch.object(m,"historical_reviewed_plan",return_value=(plan,plan["image"],"a"*40)),patch.object(m,"task_read",side_effect=lambda arn: lookup[arn]),patch.object(m,"current_service",return_value=mixed),patch.object(m,"aws",side_effect=cloud):
+    with self.assertRaisesRegex(ValueError,"^DEPLOYMENT_NOT_STABLE$"):m.reconcile("b"*40,out,out/"prepared.json","e"*64)
+   self.assertFalse((out/"reconciled.json").exists())
+ def test_service_change_between_task_reads_and_receipt_refuses(self):
+  before,candidate,descendant,plan,service,cloud=self.fixture("candidate",True)
+  changed=copy.deepcopy(service);changed["runningCount"]=0;changed["pendingCount"]=1
+  lookup={row["taskDefinitionArn"]:row for row in (before,candidate,descendant)}
+  with tempfile.TemporaryDirectory() as tmp:
+   out=pathlib.Path(tmp)
+   with patch.object(m,"historical_reviewed_plan",return_value=(plan,plan["image"],"a"*40)),patch.object(m,"task_read",side_effect=lambda arn: lookup[arn]),patch.object(m,"current_service",side_effect=[service,changed]),patch.object(m,"aws",side_effect=cloud):
+    with self.assertRaisesRegex(ValueError,"^RECONCILE_SERVICE_RACE$"):m.reconcile("b"*40,out,out/"prepared.json","e"*64)
+   self.assertFalse((out/"reconciled.json").exists())
+ def test_reconciliation_samples_tasks_around_service_and_rechecks_service_afterward(self):
+  before,candidate,descendant,plan,service,_=self.fixture("candidate",True)
+  lookup={row["taskDefinitionArn"]:row for row in (before,candidate,descendant)};order=[]
+  def read_service():order.append("service");return service
+  def read_tasks(_known):
+   order.append("tasks");row={"taskArnSha256":"a"*64,"taskDefinition":candidate["taskDefinitionArn"],"lastStatus":"RUNNING","healthStatus":"HEALTHY","imageDigest":plan["image"]["imageDigest"]};return [row],"d"*64
+  with tempfile.TemporaryDirectory() as tmp:
+   out=pathlib.Path(tmp)
+   with patch.object(m,"historical_reviewed_plan",return_value=(plan,plan["image"],"a"*40)),patch.object(m,"task_read",side_effect=lambda arn: lookup[arn]),patch.object(m,"current_service",side_effect=read_service),patch.object(m,"running_task_snapshot",side_effect=read_tasks):
+    m.reconcile("b"*40,out,out/"prepared.json","e"*64)
+  self.assertEqual(order,["service","tasks","service","tasks","service"])
+ def test_running_task_set_or_image_race_refuses_without_receipt(self):
+  before,candidate,descendant,plan,service,_=self.fixture("candidate",True)
+  lookup={row["taskDefinitionArn"]:row for row in (before,candidate,descendant)};calls={"list":0}
+  def cloud(*args,**kwargs):
+   if args[:2]==("ecs","list-tasks"):
+    calls["list"]+=1;return {"taskArns":["task-a" if calls["list"]==1 else "task-b"]}
+   if args[:2]==("ecs","describe-tasks"):
+    task=args[-1];return {"tasks":[{"taskArn":task,"taskDefinitionArn":candidate["taskDefinitionArn"],"lastStatus":"RUNNING","healthStatus":"HEALTHY","containers":[{"name":"emails","imageDigest":plan["image"]["imageDigest"]}]}]}
+   raise AssertionError("UNEXPECTED_AWS_CALL:"+str(args[:2]))
+  with tempfile.TemporaryDirectory() as tmp:
+   out=pathlib.Path(tmp)
+   with patch.object(m,"historical_reviewed_plan",return_value=(plan,plan["image"],"a"*40)),patch.object(m,"task_read",side_effect=lambda arn: lookup[arn]),patch.object(m,"current_service",return_value=service),patch.object(m,"aws",side_effect=cloud):
+    with self.assertRaisesRegex(ValueError,"^RECONCILE_RUNNING_TASK_RACE$"):m.reconcile("b"*40,out,out/"prepared.json","e"*64)
+   self.assertFalse((out/"reconciled.json").exists())
+ def test_descendant_reconciliation_uses_real_oci_lineage_and_receipt_leaks_nothing(self):
+  before,candidate,descendant,plan,service,cloud=self.fixture("descendant",True)
+  lookup={row["taskDefinitionArn"]:row for row in (before,candidate,descendant)}
+  parent_layer={"mediaType":m.OCI_LAYER,"digest":"sha256:"+"3"*64,"size":10}
+  layer_bytes=b"reviewed descendant layer\0";compressed=gzip.compress(layer_bytes,mtime=0)
+  child_layer={"mediaType":m.OCI_LAYER,"digest":m.digest(compressed),"size":len(compressed)}
+  parent_manifest={"schemaVersion":2,"mediaType":m.OCI_MANIFEST,"config":{"mediaType":m.OCI_CONFIG,"digest":"sha256:"+"5"*64,"size":1},"layers":[parent_layer]}
+  child_manifest={"schemaVersion":2,"mediaType":m.OCI_MANIFEST,"config":{"mediaType":m.OCI_CONFIG,"digest":"sha256:"+"6"*64,"size":1},"layers":[parent_layer,child_layer]}
+  runtime={"Env":["PRIVATE_SHOULD_NOT_APPEAR=1"],"Entrypoint":["bun"],"User":"1000"}
+  parent_config={"architecture":"amd64","os":"linux","created":"time","config":{**runtime,"Labels":{"keep":"same"}},"rootfs":{"type":"layers","diff_ids":["sha256:"+"7"*64]},"history":[{"created_by":"base"}]}
+  child_config={"architecture":"amd64","os":"linux","created":"time","config":{**runtime,"Labels":{"keep":"same","com.hasna.review.patch-sha256":"SECRET_LABEL_VALUE"}},"rootfs":{"type":"layers","diff_ids":["sha256:"+"7"*64,m.digest(layer_bytes)]},"history":[{"created_by":"base"},{"created_by":"overlay"}]}
+  with tempfile.TemporaryDirectory() as tmp:
+   out=pathlib.Path(tmp)
+   with patch.object(m,"historical_reviewed_plan",return_value=(plan,plan["image"],"a"*40)),patch.object(m,"task_read",side_effect=lambda arn: lookup[arn]),patch.object(m,"current_service",return_value=service),patch.object(m,"aws",side_effect=cloud),patch.object(m,"image_manifest",side_effect=[parent_manifest,child_manifest]),patch.object(m,"blob",side_effect=[m.encode(parent_config),m.encode(child_config),compressed]):
+    m.reconcile("b"*40,out,out/"prepared.json","e"*64)
+   raw=(out/"reconciled.json").read_text();row=json.loads(raw)
+  self.assertEqual(row["state"],"descendant_overlay_live_stable")
+  for forbidden in ["PRIVATE_SHOULD_NOT_APPEAR","SECRET_LABEL_VALUE","environment","valueFrom","secret"]:self.assertNotIn(forbidden,raw)
 
 if __name__=="__main__":unittest.main()

@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import tempfile
 
 
 def require(ok, code):
@@ -24,13 +25,55 @@ def admit_runs(runs, source):
     return any(r.get("head_sha") == source and r.get("head_branch") == "main" and r.get("event") == "push" and r.get("status") == "completed" and r.get("conclusion") == "success" and r.get("name") == "ci" and r.get("path") == ".github/workflows/ci.yml" for r in runs)
 
 
-def admit_preparation(run, source):
-    require(run.get("head_sha") == source and run.get("head_branch") == "main" and run.get("event") == "workflow_dispatch" and run.get("status") == "completed" and run.get("conclusion") == "success" and run.get("path") == ".github/workflows/emails-search-promotion.yml", "PREPARATION_RUN_NOT_TRUSTED")
+def admit_preparation(run, source=None):
+    prepared_source = run.get("head_sha")
+    require(
+        isinstance(prepared_source, str)
+        and re.fullmatch(r"[0-9a-f]{40}", prepared_source)
+        and (source is None or prepared_source == source)
+        and run.get("head_branch") == "main"
+        and run.get("event") == "workflow_dispatch"
+        and run.get("status") == "completed"
+        and run.get("conclusion") == "success"
+        and run.get("path") == ".github/workflows/emails-search-promotion.yml",
+        "PREPARATION_RUN_NOT_TRUSTED",
+    )
+    return prepared_source
 
+
+
+def verify_prepared_file(path, expected_sha256, expected_source):
+    require(path.is_file() and not path.is_symlink() and path.stat().st_size < 65536, "PREPARED_ARTIFACT_DIGEST")
+    raw = path.read_bytes()
+    require(hashlib.sha256(raw).hexdigest() == expected_sha256, "PREPARED_ARTIFACT_DIGEST")
+    try:
+        prepared = json.loads(raw)
+    except Exception:
+        raise ValueError("PREPARED_ARTIFACT_JSON")
+    require(
+        prepared.get("schema") == "emails.promotion-prepared.v1"
+        and prepared.get("sourceCommit") == expected_source,
+        "PREPARED_RUN_SOURCE_DRIFT",
+    )
+    return prepared
+
+
+def download_and_verify_preparation(repo, run, destination, expected_sha256, expected_source):
+    destination.mkdir(mode=0o700)
+    result = subprocess.run(
+        ["gh", "run", "download", run, "--repo", repo, "--name", "emails-search-prepared", "--dir", str(destination)],
+        capture_output=True,
+        timeout=90,
+    )
+    require(result.returncode == 0, "ARTIFACT_DOWNLOAD_REFUSED")
+    path = destination / "prepared.json"
+    verify_prepared_file(path, expected_sha256, expected_source)
+    path.chmod(0o600)
+    return path
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--phase", choices=["prepare", "promote", "rollback"], required=True)
+    p.add_argument("--phase", choices=["prepare", "reconcile", "promote", "rollback"], required=True)
     p.add_argument("--source", required=True)
     p.add_argument("--run", default="")
     p.add_argument("--prepared-sha256", default="")
@@ -47,18 +90,28 @@ def main():
     require(re.fullmatch(r"[0-9a-f]{40}", source), "OVERLAY_SOURCE")
     result = subprocess.run(["git", "merge-base", "--is-ancestor", source, args.source], capture_output=True)
     require(result.returncode == 0, "OVERLAY_PUBLIC_SOURCE_NOT_MERGED")
-    if args.phase in {"promote", "rollback"}:
+    if args.phase in {"reconcile", "promote", "rollback"}:
         require(re.fullmatch(r"[1-9][0-9]{0,19}", args.run) and re.fullmatch(r"[0-9a-f]{64}", args.prepared_sha256), "PREPARED_REVIEW_BINDING")
-        admit_preparation(gh(f"repos/{repo}/actions/runs/{args.run}"), args.source)
+        prepared_source = admit_preparation(
+            gh(f"repos/{repo}/actions/runs/{args.run}"),
+            None if args.phase == "reconcile" else args.source,
+        )
+        if args.phase == "reconcile":
+            require(
+                subprocess.run(
+                    ["git", "merge-base", "--is-ancestor", prepared_source, args.source],
+                    capture_output=True,
+                ).returncode == 0,
+                "PREPARATION_SOURCE_NOT_ANCESTOR",
+            )
         artifacts = gh(f"repos/{repo}/actions/runs/{args.run}/artifacts?per_page=100")["artifacts"]
         rows = [a for a in artifacts if a["name"] == "emails-search-prepared" and not a.get("expired")]
         require(len(rows) == 1, "PREPARED_ARTIFACT_COUNT")
         if args.download is not None:
-            args.download.mkdir(mode=0o700)
-            r = subprocess.run(["gh", "run", "download", args.run, "--repo", repo, "--name", "emails-search-prepared", "--dir", str(args.download)], capture_output=True, timeout=90)
-            require(r.returncode == 0, "ARTIFACT_DOWNLOAD_REFUSED")
-            path = args.download / "prepared.json"
-            require(path.is_file() and not path.is_symlink() and path.stat().st_size < 65536 and hashlib.sha256(path.read_bytes()).hexdigest() == args.prepared_sha256, "PREPARED_ARTIFACT_DIGEST")
+            download_and_verify_preparation(repo, args.run, args.download, args.prepared_sha256, prepared_source)
+        else:
+            with tempfile.TemporaryDirectory(prefix="emails-prepared-gate-") as temporary:
+                download_and_verify_preparation(repo, args.run, Path(temporary) / "artifact", args.prepared_sha256, prepared_source)
     print("Exact-main CI and promotion input admission passed")
 
 
