@@ -1520,8 +1520,8 @@ profileCmd.command("binding <profile> <config>").description("Set a config's sch
 
 profileCmd.command("apply [id]").description("Apply all configs in a profile to disk")
   .option("--dry-run", "preview without writing")
-  .option("--from <agent>", "verify the hosted Conversations heartbeat for this agent")
-  .option("--delivery-verified", "assert channel and direct-message canaries were observed in this acceptance pass")
+  .option("--from <agent>", "deprecated compatibility option; no heartbeat is sent")
+  .option("--delivery-verified", "deprecated compatibility option; Skills delivery is not verified here")
   .option("--auto", "resolve the matching profile for the current machine")
   .option("--hostname <hostname>", "override detected hostname for auto resolution")
   .option("--os <os>", "override detected OS for auto resolution")
@@ -1568,13 +1568,6 @@ profileCmd.command("apply [id]").description("Apply all configs in a profile to 
         console.error(chalk.red(`[failed] ${failure.config_slug}: ${failure.message}`));
       }
       if (report.failures.length > 0) process.exitCode = 1;
-      const runtimeReport = await reconcileManagedSkillRuntimes({
-        dryRun: opts.dryRun,
-        agent: opts.from,
-        deliveryVerified: opts.deliveryVerified,
-      });
-      printManagedSkillRuntimeReport(runtimeReport);
-      if (runtimeReport.failed > 0) process.exitCode = 1;
       console.log(chalk.dim(`\n${changed}/${results.length} changed (${selected.slug} on ${machine.hostname} ${machine.os_family}/${machine.arch})`));
     } catch (e) { console.error(chalk.red(formatCliError(e))); process.exit(1); }
   });
@@ -2887,20 +2880,20 @@ program
     console.log(chalk.cyan("Missing:") + ` ${status.health.missingTargets === 0 ? chalk.green("0") : chalk.yellow(String(status.health.missingTargets))} (file not on disk)`);
     console.log(chalk.cyan("Secrets:") + ` ${status.health.unredactedSecretFindings === 0 ? chalk.green("0 ✓") : chalk.red(String(status.health.unredactedSecretFindings) + " ⚠")} unredacted`);
     console.log(chalk.cyan("Retired agents:") + ` ${status.health.retiredAgentRows === 0 ? chalk.green("0") : chalk.yellow(String(status.health.retiredAgentRows))} row(s)`);
-    console.log(chalk.cyan("Skill runtimes:") + ` ${status.health.missingManagedSkillRuntimes === 0 ? chalk.green(`${status.counts.managedSkillRuntimes.healthy} ready`) : chalk.yellow(`${status.health.missingManagedSkillRuntimes} missing`)} (${status.counts.managedSkillRuntimes.skillsPresent} managed skill(s) present)`);
+    console.log(chalk.cyan("Legacy Inbox migration:") + ` ${status.health.missingManagedSkillRuntimes === 0 ? chalk.green("no legacy paths found") : chalk.yellow("native paths need Skills CLI review")} (Skills availability is not verified here)`);
     console.log(chalk.cyan("Templates:") + ` ${status.counts.configs.templates} (with {{VAR}} placeholders)`);
   });
 
 // ── managed skill runtimes ──────────────────────────────────────────────────
 const managedSkillsCmd = program
   .command("managed-skills")
-  .description("Inspect or reconcile package-owned runtime contracts for installed managed skills");
+  .description("Report retired native Inbox skill paths; manage skills through the Skills CLI");
 
 managedSkillsCmd
   .command("status")
-  .option("--from <agent>", "verify the hosted Conversations heartbeat for this agent")
-  .option("--delivery-verified", "assert channel and direct-message canaries were observed in this acceptance pass")
-  .option("--json", "output the full local runtime status as JSON")
+  .option("--from <agent>", "deprecated compatibility option; no heartbeat is sent")
+  .option("--delivery-verified", "deprecated compatibility option; Skills delivery is not verified here")
+  .option("--json", "output the read-only legacy migration status as JSON")
   .action((opts: { deliveryVerified?: boolean; from?: string; json?: boolean }) => {
     const report = inspectManagedSkillRuntimes({
       agent: opts.from,
@@ -2912,7 +2905,7 @@ managedSkillsCmd
       return;
     }
     if (report.skills_present === 0) {
-      console.log(chalk.dim("No managed skills with package-owned runtime contracts are installed."));
+      console.log(chalk.dim("No legacy native Inbox skill found. Use the Skills CLI to inspect selected skills."));
       return;
     }
     for (const runtime of report.runtimes) {
@@ -2925,10 +2918,11 @@ managedSkillsCmd
 
 managedSkillsCmd
   .command("apply")
+  .description("Deprecated: report migration requirements without repairing native skill payloads")
   .option("--dry-run", "preview without writing")
-  .option("--from <agent>", "verify the hosted Conversations heartbeat for this agent")
-  .option("--delivery-verified", "assert channel and direct-message canaries were observed in this acceptance pass")
-  .option("--json", "output the reconcile report as JSON")
+  .option("--from <agent>", "deprecated compatibility option; no heartbeat is sent")
+  .option("--delivery-verified", "deprecated compatibility option; Skills delivery is not verified here")
+  .option("--json", "output the read-only retirement report as JSON")
   .action(async (opts: { deliveryVerified?: boolean; dryRun?: boolean; from?: string; json?: boolean }) => {
     const report = await reconcileManagedSkillRuntimes({
       dryRun: opts.dryRun,
@@ -3529,8 +3523,8 @@ program
   .command("bootstrap")
   .description("Install the full @hasna ecosystem: CLI tools + MCP servers + configs")
   .option("--dry-run", "show what would be installed without doing it")
-  .option("--from <agent>", "verify the hosted Conversations heartbeat for this agent")
-  .option("--delivery-verified", "assert channel and direct-message canaries were observed in this acceptance pass")
+  .option("--from <agent>", "deprecated compatibility option; no heartbeat is sent")
+  .option("--delivery-verified", "deprecated compatibility option; Skills delivery is not verified here")
   .option("--skip-mcp", "skip MCP server registration")
   .action(async (opts) => {
     const store = resolveConfigStore();
@@ -3582,18 +3576,7 @@ program
       console.log(chalk.dim("  would run: configs init"));
     }
 
-    console.log(chalk.cyan("\nReconciling managed skill runtimes:"));
-    const runtimeReport = await reconcileManagedSkillRuntimes({
-      dryRun: opts.dryRun,
-      agent: opts.from,
-      deliveryVerified: opts.deliveryVerified,
-    });
-    printManagedSkillRuntimeReport(runtimeReport);
-    if (runtimeReport.failed > 0) {
-      console.error(chalk.red("\nBootstrap incomplete: a managed skill runtime could not be reconciled."));
-      process.exitCode = 1;
-      return;
-    }
+    console.log(chalk.dim("\nManage skill publication, selection and agent hooks through the Skills CLI."));
 
     console.log(chalk.bold("\n✓ Bootstrap complete.") + chalk.dim(" Restart agent sessions to load updated integrations."));
   });

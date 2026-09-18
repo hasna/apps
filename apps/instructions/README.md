@@ -67,6 +67,19 @@ instructions package-manager-scan --fail-on-findings .
 instructions package-manager-scan --home --fail-on-findings .
 ```
 
+Skills are managed through the Skills CLI. Profile application and bootstrap do
+not inspect, install or repair native Inbox skill payloads, and do not send
+Conversations heartbeats. Their legacy `--from` and `--delivery-verified` flags
+remain accepted for compatibility but perform no verification.
+
+`instructions managed-skills status` and `instructions managed-skills apply`
+are deprecated, read-only migration reports. They return a failure when legacy
+Inbox paths remain and preserve those paths, including symlinks. Use the Skills
+CLI to review `skills migrate native`, then sync and load the selected skills.
+An empty legacy inventory does not verify hosted skill selection or runtime
+delivery. The exported inspection/reconciliation helpers behave the same way;
+an explicit legacy `assetPath` no longer enables native payload writes.
+
 Collection commands are compact by default to keep agent terminals and context
 small. Human output is capped at 20 rows unless you pass `--limit`; use
 `--cursor` to continue from the next page. Detail is explicit:
