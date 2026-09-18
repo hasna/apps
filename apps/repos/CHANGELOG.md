@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.3.0
+
+### Minor Changes
+
+- 08d17e4: Add an exact existing-checkout registration command and SDK operation. Plans bind the expected remote, HEAD, branch, index and normal registry identity. Applying inserts one catalog row without workspace bootstrap, hook installation, catalog synchronization or duplicate-row merging.
+
+### Patch Changes
+
+- 456347c: Add a dry-run worktree normalization command with verified file checkpoints,
+  Git-aware relocation, registry and lease path updates, compatibility aliases,
+  and receipt-based rollback into the org-scoped layout.
+- 3ef5458: Preserve macOS symlink permissions in normalization checkpoints, relocated external links, and rollback without changing the linked files.
+
+Release bookkeeping: consume the stale resolver changesets `683bcbd` and `0575dfa`, whose behavior was already released before 0.2.0 and described under 0.1.55 and 0.1.56. They introduce no new behavior in 0.3.0.
+
 ## 0.2.0
 
 ### Minor Changes

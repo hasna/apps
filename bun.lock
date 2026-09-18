@@ -905,7 +905,7 @@
     },
     "apps/repos": {
       "name": "@hasna/repos",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "bin": {
         "repos": "dist/cli/index.js",
         "repos-mcp": "dist/mcp/index.js",
