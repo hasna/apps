@@ -98,6 +98,7 @@ export interface MessagesStore {
   deliverTo(
     recipient: string,
     at: string,
+    limit?: number,
   ): Promise<Array<{ message: Message; delivery: MessageDelivery }>>;
   /** Mark a whole thread read from an agent's perspective (stored/delivered -> read). */
   markThreadRead(threadId: string, agent: string, at: string): Promise<void>;
@@ -482,11 +483,11 @@ export class MessagesService {
    * undelivered messages and return them. This is the verb that makes a
    * stored-but-undelivered message distinguishable from a delivered one —
    * delivery is recorded when the recipient actually pulls. */
-  async receive(agent: string): Promise<DeliveredMessage[]> {
+  async receive(agent: string, limit?: number): Promise<DeliveredMessage[]> {
     const agentName = normalizeAgentName(agent);
     if (!agentName) throw new Error("agent is required");
     const now = new Date().toISOString();
-    const delivered = await this.store.deliverTo(agentName, now);
+    const delivered = await this.store.deliverTo(agentName, now, limit);
     await this.store.touchAgent(agentName, now);
     return delivered.map(({ message, delivery }) => ({
       ...message,

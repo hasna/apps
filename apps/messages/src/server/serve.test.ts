@@ -171,6 +171,22 @@ describe("messages-serve HTTP API", () => {
     }
   });
 
+  test("receive accepts OpenAPI boolean full=true and compatibility full=1", async () => {
+    const { handler, close } = makeHandler();
+    try {
+      for (let i = 0; i < 21; i += 1) {
+        await req(handler, "POST", "/v1/messages", { from: "sender", to: "boolean-full", content: `boolean ${i}` });
+        await req(handler, "POST", "/v1/messages", { from: "sender", to: "numeric-full", content: `numeric ${i}` });
+      }
+      const booleanFull = await j<{ messages: unknown[] }>(await req(handler, "GET", "/v1/messages/receive?agent=boolean-full&full=true"));
+      expect(booleanFull.messages).toHaveLength(21);
+      const numericFull = await j<{ messages: unknown[] }>(await req(handler, "GET", "/v1/messages/receive?agent=numeric-full&full=1"));
+      expect(numericFull.messages).toHaveLength(21);
+    } finally {
+      close();
+    }
+  });
+
   test("thread close/reopen over HTTP", async () => {
     const { handler, close } = makeHandler();
     try {
