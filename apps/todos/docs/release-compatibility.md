@@ -40,17 +40,30 @@ other final-pack mutation scripts, so npm's final publish pack is generated
 from the same deterministic build state verified by the gate.
 
 The Actions entrypoint is the repository-root
-`.github/workflows/release-todos.yml`. A push of an annotated
-`npm/todos/v<version>` tag on protected-main history invokes `npm publish`
-from `apps/todos`. The workflow sets `HASNA_TODOS_EXPECTED_COMMIT` to
-GitHub's event SHA and supplies the fixed reviewer variables and signed receipt
-from the `npm-release` environment. See `npm-release-agent-review.md` for
-the independent review and receipt procedure.
+`.github/workflows/release-todos.yml`. Every annotated
+`npm/todos/v<version>` tag on main identifies one delivery lane with an exact
+`Release-Lane: vault-token` or `Release-Lane: oidc` line. It must match the
+`npm-release` environment's `RELEASE_PUBLISH_MODE`, which defaults to
+`vault-token`; unknown values fail closed. Every tag runs the signed independent
+review and release checks. Only an explicitly selected OIDC tag invokes
+`npm publish` from `apps/todos` in Actions. Vault-token tags are validated there
+without a competing publication.
 
-The npm trusted publisher for `@hasna/todos` must bind `hasna/apps`,
-`release-todos.yml`, and `npm-release`, with direct publishing enabled.
-A manual workflow run executes review-mode checks without publishing and does
-not validate the npm OIDC binding or authoritative receipt gate.
+The local vault-token lane follows the repository publish law, keeps the same
+package-owned lifecycle and signed review, and selects
+`HASNA_TODOS_RELEASE_CONTEXT=vault-token` with the exact expected commit and
+`HASNA_TODOS_RELEASE_TAG`. It never sets GitHub event variables. See
+`npm-release-agent-review.md` for the independent review, tag, context and
+receipt procedure. Before local publication, push the immutable reviewed tag
+once and verify that its remote annotated object matches the local object;
+never replace an existing tag to change its lane.
+
+For the optional OIDC lane, the npm trusted publisher must bind `hasna/apps`,
+`release-todos.yml`, and `npm-release`, with direct publishing enabled. The
+workflow supplies GitHub's event SHA and the fixed reviewer configuration and
+signed receipt from that environment. A manual workflow run executes
+review-mode checks without publishing and does not validate the npm OIDC
+binding or authoritative receipt gate.
 
 Without the export, `prepublishOnly` fails the gate with
 `release-expected-commit` and nothing is published; with a value that is not

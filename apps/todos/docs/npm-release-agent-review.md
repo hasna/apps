@@ -46,6 +46,52 @@ The public key is canonical base64 SPKI DER. Its key id is
 a configured key id that does not derive from the configured key, a receipt
 that names another key id, and a signature made by any other key.
 
+## Select one delivery lane
+
+Todos tags must contain exactly one `Release-Lane: vault-token` or
+`Release-Lane: oidc` line before the final `Agent:` trailer. The annotation is
+checked by both the local verifier and the Actions workflow. A vault-token tag
+cannot pass the Actions publication gate, and an OIDC tag cannot pass the local
+gate. Do not change or replace an existing release tag.
+
+The `npm-release` environment variable `RELEASE_PUBLISH_MODE` selects
+`vault-token` (the default when absent) or explicitly `oidc`. Any other value
+fails closed. For tag pushes, the setting must agree with the tag annotation.
+The vault-token workflow validates the signed review, tests and reproducible
+release artifact without publishing. The explicit OIDC lane retains the
+package-owned `prepublishOnly` gate and npm provenance publication.
+
+For the repository's local vault-token procedure, the publisher uses the same
+fixed reviewer's signed receipt and public-key configuration. Before creating
+or pushing the tag, read and record the actual `npm-release` delivery setting;
+it must select vault-token. Push the reviewed annotated tag once and read back
+its exact remote tag object; require equality with the local object before
+publishing. Preserve this comparison in the release evidence. Set these local context values without setting any
+`GITHUB_*` variables:
+
+```text
+HASNA_TODOS_RELEASE_CONTEXT=vault-token
+RELEASE_PUBLISH_MODE=vault-token
+HASNA_TODOS_EXPECTED_COMMIT=<exact reviewed release commit>
+HASNA_TODOS_RELEASE_TAG=npm/todos/v<version>
+HASNA_TODOS_RELEASE_PACKAGE_PATH=apps/todos
+```
+
+Inject `NPM_RELEASE_AGENT_REVIEW_RECEIPT`, `RELEASE_REVIEWER_AGENT`,
+`RELEASE_REVIEW_KEY_ID` and `RELEASE_REVIEW_PUBLIC_KEY` into the publishing
+process from the reviewed private evidence. The signed receipt is
+capability-bearing: keep its file owner-only and never print it. The signer key
+remains available only to the independent reviewer. Publish from `apps/todos`
+through `secrets exec` and an owner-only temporary npmrc referencing
+`${NODE_AUTH_TOKEN}`, following the repository publish law with
+`--provenance=false`. Keep lifecycle scripts enabled. No package, commit, tag,
+review, clean-checkout, artifact or test gate is skipped for local publication.
+
+The explicit local context applies to `@hasna/todos`; `@hasna/todos-ai` retains
+its existing Actions context. The tag must point to the exact checked-out
+release commit on main, and its final publisher `Agent:` trailer must match the
+signed receipt. A mixed local/Actions context is rejected.
+
 ## Strict signed receipt
 
 The environment receipt is an exact JSON object with no additional fields:
@@ -186,9 +232,11 @@ release SHA, registered agent name, review-run id, verdict, and blocker counts
 on the release task. It does not create or push the tag and does not publish.
 
 The later publisher creates one annotated tag on the receipt's exact commit.
-Its message must end with exactly one registered agent trailer:
+For `@hasna/todos`, include the selected delivery lane immediately before its
+single final registered agent trailer:
 
 ```text
+Release-Lane: vault-token
 Agent: <intended-publisher-agent>
 ```
 

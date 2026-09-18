@@ -2,6 +2,8 @@
 
 ## 0.17.0
 
+- Support the repository vault-token release path with the same signed independent review and package-owned checks. Annotated tags select one delivery lane, preventing local and Actions publishers from racing.
+
 ### Minor Changes
 
 - MCP surface triage, slice 1 (fleet alignment 2026-09-11; follows the fail-closed
