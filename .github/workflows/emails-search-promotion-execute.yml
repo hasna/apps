@@ -174,13 +174,20 @@ jobs:
             --expected-version "$expected_version" \
             --out "$RUNNER_TEMP/emails-current-receipts/public-proof.json"
 
-      - name: Retain metadata-only preparation and mutation receipts
-        if: ${{ always() }}
+      - name: Retain metadata-only search preparation and mutation receipts
+        if: ${{ always() && inputs.phase != 'current' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: ${{ inputs.phase == 'current' && 'emails-current-deployed' || inputs.phase == 'prepare' && 'emails-search-prepared' || inputs.phase == 'reconcile' && 'emails-search-reconciled' || 'emails-search-promoted' }}
-          path: |
-            ${{ runner.temp }}/emails-promotion-receipts/*.json
-            ${{ runner.temp }}/emails-current-receipts/*.json
+          name: ${{ inputs.phase == 'prepare' && 'emails-search-prepared' || inputs.phase == 'reconcile' && 'emails-search-reconciled' || 'emails-search-promoted' }}
+          path: ${{ runner.temp }}/emails-promotion-receipts/*.json
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Retain metadata-only current server deployment receipts
+        if: ${{ always() && inputs.phase == 'current' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: emails-current-deployed
+          path: ${{ runner.temp }}/emails-current-receipts/*.json
           if-no-files-found: ignore
           retention-days: 30

@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.2.0
+
+### Minor Changes
+
+- f7d8d8f: Add the pure `@hasna/contracts/output` API for compact projection, branded and structurally validated page envelopes, monotonic numeric/opaque known-total invariants, stable empty-versus-item budget errors, deterministic JSON and receipt-bearing JSONL serialization, exact UTF-8 byte accounting, and continuation-safe byte-budget fitting. Add an advisory static fleet census for output-efficiency adoption without changing application authority or transport behavior.
+
+### Patch Changes
+
+- 57ed2d6: Register `configs` and `configs-mcp` as the exact compatibility binaries for `@hasna/instructions` while keeping every other app bin allowlist closed.
+
 ## 1.1.0
 
 ### Minor Changes
