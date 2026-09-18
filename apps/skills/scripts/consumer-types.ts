@@ -69,6 +69,13 @@ try {
   }, files: ["consumer.ts"] }));
   await writeFile(join(workspace, "consumer.ts"), `
 import { createRunService, runAdmissionSchema, runTerminalSchema, type SkillsProductStore, RemoteCapabilityUnavailableError, RemoteRequestError } from "@hasna/skills/sdk";
+import { inspectSkillSession, reconcileSkillSession, type SessionReconciliationInput, type SessionReconciliationOptions } from "@hasna/skills/sdk";
+import { reconcileSkillSession as reconcileFromRoot } from "@hasna/skills";
+declare const sessionReconciliation: SessionReconciliationInput;
+declare const sessionOptions: SessionReconciliationOptions;
+const sessionMetadata: { receiptSha256: string; profileId: string } = inspectSkillSession("session", sessionOptions);
+const sessionReconciliationResult = reconcileSkillSession(sessionReconciliation, sessionOptions);
+const sessionReconciliationFromRoot: typeof reconcileSkillSession = reconcileFromRoot;
 import { resolveSelectedRun, executeSelectedLocal, prepareSelectedSecretBindings, readSelectedSecretBindings,
   type ResolvedSelectedRun, type SelectedLocalRunOptions, type SelectedSecretBindings, type SelectedSecretsClient } from "@hasna/skills/sdk";
 declare const selectedExecution: ResolvedSelectedRun;

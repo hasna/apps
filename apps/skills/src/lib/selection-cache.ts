@@ -1,7 +1,8 @@
 /** Immutable, credential-authority/workspace scoped objects. Authoring corpus is never read or written. */
 import { createHash, randomUUID } from "node:crypto";
-import { closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, constants, existsSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, parse, resolve } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { getDataDirReadOnly } from "./config.js";
 import { inspectSkillBundle, sha256Hex, SKILL_BUNDLE_INSPECTION_LIMITS, type SkillBundleEntry } from "./skill-bundle.js";
 import { isValidSkillVersion } from "./skill-version.js";
@@ -112,12 +113,14 @@ export function writeSelectionJson(path: string, value: unknown): void {
   if (bytes.length > MAX_PROFILE_DOCUMENT_BYTES) throw new SkillSelectionError("RECEIPT_TOO_LARGE", "The Skills selection receipt exceeds its size limit.");
   atomicWrite(path, bytes, 0o600);
 }
-function atomicWrite(path: string, bytes: Uint8Array, mode: number): void {
+function atomicWrite(path: string, bytes: Uint8Array, mode: number, durable = false): void {
   assertRegularPath(path, true);
   const temporary = join(dirname(path), `.selection-${randomUUID()}.tmp`);
   try {
-    writeFileSync(temporary, bytes, { flag: "wx", mode });
+    const fd = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, mode);
+    try { writeFileSync(fd, bytes); if (durable) fsyncSync(fd); } finally { closeSync(fd); }
     renameSync(temporary, path);
+    if (durable) syncDirectory(dirname(path));
   } finally { try { unlinkSync(temporary); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; } }
 }
 export function readSelectionJson<T>(path: string): T | null {
@@ -212,13 +215,110 @@ export function sessionReceiptPath(sessionId: string, options: SelectionCacheOpt
 }
 export function readSkillSession(sessionId: string, options: SelectionCacheOptions = {}): SkillSessionReceipt | null {
   const receipt = readSelectionJson<SkillSessionReceipt>(sessionReceiptPath(sessionId, options));
-  if (receipt) {
-    validateSelectionReceipt(receipt);
-    const keys = new Set(receipt.profile.selections.map(selectionKey));
-    if (receipt.sessionId !== sessionId || !Array.isArray(receipt.loaded) || receipt.loaded.length > keys.size
-        || new Set(receipt.loaded).size !== receipt.loaded.length || !receipt.loaded.every(key => keys.has(key))) {
-      throw new SkillSelectionError("INVALID_RECEIPT", "The Skills session receipt is invalid.");
-    }
-  }
+  if (receipt) validateSkillSessionReceipt(receipt, sessionId);
   return receipt;
+}
+function validateSkillSessionReceipt(receipt: SkillSessionReceipt, sessionId: string): void {
+  validateSelectionReceipt(receipt);
+  const keys = new Set(receipt.profile.selections.map(selectionKey));
+  if (receipt.sessionId !== sessionId || !Array.isArray(receipt.loaded) || receipt.loaded.length > keys.size
+      || new Set(receipt.loaded).size !== receipt.loaded.length || !receipt.loaded.every(key => keys.has(key))) {
+    throw new SkillSelectionError("INVALID_RECEIPT", "The Skills session receipt is invalid.");
+  }
+}
+
+export function readSkillSessionSnapshot(sessionId: string, options: SelectionCacheOptions = {}) {
+  const path = sessionReceiptPath(sessionId, options), bytes = readRegularFile(path, MAX_PROFILE_DOCUMENT_BYTES);
+  if (!bytes) throw new SkillSelectionError("SESSION_NOT_FOUND", "The requested Skills session receipt does not exist.");
+  let receipt: SkillSessionReceipt;
+  try { receipt = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)); }
+  catch { throw new SkillSelectionError("INVALID_RECEIPT", "The Skills session receipt is unreadable."); }
+  validateSkillSessionReceipt(receipt, sessionId);
+  return { path, bytes, receipt, sha256: sha256Hex(bytes) };
+}
+
+/** Shared by normal receipt writers and explicit reconciliation. Never steal a lock. */
+function withSessionWriteLock<T>(sessionId: string, options: SelectionCacheOptions, action: (assertOwned: () => void) => T): T {
+  const path = `${sessionReceiptPath(sessionId, options)}.write-lock`;
+  assertRegularPath(path, true);
+  let fd: number;
+  try { fd = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new SkillSelectionError("SESSION_WRITE_LOCKED", "Another Skills process owns this session write lock; retry after it completes. A surviving lock requires explicit recovery review.");
+    throw error;
+  }
+  const owned = fstatSync(fd);
+  const assertOwned = () => {
+    const current = lstatSync(path, { throwIfNoEntry: false });
+    if (!current?.isFile() || current.dev !== owned.dev || current.ino !== owned.ino) {
+      throw new SkillSelectionError("SESSION_WRITE_LOCK_CHANGED", "The session write lock changed during the operation; no replacement is permitted.");
+    }
+  };
+  try {
+    writeFileSync(fd, `${JSON.stringify({ schemaVersion: 1, operationId: randomUUID(), pid: process.pid })}\n`);
+    return action(assertOwned);
+  } finally {
+    closeSync(fd);
+    const current = lstatSync(path, { throwIfNoEntry: false });
+    if (current?.isFile() && current.dev === owned.dev && current.ino === owned.ino) unlinkSync(path);
+  }
+}
+
+/** A context resolved before reconciliation must not overwrite the new pin. */
+export function writeSkillSession(receipt: SkillSessionReceipt, expected: SkillSessionReceipt | null, options: SelectionCacheOptions = {}): void {
+  validateSkillSessionReceipt(receipt, receipt.sessionId);
+  withSessionWriteLock(receipt.sessionId, options, assertOwned => {
+    const current = readSkillSession(receipt.sessionId, options);
+    if ((!current && expected) || (current && !isDeepStrictEqual(current.profile, receipt.profile))) {
+      throw new SkillSelectionError("SESSION_RECEIPT_CHANGED", "The Skills session pin changed while context was loading; resolve context again without replacing the new pin.");
+    }
+    const next = current ? { ...current, loaded: [...new Set([...current.loaded, ...receipt.loaded])] } : receipt;
+    assertOwned();
+    writeSelectionJson(sessionReceiptPath(receipt.sessionId, options), next);
+  });
+}
+
+function syncDirectory(path: string): void {
+  assertRegularPath(path);
+  const fd = openSync(path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+  try { fsyncSync(fd); } finally { closeSync(fd); }
+}
+function archiveBytes(path: string, bytes: Uint8Array): void {
+  assertRegularPath(path, true);
+  const fd = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+  try { writeFileSync(fd, bytes); fsyncSync(fd); } finally { closeSync(fd); }
+}
+
+/** Preserve both sides before the single atomic replacement; failures retain recovery evidence. */
+export function replaceSkillSession(snapshotSha256: string, replacement: SkillSessionReceipt, plan: unknown, options: SelectionCacheOptions = {}) {
+  validateSkillSessionReceipt(replacement, replacement.sessionId);
+  const bytes = Buffer.from(`${JSON.stringify(replacement)}\n`);
+  if (bytes.length > MAX_PROFILE_DOCUMENT_BYTES) throw new SkillSelectionError("RECEIPT_TOO_LARGE", "The Skills selection receipt exceeds its size limit.");
+  return withSessionWriteLock(replacement.sessionId, options, assertOwned => {
+    const before = readSkillSessionSnapshot(replacement.sessionId, options);
+    if (before.sha256 !== snapshotSha256) throw new SkillSelectionError("SESSION_RECEIPT_CHANGED", "The Skills session receipt changed after review; inspect it and prepare a new plan.");
+    if (before.receipt.profile.authority !== replacement.profile.authority || before.receipt.profile.workspaceId !== replacement.profile.workspaceId) {
+      throw new SkillSelectionError("PROFILE_IDENTITY_MISMATCH", "A session reconciliation cannot change its Skills authority or workspace.");
+    }
+    const directory = join(selectionCacheRoot(options), "session-reconciliations", randomUUID());
+    const archivePath = join(directory, "original.json"), replacementPath = join(directory, "replacement.json"), receiptPath = join(directory, "receipt.json");
+    const afterSha256 = sha256Hex(bytes);
+    archiveBytes(archivePath, before.bytes);
+    archiveBytes(replacementPath, bytes);
+    const receipt = { schemaVersion: 1, status: "prepared", sessionId: replacement.sessionId, beforeSha256: before.sha256, afterSha256, archivePath, replacementPath, plan };
+    archiveBytes(receiptPath, Buffer.from(`${JSON.stringify(receipt)}\n`));
+    syncDirectory(directory); syncDirectory(dirname(directory)); syncDirectory(selectionCacheRoot(options));
+    if (sha256Hex(readRegularFile(archivePath, MAX_PROFILE_DOCUMENT_BYTES)!) !== before.sha256
+        || readSkillSessionSnapshot(replacement.sessionId, options).sha256 !== snapshotSha256) {
+      throw new SkillSelectionError("SESSION_RECEIPT_CHANGED", "The session or its preservation archive changed before replacement; retained evidence must be reviewed.");
+    }
+    assertOwned();
+    try {
+      atomicWrite(before.path, bytes, 0o600, true);
+      atomicWrite(receiptPath, Buffer.from(`${JSON.stringify({ ...receipt, status: "applied" })}\n`), 0o600, true);
+    } catch {
+      throw new SkillSelectionError("SESSION_RECONCILIATION_INCOMPLETE", `Inspect sessions show and the preserved operation receipt at ${receiptPath} before any retry; replacement may already have committed.`);
+    }
+    return { archivePath, receiptPath, beforeSha256: before.sha256, afterSha256 };
+  });
 }

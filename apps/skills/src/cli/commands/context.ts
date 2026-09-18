@@ -6,6 +6,7 @@ import { buildSkillContext, type SkillContextInput } from "../../lib/skill-conte
 import { loadSelectedSkill, type SelectionResolverOptions } from "../../lib/selection-resolver.js";
 import { SkillSelectionError } from "../../lib/selection-cache.js";
 import { readManagedSkillPolicy } from "../../lib/managed-policy.js";
+import { inspectSkillSession, reconcileSkillSession, type SessionReconciliationInput } from "../../lib/session-reconciliation.js";
 
 export function selectedProfileId(explicit?: string): string {
   return explicit ?? process.env.HASNA_SKILLS_SELECTION_PROFILE ?? readManagedSkillPolicy()?.profileId ?? "default";
@@ -19,6 +20,34 @@ export function contextResolverOptions(options: ContextCommandOptions): Selectio
   return { cached: true, authority };
 }
 export function registerContextCommands(parent: Command): void {
+  const sessions = parent.command("sessions").description("Inspect exact session pins and explicitly reconcile one reviewed receipt");
+  sessions.command("show <id>")
+    .option("--json", "Return metadata as JSON", false)
+    .description("Inspect one session receipt without displaying payloads or changing its pin")
+    .action(async (id: string, options: { json?: boolean }) => {
+      try {
+        const result = inspectSkillSession(id);
+        await writeCliOutput(options.json ? JSON.stringify(result) : `${JSON.stringify(id)}: ${result.profileId} at ${result.profileRevision}\nReceipt SHA256: ${result.receiptSha256}`);
+      } catch (error) { reportContextError(error, options.json); }
+    });
+  sessions.command("reconcile <id>")
+    .requiredOption("--from-profile <id>", "Expected current session profile")
+    .requiredOption("--from-revision <revision>", "Expected current session profile revision")
+    .requiredOption("--receipt-sha256 <sha256>", "Expected exact current receipt bytes")
+    .requiredOption("--selection-profile <id>", "Intended target selection profile")
+    .requiredOption("--profile-revision <revision>", "Expected current API target revision")
+    .option("--apply", "Archive the old receipt and atomically apply the reviewed plan", false)
+    .option("--plan-digest <sha256>", "Exact reviewed plan digest; required with --apply")
+    .option("--json", "Return the plan or application receipt as JSON", false)
+    .description("Plan an intentional migration of one session pin; ordinary hooks never migrate pins")
+    .action(async (id: string, options: Omit<SessionReconciliationInput, "sessionId"> & { json?: boolean }) => {
+      try {
+        const result = await reconcileSkillSession({ ...options, sessionId: id });
+        await writeCliOutput(options.json ? JSON.stringify(result) : result.applied
+          ? `Reconciled ${JSON.stringify(id)} to ${result.plan.target.profileId} at ${result.plan.target.profileRevision}.\nPreserved original receipt: ${result.archivePath}`
+          : `Planned one session reconciliation. Review --json output, then use --apply --plan-digest ${result.planDigest}.`);
+      } catch (error) { reportContextError(error, options.json); }
+    });
   parent.command("load <skill>")
     .description("Load an exact API-selected skill and return its version/digest receipt")
     .option("--selection-profile <id>", "Selection profile (separate from the credential --profile)")
