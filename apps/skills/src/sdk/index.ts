@@ -15,6 +15,7 @@
  * — the shared @hasna/contracts ladder — instead of reading an environment
  * variable of its own. See lib/fleet-credentials.ts.
  */
+export { CloudExecutionClient, type CloudExecution, type CloudEligibility } from "../lib/cloud-executions.js";
 export { readExecutionGrantPolicy, saveExecutionGrantPolicy, resolveExecutionGrant } from "../lib/execution-grant-client.js";
 export type { ExecutionGrant, ExecutionGrantPolicy, ExecutionGrantRequest, ResolvedExecutionGrant } from "../lib/execution-grants.js";
 export { HttpProfileClient, createProfileClient, type ProfileClient, type AuthenticatedProfilePrincipal, type AuthenticatedProfileRole } from "../lib/profile-client.js";

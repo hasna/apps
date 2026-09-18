@@ -309,7 +309,15 @@ export class SqliteRunExecutionStore implements RunExecutionStore {
     this.db = new Database(path);
     this.db.run("PRAGMA journal_mode = WAL");
     this.db.run("PRAGMA foreign_keys = ON");
-    this.db.run(SCHEMA_SQL);
+    this.db.transaction(() => {
+      this.db.run(SCHEMA_SQL);
+      // Existing SDK databases retain legacy PDF records with a null contract.
+      for (const table of ["execution_runs", "execution_receipts"]) {
+        const columns = this.db.query<{ name: string }, []>(`PRAGMA table_info(${table})`).all();
+        if (!columns.some(column => column.name === "execution_contract_json"))
+          this.db.run(`ALTER TABLE ${table} ADD COLUMN execution_contract_json TEXT`);
+      }
+    }).immediate();
   }
 
   async admit(admission: FrozenAdmission): Promise<ExecutionRunRow> {
@@ -318,8 +326,8 @@ export class SqliteRunExecutionStore implements RunExecutionStore {
         `INSERT OR IGNORE INTO execution_runs (
            run_id, contract_version, tenant_id, skill_id, skill_version, bundle_digest,
            runtime_image_digest, dependency_layer_tag, input_digest, runtime,
-           policy_json, limits_json, idempotency_key, status, created_at, updated_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           policy_json, limits_json, idempotency_key, status, created_at, updated_at, execution_contract_json
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         admission.runId,
@@ -338,6 +346,7 @@ export class SqliteRunExecutionStore implements RunExecutionStore {
         "admitted",
         admission.createdAt,
         admission.createdAt,
+        admission.executionContract ? JSON.stringify(admission.executionContract) : null,
       );
     const row = this.readRun(admission.runId);
     if (!row) throw new Error(`admission did not persist run ${admission.runId}`);
@@ -489,8 +498,8 @@ export class SqliteRunExecutionStore implements RunExecutionStore {
            run_id, attempt_id, lease_generation, client_token, request_digest, started_by,
            task_id, launched_at, completed_at, runtime_image_digest, bundle_digest,
            dependency_layer_tag, policy_json, limits_json, exit_code, status,
-           artifact_pointers_json, log_pointers_json, cost_cents
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           artifact_pointers_json, log_pointers_json, cost_cents, execution_contract_json
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         receipt.runId,
@@ -512,6 +521,7 @@ export class SqliteRunExecutionStore implements RunExecutionStore {
         JSON.stringify(receipt.artifactPointers),
         JSON.stringify(receipt.logPointers),
         receipt.costCents,
+        receipt.executionContract ? JSON.stringify(receipt.executionContract) : null,
       );
     return receipt;
   }
@@ -562,6 +572,7 @@ interface DbRunRow {
   bundle_digest: string;
   runtime_image_digest: string;
   dependency_layer_tag: string | null;
+  execution_contract_json: string | null;
   input_digest: string;
   runtime: string;
   policy_json: string;
@@ -602,6 +613,7 @@ interface DbReceiptRow {
   runtime_image_digest: string;
   bundle_digest: string;
   dependency_layer_tag: string | null;
+  execution_contract_json: string | null;
   policy_json: string;
   limits_json: string;
   exit_code: number | null;
@@ -622,6 +634,7 @@ function rowToRun(row: DbRunRow): ExecutionRunRow {
       bundleDigest: row.bundle_digest,
       runtimeImageDigest: row.runtime_image_digest,
       dependencyLayerTag: row.dependency_layer_tag,
+      ...(row.execution_contract_json ? { executionContract: JSON.parse(row.execution_contract_json) } : {}),
       inputDigest: row.input_digest,
       runtime: row.runtime as FrozenAdmission["runtime"],
       policy: JSON.parse(row.policy_json),
@@ -667,6 +680,7 @@ function rowToReceipt(row: DbReceiptRow): AttemptReceipt {
     runtimeImageDigest: row.runtime_image_digest,
     bundleDigest: row.bundle_digest,
     dependencyLayerTag: row.dependency_layer_tag,
+      ...(row.execution_contract_json ? { executionContract: JSON.parse(row.execution_contract_json) } : {}),
     policy: JSON.parse(row.policy_json),
     limits: JSON.parse(row.limits_json),
     exitCode: row.exit_code,
@@ -687,6 +701,7 @@ CREATE TABLE IF NOT EXISTS execution_runs (
   bundle_digest TEXT NOT NULL,
   runtime_image_digest TEXT NOT NULL,
   dependency_layer_tag TEXT,
+  execution_contract_json TEXT,
   input_digest TEXT NOT NULL,
   runtime TEXT NOT NULL,
   policy_json TEXT NOT NULL,
@@ -740,6 +755,7 @@ CREATE TABLE IF NOT EXISTS execution_receipts (
   runtime_image_digest TEXT NOT NULL,
   bundle_digest TEXT NOT NULL,
   dependency_layer_tag TEXT,
+  execution_contract_json TEXT,
   policy_json TEXT NOT NULL,
   limits_json TEXT NOT NULL,
   exit_code INTEGER,
