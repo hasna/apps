@@ -11,6 +11,7 @@ import { createInferenceGateway } from "./inference-gateway";
 import { desktopLease,safeDesktopRead,writeDesktopPrivate } from "./desktop-state";
 import type { ClaudeDesktopInstallation } from "./desktop-apps";
 import type { HarnessLaunchInput,PreparedLaunch } from "./harness-types";
+import { nativeStateEnvironment, projectNativeState } from "./native-state";
 
 const execute=promisify(execFile);
 const hash=(text:string)=>createHash("sha256").update(text).digest("hex");
@@ -38,6 +39,7 @@ function metadata(text:string|undefined):Record<string,unknown>&{entries:Record<
  * selection. The signed app rejects custom userData development overrides. */
 export async function prepareClaudeDesktopLaunch(input:HarnessLaunchInput,app:ClaudeDesktopInstallation,sessionDir:string,system?:DesktopSystem):Promise<PreparedLaunch> {
   if(input.harness!=="claude")throw new Fault(422,"desktop_harness","Claude desktop requires the Claude Messages adapter.");
+  if(input.sharedState&&input.sharedState.tool!=="claude")throw new Fault(422,"native_state_tool","Claude desktop requires the canonical Claude corpus.");
   validateHarnessProvider("claude",{protocol:input.protocol,authStyle:input.authStyle??"bearer"});
   if(input.args?.length||input.reasoning||input.dangerouslyBypassApprovalsAndSandbox)throw new Fault(400,"desktop_arguments","Claude desktop uses its own effort and permission controls; native CLI arguments and Codex-only launch controls are not accepted.");
   const version=app.version.split(".").map(Number);
@@ -70,6 +72,7 @@ export async function prepareClaudeDesktopLaunch(input:HarnessLaunchInput,app:Cl
     const localConfig=await safeDesktopRead(join(userData,"claude_desktop_config.json"));
     if(localConfig&&JSON.parse(localConfig).deploymentMode==="1p")throw new Fault(409,"desktop_mode","Claude's third-party profile is set to standard account mode. Select third-party mode in Claude before launching this gateway.");
     await privateDirectory(sessionDir);
+    if(input.sharedState)await projectNativeState(input.sharedState,sessionDir);
     const roles=input.modelPolicy?.roles;
     const targets={sonnet:input.model,opus:roles?.planning??input.model,haiku:roles?.fast??input.model};
     const aliases=Object.fromEntries(Object.entries(targets).map(([tier,model])=>["switcher/"+tier,model]));
@@ -89,7 +92,7 @@ export async function prepareClaudeDesktopLaunch(input:HarnessLaunchInput,app:Cl
     await writeDesktopPrivate(configPath,config);
     await writeDesktopPrivate(receiptPath,JSON.stringify(receipt));
     await writeDesktopPrivate(metaPath,appliedMeta);
-    return {executable:app.executable,args:[],env:{CLAUDE_CONFIG_DIR:sessionDir},configPaths:[catalogPath,configPath],beforeLaunch:check,cleanup,
+    return {executable:app.executable,args:[],env:{...(input.sharedState?nativeStateEnvironment(input.sharedState):{}),CLAUDE_CONFIG_DIR:sessionDir},configPaths:[catalogPath,configPath],beforeLaunch:check,cleanup,
       warnings:[`Claude desktop gateway: ${input.providerId??"provider"} / ${input.model}. Uses the shared Claude-3p profile, separate from the normal Claude account. Quit this instance before switching providers; keep Switcher running until then. The previous configuration selection is restored on exit. Managed settings and native permissions remain authoritative.`]};
   }catch(error){try{await cleanup();}catch{/* Preserve the original preparation error and recovery receipt. */}throw error;}
 }

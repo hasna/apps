@@ -9,7 +9,7 @@ const dict = (v: unknown): v is Dict => v !== null && typeof v === "object" && !
 const model = (v: string) => JSON.stringify(v);
 
 /** Keys which can redirect a Codex request outside Switcher's launch provider. */
-export const codexRoutingKeys = new Set(["model", "model_provider", "model_providers", "model_catalog_json", "base_url", "wire_api", "env_key", "env_http_headers", "http_headers", "auth_command", "include"]);
+export const codexRoutingKeys = new Set(["model", "model_provider", "provider", "model_providers", "model_catalog_json", "base_url", "wire_api", "env_key", "env_http_headers", "http_headers", "auth_command", "include"]);
 export const codexTransportKeys = new Set(["mcp_servers", "mcp_server", "transport", "transports", "plugins"]);
 
 export type CodexAgentInput = {
@@ -94,7 +94,7 @@ function scanNested(value: unknown, path: string): unknown {
   if (Array.isArray(value)) return value.map((item, index) => scanNested(item, `${path}[${index}]`));
   if (!dict(value)) return value;
   for (const [key, item] of Object.entries(value)) {
-    if (codexTransportKeys.has(key) || key === "config_file" || key === "include" || key === "model_providers" || key === "base_url" || key === "auth_command" || key === "model_instructions_file") reject(`${path}.${key}`);
+    if (codexTransportKeys.has(key) || key === "config_file" || key === "include" || key === "model" || key === "model_provider" || key === "provider" || key === "model_providers" || key === "base_url" || key === "wire_api" || key === "env_key" || key === "env_http_headers" || key === "http_headers" || key === "auth_command" || key === "model_instructions_file") reject(`${path}.${key}`);
     if (key === "agents" && dict(item)) for (const [name, role] of Object.entries(item)) if (dict(role) && role.config_file !== undefined) reject(`${path}.agents.${name}.config_file`);
     scanNested(item, `${path}.${key}`);
   }

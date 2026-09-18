@@ -27,3 +27,9 @@ test("Gemini policy arguments retain original home without rewriting literal pro
  expect(geminiPolicyArguments(["--policy","~/rules,~/more","--adminPolicy=~/admin"],"/original")).toEqual(["--policy","/original/rules,/original/more","--adminPolicy=/original/admin"]);
  for(const args of [["--prompt","--policy","~/literal"],["--promptInteractive","--policy","~/literal"],["-p","--policy","~/literal"],["--","--policy","~/literal"]]) expect(geminiPolicyArguments(args,"/original")).toEqual(args);
 });
+
+
+test("Codex sqlite_home remains compatible unless shared state owns it",()=>{
+  expect(()=>assertHarnessArguments("codex",["-c",'sqlite_home="/tmp/native"'])).not.toThrow();
+  expect(()=>assertHarnessArguments("codex",["-c",'sqlite_home="/tmp/native"'],{reservedCodexRoots:["sqlite_home"]})).toThrow("reserved");
+});

@@ -68,7 +68,7 @@ test("Junie custom profiles use gateway env credentials, role slots and isolated
   expect(profile.id).toBe("vendor/main");expect(profile.apiType).toBe("OpenAICompletion");expect(profile.apiKey).toBe("${SWITCHER_HARNESS_API_KEY}");
   expect(profile.baseUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/v1\/chat\/completions$/);expect(profile.fasterModel.id).toBe("vendor/fast");
   expect(prepared.args).toContain("custom:switcher");expect(prepared.args).toContain("--config-default-locations");expect(prepared.env.JUNIE_HOME).toContain("state");expect(prepared.args).toContain(join(root,"sessions","junie-cache"));
-  expect(await realpath(join(prepared.env.JUNIE_HOME,"sessions"))).toBe(join(root,"sessions","junie","sessions"));
+  expect(await realpath(join(prepared.env.JUNIE_HOME,"sessions"))).toBe(await realpath(join(root,"sessions","junie","sessions")));
   expect(JSON.stringify(profile)).not.toContain("fixture-provider");expect(prepared.env.SWITCHER_HARNESS_API_KEY).not.toBe("fixture-provider");
  }finally{await prepared?.cleanup?.();if(oldHome===undefined)delete process.env.HOME;else process.env.HOME=oldHome;await rm(root,{recursive:true,force:true});}
 });
