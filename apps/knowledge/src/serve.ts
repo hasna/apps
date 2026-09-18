@@ -32,6 +32,11 @@ export { buildKnowledgePostgresMigrations } from './db/migrate-list.js';
 export { MigrationLedger, defineMigration } from './generated/storage-kit/migrations.js';
 import { knowledgeRegistryContract } from './registry-contract.js';
 import {
+  assertKnowledgePrivateReviewRequest,
+  type KnowledgePrivateReviewEnvelope,
+  type KnowledgePrivateReviewReadback,
+} from './guarded-review.js';
+import {
   makeId,
   makeShortId,
   type KnowledgeItem,
@@ -1060,6 +1065,30 @@ class GuardedWriteRepo {
         : null,
       limits,
     };
+  }
+
+  async reviewPrivate(envelope: KnowledgePrivateReviewEnvelope): Promise<KnowledgePrivateReviewReadback | null> {
+    const { descriptor: d, limits } = envelope;
+    const b = d.binding;
+    // One exact row and one SELECT: the preconditions describe the same snapshot
+    // as the private item. No adoption, receipt, history, or note mutation occurs.
+    const row = await this.client.get<Record<string, unknown>>(
+      `SELECT * FROM knowledge_items WHERE id = $1 AND (
+        ($2 = 'legacy_unbound' AND authority_classification IS NULL AND authority_id IS NULL
+          AND scope IS NULL AND parent_id IS NULL AND (tenant_id IS NULL OR tenant_id::text = $3))
+        OR ($2 = 'bound_to_requested' AND authority_classification = $4 AND authority_id = $5
+          AND tenant_id::text = $3 AND scope = $6 AND parent_id = $7)
+      ) LIMIT 1`,
+      [d.target_id, d.expected_binding_state, b.tenant_id, b.authority.classification, b.authority.authority_id, b.scope, b.parent_id],
+    );
+    if (!row) return null;
+    const item = rowToItem(row);
+    if (item.version !== d.expected_version || knowledgeGuardedContentSha256(item.content) !== d.expected_content_sha256) {
+      throw new HttpError(409, 'private_review_precondition_failed');
+    }
+    return { contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT, exact: true, bounded: true,
+      private: true, item_count: 1, binding: b, binding_state: d.expected_binding_state,
+      request_digest: knowledgeGuardedDigest(envelope), item, limits };
   }
 
   async executeAdoption(
@@ -3428,6 +3457,24 @@ export function knowledgeOpenApi(version: string): Record<string, unknown> {
           },
         },
       },
+      '/v1/guarded-writes/reviews': {
+        post: {
+          operationId: 'reviewPrivateKnowledge',
+          summary: 'Read one private bound or legacy item at an exact reviewed version and digest',
+          description: 'Read-only. Requires tenant-bound knowledge:read authorization, exact authority, binding state, version, content SHA-256, expiry and positive producer limits. Returns the full item only through authenticated transport to the package-owned in-process reviewer. Never adopts or mutates an item.',
+          requestBody: { required: true, content: { 'application/json': { schema: {
+            type: 'object', required: ['descriptor', 'limits'], additionalProperties: false,
+            properties: { descriptor: { type: 'object' }, limits: { type: 'object' } },
+          } } } },
+          responses: {
+            '200': { description: 'One private item for the in-process reviewer; caller-visible result is digest-only.' },
+            '403': { description: 'Wrong authority or tenant.' },
+            '404': { description: 'No exact item at the requested binding state.' },
+            '409': { description: 'Version or content changed; obtain fresh binding-state evidence.' },
+            '413': { description: 'Request or response exceeds the producer byte limit.' },
+          },
+        },
+      },
       '/v1/guarded-writes/receipts/{deterministicKey}': {
         get: {
           operationId: 'reconcileGuardedKnowledgeWrite',
@@ -4228,6 +4275,35 @@ export function createServeHandler(deps: ServeDeps): (req: Request) => Promise<R
       }
 
       // ---- FCAME-1 guarded writes ----
+      if (path === '/v1/guarded-writes/reviews') {
+        if (method !== 'POST') return json({ error: 'method_not_allowed' }, 405);
+        if (!guardedRepo) return json({ error: 'guarded_authority_unconfigured' }, 503);
+        const startedAt = Date.now();
+        const tenantId = req.headers.get('x-knowledge-tenant-id');
+        if (!tenantId) throw new HttpError(400, 'x-knowledge-tenant-id is required.');
+        await authOrThrow(req, ['knowledge:read'], tenantId);
+        const bounds = guardedBoundsFromHeaders(req);
+        const raw = await readBoundedJson(req, bounds, startedAt);
+        let envelope: KnowledgePrivateReviewEnvelope;
+        try {
+          if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error();
+          assertExactRequestKeys(raw as Record<string, unknown>, 'review envelope', ['descriptor', 'limits']);
+          envelope = raw as KnowledgePrivateReviewEnvelope;
+          assertKnowledgePrivateReviewRequest(envelope.descriptor);
+          assertKnowledgeGuardedBounds(envelope.limits);
+          if (canonicalKnowledgeGuardedJson(envelope.limits) !== canonicalKnowledgeGuardedJson(bounds)) throw new Error();
+        } catch {
+          throw new HttpError(400, 'private_review_descriptor_invalid');
+        }
+        assertConfiguredAuthority(envelope.descriptor.binding, guardedRepo.authority);
+        if (envelope.descriptor.binding.tenant_id !== tenantId) throw new HttpError(403, 'private_review_tenant_mismatch');
+        const result = await guardedRepo.reviewPrivate(envelope);
+        const response = result
+          ? boundedJson(result, 200, bounds, startedAt)
+          : boundedJson({ error: 'not_found' }, 404, bounds, startedAt);
+        response.headers.set('cache-control', 'no-store');
+        return response;
+      }
       if (path === '/v1/guarded-manifests' && method === 'POST') {
         if (!guardedRepo) {
           return json({ error: 'guarded_authority_unconfigured' }, 503);

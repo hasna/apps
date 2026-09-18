@@ -19701,7 +19701,7 @@ function createKnowledgeProjectLinksHttpClient(options) {
 // package.json
 var package_default = {
   name: "@hasna/knowledge",
-  version: "0.3.2",
+  version: "0.4.0",
   description: "Agent-friendly local knowledge CLI with JSON output, pagination, and safe destructive actions",
   type: "module",
   exports: {
@@ -24458,6 +24458,9 @@ function knowledgeRegistryContract(input) {
   };
 }
 
+// src/guarded-review.ts
+import { randomUUID as randomUUID14 } from "crypto";
+
 // src/guarded-write-contract.ts
 import { createHash as createHash22, randomUUID as randomUUID13 } from "crypto";
 var KNOWLEDGE_GUARDED_WRITE_CONTRACT = "FCAME-1";
@@ -25426,6 +25429,131 @@ function knowledgeGuardedUtf8Bytes(value) {
   return Buffer.byteLength(JSON.stringify(value), "utf8");
 }
 
+// src/guarded-review.ts
+var KNOWLEDGE_PRIVATE_REVIEW_SCHEMA = "hasna.knowledge.private-review.v1";
+
+class KnowledgePrivateReviewError extends Error {
+  code;
+  status;
+  constructor(code, status) {
+    super(code);
+    this.code = code;
+    this.status = status;
+    this.name = "KnowledgePrivateReviewError";
+  }
+}
+var descriptors = new WeakMap;
+var same = (left, right) => canonicalKnowledgeGuardedJson(left) === canonicalKnowledgeGuardedJson(right);
+function deepFreeze(value) {
+  if (value && typeof value === "object") {
+    for (const child of Object.values(value))
+      deepFreeze(child);
+    Object.freeze(value);
+  }
+  return value;
+}
+function assertKnowledgePrivateReviewRequest(value) {
+  try {
+    if (!value || typeof value !== "object" || Array.isArray(value))
+      throw new Error;
+    const v = value;
+    if (!same(Object.keys(v).sort(), ["binding", "contract", "expected_binding_state", "expected_content_sha256", "expected_version", "expires_at", "operation_id", "schema", "step_id", "target_id"]))
+      throw new Error;
+    if (v.contract !== KNOWLEDGE_GUARDED_WRITE_CONTRACT || v.schema !== KNOWLEDGE_PRIVATE_REVIEW_SCHEMA)
+      throw new Error;
+    assertKnowledgeGuardedBinding(v.binding);
+    for (const text of [v.operation_id, v.step_id, v.target_id]) {
+      if (typeof text !== "string" || !text.trim() || text.length > 512)
+        throw new Error;
+    }
+    if (!Number.isSafeInteger(v.expected_version) || v.expected_version < 1)
+      throw new Error;
+    if (typeof v.expected_content_sha256 !== "string" || !/^[a-f0-9]{64}$/.test(v.expected_content_sha256))
+      throw new Error;
+    if (!["legacy_unbound", "bound_to_requested"].includes(v.expected_binding_state))
+      throw new Error;
+    const expiration = typeof v.expires_at === "string" ? Date.parse(v.expires_at) : NaN;
+    if (!Number.isFinite(expiration) || expiration <= Date.now() || expiration > Date.now() + 3600000)
+      throw new Error;
+  } catch {
+    throw new KnowledgePrivateReviewError("private_review_descriptor_invalid");
+  }
+}
+function createKnowledgePrivateReviewDescriptor(options) {
+  const lifetime = options.expires_in_ms ?? 300000;
+  if (!Number.isSafeInteger(lifetime) || lifetime < 1 || lifetime > 3600000)
+    throw new KnowledgePrivateReviewError("private_review_descriptor_invalid");
+  const request = {
+    contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+    schema: KNOWLEDGE_PRIVATE_REVIEW_SCHEMA,
+    operation_id: options.operation_id,
+    step_id: options.step_id,
+    binding: structuredClone(options.binding),
+    target_id: options.target_id,
+    expected_version: options.expected_version,
+    expected_content_sha256: options.expected_content_sha256,
+    expected_binding_state: options.expected_binding_state,
+    expires_at: new Date(Date.now() + lifetime).toISOString()
+  };
+  assertKnowledgePrivateReviewRequest(request);
+  deepFreeze(request);
+  const descriptor = { ...request, toJSON: () => request };
+  Object.defineProperty(descriptor, "descriptor_id", { value: `kprv_${randomUUID14()}`, enumerable: false });
+  Object.freeze(descriptor);
+  descriptors.set(descriptor, request);
+  return descriptor;
+}
+async function executeKnowledgePrivateReview(transport, binding, descriptor, reviewer, bounds) {
+  const request = descriptors.get(descriptor);
+  if (!request || typeof reviewer !== "function")
+    throw new KnowledgePrivateReviewError("private_review_descriptor_invalid");
+  assertKnowledgePrivateReviewRequest(request);
+  assertKnowledgeGuardedBounds(bounds, "private review bounds");
+  if (!same(request.binding, binding))
+    throw new KnowledgePrivateReviewError("private_review_binding_mismatch");
+  const envelope = { descriptor: request, limits: { ...bounds } };
+  if (knowledgeGuardedUtf8Bytes(envelope) > bounds.max_bytes)
+    throw new KnowledgePrivateReviewError("private_review_request_too_large");
+  const requestDigest = knowledgeGuardedDigest(envelope);
+  let response;
+  try {
+    response = await transport.post("/guarded-writes/reviews", envelope, {
+      headers: {
+        "x-knowledge-tenant-id": binding.tenant_id,
+        "x-knowledge-max-calls": String(bounds.max_calls),
+        "x-knowledge-max-items": String(bounds.max_items),
+        "x-knowledge-max-bytes": String(bounds.max_bytes),
+        "x-knowledge-wall-time-ms": String(bounds.wall_time_ms)
+      },
+      timeoutMs: bounds.wall_time_ms,
+      retry: false
+    });
+  } catch (error) {
+    const status = error && typeof error === "object" && typeof error.status === "number" ? error.status : undefined;
+    throw new KnowledgePrivateReviewError("private_review_transport_failed", status);
+  }
+  try {
+    if (!response || knowledgeGuardedUtf8Bytes(response) > bounds.max_bytes || response.contract !== KNOWLEDGE_GUARDED_WRITE_CONTRACT || response.exact !== true || response.bounded !== true || response.private !== true || response.item_count !== 1 || response.request_digest !== requestDigest || !same(response.binding, binding) || !same(response.limits, bounds) || response.binding_state !== request.expected_binding_state || response.item?.id !== request.target_id || response.item.version !== request.expected_version || typeof response.item.content !== "string" || typeof response.item.title !== "string" || !Array.isArray(response.item.tags) || !response.item.tags.every((x) => typeof x === "string") || knowledgeGuardedContentSha256(response.item.content) !== request.expected_content_sha256)
+      throw new Error;
+  } catch {
+    throw new KnowledgePrivateReviewError("private_review_response_invalid");
+  }
+  const item = deepFreeze(structuredClone(response.item));
+  try {
+    await reviewer(item);
+  } catch {
+    throw new KnowledgePrivateReviewError("private_review_callback_failed");
+  }
+  return deepFreeze({
+    contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+    kind: "review",
+    item_count: 1,
+    request_digest: requestDigest,
+    binding_state: response.binding_state,
+    item: knowledgePrivateItemProof(item)
+  });
+}
+
 // src/serve.ts
 var KNOWLEDGE_SERVE_APP = "knowledge";
 function normalizePostgresDatabaseUrl(env = process.env) {
@@ -26080,6 +26208,34 @@ class GuardedWriteRepo {
       state: legacyForRequestedTenant ? "legacy_unbound" : requested ? "bound_to_requested" : "bound_elsewhere",
       item_version: legacyForRequestedTenant || requested ? Number(row.version ?? 1) : null,
       content_sha256: legacyForRequestedTenant || requested ? knowledgeGuardedContentSha256(String(row.content ?? "")) : null,
+      limits
+    };
+  }
+  async reviewPrivate(envelope) {
+    const { descriptor: d, limits } = envelope;
+    const b = d.binding;
+    const row = await this.client.get(`SELECT * FROM knowledge_items WHERE id = $1 AND (
+        ($2 = 'legacy_unbound' AND authority_classification IS NULL AND authority_id IS NULL
+          AND scope IS NULL AND parent_id IS NULL AND (tenant_id IS NULL OR tenant_id::text = $3))
+        OR ($2 = 'bound_to_requested' AND authority_classification = $4 AND authority_id = $5
+          AND tenant_id::text = $3 AND scope = $6 AND parent_id = $7)
+      ) LIMIT 1`, [d.target_id, d.expected_binding_state, b.tenant_id, b.authority.classification, b.authority.authority_id, b.scope, b.parent_id]);
+    if (!row)
+      return null;
+    const item = rowToItem(row);
+    if (item.version !== d.expected_version || knowledgeGuardedContentSha256(item.content) !== d.expected_content_sha256) {
+      throw new HttpError(409, "private_review_precondition_failed");
+    }
+    return {
+      contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
+      exact: true,
+      bounded: true,
+      private: true,
+      item_count: 1,
+      binding: b,
+      binding_state: d.expected_binding_state,
+      request_digest: knowledgeGuardedDigest(envelope),
+      item,
       limits
     };
   }
@@ -28089,6 +28245,26 @@ function knowledgeOpenApi(version) {
           }
         }
       },
+      "/v1/guarded-writes/reviews": {
+        post: {
+          operationId: "reviewPrivateKnowledge",
+          summary: "Read one private bound or legacy item at an exact reviewed version and digest",
+          description: "Read-only. Requires tenant-bound knowledge:read authorization, exact authority, binding state, version, content SHA-256, expiry and positive producer limits. Returns the full item only through authenticated transport to the package-owned in-process reviewer. Never adopts or mutates an item.",
+          requestBody: { required: true, content: { "application/json": { schema: {
+            type: "object",
+            required: ["descriptor", "limits"],
+            additionalProperties: false,
+            properties: { descriptor: { type: "object" }, limits: { type: "object" } }
+          } } } },
+          responses: {
+            "200": { description: "One private item for the in-process reviewer; caller-visible result is digest-only." },
+            "403": { description: "Wrong authority or tenant." },
+            "404": { description: "No exact item at the requested binding state." },
+            "409": { description: "Version or content changed; obtain fresh binding-state evidence." },
+            "413": { description: "Request or response exceeds the producer byte limit." }
+          }
+        }
+      },
       "/v1/guarded-writes/receipts/{deterministicKey}": {
         get: {
           operationId: "reconcileGuardedKnowledgeWrite",
@@ -28696,6 +28872,39 @@ function createServeHandler(deps) {
           storageType: "s3",
           artifactUriPrefix: process.env.HASNA_KNOWLEDGE_S3_PREFIX ?? null
         }));
+      }
+      if (path === "/v1/guarded-writes/reviews") {
+        if (method !== "POST")
+          return json({ error: "method_not_allowed" }, 405);
+        if (!guardedRepo)
+          return json({ error: "guarded_authority_unconfigured" }, 503);
+        const startedAt = Date.now();
+        const tenantId = req.headers.get("x-knowledge-tenant-id");
+        if (!tenantId)
+          throw new HttpError(400, "x-knowledge-tenant-id is required.");
+        await authOrThrow(req, ["knowledge:read"], tenantId);
+        const bounds = guardedBoundsFromHeaders(req);
+        const raw = await readBoundedJson(req, bounds, startedAt);
+        let envelope;
+        try {
+          if (!raw || typeof raw !== "object" || Array.isArray(raw))
+            throw new Error;
+          assertExactRequestKeys(raw, "review envelope", ["descriptor", "limits"]);
+          envelope = raw;
+          assertKnowledgePrivateReviewRequest(envelope.descriptor);
+          assertKnowledgeGuardedBounds(envelope.limits);
+          if (canonicalKnowledgeGuardedJson(envelope.limits) !== canonicalKnowledgeGuardedJson(bounds))
+            throw new Error;
+        } catch {
+          throw new HttpError(400, "private_review_descriptor_invalid");
+        }
+        assertConfiguredAuthority(envelope.descriptor.binding, guardedRepo.authority);
+        if (envelope.descriptor.binding.tenant_id !== tenantId)
+          throw new HttpError(403, "private_review_tenant_mismatch");
+        const result = await guardedRepo.reviewPrivate(envelope);
+        const response = result ? boundedJson(result, 200, bounds, startedAt) : boundedJson({ error: "not_found" }, 404, bounds, startedAt);
+        response.headers.set("cache-control", "no-store");
+        return response;
       }
       if (path === "/v1/guarded-manifests" && method === "POST") {
         if (!guardedRepo) {
@@ -29963,6 +30172,9 @@ class GuardedWriter {
     const result = await this.readback(fullId, bounds);
     return createKnowledgePrivateResultDescriptor({ kind: "readback", value: result });
   }
+  reviewPrivate(descriptor, reviewer, bounds = this.limits.readback) {
+    return executeKnowledgePrivateReview(this.transport, this.binding, descriptor, reviewer, bounds);
+  }
 }
 function createKnowledgeGuardedWriter(options) {
   assertKnowledgeGuardedBinding(options.binding);
@@ -30665,6 +30877,7 @@ export {
   createKnowledgeProjectPanel,
   createKnowledgeProjectLinksHttpClient,
   createKnowledgePrivateTitleLookupDescriptor,
+  createKnowledgePrivateReviewDescriptor,
   createKnowledgePrivateQueryDescriptor,
   createKnowledgePrivateInputDescriptor,
   createKnowledgeMachinesAdapter,
@@ -30720,6 +30933,7 @@ export {
   KnowledgeProjectLinksHttpClient,
   KnowledgeProjectLinksError,
   KnowledgePrivateTitleLookupAmbiguousError,
+  KnowledgePrivateReviewError,
   KnowledgePrivateQueryResponseError,
   KnowledgeNetworkGuardError,
   KnowledgeGuardedWriteUncertainError,
@@ -30748,6 +30962,7 @@ export {
   KNOWLEDGE_PROJECT_REGISTRATION_ROUTE,
   KNOWLEDGE_PROJECT_MEMBERSHIP_RULE,
   KNOWLEDGE_PRIVATE_TITLE_LOOKUP_SCHEMA,
+  KNOWLEDGE_PRIVATE_REVIEW_SCHEMA,
   KNOWLEDGE_PRIVATE_RESULT_SCHEMA,
   KNOWLEDGE_PRIVATE_QUERY_SCHEMA,
   KNOWLEDGE_PRIVATE_INPUT_SCHEMA,

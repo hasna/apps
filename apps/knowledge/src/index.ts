@@ -200,6 +200,16 @@ export {
 } from './guarded-write-contract.js';
 export * from './guarded-writer.js';
 export {
+  KNOWLEDGE_PRIVATE_REVIEW_SCHEMA,
+  KnowledgePrivateReviewError,
+  createKnowledgePrivateReviewDescriptor,
+  type CreateKnowledgePrivateReviewDescriptorOptions,
+  type KnowledgePrivateReviewDescriptor,
+  type KnowledgePrivateReviewer,
+  type KnowledgePrivateReviewProof,
+  type KnowledgeReviewBindingState,
+} from './guarded-review.js';
+export {
   KNOWLEDGE_GUARDED_CLI_REQUEST_SCHEMA,
   KNOWLEDGE_GUARDED_CLI_RESULT_SCHEMA,
   KnowledgeGuardedCliDescriptorError,

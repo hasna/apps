@@ -310,6 +310,64 @@ second effect. Ordinary `/v1/notes`, `knowledge update --if-version`, SQLite,
 and raw SQL do not create an adoption claim and cannot substitute for this
 path.
 
+### Private review before an edit or legacy adoption
+
+`reviewPrivate` reads one complete record into a trusted in-process reviewer.
+It supports existing guarded records and legacy records **without adopting or
+editing them**. Obtain exact binding-state evidence first; freeze its version,
+raw content SHA-256 and binding state in a package-created review descriptor:
+
+```ts
+import { createKnowledgePrivateReviewDescriptor } from '@hasna/knowledge';
+
+const observed = await guarded.readBindingState(fullId);
+if (observed.state === 'bound_elsewhere') throw new Error('binding conflict');
+const review = createKnowledgePrivateReviewDescriptor({
+  operation_id: reviewedOperationId,
+  step_id: 'review-existing',
+  binding,
+  target_id: fullId,
+  expected_version: observed.item_version!,
+  expected_content_sha256: observed.content_sha256!,
+  expected_binding_state: observed.state,
+});
+const proof = await guarded.reviewPrivate(review, async (item) => {
+  // The complete, deeply frozen item is available only inside this process.
+  // Review content and preserve title, URL, tags, metadata and provenance.
+  await authorizedPrivateReviewer(item);
+});
+// Only identifiers, versions and hashes are returned. Do not log item bodies.
+```
+
+The authenticated `POST /v1/guarded-writes/reviews` route requires a tenant-bound
+`knowledge:read` credential, the service's exact authority, a full record ID,
+the expected stored binding state and the exact version/content digest. One
+producer SELECT checks and returns the same row snapshot. Positive call, item,
+byte and wall-time caps apply; stale records fail closed. The response is
+`no-store`. The route creates no note, history snapshot, adoption or receipt.
+Client transport errors and reviewer exceptions are sanitized; reviewer return
+values are discarded rather than placed on the result surface.
+
+The callback is trusted application code, not an isolation sandbox. It may
+perform a human or agent review using an explicitly authorized private review
+renderer, with bounded output and owner-only artifact permissions. The package
+does not write any artifact automatically. Such a review artifact is source
+review evidence, not a serialized input descriptor or an alternative mutation
+transport. Keep credentials, private bodies and private review payloads out of
+process arguments, environment variables, stdout/stderr and shared logs. Build
+any subsequent write descriptor in memory from the reviewed record and bind
+its exact version; a legacy row still needs separate explicit adoption before
+guarded mutation. Review success is not mutation authorization or live-write
+proof. No model call, external transmission or paid generation happens as a
+side effect of review.
+
+Guarded producers intentionally isolate credentials supplied for one authority
+from ambient profile, disk and override tiers. Supply their authenticated
+transport environment through an approved credential consumer; the guarded
+transport consumes `HASNA_KNOWLEDGE_API_KEY` and the matching API URL. Never
+print or persist the supplied value. This explicit guarded path does not
+change the ordinary CLI's shared owner-file credential resolution.
+
 For any workflow touching multiple records or authorities, construct all
 descriptors first. Derive the manifest ID with
 `computeKnowledgeGuardedManifestId(maintainerBinding, workflowOperationId)`;

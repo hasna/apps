@@ -31,6 +31,7 @@ import {
   executeKnowledgeGuardedCliWrite,
   createKnowledgePrivateInputDescriptor,
   createKnowledgePrivateQueryDescriptor,
+  createKnowledgePrivateReviewDescriptor,
   createKnowledgePrivateTitleLookupDescriptor,
   inspectKnowledgePrivateResult,
   knowledgeGuardedDigest,
@@ -40,6 +41,7 @@ import {
   type KnowledgeGuardedManifestRecovery,
   type KnowledgeGuardedManifestStep,
   type KnowledgePrivateInputDescriptor,
+  type KnowledgeReviewBindingState,
 } from '../src/index';
 import { createServeHandler } from '../src/serve';
 import type {
@@ -181,6 +183,137 @@ async function itemSnapshot(id: string) {
   expect(result.rows).toHaveLength(1);
   return result.rows[0]!;
 }
+
+async function reviewDescriptor(id: string, state?: KnowledgeReviewBindingState) {
+  const observed = await writer().readBindingState(id);
+  return createKnowledgePrivateReviewDescriptor({
+    operation_id: 'private-review-tests', step_id: id, binding: BINDING, target_id: id,
+    expected_version: observed.item_version!, expected_content_sha256: observed.content_sha256!,
+    expected_binding_state: state ?? observed.state as KnowledgeReviewBindingState,
+  });
+}
+
+test('private review reads a legacy row without adoption and enables a memory-only reviewed update descriptor', async () => {
+  const id = 'private-review-legacy';
+  const body = 'PRIVATE-REVIEW-BODY-SENTINEL';
+  await createLegacyItem(id, body, { metadata: { provenance: { source: 'original-source', author: 'original-author' } } });
+  const before = await itemSnapshot(id);
+  const descriptor = await reviewDescriptor(id);
+  let reviewedUpdate: KnowledgePrivateInputDescriptor | undefined;
+  const proof = await writer().reviewPrivate(descriptor, (item) => {
+    expect(item.content).toBe(body);
+    expect(item.metadata).toEqual({ provenance: { source: 'original-source', author: 'original-author' } });
+    expect(Object.isFrozen(item)).toBe(true);
+    expect(Object.isFrozen(item.metadata?.provenance)).toBe(true);
+    reviewedUpdate = createKnowledgePrivateInputDescriptor({
+      operation_id: 'private-review-tests', step_id: 'reviewed-edit', verb: 'update', target_id: item.id,
+      binding: BINDING, precondition: { kind: 'version', expected_version: item.version! },
+      payload: { title: item.title, content: `${item.content}\nReviewed amendment`, url: item.url,
+        tags: [...item.tags], metadata: structuredClone(item.metadata), archived: item.archived },
+    });
+  });
+  expect(reviewedUpdate).toBeDefined();
+  expect(JSON.stringify([descriptor, proof, reviewedUpdate])).not.toContain(body);
+  expect(proof.binding_state).toBe('legacy_unbound');
+  expect(proof.item.id).toBe(id);
+  expect(await itemSnapshot(id)).toEqual(before);
+  expect((await writer().readBindingState(id)).state).toBe('legacy_unbound');
+  const history = await db.query('SELECT * FROM knowledge_item_versions WHERE item_id = $1', [id]);
+  expect(history.rows).toHaveLength(0);
+  const adoption = await db.query('SELECT * FROM knowledge_guarded_adoption_receipts WHERE target_id = $1', [id]);
+  expect(adoption.rows).toHaveLength(0);
+});
+
+test('private review handles a bound record and sanitizes callback errors and returns', async () => {
+  const id = 'private-review-bound';
+  const secretBody = 'REVIEW-NOT-FOR-PUBLIC-RESULT';
+  await writer().executePrivate(createKnowledgePrivateInputDescriptor({
+    operation_id: 'private-review-tests', step_id: 'create-bound', verb: 'create', target_id: id,
+    binding: BINDING, precondition: {kind:'absent'}, payload: {title:'Private review fixture', content:secretBody},
+  }));
+  const descriptor = await reviewDescriptor(id);
+  const proof = await writer().reviewPrivate(descriptor, (item) => { expect(item.content).toBe(secretBody); });
+  expect(proof.binding_state).toBe('bound_to_requested');
+  expect(JSON.stringify(proof)).not.toContain(secretBody);
+  let failure: unknown;
+  try { await writer().reviewPrivate(descriptor, () => {throw new Error(secretBody);}); } catch (e) {failure=e;}
+  expect(String(failure)).toContain('private_review_callback_failed');
+  expect(String(failure)).not.toContain(secretBody);
+  expect(JSON.stringify(failure)).not.toContain(secretBody);
+  const accidentalReturn = await writer().reviewPrivate(descriptor, (() => secretBody) as unknown as () => void);
+  expect(JSON.stringify(accidentalReturn)).not.toContain(secretBody);
+});
+
+test('private review refuses stale version/digest/state and cross-tenant or authority access before callback', async () => {
+  const id = 'private-review-preconditions';
+  await createLegacyItem(id, 'PRIVATE-CONTENT-UNCHANGED');
+  const good = await reviewDescriptor(id);
+  let callbacks = 0;
+  const callback = () => { callbacks++; };
+  for (const [change, expectedStatus] of [
+    [{expected_version:99},409], [{expected_content_sha256:'0'.repeat(64)},409],
+    [{expected_binding_state:'bound_to_requested'},404], [{target_id:'absent-exact-review-id'},404],
+  ] as const) {
+    const changed = createKnowledgePrivateReviewDescriptor({...good.toJSON(), ...change});
+    await expect(writer().reviewPrivate(changed, callback)).rejects.toMatchObject({code:'private_review_transport_failed',status:expectedStatus});
+  }
+  const otherTenant = {...BINDING, tenant_id:'other-tenant'};
+  await expect(writer(otherTenant).reviewPrivate(createKnowledgePrivateReviewDescriptor({...good.toJSON(),binding:otherTenant}),callback))
+    .rejects.toMatchObject({status:403});
+  const otherAuthority = {...BINDING, authority:{...AUTHORITY,authority_id:'other-authority'}};
+  await expect(writer(otherAuthority).reviewPrivate(createKnowledgePrivateReviewDescriptor({...good.toJSON(),binding:otherAuthority}),callback))
+    .rejects.toMatchObject({status:403});
+  await expect(writer().reviewPrivate({...good} as typeof good,callback)).rejects.toMatchObject({code:'private_review_descriptor_invalid'});
+  expect(callbacks).toBe(0);
+});
+
+test('private review enforces producer byte bounds, exact response, expiry and no-store', async () => {
+  const id = 'private-review-bounds';
+  await createLegacyItem(id, 'private-large-content-'.repeat(1000));
+  const descriptor = await reviewDescriptor(id);
+  let callbacks = 0;
+  await expect(writer().reviewPrivate(descriptor,()=>{callbacks++;}, {...DEFAULT_KNOWLEDGE_GUARDED_LIMITS.readback,max_bytes:2048}))
+    .rejects.toMatchObject({status:413});
+  const limits=DEFAULT_KNOWLEDGE_GUARDED_LIMITS.readback;
+  const headers={'x-api-key':env.HASNA_KNOWLEDGE_API_KEY!,'content-type':'application/json','x-knowledge-tenant-id':TENANT,
+    'x-knowledge-max-calls':String(limits.max_calls),'x-knowledge-max-items':String(limits.max_items),
+    'x-knowledge-max-bytes':String(limits.max_bytes),'x-knowledge-wall-time-ms':String(limits.wall_time_ms)};
+  const response=await fetch(`http://127.0.0.1:${server.port}/v1/guarded-writes/reviews`,{method:'POST',headers,body:JSON.stringify({descriptor:descriptor.toJSON(),limits})});
+  expect(response.status).toBe(200);
+  expect(response.headers.get('cache-control')).toBe('no-store');
+  await response.arrayBuffer();
+  const expired=await fetch(`http://127.0.0.1:${server.port}/v1/guarded-writes/reviews`,{method:'POST',headers,body:JSON.stringify({descriptor:{...descriptor.toJSON(),expires_at:'2000-01-01T00:00:00Z'},limits})});
+  expect(expired.status).toBe(400);
+  expect(await expired.text()).not.toContain('private-large-content');
+  expect(callbacks).toBe(0);
+});
+
+test('private review rejects mismatched response identity without leaking bodies or invoking the reviewer', async () => {
+  const id = 'private-review-response-validation';
+  const body = 'PRIVATE-RESPONSE-SENTINEL';
+  await createLegacyItem(id, body);
+  const descriptor = await reviewDescriptor(id);
+  const originalFetch = globalThis.fetch;
+  let callbacks = 0;
+  globalThis.fetch = (async (input, init) => {
+    const response = await originalFetch(input, init);
+    const url = String(input instanceof Request ? input.url : input);
+    if (!url.endsWith('/guarded-writes/reviews')) return response;
+    const data = await response.json() as Record<string, unknown>;
+    data.request_digest = '0'.repeat(64);
+    return new Response(JSON.stringify(data), {status:response.status,headers:response.headers});
+  }) as typeof fetch;
+  try {
+    let failure: unknown;
+    try { await writer().reviewPrivate(descriptor,()=>{callbacks++;}); } catch(e) { failure=e; }
+    expect(String(failure)).toContain('private_review_response_invalid');
+    expect(String(failure)).not.toContain(body);
+    expect(JSON.stringify(failure)).not.toContain(body);
+    expect(callbacks).toBe(0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
 
 test('REGRESSION: guarded writer uses the supplied env endpoint and credential, not ambient credentials', async () => {
   const originalFetch = globalThis.fetch;

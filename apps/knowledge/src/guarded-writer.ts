@@ -9,6 +9,12 @@
 import type { HasnaStorageClient } from './contracts-types.js';
 import { resolveKnowledgeGuardedTransport } from './http-store.js';
 import {
+  executeKnowledgePrivateReview,
+  type KnowledgePrivateReviewDescriptor,
+  type KnowledgePrivateReviewer,
+  type KnowledgePrivateReviewProof,
+} from './guarded-review.js';
+import {
   KNOWLEDGE_GUARDED_WRITE_CONTRACT,
   assertKnowledgeGuardedBinding,
   assertKnowledgeGuardedBounds,
@@ -104,6 +110,11 @@ export interface KnowledgeGuardedWriter {
     fullId: string,
     bounds?: KnowledgeGuardedBounds,
   ): Promise<KnowledgePrivateResultDescriptor>;
+  reviewPrivate(
+    descriptor: KnowledgePrivateReviewDescriptor,
+    reviewer: KnowledgePrivateReviewer,
+    bounds?: KnowledgeGuardedBounds,
+  ): Promise<KnowledgePrivateReviewProof>;
   readBindingState(
     fullId: string,
     bounds?: KnowledgeGuardedBounds,
@@ -1070,6 +1081,14 @@ class GuardedWriter implements KnowledgeGuardedWriter {
   ): Promise<KnowledgePrivateResultDescriptor> {
     const result = await this.readback(fullId, bounds);
     return createKnowledgePrivateResultDescriptor({ kind: 'readback', value: result });
+  }
+
+  reviewPrivate(
+    descriptor: KnowledgePrivateReviewDescriptor,
+    reviewer: KnowledgePrivateReviewer,
+    bounds: KnowledgeGuardedBounds = this.limits.readback,
+  ): Promise<KnowledgePrivateReviewProof> {
+    return executeKnowledgePrivateReview(this.transport, this.binding, descriptor, reviewer, bounds);
   }
 }
 
