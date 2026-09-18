@@ -34,6 +34,8 @@ interface StubOptions {
   persistentAdvisoryFailure?: boolean;
   /** Bump the stored task version after the first advisory-lock failure. */
   bumpVersionAfterFailure?: boolean;
+  /** Simulate a writer changing the row between the scoped read and SQL CAS. */
+  bumpVersionBeforeGuardedWrite?: boolean;
 }
 
 function transient55P03(sqlStateOnCause: boolean): Error {
@@ -53,11 +55,13 @@ function transient55P03(sqlStateOnCause: boolean): Error {
 function createStubClient(options: StubOptions = {}): TodosPostgresQueryClient & {
   advisoryLockCalls: number;
   guardedWriteCalls: number;
+  taskReadVersions: number[];
   setStoredVersion: (version: number) => void;
 } {
   let advisoryLockCalls = 0;
   let guardedWriteCalls = 0;
   let storedVersion = 1;
+  const taskReadVersions: number[] = [];
 
   const client: TodosPostgresQueryClient = {
     async transaction<T>(fn: (transaction: TodosPostgresQueryClient) => Promise<T>): Promise<T> {
@@ -72,6 +76,7 @@ function createStubClient(options: StubOptions = {}): TodosPostgresQueryClient &
       // guard): return a validation row that mirrors the real statement.
       if (sql.includes("todos:task-plan-membership-guard") || sql.includes("todos:task-parent-integrity-guard")) {
         guardedWriteCalls += 1;
+        if (options.bumpVersionBeforeGuardedWrite) storedVersion += 1;
         const [, , rawPayload, , , , , , , , , expectedVersion] = values;
         // jsonbParam passes the object through; accept either shape.
         const task = (
@@ -117,6 +122,7 @@ function createStubClient(options: StubOptions = {}): TodosPostgresQueryClient &
       }
       // Single-record read (store.get / requireRecord).
       if (sql.includes("object_type = $2") && sql.includes("object_id = $3")) {
+        if (values[1] === "tasks") taskReadVersions.push(storedVersion);
         return {
           rows: [{
             payload: {
@@ -144,6 +150,9 @@ function createStubClient(options: StubOptions = {}): TodosPostgresQueryClient &
     },
     get guardedWriteCalls() {
       return guardedWriteCalls;
+    },
+    get taskReadVersions() {
+      return [...taskReadVersions];
     },
     setStoredVersion(version: number) {
       storedVersion = version;
@@ -207,13 +216,26 @@ describe("postgres adapter guarded-write transient lock retry (incident 724667 /
     const adapter = makeAdapter(stub);
 
     // The first attempt is canceled at the advisory lock; by the retry a
-    // concurrent writer bumped the row to version 2, so the guarded write's
-    // CAS rejects the stale expected version. Retrying must NOT bypass the
-    // optimistic-concurrency contract.
+    // concurrent writer bumped the row to version 2. The initial task read is
+    // now inside the transaction and sees that version before issuing a write.
+    // Retrying must NOT bypass the optimistic-concurrency contract.
     await expect(adapter.tasks.update("task-1", { version: 1, title: "new title" })).rejects.toThrow(
       /version conflict/i,
     );
     expect(stub.advisoryLockCalls).toBe(2);
+    expect(stub.taskReadVersions).toEqual([2]);
+    expect(stub.guardedWriteCalls).toBe(0);
+  });
+
+  test("the guarded SQL CAS still rejects a version bump after the protected task read", async () => {
+    const stub = createStubClient({ bumpVersionBeforeGuardedWrite: true });
+    const adapter = makeAdapter(stub);
+
+    await expect(adapter.tasks.update("task-1", { version: 1, title: "new title" })).rejects.toThrow(
+      /version conflict/i,
+    );
+    expect(stub.advisoryLockCalls).toBe(1);
+    expect(stub.taskReadVersions).toEqual([1]);
     expect(stub.guardedWriteCalls).toBe(1);
   });
 });
