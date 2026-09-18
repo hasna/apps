@@ -43,7 +43,7 @@ import {
   type KnowledgePrivateInputDescriptor,
   type KnowledgeReviewBindingState,
 } from '../src/index';
-import { createServeHandler } from '../src/serve';
+import { createServeHandler, resolveKnowledgeLegacyOwnerTenantId } from '../src/serve';
 import type {
   PoolQueryClient,
   TypedQueryClient,
@@ -69,6 +69,7 @@ const AMBIENT_SENTINEL_KEY = 'fake-ambient-guarded-writer-env-key';
 let db: PGlite;
 let server: { port: number; stop: (closeActive?: boolean) => void };
 let env: NodeJS.ProcessEnv;
+let fixtureClient: PoolQueryClient;
 const guardedSqlTrace: string[] = [];
 
 function tracedQueryClient(base: PoolQueryClient): PoolQueryClient {
@@ -107,6 +108,7 @@ beforeAll(async () => {
   const created = await createMigratedPglite();
   db = created.db;
   const client = tracedQueryClient(created.client);
+  fixtureClient = client;
   const store = new ApiKeyStore(client);
   const verifier = verifyApiKey({
     app: 'knowledge',
@@ -119,6 +121,7 @@ beforeAll(async () => {
     store,
     version: '9.9.9',
     guardedAuthority: AUTHORITY,
+    legacyOwnerTenantId: TENANT,
   });
   server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: handler });
   env = {
@@ -265,6 +268,72 @@ test('private review refuses stale version/digest/state and cross-tenant or auth
     .rejects.toMatchObject({status:403});
   await expect(writer().reviewPrivate({...good} as typeof good,callback)).rejects.toMatchObject({code:'private_review_descriptor_invalid'});
   expect(callbacks).toBe(0);
+});
+
+test('tenant-null legacy ownership is explicit and denies a separately authenticated other tenant', async () => {
+  const id = 'private-review-owner-boundary';
+  const content = 'SYNTHETIC-LEGACY-OWNER-CONTENT';
+  await createLegacyItem(id, content);
+  // Model the historical tenant-null storage shape only in this isolated fixture.
+  await db.query('UPDATE knowledge_items SET tenant_id = NULL WHERE id = $1', [id]);
+  const before = await itemSnapshot(id);
+  const ownerDescriptor = await reviewDescriptor(id);
+  let ownerReviews = 0;
+  await writer().reviewPrivate(ownerDescriptor, () => { ownerReviews++; });
+  expect(ownerReviews).toBe(1);
+
+  const foreignBinding = { ...BINDING, tenant_id: 'tenant-independent-fixture' };
+  const foreignWriter = createKnowledgeGuardedWriter({
+    binding: foreignBinding,
+    env: { ...env, HASNA_KNOWLEDGE_API_KEY: mintApiKey({
+      app: 'knowledge', scopes: ['knowledge:read', 'knowledge:write'],
+      tid: foreignBinding.tenant_id, signingSecret: SIGNING,
+    }).token },
+  });
+  const foreignDescriptor = createKnowledgePrivateReviewDescriptor({
+    ...ownerDescriptor.toJSON(), binding: foreignBinding,
+  });
+  let foreignReviews = 0;
+  await expect(foreignWriter.readBindingState(id)).rejects.toThrow(/404/);
+  await expect(foreignWriter.reviewPrivate(foreignDescriptor, () => { foreignReviews++; }))
+    .rejects.toMatchObject({ status: 404 });
+  await expect(foreignWriter.adoptLegacy({
+    operation_id: 'foreign-legacy-owner-test', step_id: 'adopt', target_id: id,
+    expected_version: Number(before.version),
+    expected_content_sha256: createHash('sha256').update(content).digest('hex'),
+  })).rejects.toThrow();
+  expect(foreignReviews).toBe(0);
+  expect(await itemSnapshot(id)).toEqual(before);
+
+  const noOwnerServer = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: createServeHandler({
+    client: fixtureClient, store: new ApiKeyStore(fixtureClient), version: '9.9.9',
+    guardedAuthority: AUTHORITY,
+    verifier: verifyApiKey({ app: 'knowledge', signingSecret: SIGNING,
+      keyStatus: () => Promise.resolve('active' as const) }),
+  }) });
+  try {
+    const noOwnerWriter = createKnowledgeGuardedWriter({ binding: BINDING,
+      env: { ...env, HASNA_KNOWLEDGE_API_URL: `http://127.0.0.1:${noOwnerServer.port}` },
+    });
+    await expect(noOwnerWriter.readBindingState(id)).rejects.toThrow(/404/);
+    await expect(noOwnerWriter.reviewPrivate(ownerDescriptor, () => { ownerReviews++; }))
+      .rejects.toMatchObject({ status: 404 });
+    await expect(noOwnerWriter.adoptLegacy({
+      operation_id: 'unconfigured-legacy-owner-test', step_id: 'adopt', target_id: id,
+      expected_version: Number(before.version),
+      expected_content_sha256: createHash('sha256').update(content).digest('hex'),
+    })).rejects.toThrow();
+    expect(ownerReviews).toBe(1);
+    expect(await itemSnapshot(id)).toEqual(before);
+  } finally { noOwnerServer.stop(true); }
+});
+
+test('legacy owner configuration rejects empty or ambiguous tenant identities', () => {
+  expect(resolveKnowledgeLegacyOwnerTenantId({})).toBeUndefined();
+  expect(resolveKnowledgeLegacyOwnerTenantId({ HASNA_KNOWLEDGE_LEGACY_OWNER_TENANT_ID: TENANT })).toBe(TENANT);
+  for (const value of ['', ' tenant', 'tenant ', 'tenant\nother', 'tenant other', 'x'.repeat(65)]) {
+    expect(() => resolveKnowledgeLegacyOwnerTenantId({ HASNA_KNOWLEDGE_LEGACY_OWNER_TENANT_ID: value })).toThrow();
+  }
 });
 
 test('private review enforces producer byte bounds, exact response, expiry and no-store', async () => {
@@ -1532,6 +1601,7 @@ describe('FCAME-1 guarded Knowledge writer', () => {
           store,
           version: '9.9.9',
           guardedAuthority: AUTHORITY,
+          legacyOwnerTenantId: variant.tenantId,
         }),
       });
       try {
@@ -1616,6 +1686,7 @@ describe('FCAME-1 guarded Knowledge writer', () => {
           store,
           version: '9.9.9',
           guardedAuthority: AUTHORITY,
+          legacyOwnerTenantId: variant.tenantId,
         }),
       });
       try {

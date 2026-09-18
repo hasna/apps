@@ -3178,9 +3178,11 @@ function rowsToManifest(row, stepRows) {
 class GuardedWriteRepo {
   client;
   authority;
-  constructor(client, authority) {
+  legacyOwnerTenantId;
+  constructor(client, authority, legacyOwnerTenantId) {
     this.client = client;
     this.authority = authority;
+    this.legacyOwnerTenantId = legacyOwnerTenantId;
   }
   binding(envelope) {
     return envelope.descriptor.binding;
@@ -3243,14 +3245,14 @@ class GuardedWriteRepo {
           AND (
             (
               authority_classification IS NULL
-              AND (tenant_id IS NULL OR tenant_id::text = $2)
+              AND (tenant_id::text = $2 OR (tenant_id IS NULL AND $2 = $3::text))
             )
             OR tenant_id::text = $2
           )
-        LIMIT 1`, [fullId, binding.tenant_id]);
+        LIMIT 1`, [fullId, binding.tenant_id, this.legacyOwnerTenantId]);
     if (!row)
       return null;
-    const legacyForRequestedTenant = row.authority_classification == null && row.authority_id == null && row.scope == null && row.parent_id == null && (row.tenant_id == null || String(row.tenant_id) === binding.tenant_id);
+    const legacyForRequestedTenant = row.authority_classification == null && row.authority_id == null && row.scope == null && row.parent_id == null && (row.tenant_id == null ? binding.tenant_id === this.legacyOwnerTenantId : String(row.tenant_id) === binding.tenant_id);
     const requested = rowMatchesGuardedBinding(row, binding);
     return {
       contract: KNOWLEDGE_GUARDED_WRITE_CONTRACT,
@@ -3269,10 +3271,11 @@ class GuardedWriteRepo {
     const b = d.binding;
     const row = await this.client.get(`SELECT * FROM knowledge_items WHERE id = $1 AND (
         ($2 = 'legacy_unbound' AND authority_classification IS NULL AND authority_id IS NULL
-          AND scope IS NULL AND parent_id IS NULL AND (tenant_id IS NULL OR tenant_id::text = $3))
+          AND scope IS NULL AND parent_id IS NULL
+          AND (tenant_id::text = $3 OR (tenant_id IS NULL AND $3 = $8::text)))
         OR ($2 = 'bound_to_requested' AND authority_classification = $4 AND authority_id = $5
           AND tenant_id::text = $3 AND scope = $6 AND parent_id = $7)
-      ) LIMIT 1`, [d.target_id, d.expected_binding_state, b.tenant_id, b.authority.classification, b.authority.authority_id, b.scope, b.parent_id]);
+      ) LIMIT 1`, [d.target_id, d.expected_binding_state, b.tenant_id, b.authority.classification, b.authority.authority_id, b.scope, b.parent_id, this.legacyOwnerTenantId]);
     if (!row)
       return null;
     const item = rowToItem(row);
@@ -3372,8 +3375,8 @@ class GuardedWriteRepo {
       }
       const existing = await tx.get(`SELECT * FROM knowledge_items
           WHERE id = $1
-            AND (tenant_id IS NULL OR tenant_id::text = $2)
-          FOR UPDATE`, [envelope.target_id, binding.tenant_id]);
+            AND (tenant_id::text = $2 OR (tenant_id IS NULL AND $2 = $3::text))
+          FOR UPDATE`, [envelope.target_id, binding.tenant_id, this.legacyOwnerTenantId]);
       if (!existing) {
         const receipt2 = await this.finishAdoption(tx, envelope, "rejected", "not_found", null, null);
         return {
@@ -3383,7 +3386,7 @@ class GuardedWriteRepo {
           duplicate: false
         };
       }
-      const legacyForRequestedTenant = existing.authority_classification == null && existing.authority_id == null && existing.scope == null && existing.parent_id == null && (existing.tenant_id == null || String(existing.tenant_id) === binding.tenant_id);
+      const legacyForRequestedTenant = existing.authority_classification == null && existing.authority_id == null && existing.scope == null && existing.parent_id == null && (existing.tenant_id == null ? binding.tenant_id === this.legacyOwnerTenantId : String(existing.tenant_id) === binding.tenant_id);
       const requested = rowMatchesGuardedBinding(existing, binding);
       if (envelope.action === "adopt" && !legacyForRequestedTenant || envelope.action === "rollback" && (!requested || existing.guarded_adoption_receipt_id !== envelope.adoption_receipt_id)) {
         const code = envelope.action === "adopt" ? requested ? "already_bound" : "binding_mismatch" : requested ? "adoption_receipt_not_current" : "binding_mismatch";
@@ -3434,7 +3437,7 @@ class GuardedWriteRepo {
              AND scope IS NULL
              AND parent_id IS NULL
              AND guarded_adoption_receipt_id IS NULL
-             AND (tenant_id IS NULL OR tenant_id::text = $3)
+             AND (tenant_id::text = $3 OR (tenant_id IS NULL AND $3 = $10::text))
              AND encode(sha256(convert_to(coalesce(content, ''), 'UTF8')), 'hex') = $9
            RETURNING *`, [
         binding.authority.classification,
@@ -3445,7 +3448,8 @@ class GuardedWriteRepo {
         computeKnowledgeGuardedAdoptionReceiptId(envelope.deterministic_key),
         envelope.target_id,
         envelope.expected_version,
-        envelope.expected_content_sha256
+        envelope.expected_content_sha256,
+        this.legacyOwnerTenantId
       ]) : await tx.get(`UPDATE knowledge_items SET
              authority_classification = NULL,
              authority_id = NULL,
@@ -5869,8 +5873,11 @@ function parseExpectedVersion(req, body) {
   return parsed;
 }
 function createServeHandler(deps) {
+  const legacyOwnerTenantId = resolveKnowledgeLegacyOwnerTenantId({
+    HASNA_KNOWLEDGE_LEGACY_OWNER_TENANT_ID: deps.legacyOwnerTenantId
+  });
   const repo = new NoteRepo(deps.client);
-  const guardedRepo = deps.guardedAuthority ? new GuardedWriteRepo(deps.client, deps.guardedAuthority) : null;
+  const guardedRepo = deps.guardedAuthority ? new GuardedWriteRepo(deps.client, deps.guardedAuthority, legacyOwnerTenantId ?? null) : null;
   const projectLinksForTenant = (tenantId) => deps.projectLinksAuthority?.(tenantId) ?? createPostgresKnowledgeProjectLinksAuthority({
     client: deps.client,
     itemResolver: (id) => repo.get(id, tenantId),
@@ -6449,8 +6456,18 @@ function resolveKnowledgeGuardedAuthority(env = process.env) {
   assertKnowledgeGuardedBinding(binding);
   return binding.authority;
 }
+function resolveKnowledgeLegacyOwnerTenantId(env) {
+  const value = env.HASNA_KNOWLEDGE_LEGACY_OWNER_TENANT_ID;
+  if (value === undefined)
+    return;
+  if (!value || value !== value.trim() || value.length > 64 || /[\s\x00-\x1f\x7f]/.test(value)) {
+    throw new Error("HASNA_KNOWLEDGE_LEGACY_OWNER_TENANT_ID must be an exact nonempty tenant ID.");
+  }
+  return value;
+}
 async function startKnowledgeServe(options = {}) {
   const env = options.env ?? process.env;
+  const legacyOwnerTenantId = resolveKnowledgeLegacyOwnerTenantId(env);
   const port = options.port ?? Number(env.PORT ?? env.HASNA_KNOWLEDGE_SERVE_PORT ?? 8080);
   const hostname = options.hostname ?? env.HOST ?? "0.0.0.0";
   const version = resolveVersion();
@@ -6472,7 +6489,8 @@ async function startKnowledgeServe(options = {}) {
     verifier,
     store,
     version,
-    guardedAuthority: resolveKnowledgeGuardedAuthority(env)
+    guardedAuthority: resolveKnowledgeGuardedAuthority(env),
+    legacyOwnerTenantId
   });
   const BunGlobal = globalThis.Bun;
   if (!BunGlobal?.serve) {

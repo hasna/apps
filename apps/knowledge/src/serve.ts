@@ -936,6 +936,7 @@ class GuardedWriteRepo {
   constructor(
     private readonly client: PoolQueryClient,
     readonly authority: KnowledgeServeGuardedAuthority,
+    private readonly legacyOwnerTenantId: string | null,
   ) {}
 
   private binding(envelope: KnowledgeGuardedWriteEnvelope): KnowledgeGuardedBinding {
@@ -1032,12 +1033,12 @@ class GuardedWriteRepo {
           AND (
             (
               authority_classification IS NULL
-              AND (tenant_id IS NULL OR tenant_id::text = $2)
+              AND (tenant_id::text = $2 OR (tenant_id IS NULL AND $2 = $3::text))
             )
             OR tenant_id::text = $2
           )
         LIMIT 1`,
-      [fullId, binding.tenant_id],
+      [fullId, binding.tenant_id, this.legacyOwnerTenantId],
     );
     if (!row) return null;
     const legacyForRequestedTenant = (
@@ -1045,7 +1046,9 @@ class GuardedWriteRepo {
       && row.authority_id == null
       && row.scope == null
       && row.parent_id == null
-      && (row.tenant_id == null || String(row.tenant_id) === binding.tenant_id)
+      && (row.tenant_id == null
+        ? binding.tenant_id === this.legacyOwnerTenantId
+        : String(row.tenant_id) === binding.tenant_id)
     );
     const requested = rowMatchesGuardedBinding(row, binding);
     return {
@@ -1075,11 +1078,12 @@ class GuardedWriteRepo {
     const row = await this.client.get<Record<string, unknown>>(
       `SELECT * FROM knowledge_items WHERE id = $1 AND (
         ($2 = 'legacy_unbound' AND authority_classification IS NULL AND authority_id IS NULL
-          AND scope IS NULL AND parent_id IS NULL AND (tenant_id IS NULL OR tenant_id::text = $3))
+          AND scope IS NULL AND parent_id IS NULL
+          AND (tenant_id::text = $3 OR (tenant_id IS NULL AND $3 = $8::text)))
         OR ($2 = 'bound_to_requested' AND authority_classification = $4 AND authority_id = $5
           AND tenant_id::text = $3 AND scope = $6 AND parent_id = $7)
       ) LIMIT 1`,
-      [d.target_id, d.expected_binding_state, b.tenant_id, b.authority.classification, b.authority.authority_id, b.scope, b.parent_id],
+      [d.target_id, d.expected_binding_state, b.tenant_id, b.authority.classification, b.authority.authority_id, b.scope, b.parent_id, this.legacyOwnerTenantId],
     );
     if (!row) return null;
     const item = rowToItem(row);
@@ -1205,9 +1209,9 @@ class GuardedWriteRepo {
       const existing = await tx.get<Record<string, unknown>>(
         `SELECT * FROM knowledge_items
           WHERE id = $1
-            AND (tenant_id IS NULL OR tenant_id::text = $2)
+            AND (tenant_id::text = $2 OR (tenant_id IS NULL AND $2 = $3::text))
           FOR UPDATE`,
-        [envelope.target_id, binding.tenant_id],
+        [envelope.target_id, binding.tenant_id, this.legacyOwnerTenantId],
       );
       if (!existing) {
         const receipt = await this.finishAdoption(tx, envelope, 'rejected', 'not_found', null, null);
@@ -1224,7 +1228,9 @@ class GuardedWriteRepo {
         && existing.authority_id == null
         && existing.scope == null
         && existing.parent_id == null
-        && (existing.tenant_id == null || String(existing.tenant_id) === binding.tenant_id)
+        && (existing.tenant_id == null
+          ? binding.tenant_id === this.legacyOwnerTenantId
+          : String(existing.tenant_id) === binding.tenant_id)
       );
       const requested = rowMatchesGuardedBinding(existing, binding);
       if (
@@ -1308,7 +1314,7 @@ class GuardedWriteRepo {
              AND scope IS NULL
              AND parent_id IS NULL
              AND guarded_adoption_receipt_id IS NULL
-             AND (tenant_id IS NULL OR tenant_id::text = $3)
+             AND (tenant_id::text = $3 OR (tenant_id IS NULL AND $3 = $10::text))
              AND encode(sha256(convert_to(coalesce(content, ''), 'UTF8')), 'hex') = $9
            RETURNING *`,
           [
@@ -1321,6 +1327,7 @@ class GuardedWriteRepo {
             envelope.target_id,
             envelope.expected_version,
             envelope.expected_content_sha256,
+            this.legacyOwnerTenantId,
           ],
         )
         : await tx.get<Record<string, unknown>>(
@@ -4190,6 +4197,9 @@ export interface ServeDeps {
    * routes keep working and guarded routes fail closed with 503.
    */
   guardedAuthority?: KnowledgeServeGuardedAuthority;
+  /** Explicit deployment owner of tenant-null legacy rows. Absent denies access
+   * to those rows; a request's tenant never establishes their ownership. */
+  legacyOwnerTenantId?: string;
   /**
    * Optional test/host override for the package-owned project-link authority.
    * Production uses the same Postgres client as notes and scopes every
@@ -4199,9 +4209,12 @@ export interface ServeDeps {
 }
 
 export function createServeHandler(deps: ServeDeps): (req: Request) => Promise<Response> {
+  const legacyOwnerTenantId = resolveKnowledgeLegacyOwnerTenantId({
+    HASNA_KNOWLEDGE_LEGACY_OWNER_TENANT_ID: deps.legacyOwnerTenantId,
+  });
   const repo = new NoteRepo(deps.client);
   const guardedRepo = deps.guardedAuthority
-    ? new GuardedWriteRepo(deps.client, deps.guardedAuthority)
+    ? new GuardedWriteRepo(deps.client, deps.guardedAuthority, legacyOwnerTenantId ?? null)
     : null;
   const projectLinksForTenant = (tenantId: string): KnowledgeProjectLinksAuthority => (
     deps.projectLinksAuthority?.(tenantId)
@@ -4945,12 +4958,21 @@ export function resolveKnowledgeGuardedAuthority(
   return binding.authority;
 }
 
-/**
- * Start the knowledge HTTP service on Bun. Opens the server PostgreSQL pool and a
- * contracts API-key verifier backed by the api_keys table (revocation).
- */
+/** Tenant-null records have no request-derived owner. Only explicit deployment
+ * configuration may grant their guarded review or adoption to one tenant. */
+export function resolveKnowledgeLegacyOwnerTenantId(env: NodeJS.ProcessEnv): string | undefined {
+  const value = env.HASNA_KNOWLEDGE_LEGACY_OWNER_TENANT_ID;
+  if (value === undefined) return undefined;
+  if (!value || value !== value.trim() || value.length > 64 || /[\s\x00-\x1f\x7f]/.test(value)) {
+    throw new Error('HASNA_KNOWLEDGE_LEGACY_OWNER_TENANT_ID must be an exact nonempty tenant ID.');
+  }
+  return value;
+}
+
+/** Start the HTTP service using PostgreSQL and a revocation-aware verifier. */
 export async function startKnowledgeServe(options: StartServeOptions = {}): Promise<RunningServe> {
   const env = options.env ?? process.env;
+  const legacyOwnerTenantId = resolveKnowledgeLegacyOwnerTenantId(env);
   const port = options.port ?? Number(env.PORT ?? env.HASNA_KNOWLEDGE_SERVE_PORT ?? 8080);
   const hostname = options.hostname ?? env.HOST ?? '0.0.0.0';
   const version = resolveVersion();
@@ -4980,6 +5002,7 @@ export async function startKnowledgeServe(options: StartServeOptions = {}): Prom
     store,
     version,
     guardedAuthority: resolveKnowledgeGuardedAuthority(env),
+    legacyOwnerTenantId,
   });
 
   // Bun.serve is provided by the Bun runtime the Dockerfile uses.

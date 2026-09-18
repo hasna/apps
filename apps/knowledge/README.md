@@ -348,6 +348,14 @@ byte and wall-time caps apply; stale records fail closed. The response is
 Client transport errors and reviewer exceptions are sanitized; reviewer return
 values are discarded rather than placed on the result surface.
 
+Tenant-null legacy records are inaccessible through guarded binding-state,
+review and adoption by default. A deployment with a verified single legacy
+owner can set `HASNA_KNOWLEDGE_LEGACY_OWNER_TENANT_ID` to that exact tenant ID.
+This server-only setting never comes from request headers or descriptors;
+credentials for another tenant remain unable to access those records.
+Legacy rows with an existing tenant ID retain their own tenant boundary.
+Do not set one owner for a corpus with mixed or unresolved legacy ownership.
+
 The callback is trusted application code, not an isolation sandbox. It may
 perform a human or agent review using an explicitly authorized private review
 renderer, with bounded output and owner-only artifact permissions. The package
