@@ -208,6 +208,12 @@
       "app": "testers",
       "source": "external",
       "notes": "Built in hasna-internal/internal-apps."
+    },
+    {
+      "app": "tickets",
+      "source": "external",
+      "probePath": "/v1/projects",
+      "notes": "Built in hasna-internal/internal-apps. This deployment-only probe credential checks the canonical gateway route; station clients use separately minted, revocable identities."
     }
   ]
 }
