@@ -18,6 +18,7 @@
 
 import { mintApiKey, type MintedApiKey } from "../auth/keys";
 import { normalizeTenantId } from "../auth/tenant";
+import { toV1BaseUrl } from "../client/transport";
 import {
   API_KEY_ISSUANCE_PENDING_REASON,
   ApiKeyStore,
@@ -125,23 +126,17 @@ function ownEnv(env: NodeJS.ProcessEnv, key: string): string | undefined {
 }
 
 function normalizeSecretsBaseUrl(value: string): string {
-  let url: URL;
+  // Parsed search and hash are empty for a bare delimiter; serialization retains it.
+  // Reject it before SDK path joining can turn a route into a query or fragment.
+  if (/[?#]/.test(value)) throw new SecretsConfigurationError("invalid_secrets_config");
   try {
-    url = new URL(value);
+    // Match the Secrets SDK's authority rules and preserve gateway prefixes.
+    // Both /prefix and /prefix/v1 identify the same service; the SDK adds /v1.
+    return toV1BaseUrl(value).replace(/\/v1$/, "");
   } catch {
+    // URL errors can contain caller input; issuance diagnostics stay sanitized.
     throw new SecretsConfigurationError("invalid_secrets_config");
   }
-  if (
-    (url.protocol !== "http:" && url.protocol !== "https:") ||
-    url.username.length > 0 ||
-    url.password.length > 0 ||
-    url.pathname !== "/" ||
-    url.search.length > 0 ||
-    url.hash.length > 0
-  ) {
-    throw new SecretsConfigurationError("invalid_secrets_config");
-  }
-  return url.origin;
 }
 
 function resolveSecretsAlias(
