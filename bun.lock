@@ -953,7 +953,7 @@
     },
     "apps/skills": {
       "name": "@hasna/skills",
-      "version": "0.8.11",
+      "version": "0.8.12",
       "bin": {
         "skills": "bin/index.js",
         "skills-mcp": "bin/mcp.js",
