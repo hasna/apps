@@ -41,11 +41,6 @@
   ],
   "apps": [
     {
-      "app": "attachments",
-      "source": "monorepo",
-      "probePath": "/v1/attachments"
-    },
-    {
       "app": "calendar",
       "source": "monorepo"
     },
@@ -126,11 +121,6 @@
       "probePath": "/v1/secrets"
     },
     {
-      "app": "shortlinks",
-      "source": "monorepo",
-      "probePath": "/v1/links"
-    },
-    {
       "app": "skills",
       "source": "monorepo",
       "probeAuth": "bearer",
@@ -160,6 +150,12 @@
       "probePath": "/v1/status",
       "probeAuth": "bearer",
       "notes": "Deployment-only probe identity. Agent credentials are station-bound and individually provisioned; never distribute this probe key to stations. Independent gateway activation and live acceptance are required."
+    },
+    {
+      "app": "attachments",
+      "source": "external",
+      "probePath": "/v1/attachments",
+      "notes": "Built in hasna-internal/internal-apps; the canonical api.hasna.com gateway and fleet-key drift coverage remain unchanged."
     },
     {
       "app": "identities",
@@ -197,6 +193,12 @@
       "app": "sessions",
       "source": "external",
       "notes": "Built in hasna-internal/internal-apps."
+    },
+    {
+      "app": "shortlinks",
+      "source": "external",
+      "probePath": "/v1/links",
+      "notes": "Built in hasna-internal/internal-apps; the canonical api.hasna.com gateway and fleet-key drift coverage remain unchanged."
     },
     {
       "app": "subscriptions",
