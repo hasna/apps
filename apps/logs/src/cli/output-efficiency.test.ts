@@ -48,6 +48,26 @@ function fixture(count = 40): string {
   return root;
 }
 
+function fixtureWithIds(ids: string[]): string {
+  const root = fixture(0);
+  closeDb();
+  process.env.HASNA_LOGS_DB_PATH = join(root, "logs.db");
+  process.env.HASNA_LOGS_DATA_DIR = root;
+  const db = getDb();
+  for (const [index, id] of ids.entries()) {
+    ingestLog(db, {
+      id,
+      timestamp: `2026-09-18T00:00:${String(index).padStart(2, "0")}.000Z`,
+      level: "info",
+      source: "sdk",
+      service: "identity-test",
+      message: `identity message ${index}`,
+    });
+  }
+  closeDb();
+  return root;
+}
+
 function runCli(args: string[], root: string) {
   return Bun.spawnSync(["bun", "src/cli/index.ts", ...args], {
     cwd: repoRoot,
@@ -101,6 +121,44 @@ describe("logs list output efficiency", () => {
     expect(Buffer.byteLength(text)).toBeLessThanOrEqual(2048);
     expect(text).toMatch(/Showing \d+ log\(s\).*next_offset=\d+/);
     expect(text).toContain("--offset");
+  });
+
+  test("keeps long and whitespace-bearing ids exactly recoverable", () => {
+    const longId = `long-id-${"x".repeat(240)}`;
+    const whitespaceId = "id with spaces\tand\na newline";
+    const root = fixtureWithIds([longId, whitespaceId]);
+    const result = runCli(
+      ["list", "--limit", "2", "--max-bytes", "8192"],
+      root,
+    );
+    const text = stdout(result);
+
+    expect(result.exitCode, new TextDecoder().decode(result.stderr)).toBe(0);
+    const recovered = text.split("\n").flatMap((line) => {
+      const match = / id=((?:"(?:[^"\\]|\\.)*")) /.exec(line);
+      return match?.[1] ? [JSON.parse(match[1]) as string] : [];
+    });
+    expect(recovered.sort()).toEqual([longId, whitespaceId].sort());
+    expect(text).not.toContain(`${longId.slice(0, 77)}...`);
+
+    for (const id of recovered) {
+      const detail = runCli(["get", id], root);
+      expect(detail.exitCode, new TextDecoder().decode(detail.stderr)).toBe(0);
+      expect((JSON.parse(stdout(detail)) as { id: string }).id).toBe(id);
+    }
+  });
+
+  test("refuses an id that cannot fit without alteration", () => {
+    const hugeId = `huge-id-${"z".repeat(2_000)}`;
+    const root = fixtureWithIds([hugeId]);
+    const result = runCli(["list", "--max-bytes", "1024"], root);
+    const error = new TextDecoder().decode(result.stderr);
+
+    expect(result.exitCode).not.toBe(0);
+    expect(error).toContain(
+      "cannot fit compact output without altering the id",
+    );
+    expect(error).not.toContain(hugeId);
   });
 
   test("help makes the compact default and byte/row controls discoverable", () => {

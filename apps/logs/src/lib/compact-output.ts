@@ -10,7 +10,6 @@ const FIELD_BYTES = Object.freeze({
   timestamp: 40,
   level: 12,
   service: 64,
-  id: 80,
   message: 160,
 });
 
@@ -71,12 +70,18 @@ export function truncateUtf8(
   return `${result}${suffix}`;
 }
 
+/** JSON string escaping is reversible and keeps every ID code point exact while
+ * ensuring whitespace/control characters cannot create extra output lines. */
+export function encodeExactLogId(id: string): string {
+  return JSON.stringify(id);
+}
+
 export function compactLogLine(row: LogRow): string {
   return [
     truncateUtf8(row.timestamp, FIELD_BYTES.timestamp),
     `[${truncateUtf8(row.level.toUpperCase(), FIELD_BYTES.level)}]`,
     truncateUtf8(row.service, FIELD_BYTES.service),
-    `id=${truncateUtf8(row.id, FIELD_BYTES.id)}`,
+    `id=${encodeExactLogId(row.id)}`,
     truncateUtf8(row.message, FIELD_BYTES.message),
   ].join(" ");
 }
@@ -99,7 +104,7 @@ function footer(
     nextOffset === null
       ? "complete"
       : `next_offset=${nextOffset}; continue with --offset ${nextOffset}`;
-  return `Showing ${count} log(s) from offset ${offset}; ${continuation}; bytes<=${maxBytes}. Use logs get <id> for full detail.`;
+  return `Showing ${count} log(s) from offset ${offset}; ${continuation}; bytes<=${maxBytes}. Decode the id= JSON string and pass its exact value to logs get <id>.`;
 }
 
 export function buildCompactLogOutput(
@@ -113,6 +118,12 @@ export function buildCompactLogOutput(
 
   for (let index = 0; index < candidates.length; index += 1) {
     const line = compactLogLine(candidates[index]!);
+    const standalone = `${line}\n${footer(1, options.offset + index, options.offset + index + 1, options.maxBytes)}\n`;
+    if (Buffer.byteLength(standalone) > options.maxBytes) {
+      throw new Error(
+        `Log at matching offset ${options.offset + index} cannot fit compact output without altering the id; increase --max-bytes or use an exact id from JSON output.`,
+      );
+    }
     const proposed = [...lines, line];
     const hasMore = sourceHasMore || index + 1 < candidates.length;
     const nextOffset = hasMore ? options.offset + proposed.length : null;

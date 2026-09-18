@@ -96,11 +96,13 @@ logs --help
 - `logs diagnose`
 
 `logs list` defaults to a bounded compact identity preview: 25 rows, message and
-service previews, exact log IDs for `logs get <id>`, and a 32 KiB output
-ceiling. When more rows remain, the footer reports a resumable `next_offset`;
-pass it back with `--offset`. Use `--limit` and `--max-bytes` to tune the compact
+service previews, reversible JSON-string-escaped log IDs for `logs get <id>`,
+and a 32 KiB output ceiling. When more rows remain, the footer reports a
+resumable `next_offset`; pass it back with `--offset`. Use `--limit` and `--max-bytes` to tune the compact
 page, `--format table` for the legacy terminal columns, or `--format json` for
-explicit full records.
+explicit full records. Multi-level hosted filters scan bounded server pages so
+`--offset` always counts matching rows and the continuation footer stays
+truthful even when nonmatching rows precede the next match.
 
 Examples:
 
