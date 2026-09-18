@@ -47,7 +47,7 @@ describe("repos registry prune", () => {
     expect(plan.applied).toBe(false);
     expect(plan.plan.row_count).toBe(1);
     expect(plan.plan.plan_hash).toMatch(/^[0-9a-f]{64}$/);
-    const after = runCli(dbPath, ["repos", "--json", "-n", "10"]);
+    const after = runCli(dbPath, ["repos", "--json", "--full", "-n", "10"]);
     expect((JSON.parse(after.stdout) as unknown[]).length).toBe(2);
     expect(existsSync(live)).toBe(true);
   });
@@ -59,7 +59,7 @@ describe("repos registry prune", () => {
     const body = JSON.parse(result.stdout) as { ok: boolean; error: { code: string } };
     expect(body.ok).toBe(false);
     expect(body.error.code).toBe("CONFIRMATION_REQUIRED");
-    const after = runCli(dbPath, ["repos", "--json", "-n", "10"]);
+    const after = runCli(dbPath, ["repos", "--json", "--full", "-n", "10"]);
     expect((JSON.parse(after.stdout) as unknown[]).length).toBe(2);
   });
 
@@ -90,7 +90,7 @@ describe("repos registry prune", () => {
     expect(body.applied).toBe(true);
     expect(body.receipt.row_count).toBe(1);
 
-    const after = JSON.parse(runCli(dbPath, ["repos", "--json", "-n", "10"]).stdout) as Array<{ name: string }>;
+    const after = JSON.parse(runCli(dbPath, ["repos", "--json", "--full", "-n", "10"]).stdout) as Array<{ name: string }>;
     expect(after.map((row) => row.name)).toEqual(["open-live"]);
     expect(existsSync(live)).toBe(true);
     expect(existsSync(join(live, "KEEP.txt"))).toBe(true);
@@ -132,7 +132,7 @@ describe("repos registry prune", () => {
     expect(body.applied).toBe(true);
     expect(body.receipt.row_count).toBe(1);
 
-    const remaining = JSON.parse(runCli(dbPath, ["repos", "--json", "-n", "10"]).stdout) as Array<{ name: string }>;
+    const remaining = JSON.parse(runCli(dbPath, ["repos", "--json", "--full", "-n", "10"]).stdout) as Array<{ name: string }>;
     expect(remaining.map((row) => row.name).sort()).toEqual(["open-gone", "open-live"]);
     expect(existsSync(live)).toBe(true);
   });

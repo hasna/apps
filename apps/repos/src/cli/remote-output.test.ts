@@ -37,7 +37,7 @@ describe("CLI remote output boundary", () => {
     closeDb();
 
     for (const args of [
-      ["repos", "--json"],
+      ["repos", "--json", "--full"],
       // The fixture path does not exist, so `repo` refuses it with a non-zero
       // exit. Opt out of the failure — the subject here is redaction.
       ["repo", "remoteoutput", "--json", "--allow-unusable-checkout"],

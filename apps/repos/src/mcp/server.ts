@@ -38,6 +38,7 @@ import {
 import { getDb } from "../db/database.js";
 import { getCliVersion } from "../cli/version.js";
 import { sanitizeRemoteOutput } from "../lib/remote-identity.js";
+import { createProfiledReposServer, type ReposMcpProfile } from "./profile.js";
 
 export const MCP_NAME = "repos";
 export const VERSION = getCliVersion();
@@ -94,11 +95,12 @@ export function compactPage<T, U>(
   };
 }
 
-export function buildServer(): McpServer {
-  const server = new McpServer({
+export function buildServer(profile: ReposMcpProfile = "full"): McpServer {
+  const rawServer = new McpServer({
     name: MCP_NAME,
     version: VERSION,
-  });
+  }, { instructions: `Active MCP profile: ${profile}. The default core profile keeps tool discovery bounded; set HASNA_REPOS_MCP_PROFILE=full only for the complete operational inventory.` });
+  const server = createProfiledReposServer(rawServer, profile);
 
 function jsonText(value: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(sanitizeRemoteOutput(value)) }] };
@@ -792,7 +794,7 @@ server.tool("list_agents", "List registered agents", {
   });
 });
 
-  return server;
+  return rawServer;
 }
 
 export async function prepareMcpLifecycle(): Promise<{ stop: () => void }> {

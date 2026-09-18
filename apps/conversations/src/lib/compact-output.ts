@@ -241,6 +241,7 @@ export function summarizeTask(task: TaskInfo | SearchResultTask, maxChars = DEFA
 
 export function summarizeChannel(channel: ChannelInfo, maxChars = DEFAULT_PREVIEW_CHARS) {
   return {
+    id: channel.id,
     name: channel.name,
     description_preview: channel.description ? previewText(channel.description, maxChars) : null,
     topic_preview: channel.topic ? previewText(channel.topic, maxChars) : null,

@@ -3,7 +3,7 @@ import { getStore } from "../../lib/store/index.js";
 import chalk from "chalk";
 // Reads/writes route through getStore(): ApiStore (HTTP API) or LocalStore.
 import { resolveIdentity } from "../../lib/identity.js";
-import { previewText, windowItems } from "../../lib/compact-output.js";
+import { previewText, summarizeChannel, windowItems } from "../../lib/compact-output.js";
 import { assertNoSensitiveContent } from "../../lib/content-safety.js";
 import { getCliWindow, pageFromQuery, printCompactFooter, printJsonDisclosure, queryLimitFor, warnIfPageFull, windowJsonList } from "../compact.js";
 import { CHANNEL_MEMBER_ORDER, CHANNEL_SUBSCRIPTION_AGENT_ORDER } from "../../lib/list-order.js";
@@ -148,7 +148,8 @@ export function registerChannelCommands(program: Command): void {
     .option("--archived", "Include archived channels")
     .option("--limit <n>", "Max channels to show", parseInt)
     .option("--cursor <n>", "Skip first N channels for pagination", parseInt)
-    .option("-j, --json", "Output as JSON")
+    .option("-j, --json", "Output bounded compact JSON")
+    .option("--full", "Return the legacy full-record JSON array (unbounded unless --limit is set)")
     .action(async (opts) => {
       const listOpts: { project_id?: string; include_archived?: boolean } = {};
       if (opts.project) listOpts.project_id = opts.project;
@@ -160,15 +161,30 @@ export function registerChannelCommands(program: Command): void {
       const page = windowItems(channels, window);
 
       if (opts.json) {
-        const listing = windowJsonList(channels, opts);
-        printJson(listing.rows);
-        printJsonDisclosure({
-          shown: listing.rows.length,
-          total: listing.page.total,
-          hasMore: listing.bounded && listing.page.hasMore,
-          nextCursor: listing.page.nextCursor,
-          sort,
-        });
+        if (opts.full) {
+          const listing = windowJsonList(channels, opts);
+          printJson(listing.rows);
+          printJsonDisclosure({
+            shown: listing.rows.length,
+            total: listing.page.total,
+            hasMore: listing.bounded && listing.page.hasMore,
+            nextCursor: listing.page.nextCursor,
+            sort,
+          });
+        } else {
+          printJson({
+            channels: page.items.map((channel) => summarizeChannel(channel)),
+            count: page.count,
+            total: page.total,
+            limit: window.limit,
+            cursor: window.offset,
+            next_cursor: page.nextCursor,
+            has_more: page.hasMore,
+            compact: true,
+            sort,
+            hint: "Use channel read <name> for messages; pass --full for the legacy channel records.",
+          });
+        }
       } else {
         if (channels.length === 0) {
           printLine(chalk.dim("No channels found."));

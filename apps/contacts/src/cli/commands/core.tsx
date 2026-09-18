@@ -8,6 +8,7 @@ import type { CreateContactInput, Group } from "../../types/index.js";
 import { readFileSync, writeFileSync, existsSync } from "fs";
 import { extname } from "path";
 import { renderTable, formatContact, promptUser as prompt, confirmUser as confirm } from "../utils.js";
+import { compactContactsPage, normalizeContactsLimit, normalizeContactsOffset } from "../../lib/compact-output.js";
 
 // The package version is read in src/cli/index.tsx (../../package.json, same
 // depth as the flat dist/cli bundle) and passed in here: a module-level require
@@ -205,25 +206,28 @@ program
   .option("--tag <tag_id>", "Filter by tag ID")
   .option("--company <id>", "Filter by company ID")
   .option("--include-restricted", "Include restricted-sensitivity contacts")
-  .option("-l, --limit <n>", "Max results", "50")
+  .option("-l, --limit <n>", "Max results (default 20; --full defaults to 50)")
   .option("-o, --offset <n>", "Skip first N results", "0")
   .option("--order-by <field>", "Sort field: display_name|created_at|updated_at|last_contacted_at|follow_up_at", "display_name")
   .option("--order-dir <dir>", "Sort direction: asc|desc", "asc")
-  .option("-j, --json", "Output JSON")
-  .action(async (opts: { tag?: string; company?: string; includeRestricted?: boolean; limit: string; offset: string; orderBy: string; orderDir: string; json?: boolean }) => {
+  .option("-j, --json", "Output compact paged JSON")
+  .option("--full", "Return the legacy full-record list payload")
+  .action(async (opts: { tag?: string; company?: string; includeRestricted?: boolean; limit?: string; offset: string; orderBy: string; orderDir: string; json?: boolean; full?: boolean }) => {
     const store = getStore();
+    const limit = normalizeContactsLimit(opts.limit, opts.full ? 50 : 20);
+    const offset = normalizeContactsOffset(opts.offset);
     const result = await store.listContacts({
       tag_id: opts.tag,
       company_id: opts.company,
       include_restricted: opts.includeRestricted,
-      limit: parseInt(opts.limit, 10),
-      offset: parseInt(opts.offset, 10),
+      limit,
+      offset,
       order_by: opts.orderBy as "display_name" | "created_at" | "updated_at" | "last_contacted_at" | "follow_up_at",
       order_dir: opts.orderDir === "desc" ? "desc" : "asc",
     });
 
     if (opts.json) {
-      console.log(JSON.stringify(result, null, 2));
+      console.log(JSON.stringify(opts.full ? result : compactContactsPage(result.contacts, { total: result.total, limit, offset }), null, 2));
       return;
     }
 

@@ -17,6 +17,6 @@ describe("repos command pagination flags", () => {
 
     const output = new TextDecoder().decode(result.stdout);
     const parsed = JSON.parse(output) as unknown;
-    expect(Array.isArray(parsed)).toBe(true);
+    expect(parsed).toMatchObject({ repos: [], count: 0, total: 0, limit: 1, cursor: 0, has_more: false, compact: true });
   });
 });

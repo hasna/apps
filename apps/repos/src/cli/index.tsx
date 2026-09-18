@@ -525,11 +525,12 @@ program
   .option("--education", "Filter by hasnaeducation org (shorthand)")
   .option("--family", "Filter by hasnafamily org (shorthand)")
   .option("-q, --query <query>", "Filter by name")
-  .option("-n, --limit <n>", "Max results (default: 20 human, 50 JSON)")
+  .option("-n, --limit <n>", "Max results (default: 20; --full defaults to 50)")
   .option("-o, --offset <n>", "Skip first N results", "0")
   .option("--cursor <n>", "Pagination cursor from a previous page")
   .option("--verbose", "Show descriptions and full paths")
-  .option("--json", "Output as JSON")
+  .option("--json", "Output bounded compact JSON")
+  .option("--full", "Return the legacy full-record JSON array")
   .action((opts) => {
     const alias = opts.filter ? getFilterAlias(opts.filter) : undefined;
     if (opts.filter && !alias) {
@@ -538,13 +539,35 @@ program
     }
     const org = alias?.org ?? (opts.oss ? "hasna" : opts.xyz ? "hasnaxyz" : opts.studio ? "hasnastudio" : opts.tools ? "hasnatools" : opts.ai ? "hasnaai" : opts.education ? "hasnaeducation" : opts.family ? "hasnafamily" : (opts.org ? ORG_ALIASES[opts.org] ?? opts.org : undefined));
     const query = alias?.query ?? opts.query;
-    const limit = resolveLimit(opts, COMPACT_LIMIT, 50);
+    const limit = resolveLimit(opts, COMPACT_LIMIT, opts.full ? 50 : COMPACT_LIMIT);
     const offset = resolveOffset(opts);
     const repos = listRepos({ org, query, limit, offset });
     const total = countRepos({ org, query });
     if (opts.json) {
-      printJson(repos);
-      warnIfTruncated({ shown: repos.length, total, limit, offset, noun: "repo(s)" });
+      if (opts.full) {
+        printJson(repos);
+        warnIfTruncated({ shown: repos.length, total, limit, offset, noun: "repo(s)" });
+      } else {
+        const nextCursor = offset + repos.length < total ? offset + repos.length : null;
+        printJson({
+          repos: repos.map((repo) => ({
+            id: repo.id,
+            name: repo.name,
+            org: repo.org,
+            default_branch: repo.default_branch,
+            counts: { commits: repo.commit_count, branches: repo.branch_count, tags: repo.tag_count },
+            description: compactText(repo.description, 120),
+          })),
+          count: repos.length,
+          total,
+          limit,
+          cursor: offset,
+          next_cursor: nextCursor,
+          has_more: nextCursor !== null,
+          compact: true,
+          hint: "Use repos show <name> for details; pass --full for the legacy full-record array.",
+        });
+      }
     } else {
       if (repos.length === 0) { console.log(chalk.dim("No repos found. Run: repos scan")); return; }
       for (const r of repos) {

@@ -17,6 +17,7 @@ import type {
 } from "../../types/index.js";
 import { getStore, ApiUnavailableError, type Store } from "../../store/index.js";
 import { importContacts } from "../../lib/import.js";
+import { compactContactsPage, normalizeContactsLimit, normalizeContactsOffset } from "../../lib/compact-output.js";
 
 const json = (v: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(v, null, 2) }] });
 const stripUndef = (o: Record<string, unknown>): Record<string, unknown> => {
@@ -124,6 +125,9 @@ export const coreHandlers: Record<string, ToolHandler> = {
 
   list_contacts: async (a) => {
     const store = getStore();
+    const verbose = a.verbose === true;
+    const limit = normalizeContactsLimit(a.limit, verbose ? 50 : 20);
+    const offset = normalizeContactsOffset(a.offset);
     const result = await store.listContacts({
       company_id: a.company_id as string | undefined,
       tag_id: a.tag_id as string | undefined,
@@ -136,12 +140,14 @@ export const coreHandlers: Record<string, ToolHandler> = {
       follow_up_due: a.follow_up_due as boolean | undefined,
       last_contacted_after: a.last_contacted_after as string | undefined,
       last_contacted_before: a.last_contacted_before as string | undefined,
-      limit: a.limit as number | undefined,
-      offset: a.offset as number | undefined,
+      limit,
+      offset,
       order_by: a.order_by as "display_name" | "created_at" | "updated_at" | "last_contacted_at" | "follow_up_at" | undefined,
       order_dir: a.order_dir as "asc" | "desc" | undefined,
     });
-    return json({ contacts: result.contacts, count: result.total });
+    return json(verbose
+      ? { contacts: result.contacts, count: result.total }
+      : compactContactsPage(result.contacts, { total: result.total, limit, offset }));
   },
 
   search_contacts: async (a) => json(await getStore().searchContacts(a.query as string)),

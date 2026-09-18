@@ -12,6 +12,21 @@ import { VERSION } from "./version.js";
 
 const SECRET_TYPES = ["api_key", "password", "token", "credential", "other"] as const;
 const VAULT_ITEM_KINDS = ["login", "address", "identity", "payment_card", "secure_note", "api_key", "custom"] as const;
+const MCP_LIST_DEFAULT = 20;
+const MCP_LIST_MAX = 200;
+
+function mcpPage<T, U>(items: T[], args: { limit?: number; cursor?: number }, map: (item: T) => U, hint: string) {
+  const limit = Math.max(1, Math.min(MCP_LIST_MAX, Math.trunc(args.limit ?? MCP_LIST_DEFAULT)));
+  const cursor = Math.max(0, Math.trunc(args.cursor ?? 0));
+  const selected = items.slice(cursor, cursor + limit);
+  const nextCursor = cursor + selected.length < items.length ? cursor + selected.length : null;
+  return { items: selected.map(map), count: selected.length, total: items.length, limit, cursor, next_cursor: nextCursor, has_more: nextCursor !== null, compact: true, hint };
+}
+
+function jsonContent(value: unknown) {
+  return { content: [{ type: "text" as const, text: JSON.stringify(value) }] };
+}
+
 
 export function buildServer(): McpServer {
   const server = new McpServer({
@@ -72,52 +87,70 @@ export function buildServer(): McpServer {
   server.tool(
     "list_secrets",
     "List secrets, optionally filtered by namespace",
-    { namespace: z.string().optional().describe("Namespace prefix e.g. openai") },
-    async ({ namespace }) => {
+    {
+      namespace: z.string().optional().describe("Namespace prefix e.g. openai"),
+      limit: z.number().int().positive().max(MCP_LIST_MAX).optional().describe("Maximum rows (default 20, max 200)"),
+      cursor: z.number().int().nonnegative().optional().describe("Zero-based pagination cursor"),
+      full: z.boolean().optional().describe("Return the legacy unpaged text listing"),
+    },
+    async ({ namespace, limit, cursor, full }) => {
       const entries = await store.listSecretMetadata(namespace);
-      const lines = entries.map((e) => `${e.key} [${e.type}]${e.label ? ` — ${e.label}` : ""}`);
-      return { content: [{ type: "text", text: lines.join("\n") || "No secrets found." }] };
+      if (full) {
+        const lines = entries.map((e) => `${e.key} [${e.type}]${e.label ? ` — ${e.label}` : ""}`);
+        return { content: [{ type: "text", text: lines.join("\n") || "No secrets found." }] };
+      }
+      return jsonContent(mcpPage(entries, { limit, cursor }, (entry) => ({ key: entry.key, type: entry.type, label: entry.label ?? null, expires_at: entry.expires_at ?? null, updated_at: entry.updated_at }), "Page with cursor; use full=true only for the legacy complete text listing."));
     }
   );
 
   server.tool(
     "search_secrets",
     "Search secrets by key, label, or type",
-    { query: z.string() },
-    async ({ query }) => {
+    {
+      query: z.string(),
+      limit: z.number().int().positive().max(MCP_LIST_MAX).optional(),
+      cursor: z.number().int().nonnegative().optional(),
+      full: z.boolean().optional().describe("Return the legacy unpaged text listing"),
+    },
+    async ({ query, limit, cursor, full }) => {
       const entries = await store.searchSecretMetadata(query);
-      const lines = entries.map((e) => `${e.key} [${e.type}]${e.label ? ` — ${e.label}` : ""}`);
-      return { content: [{ type: "text", text: lines.join("\n") || "No results." }] };
+      if (full) {
+        const lines = entries.map((e) => `${e.key} [${e.type}]${e.label ? ` — ${e.label}` : ""}`);
+        return { content: [{ type: "text", text: lines.join("\n") || "No results." }] };
+      }
+      return jsonContent(mcpPage(entries, { limit, cursor }, (entry) => ({ key: entry.key, type: entry.type, label: entry.label ?? null, expires_at: entry.expires_at ?? null, updated_at: entry.updated_at }), "Page with cursor; use full=true only for the legacy complete text listing."));
     }
   );
 
   server.tool(
     "list_vault_items",
     "List structured vault item metadata, optionally filtered by kind",
-    { kind: z.enum(VAULT_ITEM_KINDS).optional().describe("Vault item kind") },
-    async ({ kind }) => {
+    {
+      kind: z.enum(VAULT_ITEM_KINDS).optional().describe("Vault item kind"),
+      limit: z.number().int().positive().max(MCP_LIST_MAX).optional(),
+      cursor: z.number().int().nonnegative().optional(),
+      full: z.boolean().optional().describe("Return the legacy complete metadata array"),
+    },
+    async ({ kind, limit, cursor, full }) => {
       const entries = await store.listVaultItemMetadata(kind);
-      return {
-        content: [{
-          type: "text",
-          text: JSON.stringify(entries, null, 2),
-        }],
-      };
+      if (full) return jsonContent(entries);
+      return jsonContent(mcpPage(entries, { limit, cursor }, (entry) => ({ id: entry.id, kind: entry.kind, title: entry.title, subtitle: entry.subtitle ?? null, domain_count: entry.domains.length, tag_count: entry.tags.length, favorite: entry.favorite, updated_at: entry.updated_at }), "Page with cursor; use full=true only for the legacy complete metadata array."));
     }
   );
 
   server.tool(
     "search_vault_items",
     "Search structured vault item metadata",
-    { query: z.string() },
-    async ({ query }) => {
+    {
+      query: z.string(),
+      limit: z.number().int().positive().max(MCP_LIST_MAX).optional(),
+      cursor: z.number().int().nonnegative().optional(),
+      full: z.boolean().optional().describe("Return the legacy complete metadata array"),
+    },
+    async ({ query, limit, cursor, full }) => {
       const entries = await store.searchVaultItemMetadata(query);
-      return {
-        content: [{
-          type: "text",
-          text: JSON.stringify(entries, null, 2),
-        }],
-      };
+      if (full) return jsonContent(entries);
+      return jsonContent(mcpPage(entries, { limit, cursor }, (entry) => ({ id: entry.id, kind: entry.kind, title: entry.title, subtitle: entry.subtitle ?? null, domain_count: entry.domains.length, tag_count: entry.tags.length, favorite: entry.favorite, updated_at: entry.updated_at }), "Page with cursor; use full=true only for the legacy complete metadata array."));
     }
   );
 
@@ -172,14 +205,21 @@ export function buildServer(): McpServer {
     "View audit log for a key or recent activity",
     {
       key: z.string().optional().describe("Filter by key"),
-      limit: z.number().optional().describe("Max entries (default 50)"),
+      limit: z.number().int().positive().max(MCP_LIST_MAX).optional().describe("Max entries (default 20, max 200)"),
+      cursor: z.number().int().nonnegative().optional().describe("Zero-based pagination cursor"),
+      full: z.boolean().optional().describe("Return the legacy text listing"),
     },
-    async ({ key, limit }) => {
-      const entries = await store.getAuditLog(key, limit ?? 50);
-      const lines = entries.map(
-        (e) => `[${e.timestamp}] ${e.action.toUpperCase()} ${e.key} by ${e.agent}`
-      );
-      return { content: [{ type: "text", text: lines.join("\n") || "No audit entries." }] };
+    async ({ key, limit, cursor, full }) => {
+      const effectiveLimit = Math.max(1, Math.min(MCP_LIST_MAX, Math.trunc(limit ?? MCP_LIST_DEFAULT)));
+      const effectiveCursor = Math.max(0, Math.trunc(cursor ?? 0));
+      const entries = await store.getAuditLog(key, effectiveCursor + effectiveLimit + 1);
+      if (full) {
+        const lines = entries.slice(effectiveCursor, effectiveCursor + effectiveLimit).map((e) => `[${e.timestamp}] ${e.action.toUpperCase()} ${e.key} by ${e.agent}`);
+        return { content: [{ type: "text", text: lines.join("\n") || "No audit entries." }] };
+      }
+      const pageItems = entries.slice(effectiveCursor, effectiveCursor + effectiveLimit);
+      const hasMore = entries.length > effectiveCursor + effectiveLimit;
+      return jsonContent({ items: pageItems, count: pageItems.length, limit: effectiveLimit, cursor: effectiveCursor, next_cursor: hasMore ? effectiveCursor + pageItems.length : null, has_more: hasMore, compact: true, hint: "Page with cursor; use full=true for the legacy text listing." });
     }
   );
 
@@ -200,11 +240,19 @@ export function buildServer(): McpServer {
   server.tool(
     "list_users",
     "List registered users and agents",
-    { type: z.enum(["human", "agent"]).optional() },
-    async ({ type }) => {
+    {
+      type: z.enum(["human", "agent"]).optional(),
+      limit: z.number().int().positive().max(MCP_LIST_MAX).optional(),
+      cursor: z.number().int().nonnegative().optional(),
+      full: z.boolean().optional().describe("Return the legacy unpaged text listing"),
+    },
+    async ({ type, limit, cursor, full }) => {
       const users = await store.listUsers(type);
-      const lines = users.map((u) => `${u.id} [${u.type}] — ${u.name}`);
-      return { content: [{ type: "text", text: lines.join("\n") || "No users registered." }] };
+      if (full) {
+        const lines = users.map((u) => `${u.id} [${u.type}] — ${u.name}`);
+        return { content: [{ type: "text", text: lines.join("\n") || "No users registered." }] };
+      }
+      return jsonContent(mcpPage(users, { limit, cursor }, (user) => ({ id: user.id, name: user.name, type: user.type, last_seen: user.last_seen ?? null }), "Page with cursor; use full=true only for the legacy complete text listing."));
     }
   );
 
