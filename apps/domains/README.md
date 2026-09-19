@@ -353,13 +353,13 @@ SDK throws — it never degrades to an anonymous client or to local data.
 | `HASNA_DOMAINS_API_KEY_OVERRIDE` | Deliberate per-run key override that outranks every other tier |
 | `HASNA_DOMAINS_API_KEY_REF` | Deliberate secrets-vault pointer resolved through the `@hasna/secrets` SDK at request time |
 | `HASNA_PROFILE` | Global identity profile pointer (`credentials-<profile>` beside the credential file) |
-| `HASNA_HOME` | Shared root override — `<HASNA_HOME>/domains/` for local data, `<HASNA_HOME>/domains/config/credentials` for the credential file |
+| `HASNA_HOME` | Shared root override for the credential/config root; normal clients do not open local data |
 | `HASNA_CONFIG_HOME` | Config-root override for the resolver's credential file |
 | `HASNA_DOMAINS_DB_PATH` | Retired client setting; migrate and verify existing data before removal |
 | `DOMAINS_DB_PATH` | Retired legacy client setting; rejected |
 | `HASNA_DOMAINS_DIR` | Retired client setting; rejected |
 | `DOMAINS_DIR` | Retired legacy client setting; rejected |
-| `HASNA_DOMAINS_HOME`, `DOMAINS_HOME` | Exact-app home overrides (canonical name wins over the alias) |
+| `HASNA_DOMAINS_HOME`, `DOMAINS_HOME` | Retired client selectors; rejected by hosted client surfaces |
 | `HASNA_DOMAINS_CONFIG_PATH`, `DOMAINS_CONFIG_PATH` | Override the settings config file path |
 | `DOMAINS_CONFIG_DIR` | Override the settings config directory |
 | `DOMAINS_COMMAND_GROUPS` | Comma-separated optional command groups to load, or `all` |
@@ -382,33 +382,11 @@ SDK throws — it never degrades to an anonymous client or to local data.
 | `BRANDSIGHT_DEMO_STUBS`, `BRANDSIGHT_ALLOW_STUBS` | Set either to `1` to allow demo stub responses when the Brandsight API is unreachable |
 | `SEDO_PARTNER_ID`, `SEDO_API_KEY`, `SEDO_USERNAME`, `SEDO_PASSWORD` | Sedo marketplace API credentials |
 
-### Picking a store: a local path and a configured credential are mutually exclusive
+### Hosted storage is authoritative
 
-`HASNA_DOMAINS_DB_PATH`, `DOMAINS_DB_PATH`, `HASNA_DOMAINS_DIR`, `DOMAINS_DIR` and
-`HASNA_DOMAINS_HOME` all name a **local sqlite file or directory**. Only the local store
-has one. So setting any of them while the environment also configures a hosted
-authority or credential (`HASNA_DOMAINS_API_URL`, `HASNA_DOMAINS_API_KEY`, the
-deliberate pointers, `HASNA_PROFILE`, or a Keychain / credential-file entry)
-asks for two different stores at once, and **`getStore()` refuses to start**
-rather than pick one for you. Local mode applies only when the environment
-configures nothing at all.
+The CLI, MCP server and SDK factory are hosted clients. They resolve the owner-only credential from the shared resolver and send requests to `https://api.hasna.com/domains/v1`. `HASNA_DOMAINS_DB_PATH`, `DOMAINS_DB_PATH`, `HASNA_DOMAINS_DIR`, `DOMAINS_DIR` and `HASNA_DOMAINS_HOME` are retired client selectors and are rejected; they never select SQLite or create a local portfolio.
 
-This is deliberate. Before it, the combination silently resolved to the cloud
-store: a script that set `DOMAINS_DB_PATH` created no sqlite file, wrote to the
-remote portfolio, and printed success. Nothing on any surface said which store
-it had used.
-
-To resolve it, say which you meant:
-
-```sh
-unset HASNA_DOMAINS_DB_PATH DOMAINS_DB_PATH HASNA_DOMAINS_DIR DOMAINS_DIR HASNA_DOMAINS_HOME   # use the hosted store
-unset HASNA_DOMAINS_API_URL HASNA_DOMAINS_API_KEY HASNA_DOMAINS_API_KEY_OVERRIDE HASNA_DOMAINS_API_KEY_REF HASNA_PROFILE   # use the sqlite file the path variable names
-```
-
-`domains doctor` names the store it resolved, in its `Store` section — including
-where the URL and key came from and which tier supplied the key — before any
-other check runs. Run it whenever you are unsure which dataset a command is
-about to touch.
+If the hosted credential or authority cannot be resolved, data commands fail closed and report the configuration error. `domains doctor` reports the resolved hosted authority and credential source without exposing the credential. `domains-serve` and `domains db migrate` are operator surfaces and require PostgreSQL through `HASNA_DOMAINS_DATABASE_URL` (or the documented owner-role migration variable).
 
 ## License
 
