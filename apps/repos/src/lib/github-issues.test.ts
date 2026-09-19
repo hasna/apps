@@ -3,6 +3,7 @@ import {
   DEFAULT_WATERMARK_OVERLAP_MS,
   adjudicateIssuePage,
   fetchIssues,
+  fetchStableIssueSnapshot,
   isRateLimitedError,
   isUsableIssueNode,
   issueSyncDigest,
@@ -227,8 +228,8 @@ describe("fetchIssues traversal", () => {
 
   test("(d) a clean exhausted two-page traversal seals and reports max updatedAt", () => {
     const client = stubClient([
-      pageOf({ nodes: [issue(1, { updatedAt: "2026-09-10T10:00:00Z" })], hasNextPage: true, endCursor: "c1" }),
-      pageOf({ nodes: [issue(2, { updatedAt: "2026-09-10T12:00:00Z" })], hasNextPage: false }),
+      pageOf({ nodes: [issue(2, { updatedAt: "2026-09-10T12:00:00Z" })], hasNextPage: true, endCursor: "c1", totalCount: 2 }),
+      pageOf({ nodes: [issue(1, { updatedAt: "2026-09-10T10:00:00Z" })], hasNextPage: false, totalCount: 2 }),
     ]);
     const result = fetchIssues("hasna/apps", { client, retryAttempts: 1, sleep: noSleep });
 
@@ -294,6 +295,84 @@ describe("fetchIssues traversal", () => {
     fetchIssues("hasna/apps", { client, since: "2026-09-10T11:00:00Z", retryAttempts: 1, sleep: noSleep });
 
     expect(client.requests.map((request) => request.since)).toEqual(["2026-09-10T11:00:00Z", "2026-09-10T11:00:00Z"]);
+  });
+});
+
+
+
+describe("whole-traversal mutation guards", () => {
+  test("refuses an insertion that changes totalCount between pages", () => {
+    const client = stubClient([
+      pageOf({ nodes: [issue(4), issue(3)], hasNextPage: true, endCursor: "c1", totalCount: 4 }),
+      pageOf({ nodes: [issue(2), issue(1)], totalCount: 5 }),
+    ]);
+    const result = fetchIssues("hasna/apps", { client, retryAttempts: 1, sleep: noSleep });
+
+    expect(result.sealed).toBe(false);
+    expect(result.failure).toBe("total_count_changed");
+    expect(result.detail).toContain("4 -> 5");
+  });
+
+  test("refuses a deletion that changes totalCount between pages", () => {
+    const client = stubClient([
+      pageOf({ nodes: [issue(4), issue(3)], hasNextPage: true, endCursor: "c1", totalCount: 4 }),
+      pageOf({ nodes: [issue(1)], totalCount: 3 }),
+    ]);
+    const result = fetchIssues("hasna/apps", { client, retryAttempts: 1, sleep: noSleep });
+
+    expect(result.sealed).toBe(false);
+    expect(result.failure).toBe("total_count_changed");
+  });
+
+  test("refuses duplicate identities and non-monotonic UPDATED_AT order", () => {
+    const duplicate = fetchIssues("hasna/apps", {
+      client: stubClient([
+        pageOf({ nodes: [issue(2)], hasNextPage: true, endCursor: "c1", totalCount: 2 }),
+        pageOf({ nodes: [issue(2)], totalCount: 2 }),
+      ]),
+      retryAttempts: 1,
+      sleep: noSleep,
+    });
+    expect(duplicate.failure).toBe("duplicate_identity");
+
+    const reordered = fetchIssues("hasna/apps", {
+      client: stubClient([
+        pageOf({ nodes: [issue(1, { updatedAt: "2026-09-01T00:00:00Z" })], hasNextPage: true, endCursor: "c1", totalCount: 2 }),
+        pageOf({ nodes: [issue(2, { updatedAt: "2026-09-02T00:00:00Z" })], totalCount: 2 }),
+      ]),
+      retryAttempts: 1,
+      sleep: noSleep,
+    });
+    expect(reordered.failure).toBe("order_invalid");
+  });
+
+  test("refuses balanced insert/delete mutation across complete passes", () => {
+    const older = (number: number, hour: number) => issue(number, { updatedAt: `2026-09-02T0${hour}:00:00Z` });
+    const client = stubClient([
+      pageOf({ nodes: [older(1, 4), older(2, 3)], hasNextPage: true, endCursor: "c1", totalCount: 4 }),
+      pageOf({ nodes: [older(3, 2), older(4, 1)], totalCount: 4 }),
+      pageOf({ nodes: [older(5, 5), older(2, 3)], hasNextPage: true, endCursor: "c1", totalCount: 4 }),
+      pageOf({ nodes: [older(3, 2), older(4, 1)], totalCount: 4 }),
+    ]);
+    const result = fetchStableIssueSnapshot("hasna/apps", { client, pageSize: 2, retryAttempts: 1, sleep: noSleep });
+
+    expect(result.sealed).toBe(false);
+    expect(result.failure).toBe("snapshot_changed");
+    expect(result.pages_fetched).toBe(4);
+  });
+
+  test("refuses same-total reorder between complete passes", () => {
+    const tied = (number: number) => issue(number, { updatedAt: "2026-09-02T00:00:00Z" });
+    const client = stubClient([
+      pageOf({ nodes: [tied(1)], hasNextPage: true, endCursor: "c1", totalCount: 2 }),
+      pageOf({ nodes: [tied(2)], totalCount: 2 }),
+      pageOf({ nodes: [tied(2)], hasNextPage: true, endCursor: "c1", totalCount: 2 }),
+      pageOf({ nodes: [tied(1)], totalCount: 2 }),
+    ]);
+    const result = fetchStableIssueSnapshot("hasna/apps", { client, pageSize: 1, retryAttempts: 1, sleep: noSleep });
+
+    expect(result.sealed).toBe(false);
+    expect(result.failure).toBe("snapshot_changed");
   });
 });
 
@@ -379,6 +458,7 @@ describe("issueSyncDigest (rule R2: 0 new must be falsifiable)", () => {
       checkouts: 1,
       synced: 1,
       rows_written: 1,
+      rows_deleted: 0,
       new_issues: 0,
       pages_fetched: 1,
       nodes_seen: 1,
