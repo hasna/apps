@@ -26,6 +26,53 @@ not escape it through absolute paths or symlinks.
 Empty sources and an entirely empty render fail unless
 `--allow-empty-sources` is explicit.
 
+## Shared project instructions for Sumi and Claude
+
+A Sumi project render can own both the canonical `AGENTS.md` and an optional
+`CLAUDE.md` containing only a managed relative `@./AGENTS.md` import. This is
+opt-in and currently supports the verified Claude Code **2.1.278** capability.
+Other Claude versions fail closed until their capability is verified.
+
+```bash
+instructions session plan --tool sumi --profile shared-project \
+  --compile-profile <profile-id> --provider-version 0.2.22 \
+  --project-root <project-directory> --claude-project-import 2.1.278 \
+  --no-station-profile --json
+```
+
+Each selected binding must explicitly include both `sumi` and `claude` providers.
+The compiler checks the same ordered immutable config IDs, versions, bodies and
+activation semantics for both consumers, then checks provider filtering and
+composition again. Divergent selections, conditional policy that cannot be
+preserved, raw source inputs and unbound extra sources are refused. A binding
+restricted to one provider is never broadened by adding the companion.
+Native `@` imports inside the canonical policy are refused, including references
+to files that do not exist yet. Write literal package/path references in
+Markdown code (for example, `` `@hasna/emails` ``); ordinary email addresses and
+closed code spans or fences remain literal. Malformed or ambiguous `@` text
+fails closed so Claude cannot silently load unmanaged additional sources.
+
+Use `session apply` with the same options after reviewing the plan. Both files
+belong to the same project manifest and snapshot. Existing managed targets also
+require `--expected-manifest-sha256 <reviewed-sha256>`; `--force` is refused.
+An existing unmanaged `CLAUDE.md` is a conflict, including an import created by
+hand. A reviewed existing `AGENTS.md` can use the normal exact-hash `--adopt-file`
+operation. Foreign manifest owners and symlink paths are refused. Global native
+homes, settings and credentials remain outside this project transaction.
+
+Hosted `session refresh` retains the companion capability and recompiles both
+provider selections from current hosted sources. Snapshots restore both files,
+including removing the newly created companion when rolling back an adoption
+or a new project. Automatically dropping the companion from a later plan is
+unsupported and refused; consumer retirement requires a separate reviewed
+migration. No independent Claude project apply should compete for this manifest.
+
+This capability establishes a shared managed entry point, not adoption by an
+existing session or the absence of unrelated ancestor, global or local rules.
+Verify fresh project, sibling and control sessions with the installed consumers
+before claiming project scope. Native Claude strips HTML comments when loading
+memory files, as described in its [memory documentation](https://code.claude.com/docs/en/memory#import-additional-files).
+
 ## Station profile injector
 
 Every render also carries a compact station-profile block when a cache exists

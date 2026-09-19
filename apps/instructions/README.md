@@ -406,6 +406,12 @@ do not change the global config environment. No OpenCode config or fragment
 imports are written. See [session rendering](docs/session-rendering.md) for
 capability limits and examples.
 
+A compiled Sumi project profile can optionally add a managed Claude `CLAUDE.md`
+that imports the same `AGENTS.md`, using `--claude-project-import 2.1.278`.
+Both providers must explicitly select the same immutable sources and prose.
+The companion shares the project's manifest, snapshots and refresh transaction;
+see [shared project instructions](docs/session-rendering.md#shared-project-instructions-for-sumi-and-claude).
+
 Qwen Code session rendering writes `QWEN.md` instructional context with
 `QWEN_HOME` pointing at the rendered profile home. Known config sync also
 tracks Qwen Code `QWEN.md` and `settings.json` files at `~/.qwen/...` and

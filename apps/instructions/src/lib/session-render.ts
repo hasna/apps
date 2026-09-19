@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
+import { Marked } from "marked";
 import { basename, dirname, extname, isAbsolute, join, parse, posix, relative, resolve } from "node:path";
 import type { Config } from "../types/index.js";
 import {
@@ -267,6 +268,19 @@ export interface SessionHostedProfileSelector {
   checkGlobalCoverage: boolean;
   assetSurface?: string;
   assetScope?: "global" | "project" | "session";
+  claudeProjectImport?: ClaudeProjectImport;
+}
+
+/** A native loading capability, not permission to reuse a provider's bindings. */
+export interface ClaudeProjectImport {
+  providerVersion: "2.1.278";
+}
+
+export interface ClaudeProjectImportManifest extends ClaudeProjectImport {
+  capability: "claude-project-relative-import/v1";
+  canonicalPath: "AGENTS.md";
+  canonicalSha256: string;
+  importPath: "CLAUDE.md";
 }
 
 export interface SessionRenderInput {
@@ -279,6 +293,8 @@ export interface SessionRenderInput {
   targetHome?: string;
   sessionId?: string;
   refreshSelector?: SessionHostedProfileSelector;
+  /** Compiled profiles only: both Sumi and Claude must explicitly select identical prose. */
+  claudeProjectImport?: ClaudeProjectImport;
   /**
    * Explicit Cursor authority home for isolated planners/tests. Production
    * callers omit this and the detector resolves the current user home.
@@ -323,6 +339,7 @@ export interface SessionRenderManifest {
   profile: string;
   sessionId: string | null;
   refreshSelector?: SessionHostedProfileSelector;
+  claudeProjectImport?: ClaudeProjectImportManifest;
   adoptions?: Array<{
     relativePath: string;
     preimageSha256: string;
@@ -2308,8 +2325,60 @@ export function resolveSessionTargetOwnership(input: Pick<SessionRenderInput, "t
 }
 
 export function planSessionRender(input: SessionRenderInput): SessionRenderPlan {
+  if (input.claudeProjectImport) throw new Error("CLAUDE_PROJECT_IMPORT_REQUIRES_PROFILE: use explicit shared profile bindings.");
+  return buildSessionRenderPlan(input);
+}
+
+/** Internal graph compiler entry point; deliberately absent from the public SDK exports. */
+export function planCompiledProfileSessionRender(input: SessionRenderInput, companionSources?: SessionInstructionSource[]): SessionRenderPlan {
+  if (input.claudeProjectImport) {
+    if (!companionSources || fingerprint(input.sources) !== fingerprint(companionSources)) {
+      throw new Error("CLAUDE_PROJECT_IMPORT_DIVERGENT: both consumers must compile the same ordered source bodies and activation semantics.");
+    }
+    const normalizedFor = (sources: SessionInstructionSource[], tool: "sumi" | "claude") =>
+      composeSources(normalizeSources(sources, tool, input.allowEmptySources === true).sources, tool).sources;
+    if (fingerprint(normalizedFor(input.sources, "sumi")) !== fingerprint(normalizedFor(companionSources, "claude"))) {
+      throw new Error("CLAUDE_PROJECT_IMPORT_DIVERGENT: provider filtering or composition changes the shared canonical policy.");
+    }
+  }
+  return buildSessionRenderPlan(input);
+}
+
+/** Conservative import boundary: literal code and ordinary email addresses are
+ * prose; every other @ token may make Claude load bytes outside this manifest.
+ * Never decide safety by whether the referenced file happens to exist today. */
+function assertNoUnmanagedClaudeImports(content: string): void {
+  const markdown = new Marked({ gfm: false, async: false, renderer: {
+    codespan: () => "",
+    code: ({ raw }) => {
+      // Indented and unclosed blocks are deliberately not exempted. Only the
+      // native-proven closed fenced representation may carry literal @ text.
+      const lines = raw.trimEnd().split("\n");
+      const first = lines[0]?.match(/^ {0,3}(`{3,}|~{3,})/);
+      const last = lines.at(-1)?.match(/^ {0,3}(`{3,}|~{3,})\s*$/);
+      return lines.length > 1 && first && last && first[1]![0] === last[1]![0]
+        && last[1]!.length >= first[1]!.length ? "" : raw;
+    },
+  } });
+  const prose = (markdown.parse(content.replaceAll(`<!-- ${SESSION_RENDER_MANAGED_MARKER}. Do not edit this generated file directly. -->`, "")) as string)
+    .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}(?=$|[\s<>),.;:])/gi, "");
+  if (prose.includes("@")) throw new Error("CLAUDE_PROJECT_IMPORT_NESTED: shared canonical policy cannot contain native @ imports; quote literal package/path references in Markdown code.");
+}
+
+function buildSessionRenderPlan(input: SessionRenderInput): SessionRenderPlan {
   if (!SESSION_RENDER_TOOLS.includes(input.tool)) throw new Error(`Unsupported session render tool: ${input.tool}`);
   if (!input.profile.trim()) throw new Error("Session render profile is required.");
+  if (input.claudeProjectImport) {
+    if (input.tool !== "sumi" || !input.projectRoot || (input.targetHome && resolveSessionPath(input.targetHome) !== resolveSessionPath(input.projectRoot))) {
+      throw new Error("CLAUDE_PROJECT_IMPORT_TARGET: requires a Sumi project root with one shared manifest owner.");
+    }
+    if (Object.keys(input.claudeProjectImport).some((key) => key !== "providerVersion") || input.claudeProjectImport.providerVersion !== "2.1.278") {
+      throw new Error("CLAUDE_PROJECT_IMPORT_CAPABILITY: only verified Claude 2.1.278 relative project imports are supported.");
+    }
+  }
+  if (JSON.stringify(input.refreshSelector?.claudeProjectImport) !== JSON.stringify(input.claudeProjectImport) && input.refreshSelector) {
+    throw new Error("CLAUDE_PROJECT_IMPORT_SELECTOR: refresh must preserve the exact companion capability.");
+  }
 
   const adapter = adapterFor(input);
   const {
@@ -2395,7 +2464,18 @@ export function planSessionRender(input: SessionRenderInput): SessionRenderPlan 
   if (projectContext && orderedSources.some((source) => source.id === projectContext.source.id)) {
     throw new Error(`Session source ${projectContext.source.id} is reserved for the durable Instructions project-context renderer.`);
   }
-  const files = projectContext?.files ?? baseFiles;
+  const files = [...(projectContext?.files ?? baseFiles)];
+  let claudeProjectImport: ClaudeProjectImportManifest | undefined;
+  if (input.claudeProjectImport && !blocked) {
+    const canonical = files.find((file) => file.relativePath === "AGENTS.md");
+    if (!canonical) throw new Error("CLAUDE_PROJECT_IMPORT_CANONICAL: missing canonical project AGENTS.md.");
+    assertNoUnmanagedClaudeImports(canonical.content);
+    claudeProjectImport = {
+      ...input.claudeProjectImport, capability: "claude-project-relative-import/v1",
+      canonicalPath: "AGENTS.md", canonicalSha256: canonical.sha256, importPath: "CLAUDE.md",
+    };
+    files.push(makeFile(targetHome, "CLAUDE.md", "index", `<!-- ${SESSION_RENDER_MANAGED_MARKER}. Do not edit this generated file directly. -->\n\n@./AGENTS.md\n`, canonical.sourceIds));
+  }
   const assetFiles = buildAssetFiles(input, targetHome, blocked);
   rejectDuplicateRenderPaths([...files, ...assetFiles]);
 
@@ -2406,6 +2486,7 @@ export function planSessionRender(input: SessionRenderInput): SessionRenderPlan 
     profile: input.profile,
     sessionId: input.sessionId ?? null,
     ...(input.refreshSelector ? { refreshSelector: input.refreshSelector } : {}),
+    ...(claudeProjectImport ? { claudeProjectImport } : {}),
     targetHome,
     targetKind,
     targetOwner,
@@ -2425,6 +2506,7 @@ export function planSessionRender(input: SessionRenderInput): SessionRenderPlan 
           : null,
         projectContext: projectContext.project_context,
         assetPlanDigest: input.assetPlan?.planDigest ?? null,
+        ...(claudeProjectImport ? { claudeProjectImport } : {}),
       }
       : {
         sources: orderedSources.map(sourceFingerprint),
@@ -2433,6 +2515,7 @@ export function planSessionRender(input: SessionRenderInput): SessionRenderPlan 
           ? { sourceId: input.providerConfig.sourceId, content: input.providerConfig.content }
           : null,
         assetPlanDigest: input.assetPlan?.planDigest ?? null,
+        ...(claudeProjectImport ? { claudeProjectImport } : {}),
       }),
     sources: [
       ...orderedSources.map((source) => ({
