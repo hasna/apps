@@ -154,6 +154,16 @@ test("native reconciliation resolves an effective partial write only after nativ
   expect(receipt.reconciled).toBe(true); const saved = JSON.parse(readFileSync(join(journal, "receipt.json"), "utf8")); expect(saved.nativeStateVerified).toBe(true); expect(saved.nativeExecutionVerified).toBe(false); expect(f.calls.some(call => call.method === "config/batchWrite")).toBe(false);
 });
 
+test("native reconciliation accepts the persisted pre-inventory journal schema honestly", async () => {
+  const f = fixture(), plan = await enrollCodexNativeHooks(f, f.connect), journal = join(f.dataDir, "native-hook-trust", "55555555-5555-4555-8555-555555555555");
+  mkdirSync(journal, { recursive: true, mode: 0o700 }); const policyPath = join(f.dataDir, "agent-policy.json"), hooksText = readFileSync(f.hooksPath), policyText = readFileSync(policyPath);
+  writeFileSync(join(journal, "config.before.toml"), f.before, { mode: 0o600 }); writeFileSync(join(journal, "hooks.before.json"), hooksText, { mode: 0o600 }); writeFileSync(join(journal, "policy.before.json"), policyText, { mode: 0o600 }); writeFileSync(join(journal, "stopped.json"), "{}\n", { mode: 0o600 });
+  writeFileSync(join(journal, "intent.json"), JSON.stringify({ version: 1, planDigest: plan.planDigest, skillsCli: plan.skillsCli, nativeVersion: "codex-cli 0.154.0", configPath: f.configPath, beforeSha256: createHash("sha256").update(f.before).digest("hex"), hooksSha256: createHash("sha256").update(hooksText).digest("hex"), policySha256: createHash("sha256").update(policyText).digest("hex"), expectedVersion: `sha256:${"b".repeat(64)}`, hooks: plan.planned }) + "\n", { mode: 0o600 });
+  writeFileSync(f.configPath, f.before.replaceAll("enabled = false # preserve managed comment", "enabled = true # preserve managed comment"), { mode: 0o600 }); f.entries.forEach(entry => { entry.enabled = true; });
+  const receipt = await reconcileCodexNativeHooks({ home: f.home, dataDir: f.dataDir, journal, reviewedSkillsCli: f.reviewedSkillsCli }, f.connect);
+  expect(receipt.nativeInventoryScope).toBe("declared-managed-hooks-only"); expect(receipt.unrelatedNativeHooksPreserved).toBe(false);
+});
+
 test("native reconciliation refuses unrelated effective configuration drift", async () => {
   const f = fixture(), plan = await enrollCodexNativeHooks(f, f.connect), journal = join(f.dataDir, "native-hook-trust", "22222222-2222-4222-8222-222222222222");
   mkdirSync(journal, { recursive: true, mode: 0o700 }); const policyPath = join(f.dataDir, "agent-policy.json"), hooksText = readFileSync(f.hooksPath), policyText = readFileSync(policyPath);
