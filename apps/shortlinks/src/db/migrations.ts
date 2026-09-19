@@ -87,6 +87,11 @@ const CORE_MIGRATIONS: Migration[] = [
      CREATE INDEX IF NOT EXISTS idx_clicks_clicked_at ON clicks(clicked_at);
      CREATE INDEX IF NOT EXISTS idx_clicks_updated ON clicks(updated_at)`,
   ),
+  defineMigration(
+    "shortlinks_0005_host_redirect_lookup",
+    `CREATE INDEX IF NOT EXISTS idx_links_domain_active_slug
+       ON links(domain_id, active, slug)`,
+  ),
 ];
 
 /**
