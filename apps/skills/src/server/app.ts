@@ -36,9 +36,10 @@ import {
   deletePublishedSkill,
   publishedPayload,
   skillSummary,
+  skillLifecyclePatch,
 } from "./skills-api.js";
 import { createStore, type MemorySkillsStore } from "./store.js";
-import { SkillRevisionConflictError, SkillVersionExistsError, StaleLeaseGenerationError, type ApiPrincipal, type ServerRunRecord, type SkillsProductStore } from "./types.js";
+import { SkillLifecycleConflictError, SkillRevisionConflictError, SkillVersionExistsError, StaleLeaseGenerationError, type ApiPrincipal, type ServerRunRecord, type SkillsProductStore } from "./types.js";
 
 export interface SkillsServerOptions {
   /** Overrides the artifact storage (tests inject an in-memory S3 stand-in). */
@@ -191,6 +192,9 @@ export async function createSkillsFetchHandler(options: SkillsServerOptions = {}
           { status: 409 },
         );
       }
+      if (error instanceof SkillLifecycleConflictError) {
+        return json({ error: error.message, code: "SKILL_ARCHIVE_PROFILE_CONFLICT", profiles: error.profiles }, { status: 409 });
+      }
       if (error instanceof SkillRevisionConflictError) {
         return json(
           {
@@ -306,6 +310,15 @@ async function handleApiV1(
 
     if (request.method === "GET" && id && subresource === "versions" && !childId) {
       return json(await listSkillVersionsPayload(store, principal, id));
+    }
+
+    if (request.method === "PATCH" && id && subresource === "lifecycle" && !childId) {
+      if (!["owner", "admin"].includes(principal.role)) return json({ error: "Only organization owners or admins may change skill lifecycle", code: "LIFECYCLE_ROLE_REQUIRED" }, { status: 403 });
+      const expectedRevisionId = parseIfMatch(request.headers.get("if-match"));
+      const updated = await store.setSkillLifecycle(principal, id, skillLifecyclePatch(await readJson(request, config.requestBodyLimitBytes)), expectedRevisionId);
+      return updated
+        ? json(publishedPayload(updated), { headers: { ETag: revisionEtag(updated.revisionId) } })
+        : json({ error: "published skill not found", code: "SKILL_NOT_FOUND" }, { status: 404 });
     }
     if (request.method === "GET" && id && subresource === "versions" && childId && !parts[4]) {
       const version = await readSkillVersion(store, principal, id, childId);

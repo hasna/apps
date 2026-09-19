@@ -193,6 +193,31 @@ describe("CLI docs and validation", () => {
   });
 
   describe("info (enriched)", () => {
+    test("remote JSON info preserves published and catalogue-only revisions and rejects invalid revisions", async () => {
+      const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
+        const slug = new URL(request.url).pathname.split("/").pop();
+        const body = slug === "published-fixture"
+          ? { name: slug, displayName: "Published Fixture", description: "Published", category: "Development Tools", tags: [], revisionId: "rev-20260919", lifecycle: "active" }
+          : slug === "catalogue-fixture"
+            ? { name: slug, displayName: "Catalogue Fixture", description: "Catalogue", category: "Development Tools", tags: [], publicationState: "catalogue-only", revisionId: null, lifecycle: "active" }
+            : { name: slug, revisionId: " bad revision" };
+        return Response.json(body);
+      }});
+      try {
+        const env = { HASNA_SKILLS_LOCAL: "0", HASNA_SKILLS_API_URL: server.url.origin, HASNA_SKILLS_API_KEY_OVERRIDE: "info-fixture-key" };
+        const published = await runCli(["info", "published-fixture", "--remote", "--json"], env);
+        expect(published.exitCode).toBe(0);
+        expect(JSON.parse(published.stdout)).toMatchObject({ name: "published-fixture", revisionId: "rev-20260919", lifecycle: "active" });
+        const catalogue = await runCli(["info", "catalogue-fixture", "--remote", "--json"], env);
+        expect(catalogue.exitCode).toBe(0);
+        expect(JSON.parse(catalogue.stdout)).toMatchObject({ name: "catalogue-fixture", revisionId: null, lifecycle: "active" });
+        const invalid = await runCli(["info", "invalid-fixture", "--remote", "--json"], env);
+        expect(invalid.exitCode).toBe(1);
+        expect(JSON.parse(invalid.stdout)).toEqual({ error: "Remote skill payload did not match the expected skills contract", similar: [] });
+        expect(invalid.stderr).toBe("");
+      } finally { server.stop(true); }
+    });
+
     test("JSON includes envVars and cliCommand", async () => {
       const { stdout } = await runCli(["info", "byo-fixture", "--json"], FIXTURE_ENV);
       const data = JSON.parse(stdout);

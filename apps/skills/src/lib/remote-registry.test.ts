@@ -155,6 +155,36 @@ describe("remote registry", () => {
     ]);
   });
 
+  test("preserves lifecycle scalars for remote info", () => {
+    const [skill] = parseRemoteRegistryPayload([{
+      name: "archived-demo",
+      revisionId: "rev-123",
+      lifecycle: "archived",
+    }]);
+    expect(skill).toMatchObject({ name: "archived-demo", revisionId: "rev-123", lifecycle: "archived" });
+  });
+
+  test("preserves an explicit null revision for catalogue-only skills", () => {
+    const [skill] = parseRemoteRegistryPayload([{
+      name: "catalogue-only",
+      publicationState: "catalogue-only",
+      revisionId: null,
+    }]);
+    expect(skill).toMatchObject({ name: "catalogue-only", revisionId: null });
+  });
+
+  test("rejects an invalid remote lifecycle scalar", () => {
+    expect(() => parseRemoteSkillPayload({ skill: { name: "bad-lifecycle", lifecycle: "retired" } }))
+      .toThrow("Remote skill payload did not match the expected skills contract");
+  });
+
+  test("rejects unsafe remote revisions", () => {
+    for (const revisionId of ["", " revision", "revision ", "bad\nheader", "rev-林"]) {
+      expect(() => parseRemoteSkillPayload({ skill: { name: "unsafe-revision", revisionId } }))
+        .toThrow("Remote skill payload did not match the expected skills contract");
+    }
+  });
+
   test("preserves a remote-declared unavailability instead of inventing one", () => {
     // Availability is now purely a REMOTE assertion: the client ships no local
     // denylist, so a payload that omits the field is available, and a payload that

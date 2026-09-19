@@ -36,6 +36,12 @@ describe("Domains manifest secret projection", () => {
     expect(workflow).toContain("MANIFEST_WEB_SECRETS");
     expect(workflow).toContain("required_secrets");
     expect(workflow).toContain("valueFrom:.value");
+    for (const name of ["CLOUDFLARE_ACCOUNT_ID", "DOMAINS_REGISTRANT_SOURCE_DOMAIN", "DOMAINS_PROVISIONING_INTERVAL_MS"]) {
+      expect(workflow).toContain(`has(\"${name}\")`);
+    }
+    expect(workflow).toContain("MANIFEST_WEB_ENVIRONMENT");
+    expect(workflow).toContain("required_environment");
+    expect(workflow).toContain("value:.value");
   });
 });
 

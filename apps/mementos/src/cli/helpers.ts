@@ -130,7 +130,29 @@ export function resolveEntityArg(nameOrId: string, type?: EntityType): Entity {
 // ============================================================================
 
 export function outputJson(data: unknown): void {
-  console.log(JSON.stringify(data, null, 2));
+  process.stdout.write(`${JSON.stringify(data, null, 2)}\n`);
+}
+
+/** Emit terminal JSON and preserve the requested exit status after drain. */
+export function outputJsonAndExit(data: unknown, code: number): Promise<never> {
+  const payload = `${JSON.stringify(data, null, 2)}\n`;
+  return new Promise<never>((resolve) => {
+    let settled = false;
+    const finish = (exitCode: number): void => {
+      if (settled) return;
+      settled = true;
+      process.stdout.off("error", onError);
+      process.exit(exitCode);
+      resolve(undefined as never);
+    };
+    const onError = (): void => finish(1);
+    process.stdout.once("error", onError);
+    try {
+      process.stdout.write(payload, () => finish(code));
+    } catch {
+      finish(1);
+    }
+  });
 }
 
 export const DEFAULT_COMPACT_LIMIT = 20;
@@ -390,13 +412,13 @@ export function formatMemoryDetail(m: Memory): string {
 // Error handler
 // ============================================================================
 
-export function makeHandleError(program: Command): (e: unknown) => never {
-  return function handleError(e: unknown): never {
+export function makeHandleError(program: Command): (e: unknown) => Promise<never> | never {
+  return function handleError(e: unknown): Promise<never> | never {
     const globalOpts = program.opts<GlobalOpts>();
     if (globalOpts.json || globalOpts.format === "json") {
-      outputJson({
+      return outputJsonAndExit({
         error: e instanceof Error ? e.message : String(e),
-      });
+      }, 1);
     } else {
       console.error(chalk.red(e instanceof Error ? e.message : String(e)));
     }

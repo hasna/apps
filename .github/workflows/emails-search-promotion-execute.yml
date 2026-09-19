@@ -24,7 +24,7 @@ permissions:
   contents: read
 jobs:
   execute:
-    if: ${{ github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' }}
+    if: ${{ github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && !startsWith(inputs.phase, 'kms_') }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
     environment: production
@@ -386,3 +386,114 @@ jobs:
           path: ${{ runner.temp }}/emails-current-receipts/*.json
           if-no-files-found: ignore
           retention-days: 30
+
+  kms-baseline:
+    if: ${{ github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && github.run_attempt == 1 && (inputs.phase == 'kms_prepare' || inputs.phase == 'kms_execute') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: production
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SOURCE: ${{ inputs.source }}
+      PHASE: ${{ inputs.phase }}
+      PREPARED_RUN: ${{ inputs.prepared_run_id }}
+      PREPARED_SHA: ${{ inputs.prepared_sha256 }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ inputs.source }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify paired KMS baseline controls before authority
+        run: python3 -I -B tooling/deploy/emails-kms-baseline/test_baseline.py
+      - name: Authenticate exact main and reviewed paired baseline
+        run: |
+          python3 -I -B tooling/deploy/emails-kms-baseline/gate.py \
+            --phase "$PHASE" --source "$SOURCE" --run "$PREPARED_RUN" \
+            --sha256 "$PREPARED_SHA" --out "$RUNNER_TEMP/emails-kms-baseline"
+      - name: Persist paired KMS mutation intent
+        if: ${{ inputs.phase == 'kms_execute' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: emails-kms-baseline-intent
+          path: ${{ runner.temp }}/emails-kms-baseline/intent.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Assume existing trusted Emails producer role for paired KMS baseline
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a
+        with:
+          role-to-assume: arn:aws:iam::789877399345:role/emails-prod-gha-deploy
+          aws-region: us-east-1
+          role-session-name: emails-kms-${{ github.run_id }}
+          mask-aws-account-id: true
+          disable-retry: true
+      - name: Prepare metadata-only paired KMS baseline
+        if: ${{ inputs.phase == 'kms_prepare' }}
+        run: python3 -I -B tooling/deploy/emails-kms-baseline/execute.py prepare --source "$SOURCE" --out "$RUNNER_TEMP/emails-kms-baseline"
+      - name: Retain paired KMS preparation
+        if: ${{ inputs.phase == 'kms_prepare' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: emails-kms-baseline-prepared
+          path: ${{ runner.temp }}/emails-kms-baseline/prepared.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: register-api exact KMS baseline once
+        if: ${{ inputs.phase == 'kms_execute' }}
+        run: python3 -I -B tooling/deploy/emails-kms-baseline/execute.py register-api --source "$SOURCE" --out "$RUNNER_TEMP/emails-kms-baseline"
+      - name: Persist register-api custody before next mutation
+        if: ${{ inputs.phase == 'kms_execute' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: emails-kms-baseline-register-api
+          path: ${{ runner.temp }}/emails-kms-baseline/api-registered.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: register-worker exact KMS baseline once
+        if: ${{ inputs.phase == 'kms_execute' }}
+        run: python3 -I -B tooling/deploy/emails-kms-baseline/execute.py register-worker --source "$SOURCE" --out "$RUNNER_TEMP/emails-kms-baseline"
+      - name: Persist register-worker custody before next mutation
+        if: ${{ inputs.phase == 'kms_execute' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: emails-kms-baseline-register-worker
+          path: ${{ runner.temp }}/emails-kms-baseline/worker-registered.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: update-api exact KMS baseline once
+        if: ${{ inputs.phase == 'kms_execute' }}
+        run: python3 -I -B tooling/deploy/emails-kms-baseline/execute.py update-api --source "$SOURCE" --out "$RUNNER_TEMP/emails-kms-baseline"
+      - name: Persist update-api custody before next mutation
+        if: ${{ inputs.phase == 'kms_execute' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: emails-kms-baseline-update-api
+          path: ${{ runner.temp }}/emails-kms-baseline/api-updated.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: update-worker exact KMS baseline once
+        if: ${{ inputs.phase == 'kms_execute' }}
+        run: python3 -I -B tooling/deploy/emails-kms-baseline/execute.py update-worker --source "$SOURCE" --out "$RUNNER_TEMP/emails-kms-baseline"
+      - name: Persist update-worker custody before next mutation
+        if: ${{ inputs.phase == 'kms_execute' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: emails-kms-baseline-update-worker
+          path: ${{ runner.temp }}/emails-kms-baseline/worker-updated.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Verify paired KMS rollout and preserved rollback anchors
+        if: ${{ inputs.phase == 'kms_execute' }}
+        run: python3 -I -B tooling/deploy/emails-kms-baseline/execute.py verify --source "$SOURCE" --out "$RUNNER_TEMP/emails-kms-baseline"
+      - name: Retain paired KMS terminal custody including partial outcomes
+        if: ${{ always() && inputs.phase == 'kms_execute' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: emails-kms-baseline-terminal
+          path: ${{ runner.temp }}/emails-kms-baseline/*.json
+          if-no-files-found: error
+          retention-days: 90

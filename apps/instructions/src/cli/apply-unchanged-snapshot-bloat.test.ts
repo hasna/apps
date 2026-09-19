@@ -18,17 +18,15 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { writeFileSync } from "node:fs";
 import { makeTempRoot } from "../lib/test-temp-root";
+import { isolatedInstructionsTestEnv } from "../test-support/environment";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "../..");
 
-function runCli(args: string[], env: Record<string, string | undefined> = {}) {
-  return spawnSync("bun", ["src/cli/index.tsx", ...args], {
+function runCli(args: string[], env: Record<string, string | undefined>) {
+  return spawnSync("bun", ["--no-env-file", "src/cli/index.tsx", ...args], {
     cwd: repoRoot,
     encoding: "utf8",
     env: {
-      ...process.env,
-      HASNA_INSTRUCTIONS_API_URL: undefined,
-      HASNA_INSTRUCTIONS_API_KEY: undefined,
       ...env,
       NO_COLOR: "1",
       FORCE_COLOR: "0",
@@ -37,7 +35,7 @@ function runCli(args: string[], env: Record<string, string | undefined> = {}) {
 }
 
 function isolatedEnv(root: string) {
-  return { HASNA_INSTRUCTIONS_DB_PATH: join(root, "db.sqlite"), CONFIGS_HOME: root };
+  return isolatedInstructionsTestEnv(root);
 }
 
 function rowsNamed(root: string, name: string): Array<{ slug: string; version: number }> {
@@ -113,6 +111,7 @@ describe("snapshot prune — the local store's reclaim path", () => {
     const seed = spawnSync(
       "bun",
       [
+        "--no-env-file",
         "-e",
         `
         import { getConfig } from "./src/db/configs.ts";
@@ -123,7 +122,7 @@ describe("snapshot prune — the local store's reclaim path", () => {
         createSnapshot(id, "v4 content\\n", 4);
         `,
       ],
-      { cwd: repoRoot, encoding: "utf8", env: { ...process.env, ...isolatedEnv(root), HASNA_INSTRUCTIONS_API_URL: undefined, HASNA_INSTRUCTIONS_API_KEY: undefined } },
+      { cwd: repoRoot, encoding: "utf8", env: { ...isolatedEnv(root), HASNA_INSTRUCTIONS_API_URL: undefined, HASNA_INSTRUCTIONS_API_KEY: undefined } },
     );
     expect(seed.status).toBe(0);
     expect(snapshotVersions(root, slug)).toEqual(["v4", "v3", "v2", "v1"]);

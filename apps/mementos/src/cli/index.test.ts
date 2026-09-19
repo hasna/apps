@@ -901,6 +901,17 @@ describe("cli memory commands (continued)", () => {
     expect(parsed.deleted).toBeDefined();
   });
 
+  test("forget --json preserves the nonzero ambiguous-key error", async () => {
+    await runCli("save", "ambiguous-json-key", "first", "--scope", "private", "--dedupe", "create");
+    await runCli("save", "ambiguous-json-key", "second", "--scope", "shared", "--dedupe", "create");
+    const { stdout, stderr, exitCode } = await runCli("--json", "forget", "ambiguous-json-key");
+    expect(exitCode).toBe(1);
+    expect(stderr).not.toContain("error:");
+    const parsed = JSON.parse(stdout);
+    expect(parsed.error).toContain("Ambiguous key");
+    expect(parsed.matches).toHaveLength(2);
+  });
+
   test("save with summary", async () => {
     const { stdout, exitCode } = await runCli(
       "save", "summary-key", "summary-value",

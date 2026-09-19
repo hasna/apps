@@ -1,0 +1,24 @@
+{
+  "schema": "emails.kms-baseline-contract.v1",
+  "keyArn": "arn:aws:kms:us-east-1:789877399345:key/592da32b-6f6a-4bb7-ac7c-e63e01925ed2",
+  "region": "us-east-1",
+  "maxAgeSeconds": 86400,
+  "api": {
+    "service": "emails-prod",
+    "container": "emails",
+    "taskDefinition": "arn:aws:ecs:us-east-1:789877399345:task-definition/emails-prod:90",
+    "baselineSha256": "4306912a9eb4f1d6728c8e47096732840a81b352624059ae29baa529ad5e2a18",
+    "candidateSha256": "ea6ec4deaacc2f7b1ac1be9b2a10c1828ef293f961f57985101b95daa5278706",
+    "image": "789877399345.dkr.ecr.us-east-1.amazonaws.com/mailery@sha256:10403087ae6cc7fac75b4b4c544f3615ad0c9d9d99dd9d33ef291f1c8f3caed2",
+    "healthCheck": true
+  },
+  "worker": {
+    "service": "emails-prod-ingest-worker",
+    "container": "ingest-worker",
+    "taskDefinition": "arn:aws:ecs:us-east-1:789877399345:task-definition/emails-prod-ingest-worker:22",
+    "baselineSha256": "be6f2075d236e87c5b60067e0600477fae006730f0c0a5137cc7ea96a80f2e95",
+    "candidateSha256": "e4a37259f34718f232ad1882f9ac5389497cff4fe309d125569b854a6012f1f7",
+    "image": "789877399345.dkr.ecr.us-east-1.amazonaws.com/open-emails@sha256:9ef751b0fb5edb06ae04062b62ea789d6d8644537df97d9dc083c0c2bd280c45",
+    "healthCheck": false
+  }
+}

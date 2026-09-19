@@ -104,6 +104,7 @@ async function validatePublished(
         "SELECTION_UNAVAILABLE",
         `Selected skill '${selection.slug}' is unavailable`,
       );
+    if (current.lifecycle === "archived") throw new SkillRequestError(409, "SELECTION_ARCHIVED", `Selected skill '${selection.slug}' is archived`);
     const version = await store.getSkillVersion(
       principal,
       selection.slug,

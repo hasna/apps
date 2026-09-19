@@ -181,6 +181,8 @@ export { providerVersionSatisfies } from "./lib/provider-version.js";
 export { discoverHarnesses, DISCOVERABLE_HARNESSES, HARNESS_DISCOVERY_SCHEMA } from "./lib/harness-discovery.js";
 export type { DiscoverableHarness, HarnessDiscoveryOptions, HarnessDiscoveryResult, HarnessDiscoveryEntry, HarnessPathObservation } from "./lib/harness-discovery.js";
 export type {
+  ClaudeProjectImport,
+  ClaudeProjectImportManifest,
   SessionHostedProfileSelector,
   SessionInstructionLayer,
   SessionInstructionMerge,
