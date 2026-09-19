@@ -44,6 +44,11 @@ const CHILD_TABLES = [
   { table: "tags", key: ["name"] },
   { table: "remotes", key: ["name"] },
   { table: "pull_requests", key: ["number"] },
+  // `issues` (migration 16) is a reviewed child: its rows move onto the target
+  // row by (repo_id, number) exactly like pull_requests. Membership here is
+  // also what makes the table KNOWN below — an unlisted table referencing
+  // repos(id) still aborts the relocation.
+  { table: "issues", key: ["number"] },
 ] as const;
 
 const KNOWN_REPO_FK_TABLES = new Set([

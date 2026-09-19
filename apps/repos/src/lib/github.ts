@@ -103,6 +103,21 @@ function pullRequestFields(withMergeState: boolean): string {
     commits(last: 1) { nodes { commit { statusCheckRollup { state contexts { nodes { name status conclusion } } } } } }`;
 }
 
+/**
+ * The accepting transport the sync/reconciliation path uses.
+ *
+ * PARTIAL-RESPONSE POLICY (deliberate, do not "harmonise" with the issue
+ * reader): GitHub answers a partially-resolvable query with data AND errors,
+ * and this transport deliberately accepts such a response whenever any
+ * `repository` field resolved (`hasUsableData` below). Dropped null holes are
+ * repaired by the next full re-enumeration plus per-number reconciliation, so
+ * accepting a partial page here is survivable.
+ *
+ * The issue DETECTION path has no such repair net (it compares watermarks and
+ * reports absence), so it must never accept a partial response. It therefore
+ * uses `graphqlStrict()` below, which returns the `errors[]` array instead of
+ * erasing it. Do not route issue detection through this function.
+ */
 function graphql(query: string, variables: Record<string, string>, withMergeState: boolean): any {
   const args = ["api", "graphql"];
   if (withMergeState) args.push("-H", MERGE_INFO_PREVIEW);
@@ -138,6 +153,89 @@ function hasUsableData(data: unknown): boolean {
   const repository = (data as { repository?: unknown }).repository;
   if (!repository || typeof repository !== "object") return false;
   return Object.values(repository as Record<string, unknown>).some((value) => value != null);
+}
+
+/**
+ * What `gh` produced for one GraphQL request, including the error body it
+ * normally keeps out of thrown messages.
+ */
+export interface StrictGraphqlResponse {
+  /** Parsed `data`, whenever the response carried one. */
+  data: unknown;
+  /** Every `errors[].message`, whitespace-collapsed. Never raw response bytes. */
+  errors: string[];
+  /**
+   * Set when the request itself did not come back cleanly (non-zero exit,
+   * empty output, unparseable body). Callers must treat this as a page
+   * failure even when `errors[]` is empty.
+   */
+  transport_failure: string | null;
+}
+
+/**
+ * Run one GraphQL request and RETURN its response, `errors[]` included.
+ *
+ * This exists because `graphql()` erases the evidence: it throws a generic
+ * error for an unusable response and returns only `parsed.data` otherwise, so
+ * no caller can tell a partial response from a clean one. The issue detection
+ * path cannot treat an error-carrying response as complete — its product is
+ * absence detection, and a response that admits something failed cannot be
+ * sealed (issue detection brief section 3.1.1 rules E1/E2).
+ *
+ * Measured behaviour this accounts for: `gh api graphql` exits non-zero for a
+ * response whose body still carries `{data, errors}` on stdout (e.g. a
+ * NOT_FOUND at one node, exit=1). The body is read even on a failed exit, so
+ * the caller can still classify from `errors[]`; failure text stays generic
+ * and never carries response bytes.
+ *
+ * The PR sync path keeps using `graphql()` and its partial acceptance policy.
+ */
+export function graphqlStrict(query: string, variables: Record<string, string>): StrictGraphqlResponse {
+  const args = ["api", "graphql", "-f", `query=${query}`];
+  for (const [key, value] of Object.entries(variables)) args.push("-f", `${key}=${value}`);
+  const { stdout, failure } = ghCapture(args);
+
+  if (!stdout) {
+    return { data: null, errors: [], transport_failure: failure ?? "GitHub GraphQL returned empty output" };
+  }
+  let parsed: any;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    return { data: null, errors: [], transport_failure: failure ?? "GitHub GraphQL returned invalid JSON" };
+  }
+  const errors = Array.isArray(parsed?.errors)
+    ? parsed.errors
+        .map((entry: any) => String(entry?.message ?? "").replace(/\s+/g, " ").trim())
+        .filter((message: string) => message.length > 0)
+    : [];
+  return { data: parsed?.data ?? null, errors, transport_failure: failure };
+}
+
+/**
+ * Spawn `gh` and keep stdout even on a non-zero exit.
+ *
+ * The strict transport needs the response body that `gh()` deliberately
+ * discards when it throws; without it a rate-limit or NOT_FOUND error entry
+ * would be indistinguishable from an opaque process failure. Never returns
+ * stderr or response bytes in `failure` — callers classify from `errors[]`.
+ */
+function ghCapture(args: string[]): { stdout: string; failure: string | null } {
+  try {
+    const stdout = execFileSync("gh", args, {
+      encoding: "utf-8",
+      timeout: 60_000,
+      maxBuffer: 50 * 1024 * 1024,
+      stdio: ["pipe", "pipe", "pipe"],
+    }).trim();
+    return { stdout, failure: null };
+  } catch (error) {
+    const err = error as Error & { stdout?: Buffer | string; status?: number | null; signal?: NodeJS.Signals | null };
+    const stdout = Buffer.isBuffer(err.stdout) ? err.stdout.toString("utf8") : (typeof err.stdout === "string" ? err.stdout : "");
+    const status = err.status == null ? "" : ` exit=${err.status}`;
+    const signal = err.signal ? ` signal=${err.signal}` : "";
+    return { stdout: stdout.trim(), failure: `GitHub CLI request failed${status}${signal}` };
+  }
 }
 
 /**
