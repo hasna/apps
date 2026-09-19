@@ -2,6 +2,7 @@ import { createMemory, listMemories, bulkUpsertMemories } from "../../db/memorie
 import type { MemoryScope, MemoryCategory, MemoryFilter, CreateMemoryInput } from "../../types/index.js";
 import { addRoute } from "../router.js";
 import { json, errorResponse, readJson } from "../helpers.js";
+import { enforceMemoryAcl, filterReadable } from "../acl-enforcement.js";
 
 // POST /api/memories/export — export memories
 addRoute("POST", "/api/memories/export", async (req) => {
@@ -15,7 +16,8 @@ addRoute("POST", "/api/memories/export", async (req) => {
   if (body["tags"]) filter.tags = body["tags"] as string[];
   filter.limit = (body["limit"] as number) || 10000;
 
-  const memories = listMemories(filter);
+  // ACL read enforcement: an export must not be a way around a denied read.
+  const memories = filterReadable(req, listMemories(filter));
   return json({ memories, count: memories.length });
 });
 
@@ -31,9 +33,14 @@ addRoute("POST", "/api/memories/import", async (req) => {
   const memoriesArr = body["memories"] as Record<string, unknown>[];
   let imported = 0;
   const errors: string[] = [];
+  const denied: string[] = [];
 
   for (const mem of memoriesArr) {
     try {
+      if (typeof mem["key"] === "string" && enforceMemoryAcl(req, mem["key"] as string, "write")) {
+        denied.push(mem["key"] as string);
+        continue;
+      }
       createMemory(
         {
           ...mem,
@@ -49,7 +56,7 @@ addRoute("POST", "/api/memories/import", async (req) => {
     }
   }
 
-  return json({ imported, errors, total: memoriesArr.length }, 201);
+  return json({ imported, errors, denied, total: memoriesArr.length }, 201);
 });
 
 // POST /api/memories/bulk-upsert — faithful, idempotent bulk restore.
@@ -70,17 +77,25 @@ addRoute("POST", "/api/memories/bulk-upsert", async (req) => {
   }
 
   const memoriesArr = body["memories"] as Record<string, unknown>[];
-  const result = bulkUpsertMemories(memoriesArr);
+  // ACL write enforcement: refuse keys this caller's agent may not write.
+  const allowedArr = memoriesArr.filter((mem) => {
+    if (typeof mem["key"] !== "string") return true;
+    return enforceMemoryAcl(req, mem["key"] as string, "write") === null;
+  });
+  const deniedArr = memoriesArr.filter((mem) => !allowedArr.includes(mem));
+  const result = bulkUpsertMemories(allowedArr);
 
-  if (result.rejected > 0) {
+  const denied = deniedArr.map((m) => String(m["key"] ?? "")).filter(Boolean);
+  if (result.rejected > 0 || denied.length > 0) {
     return json(
       {
         ...result,
+        denied,
         error: `${result.rejected} of ${result.total} memories were rejected and did not persist. See errors.`,
       },
       400
     );
   }
 
-  return json(result, 201);
+  return json({ ...result, denied }, 201);
 });

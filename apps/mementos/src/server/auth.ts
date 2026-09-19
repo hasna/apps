@@ -44,13 +44,32 @@ let _schemaReady: Promise<void> | null = null;
  */
 const AUTHENTICATED = new WeakMap<Request, boolean>();
 
-function markAuthenticated(req: Request): void {
+/**
+ * The agent (`agent` claim) on the VERIFIED principal for this request, or
+ * `null` when the key is authenticated but names no agent.
+ *
+ * This is the ACL SUBJECT. It is taken from the verified token, never from a
+ * body or header, so a direct HTTP caller cannot choose which policy applies.
+ */
+const PRINCIPAL_AGENT = new WeakMap<Request, string | null>();
+
+function markAuthenticated(req: Request, agent: string | null = null): void {
   AUTHENTICATED.set(req, true);
+  PRINCIPAL_AGENT.set(req, agent);
 }
 
 /** True when {@link checkApiKey} verified an explicit API key on this request. */
 export function isAuthenticated(req: Request): boolean {
   return AUTHENTICATED.get(req) ?? false;
+}
+
+/**
+ * The agent on the verified principal, or `null`. `null` also covers a request
+ * that was allowed without a verified key (no-auth local mode): there is no
+ * authenticated subject, so ACL enforcement is inert for it.
+ */
+export function getAuthenticatedAgent(req: Request): string | null {
+  return PRINCIPAL_AGENT.get(req) ?? null;
 }
 
 function signingSecret(): string | undefined {
@@ -157,13 +176,13 @@ export async function checkApiKey(
     // HASNA_MEMENTOS_API_KEY first, legacy MEMENTOS_API_KEY second): a server
     // configured only under the canonical name used to match the bearer and
     // then leave the request unmarked, so the Host allowlist refused it.
-    if (env.apiKey()) markAuthenticated(req);
+    if (env.apiKey()) markAuthenticated(req, null);
     return null;
   }
   if (_schemaReady) await _schemaReady;
   const decision = await verifier.authenticate(req.headers, { method, path, requiredScopes });
   if (!decision.ok) return json({ error: decision.message, reason: decision.reason }, decision.status);
-  markAuthenticated(req);
+  markAuthenticated(req, decision.principal.agent ?? null);
   return null;
 }
 

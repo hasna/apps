@@ -10,6 +10,7 @@ import type { Memory, MemoryCategory, CreateMemoryInput } from "../../types/inde
 import { addRoute } from "../router.js";
 import { json, readJson, errorResponse, getSearchParams, checkWriteOriginOrHost } from "../helpers.js";
 import { isAuthenticated } from "../auth.js";
+import { filterReadable } from "../acl-enforcement.js";
 
 // GET /api/health — simple health
 addRoute("GET", "/api/health", () => {
@@ -19,7 +20,7 @@ addRoute("GET", "/api/health", () => {
 // GET /api/memories/briefing — delta briefing (new/updated/expired since a ts).
 // The client sends its own resolved machine visibility so cross-machine callers
 // see machine-agnostic + their-own-machine memories, never the server's.
-addRoute("GET", "/api/memories/briefing", (_req, url) => {
+addRoute("GET", "/api/memories/briefing", (req, url) => {
   const q = getSearchParams(url);
   const since = q["since"];
   if (!since) return errorResponse("Missing required field: since", 400);
@@ -33,18 +34,24 @@ addRoute("GET", "/api/memories/briefing", (_req, url) => {
     visible_machine_id: visibleMachineId,
     limit: q["limit"] ? parseInt(q["limit"], 10) : undefined,
   });
-  return json(result);
+  // ACL read enforcement on every bucket: a briefing is a read surface too.
+  return json({
+    ...result,
+    new: filterReadable(req, (result as { new?: Memory[] }).new ?? []),
+    updated: filterReadable(req, (result as { updated?: Memory[] }).updated ?? []),
+    expired: filterReadable(req, (result as { expired?: Memory[] }).expired ?? []),
+  });
 });
 
 // GET /api/memories/audit — low-trust memories for poisoning review
-addRoute("GET", "/api/memories/audit", (_req, url) => {
+addRoute("GET", "/api/memories/audit", (req, url) => {
   const q = getSearchParams(url);
-  const memories = listLowTrustMemories({
+  const memories = filterReadable(req, listLowTrustMemories({
     threshold: q["threshold"] ? parseFloat(q["threshold"]) : undefined,
     project_id: q["project_id"] || undefined,
     limit: q["limit"] ? parseInt(q["limit"], 10) : undefined,
     offset: q["offset"] ? parseInt(q["offset"], 10) : undefined,
-  });
+  }));
   return json({ memories, count: memories.length });
 });
 
@@ -223,9 +230,14 @@ addRoute("GET", "/api/inject", (req, url) => {
     seen.add(m.id);
     return true;
   });
+  // ACL read enforcement: injection quotes memory values, so a denied key must
+  // not enter the context. Filter before the token budget is computed.
+  // NOTE: `filterReadable` returns the SAME array when there is no subject, so
+  // this must produce a distinct list rather than clearing `unique` in place.
+  const readableUnique = filterReadable(req, unique);
 
   // Sort by importance DESC, then recency
-  unique.sort((a, b) => {
+  readableUnique.sort((a, b) => {
     if (b.importance !== a.importance) return b.importance - a.importance;
     return (
       new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
@@ -239,7 +251,7 @@ addRoute("GET", "/api/inject", (req, url) => {
 
   const format = q["format"] || "xml"; // xml | markdown | compact | json
 
-  for (const m of unique) {
+  for (const m of readableUnique) {
     let line: string;
     if (format === "compact") {
       line = `${m.key}: ${m.value}`;

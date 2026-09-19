@@ -409,6 +409,52 @@ const scenarios: Record<string, () => Promise<void>> = {
     await expectProtocolRefusal(() => synthesizeProfile({ scope: "global", force_refresh: true }));
   },
 
+  // --- ACL + ratings (hosted PORT) ---
+  "acl-set": async () => {
+    const { setAcl } = await import("../acl.js");
+    const acl = setAcl("agent-1", "team-*", "readwrite");
+    if (acl.id !== "acl-1") throw new Error(`setAcl did not use the hosted route: ${JSON.stringify(acl)}`);
+  },
+  "acl-list": async () => {
+    const { listAcls } = await import("../acl.js");
+    const acls = listAcls("agent-1");
+    if (acls.length !== 1 || acls[0]!.id !== "acl-1") throw new Error(`listAcls did not use the hosted route`);
+  },
+  "acl-check": async () => {
+    // The decision is taken server-side: checkPermission must hit /v1/acl/check.
+    const { checkPermission } = await import("../acl.js");
+    if (checkPermission("agent-1", "team-notes", "read") !== true) {
+      throw new Error("checkPermission did not return the server decision");
+    }
+  },
+  "acl-remove": async () => {
+    const { removeAcl } = await import("../acl.js");
+    if (removeAcl("acl-1") !== true) throw new Error("removeAcl did not use the hosted route");
+  },
+  "rate-memory": async () => {
+    const { rateMemory } = await import("../ratings.js");
+    const rating = rateMemory("mem-1", true, "agent-1");
+    if (rating.id !== "rate-1") throw new Error(`rateMemory did not use the hosted route`);
+  },
+  "list-ratings": async () => {
+    const { listRatingsForMemory } = await import("../ratings.js");
+    const ratings = listRatingsForMemory("mem-1");
+    if (ratings.length !== 1 || ratings[0]!.id !== "rate-1") throw new Error("listRatingsForMemory did not use the hosted route");
+  },
+  "ratings-summary": async () => {
+    const { getRatingsSummary } = await import("../ratings.js");
+    const summary = getRatingsSummary("mem-1");
+    if (summary.total !== 1 || summary.usefulness_ratio !== 1) throw new Error("getRatingsSummary did not use the hosted route");
+  },
+  "malformed-rate": async () => {
+    const { rateMemory } = await import("../ratings.js");
+    await expectProtocolRefusal(() => rateMemory("mem-1", true, "agent-1"));
+  },
+  "malformed-acl-remove": async () => {
+    const { removeAcl } = await import("../acl.js");
+    await expectProtocolRefusal(() => removeAcl("acl-1"));
+  },
+
   // --- lifecycle / tool-events (regression cover for the T1 gaps that main
   //     already closed; they must not regress while this slice moves around
   //     them) ---

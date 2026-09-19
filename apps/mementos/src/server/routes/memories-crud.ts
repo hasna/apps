@@ -22,9 +22,10 @@ import { isAuthenticated } from "../auth.js";
 import { getDatabase } from "../../db/database.js";
 import { validateMemoryEnums, formatEnumViolation } from "../../lib/enum-validation.js";
 import { MemoryNotFoundError, VersionConflictError, DuplicateMemoryError, MemoryConflictError } from "../../types/index.js";
+import { enforceMemoryAcl, filterReadable } from "../acl-enforcement.js";
 
 // GET /api/memories — list memories
-addRoute("GET", "/api/memories", (_req: Request, url: URL) => {
+addRoute("GET", "/api/memories", (req: Request, url: URL) => {
   const q = getSearchParams(url);
   const filter: MemoryFilter = {};
 
@@ -84,9 +85,10 @@ addRoute("GET", "/api/memories", (_req: Request, url: URL) => {
     const filtered = memories.map(m =>
       Object.fromEntries(fields.map((f: string) => [f, (m as unknown as Record<string, unknown>)[f]]).filter(([, v]) => v !== undefined))
     );
+    const readableFiltered = filterReadable(req, filtered);
     return json({
-      memories: filtered,
-      count: filtered.length,
+      memories: readableFiltered,
+      count: readableFiltered.length,
       total,
       limit,
       has_more: hasMore,
@@ -94,9 +96,12 @@ addRoute("GET", "/api/memories", (_req: Request, url: URL) => {
     });
   }
 
+  // ACL read enforcement: a policy that denies a key must not be bypassed by
+  // listing every memory and reading the denied one out of the array.
+  const readable = filterReadable(req, memories);
   return json({
-    memories,
-    count: memories.length,
+    memories: readable,
+    count: readable.length,
     total,
     limit,
     has_more: hasMore,
@@ -113,6 +118,12 @@ addRoute("POST", "/api/memories", async (req) => {
   if (!body["key"] || !body["value"]) {
     return errorResponse("Missing required fields: key, value", 400);
   }
+  // ACL write enforcement: the caller's agent policy governs the key being
+  // written. Runs before any store access so a refused write touches nothing.
+  const writeKey = typeof body["key"] === "string" ? (body["key"] as string) : null;
+  const aclDenied = enforceMemoryAcl(req, writeKey, "write");
+  if (aclDenied) return aclDenied;
+
   // Reject out-of-enum category/scope/source/status here, with the field name
   // and the accepted set. Left to SQLite this surfaces as an opaque 500.
   const violation = validateMemoryEnums(body);
@@ -163,6 +174,11 @@ addRoute("GET", "/api/memories/:id", (req, _url, params) => {
   if (!memory) {
     return errorResponse("Memory not found", 404);
   }
+  // ACL read enforcement on the authoritative read boundary: a direct HTTP
+  // caller must not be able to read a key its policy denies by asking for the
+  // memory id instead of listing.
+  const readDenied = enforceMemoryAcl(req, memory.key, "read");
+  if (readDenied) return readDenied;
   touchMemory(memory.id);
   return json(memory);
 });
@@ -179,6 +195,18 @@ addRoute("PATCH", "/api/memories/:id", async (req, _url, params) => {
       428,
       { code: "MEMORY_PROJECT_LINK_GUARD_REQUIRED" },
     );
+  }
+  // ACL write enforcement against the CURRENT stored key. A patch that renames
+  // the key is checked against the key it is moving to as well, so a policy
+  // cannot be stepped over by moving a restricted key into a permitted one.
+  {
+    const existingForAcl = getMemory(params["id"]!);
+    const storedKeyDenied = enforceMemoryAcl(req, existingForAcl?.key, "write");
+    if (storedKeyDenied) return storedKeyDenied;
+    if (typeof body["key"] === "string") {
+      const nextKeyDenied = enforceMemoryAcl(req, body["key"] as string, "write");
+      if (nextKeyDenied) return nextKeyDenied;
+    }
   }
   const patchViolation = validateMemoryEnums(body);
   if (patchViolation) {
@@ -226,7 +254,12 @@ addRoute("GET", "/api/memories/:id/versions", (_req, _url, params) => {
 });
 
 // DELETE /api/memories/:id — delete memory
-addRoute("DELETE", "/api/memories/:id", (_req, _url, params) => {
+addRoute("DELETE", "/api/memories/:id", (req, _url, params) => {
+  const existingForAcl = getMemory(params["id"]!);
+  if (existingForAcl) {
+    const deleteDenied = enforceMemoryAcl(req, existingForAcl.key, "write");
+    if (deleteDenied) return deleteDenied;
+  }
   const deleted = deleteMemory(params["id"]!);
   if (!deleted) {
     return errorResponse("Memory not found", 404);
