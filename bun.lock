@@ -294,7 +294,7 @@
     },
     "apps/domains": {
       "name": "@hasna/domains",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "bin": {
         "domains": "dist/cli/index.js",
         "domains-mcp": "dist/mcp/index.js",
