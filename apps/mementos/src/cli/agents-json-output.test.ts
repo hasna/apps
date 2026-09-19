@@ -1,12 +1,12 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync, unlinkSync } from "node:fs";
+import { existsSync, mkdtempSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { getDatabase, resetDatabase } from "../db/database.js";
 import { registerAgent } from "../db/agents.js";
 import { assertLocalStoreBackend, isolatedStoreEnv } from "../test-support/store-isolation.js";
 
-const DB_PATH = join(tmpdir(), `mementos-agents-json-output-${Date.now()}.db`);
+const DB_PATH = join(mkdtempSync(join(tmpdir(), "mementos-agents-json-output-")), "store.db");
 const CLI_PATH = new URL("./index.tsx", import.meta.url).pathname;
 const HELPERS_PATH = new URL("./helpers.ts", import.meta.url).href;
 const CLI_ENV = isolatedStoreEnv(DB_PATH);
