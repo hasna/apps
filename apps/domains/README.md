@@ -321,6 +321,7 @@ Hosted provisioning runtime requirements:
 - `CLOUDFLARE_ACCOUNT_ID` plus `CLOUDFLARE_API_TOKEN`, scoped to zone management, DNS writes, Cloudflare's `Zone Settings Write` permission for the explicit SSL-mode readback contract, and the configured target bindings. Hosted provisioning deliberately rejects Cloudflare global API key/email authentication.
 - Optional `DOMAINS_PROVIDER_HTTP_TIMEOUT_MS` (default `30000`, maximum `120000`) and `DOMAINS_PROVIDER_MAX_RESPONSE_BYTES` (default `1048576`, maximum `4194304`) bound each Cloudflare request and response.
 - Optional `DOMAINS_PROVISIONING_INTERVAL_MS` (default `5000`) for the durable background worker.
+- Optional `DOMAINS_PROVISIONING_MAX_ATTEMPTS` (default `17280`) bounds consecutive polls within one state; successful state transitions reset the counter so normal registrar/DNS/certificate waits do not consume the whole job budget.
 
 Consumers must call this API (normally through `@hasna/domains/sdk`) rather than holding registrar or Cloudflare purchase credentials themselves.
 

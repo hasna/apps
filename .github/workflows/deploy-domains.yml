@@ -296,6 +296,7 @@ jobs:
             | select(has("CLOUDFLARE_ACCOUNT_ID"))
             | select(has("DOMAINS_REGISTRANT_SOURCE_DOMAIN"))
             | select(has("DOMAINS_PROVISIONING_INTERVAL_MS"))
+            | select(has("DOMAINS_PROVISIONING_MAX_ATTEMPTS"))
             | select(length > 0)
             | select(all(to_entries[];
                 (.key | test("^[A-Z][A-Z0-9_]{0,127}$")) and
@@ -304,9 +305,11 @@ jobs:
             | select(.CLOUDFLARE_ACCOUNT_ID | test("^[0-9a-fA-F]{32}$"))
             | select(.DOMAINS_REGISTRANT_SOURCE_DOMAIN | test("^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$"))
             | select(.DOMAINS_PROVISIONING_INTERVAL_MS | test("^[0-9]+$"))
+            | select(.DOMAINS_PROVISIONING_MAX_ATTEMPTS | test("^[0-9]+$"))
           ' <<<"${manifest}")"
           interval_ms="$(jq -er '.DOMAINS_PROVISIONING_INTERVAL_MS | tonumber | select(. >= 1000 and . <= 300000)' <<<"${web_environment}")"
-          [[ "${interval_ms}" =~ ^[0-9]+$ ]]
+          max_attempts="$(jq -er '.DOMAINS_PROVISIONING_MAX_ATTEMPTS | tonumber | select(. >= 240 and . <= 1000000)' <<<"${web_environment}")"
+          [[ "${interval_ms}" =~ ^[0-9]+$ && "${max_attempts}" =~ ^[0-9]+$ ]]
 
           expected_ecr_url="${EXPECTED_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${EXPECTED_ECR_REPOSITORY}"
           [[ "${cluster}" == "${EXPECTED_CLUSTER}" ]] || { echo "manifest cluster mismatch" >&2; exit 1; }
@@ -593,7 +596,7 @@ jobs:
           [[ "$(jq -r '.family' <<<"${task_definition}")" == "${WEB_FAMILY}" ]]
           [[ "$(jq --arg c "${WEB_CONTAINER}" '[.containerDefinitions[] | select(.name == $c)] | length' <<<"${task_definition}")" == "1" ]]
           jq -e 'type == "object" and has("CLOUDFLARE_API_TOKEN")' <<<"${MANIFEST_WEB_SECRETS}" >/dev/null
-          jq -e 'type == "object" and has("CLOUDFLARE_ACCOUNT_ID") and has("DOMAINS_REGISTRANT_SOURCE_DOMAIN") and has("DOMAINS_PROVISIONING_INTERVAL_MS")' <<<"${MANIFEST_WEB_ENVIRONMENT}" >/dev/null
+          jq -e 'type == "object" and has("CLOUDFLARE_ACCOUNT_ID") and has("DOMAINS_REGISTRANT_SOURCE_DOMAIN") and has("DOMAINS_PROVISIONING_INTERVAL_MS") and has("DOMAINS_PROVISIONING_MAX_ATTEMPTS")' <<<"${MANIFEST_WEB_ENVIRONMENT}" >/dev/null
           replacement="$(jq --arg image "${IMAGE}" --arg c "${WEB_CONTAINER}" --argjson required_secrets "${MANIFEST_WEB_SECRETS}" --argjson required_environment "${MANIFEST_WEB_ENVIRONMENT}" '
             .containerDefinitions |= map(
               if .name == $c then

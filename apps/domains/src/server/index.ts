@@ -114,6 +114,7 @@ export async function startDomainsServer(options: { port: number; host: string }
     createHostedProvisioningProviders(process.env),
     {
       intervalMs: Number(process.env["DOMAINS_PROVISIONING_INTERVAL_MS"] ?? "5000"),
+      maxAttempts: Number(process.env["DOMAINS_PROVISIONING_MAX_ATTEMPTS"] ?? "17280"),
       log: (event, detail) => console.log(JSON.stringify({ level: "info", event, ...detail })),
     },
   );

@@ -41,7 +41,7 @@ describe("Domains production deployment workflow", () => {
 
   test("projects required provider environment from the reviewed manifest", () => {
     expect(workflow).toContain("web_environment=\"$(jq -ce");
-    for (const name of ["CLOUDFLARE_ACCOUNT_ID", "DOMAINS_REGISTRANT_SOURCE_DOMAIN", "DOMAINS_PROVISIONING_INTERVAL_MS"]) {
+    for (const name of ["CLOUDFLARE_ACCOUNT_ID", "DOMAINS_REGISTRANT_SOURCE_DOMAIN", "DOMAINS_PROVISIONING_INTERVAL_MS", "DOMAINS_PROVISIONING_MAX_ATTEMPTS"]) {
       expect(workflow).toContain(`has(\"${name}\")`);
     }
     expect(workflow).toContain("MANIFEST_WEB_ENVIRONMENT");
