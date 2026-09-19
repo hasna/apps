@@ -23,17 +23,15 @@ import { fileURLToPath } from "node:url";
 import { writeFileSync } from "node:fs";
 import { Database } from "bun:sqlite";
 import { makeTempRoot } from "../lib/test-temp-root";
+import { isolatedInstructionsTestEnv } from "../test-support/environment";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "../..");
 
-function runCli(args: string[], env: Record<string, string | undefined> = {}) {
-  return spawnSync("bun", ["src/cli/index.tsx", ...args], {
+function runCli(args: string[], env: Record<string, string | undefined>) {
+  return spawnSync("bun", ["--no-env-file", "src/cli/index.tsx", ...args], {
     cwd: repoRoot,
     encoding: "utf8",
     env: {
-      ...process.env,
-      HASNA_INSTRUCTIONS_API_URL: undefined,
-      HASNA_INSTRUCTIONS_API_KEY: undefined,
       ...env,
       NO_COLOR: "1",
       FORCE_COLOR: "0",
@@ -42,7 +40,7 @@ function runCli(args: string[], env: Record<string, string | undefined> = {}) {
 }
 
 function isolatedEnv(root: string) {
-  return { HASNA_INSTRUCTIONS_DB_PATH: join(root, "db.sqlite"), CONFIGS_HOME: root };
+  return isolatedInstructionsTestEnv(root);
 }
 
 function referenceRowsNamed(root: string, name: string): Array<{ slug: string; content: string; version: number }> {
@@ -196,6 +194,7 @@ describe("instructions add --kind reference — one name, one row", () => {
     const seed = spawnSync(
       "bun",
       [
+        "--no-env-file",
         "-e",
         `
         import { createConfig } from "./src/db/configs.ts";
@@ -203,7 +202,7 @@ describe("instructions add --kind reference — one name, one row", () => {
         createConfig({ name: "sample rule", category: "rules", content: "two\\n", kind: "reference" });
         `,
       ],
-      { cwd: repoRoot, encoding: "utf8", env: { ...process.env, ...isolatedEnv(root), HASNA_INSTRUCTIONS_API_URL: undefined, HASNA_INSTRUCTIONS_API_KEY: undefined } },
+      { cwd: repoRoot, encoding: "utf8", env: { ...isolatedEnv(root), HASNA_INSTRUCTIONS_API_URL: undefined, HASNA_INSTRUCTIONS_API_KEY: undefined } },
     );
     expect(seed.status).toBe(0);
     expect(referenceRowsNamed(root, "Sample Rule").length).toBe(1);
@@ -248,6 +247,7 @@ describe("instructions add --kind reference — one name, one row", () => {
     const seed = spawnSync(
       "bun",
       [
+        "--no-env-file",
         "-e",
         `
         import { createConfig } from "./src/db/configs.ts";
@@ -255,7 +255,7 @@ describe("instructions add --kind reference — one name, one row", () => {
         createConfig({ name: "sample rule", category: "rules", content: "two\\n", kind: "reference" });
         `,
       ],
-      { cwd: repoRoot, encoding: "utf8", env: { ...process.env, ...isolatedEnv(root), HASNA_INSTRUCTIONS_API_URL: undefined, HASNA_INSTRUCTIONS_API_KEY: undefined } },
+      { cwd: repoRoot, encoding: "utf8", env: { ...isolatedEnv(root), HASNA_INSTRUCTIONS_API_URL: undefined, HASNA_INSTRUCTIONS_API_KEY: undefined } },
     );
     expect(seed.status).toBe(0);
     expect(referenceRowsNamed(root, "Sample Rule").length).toBe(1);

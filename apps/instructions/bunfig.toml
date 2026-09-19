@@ -1,6 +1,6 @@
 # Bun configuration for @hasna/instructions.
 #
-# The preload pins the state-kind selector HASNA_STATE_HOME to a fresh temp dir
+# The preload isolates HOME, credentials, routing and state in a fresh temp dir
 # for every `bun test` process, before any test file is imported. Without it, a
 # bare `bun test` (or `bun test <file>`) on a machine whose instructions state
 # store has been migrated to the resolver XDG dir (~/.local/state/hasna/
@@ -11,8 +11,8 @@
 # and pass green. Measured 2026-08-28: 96 fixture files; re-measured 2026-08-29
 # on O15-04648: 4 files from a single test file.
 #
-# The package test script (package.json) also pins the variable; the preload
-# makes the un-pinned path hermetic too. Removing the preload turns a working
+# The package test runner isolates its child environment before Bun starts;
+# the preload also protects bare package-cwd tests. Removing it turns a working
 # suite into one that pollutes the real store, which is the defect this file
 # exists to prevent.
 
