@@ -34,8 +34,10 @@ private temporary directory. This is the smoke referenced by
 [STATION_LOCAL_RETIREMENT.md](STATION_LOCAL_RETIREMENT.md).
 
 Service configuration. The service has NO deployment mode: setting
-`EMAILS_DATABASE_URL` is what makes `emails-serve` the operator `/v1` API over your
-own PostgreSQL, and leaving it unset is what makes it the local SQLite dashboard API.
+`EMAILS_DATABASE_URL` makes `emails-serve` the operator `/v1` API over your own
+PostgreSQL. The local SQLite dashboard instead requires the explicit
+`HASNA_EMAILS_LOCAL=1` (or `EMAILS_LOCAL=1`) opt-in with `EMAILS_DATABASE_URL`
+unset. Missing both settings refuses startup; absence never silently opens SQLite.
 Deployment modes are removed (hasna/apps#1566): the deployment-mode environment
 variable and the `emails_mode` config key are retired, and an environment or
 config file that still carries one is refused with an error naming the

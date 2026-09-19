@@ -494,8 +494,10 @@ replaying a send or other write.
 ### Standalone compatibility surfaces
 
 The package still includes a legacy SQLite dashboard under `/api/*` and explicit
-storage exports for existing consumers. Running `emails-serve` without
-`EMAILS_DATABASE_URL` starts that standalone dashboard on `127.0.0.1:3900`.
+storage exports for existing consumers. Running `emails-serve` with
+`HASNA_EMAILS_LOCAL=1` (or `EMAILS_LOCAL=1`) and without `EMAILS_DATABASE_URL`
+starts that standalone dashboard on `127.0.0.1:3900`. Missing both settings
+refuses startup rather than silently opening SQLite.
 Exposing it beyond loopback requires `EMAILS_ALLOW_REMOTE=1` and an explicit
 host, with authentication supplied by the surrounding proxy/firewall. It does
 not become the shared registry used by the ordinary CLI, terminal UI, or MCP

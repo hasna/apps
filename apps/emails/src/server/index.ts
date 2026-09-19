@@ -20,8 +20,9 @@ Commands:
                          EMAILS_API_SIGNING_KEY): the operator-owned Postgres API
                          (GET /health, /ready, /version and the API-key
                          authenticated /v1 surface), binding 0.0.0.0.
-                       - SQLite (EMAILS_DATABASE_URL unset): the SQLite
-                         dashboard API on 127.0.0.1.
+                       - SQLite (HASNA_EMAILS_LOCAL=1 and
+                         EMAILS_DATABASE_URL unset): the SQLite dashboard API
+                         on 127.0.0.1. Missing both settings refuses startup.
   ingest-worker      Run the SES-inbound ingestion worker: long-poll the SQS
                      queue (EMAILS_INGEST_QUEUE_URL), fetch each archived raw
                      message from S3, and write it to self-hosted Postgres.

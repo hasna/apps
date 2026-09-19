@@ -95,8 +95,9 @@ prints one `emails: LOCAL mode — …` line on stderr. The `emails` and
 low-level constructors with a caller-owned Database remain explicit compatibility
 surfaces and do not invoke automatic selection.
 The standalone `emails-serve` server has a separate backend contract:
-`EMAILS_DATABASE_URL` selects PostgreSQL for `/v1`; an unset value retains the
-loopback SQLite dashboard.
+`EMAILS_DATABASE_URL` selects PostgreSQL for `/v1`; the loopback SQLite dashboard
+requires the explicit `HASNA_EMAILS_LOCAL=1` (or `EMAILS_LOCAL=1`) opt-in with
+`EMAILS_DATABASE_URL` unset. Missing both settings refuses startup.
 
 ## Other shipped bins
 

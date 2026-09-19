@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { EMAILS_LOCAL_OPT_IN_ENV } from "../lib/local-opt-in.js";
 import {
   RETIRED_SERVER_MODE_SETTINGS,
   SERVER_DATABASE_URL_SETTING,
@@ -42,12 +43,23 @@ describe("emails-serve storage backend", () => {
     resetRetiredSettingNoticeForTests();
   });
 
-  it("answers postgresql when, and only when, the database URL is configured", () => {
+  it("requires either PostgreSQL or an explicit local opt-in", () => {
     expect(resolveServerStorageBackend({ [SERVER_DATABASE_URL_SETTING]: POSTGRES })).toBe("postgresql");
-    expect(resolveServerStorageBackend(bare)).toBe("sqlite");
-    // A blank value is not a configuration. The deploy path writes this variable from a
-    // secret, and an unresolved secret arrives as the empty string rather than absent.
-    expect(resolveServerStorageBackend({ [SERVER_DATABASE_URL_SETTING]: "   " })).toBe("sqlite");
+    expect(resolveServerStorageBackend({ [EMAILS_LOCAL_OPT_IN_ENV]: "1" })).toBe("sqlite");
+    for (const env of [bare, { [SERVER_DATABASE_URL_SETTING]: "   " }]) {
+      expect(() => resolveServerStorageBackend(env)).toThrow(EMAILS_LOCAL_OPT_IN_ENV);
+    }
+  });
+
+  it("refuses malformed local selectors and local/PostgreSQL ambiguity", () => {
+    for (const value of ["", "0", "true"]) {
+      const env = value === "" ? { [EMAILS_LOCAL_OPT_IN_ENV]: "0" } : { [EMAILS_LOCAL_OPT_IN_ENV]: value };
+      expect(() => resolveServerStorageBackend(env)).toThrow(EMAILS_LOCAL_OPT_IN_ENV);
+    }
+    expect(() => resolveServerStorageBackend({
+      [EMAILS_LOCAL_OPT_IN_ENV]: "1",
+      [SERVER_DATABASE_URL_SETTING]: POSTGRES,
+    })).toThrow("never guesses between stores");
   });
 
   it("refuses a retired value that never selected anything here, naming the replacement", () => {
@@ -77,7 +89,7 @@ describe("emails-serve storage backend", () => {
     // no database URL used to fail several layers down in the pool's words.
     for (const [value, env] of [
       ["local", { [MODE_SETTING]: "local", [SERVER_DATABASE_URL_SETTING]: POSTGRES }],
-      ["self_hosted", { [MODE_SETTING]: "self_hosted" }],
+      ["self_hosted", { [MODE_SETTING]: "self_hosted", [EMAILS_LOCAL_OPT_IN_ENV]: "1" }],
     ] as const) {
       let caught: unknown;
       try {
@@ -88,7 +100,7 @@ describe("emails-serve storage backend", () => {
       expect(caught, `contradiction with ${value} was not refused`)
         .toBeInstanceOf(ServerStorageConfigurationError);
       expect((caught as ServerStorageConfigurationError).settings)
-        .toEqual([MODE_SETTING, SERVER_DATABASE_URL_SETTING]);
+        .toEqual([MODE_SETTING, SERVER_DATABASE_URL_SETTING, EMAILS_LOCAL_OPT_IN_ENV]);
       expect((caught as Error).message).toContain("no precedence rule");
     }
   });
@@ -98,7 +110,7 @@ describe("emails-serve storage backend", () => {
     // legitimately exports it for the client and runs the server from the same place. Refusing
     // would break the hermetic harness, the container smoke, and the two-block setup in
     // docs/SELF_HOSTED_RUNTIME.md — configurations that work today.
-    const sqlite = announced({ [MODE_SETTING]: "local" });
+    const sqlite = announced({ [MODE_SETTING]: "local", [EMAILS_LOCAL_OPT_IN_ENV]: "1" });
     expect(sqlite.backend).toBe("sqlite");
     expect(sqlite.notices).toHaveLength(1);
 
@@ -120,7 +132,7 @@ describe("emails-serve storage backend", () => {
     // `getSelfHostedPool` resolves on every acquisition. A per-call notice would bury the real
     // log output of a long-lived service, which is how a warning stops being read.
     const notices: string[] = [];
-    const env = { [MODE_SETTING]: "local" };
+    const env = { [MODE_SETTING]: "local", [EMAILS_LOCAL_OPT_IN_ENV]: "1" };
     for (let i = 0; i < 5; i++) {
       resolveServerStorageBackend(env, { announce: (m) => notices.push(m) });
     }
@@ -156,7 +168,7 @@ describe("emails-serve storage backend", () => {
     // pins that ordering in the source: the word may not appear in the expression that answers.
     const source = readFileSync(join(import.meta.dir, "storage-backend.ts"), "utf8");
     const answer = source.slice(
-      source.indexOf("const backend: ServerStorageBackend ="),
+      source.indexOf("const databaseConfigured ="),
       source.indexOf("const present ="),
     );
     expect(answer).toContain("SERVER_DATABASE_URL_SETTING");

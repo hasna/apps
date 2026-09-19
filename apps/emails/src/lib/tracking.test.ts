@@ -1,8 +1,15 @@
 import { describe, expect, it } from "bun:test";
-import { injectOpenPixel, injectClickTracking, prepareTrackedHtml } from "./tracking.js";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { getTrackingBaseUrl, injectOpenPixel, injectClickTracking, prepareTrackedHtml } from "./tracking.js";
 
 const BASE_URL = "http://localhost:3900";
 const EMAIL_ID = "test-email-123";
+const LOCAL_OPTIONS = {
+  env: { HASNA_EMAILS_LOCAL: "1" },
+  readConfigValue: () => undefined,
+};
 
 describe("injectOpenPixel", () => {
   it("inserts pixel before </body>", () => {
@@ -87,21 +94,21 @@ describe("injectClickTracking", () => {
 describe("prepareTrackedHtml", () => {
   it("applies both open pixel and click tracking", async () => {
     const html = `<html><body><a href="https://example.com">Link</a></body></html>`;
-    const result = await prepareTrackedHtml(html, EMAIL_ID, true, true);
+    const result = await prepareTrackedHtml(html, EMAIL_ID, true, true, LOCAL_OPTIONS);
     expect(result).toContain(`/track/open/${EMAIL_ID}`);
     expect(result).toContain(`/track/click/${EMAIL_ID}/`);
   });
 
   it("applies only open pixel when trackClicks is false", async () => {
     const html = `<html><body><a href="https://example.com">Link</a></body></html>`;
-    const result = await prepareTrackedHtml(html, EMAIL_ID, true, false);
+    const result = await prepareTrackedHtml(html, EMAIL_ID, true, false, LOCAL_OPTIONS);
     expect(result).toContain(`/track/open/${EMAIL_ID}`);
     expect(result).toContain('href="https://example.com"');
   });
 
   it("applies only click tracking when trackOpens is false", async () => {
     const html = `<html><body><a href="https://example.com">Link</a></body></html>`;
-    const result = await prepareTrackedHtml(html, EMAIL_ID, false, true);
+    const result = await prepareTrackedHtml(html, EMAIL_ID, false, true, LOCAL_OPTIONS);
     expect(result).not.toContain(`/track/open/${EMAIL_ID}`);
     expect(result).toContain(`/track/click/${EMAIL_ID}/`);
   });
@@ -110,5 +117,56 @@ describe("prepareTrackedHtml", () => {
     const html = `<html><body><p>Hello</p></body></html>`;
     const result = await prepareTrackedHtml(html, EMAIL_ID, false, false);
     expect(result).toBe(html);
+  });
+});
+
+
+describe("tracking authority resolution", () => {
+  it("refuses hosted or unconfigured tracking before config/storage/network effects", async () => {
+    const home = mkdtempSync(join(tmpdir(), "emails-tracking-refusal-"));
+    const databasePath = join(home, "must-not-exist.sqlite");
+    let configReads = 0;
+    let networkCalls = 0;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = ((...args: Parameters<typeof fetch>) => {
+      networkCalls++;
+      return originalFetch(...args);
+    }) as typeof fetch;
+    try {
+      await expect(getTrackingBaseUrl({
+        env: { HASNA_EMAILS_DB_PATH: databasePath },
+        readConfigValue: () => { configReads++; return "https://must-not-read.example"; },
+      })).rejects.toThrow("HASNA_EMAILS_LOCAL=1");
+      expect(configReads).toBe(0);
+      expect(networkCalls).toBe(0);
+      expect(existsSync(databasePath)).toBe(false);
+      expect(existsSync(join(home, "config.json"))).toBe(false);
+    } finally {
+      globalThis.fetch = originalFetch;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("retains the legacy localhost default only after explicit local opt-in", async () => {
+    let reads = 0;
+    const base = await getTrackingBaseUrl({
+      env: { HASNA_EMAILS_LOCAL: "1" },
+      readConfigValue: () => { reads++; return undefined; },
+    });
+    expect(base).toBe(BASE_URL);
+    expect(reads).toBe(1);
+  });
+
+  it("accepts one explicit local HTTP(S) base and refuses unsafe configured values", async () => {
+    expect(await getTrackingBaseUrl({
+      env: { HASNA_EMAILS_LOCAL: "1" },
+      readConfigValue: () => "https://track.example/",
+    })).toBe("https://track.example");
+    for (const value of ["relative", "ftp://track.example", "https://user:pass@track.example", "https://track.example/?secret=1"]) {
+      await expect(getTrackingBaseUrl({
+        env: { HASNA_EMAILS_LOCAL: "1" },
+        readConfigValue: () => value,
+      })).rejects.toThrow("tracking-base-url");
+    }
   });
 });

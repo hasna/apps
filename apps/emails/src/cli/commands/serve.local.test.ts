@@ -121,7 +121,7 @@ describe("emails serve backend selection", () => {
       ...process.env,
       [SERVER_DATABASE_URL_SETTING]: "postgres://operator.invalid/emails",
     };
-    for (const setting of RETIRED_SERVER_MODE_SETTINGS) delete env[setting];
+    for (const setting of [...RETIRED_SERVER_MODE_SETTINGS, ...LOCAL_OPT_IN_SETTINGS]) delete env[setting];
 
     const result = Bun.spawnSync({
       cmd: ["bun", "src/cli/index.tsx", "serve", "--help"],
