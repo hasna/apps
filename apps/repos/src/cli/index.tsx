@@ -3734,7 +3734,20 @@ graph
     const depth = intFlag(opts.depth, "--depth", 1);
     const deps = getDeps(repo, depth);
     if (opts.json) {
-      printAggregateJson(deps, opts, {
+      if (opts.full || opts.all) {
+        // Preserve the exact core-MCP/SDK-era dependency row shape and order.
+        printJson(deps);
+        return;
+      }
+      const identifiedDeps = deps.map((dependency) => {
+        const dependencyRepo = getRepo(Number(dependency.repo_id));
+        return { ...dependency, repo_org: dependencyRepo?.org ?? null };
+      }).sort((left, right) =>
+        left.depth - right.depth
+        || Number(left.repo_id) - Number(right.repo_id)
+        || left.repo_id.localeCompare(right.repo_id)
+      );
+      printAggregateJson(identifiedDeps, opts, {
         collection: "dependencies",
         command: "graph-deps",
         filters: { repo, depth },
@@ -3746,7 +3759,6 @@ graph
           repo_ref: repoReference(dependency.repo_id, dependency.repo_org, dependency.repo_name),
           depth: dependency.depth,
         }),
-        legacyProject: ({ repo_org: _repoOrg, ...dependency }) => dependency,
       });
     } else {
       if (deps.length === 0) { console.log(chalk.dim("No dependencies found")); return; }

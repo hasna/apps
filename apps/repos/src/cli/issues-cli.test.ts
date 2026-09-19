@@ -160,6 +160,45 @@ describe("repos issues CLI verb", () => {
     });
   });
 
+  test("compact duplicate-checkout rows share issue identity but retain distinct repository identity", () => {
+    const db = getDb(dbPath);
+    const primary = upsertRepo({
+      path: join(tempDir, "nowhere", "primary-apps"),
+      name: "apps-primary",
+      org: "hasna",
+      remote_url: "github.com/hasna/apps",
+    });
+    const secondary = upsertRepo({
+      path: join(tempDir, "nowhere", "secondary-apps"),
+      name: "apps-secondary",
+      org: "hasna",
+      remote_url: "github.com/hasna/apps",
+    });
+    bulkInsertIssues([primary, secondary].map((repo) => ({
+      repo_id: repo.id,
+      number: 42,
+      title: "same issue from two checkouts",
+      state: "open" as const,
+      author: "duplicate-author",
+      created_at: "2026-09-01T00:00:00.000Z",
+      updated_at: "2026-09-01T00:00:00.000Z",
+      url: "https://github.com/hasna/apps/issues/42",
+    })));
+    closeDb();
+
+    const deduped = JSON.parse(new TextDecoder().decode(runCli(["issues", "--json"]).stdout));
+    expect(deduped.count).toBe(1);
+    expect(deduped.total).toBe(1);
+
+    const duplicatePage = JSON.parse(new TextDecoder().decode(runCli(["issues", "--duplicates", "--json"]).stdout));
+    expect(duplicatePage.count).toBe(2);
+    expect(duplicatePage.total).toBe(2);
+    expect(new Set(duplicatePage.issues.map((issue: any) => issue.issue_key)).size).toBe(1);
+    expect(new Set(duplicatePage.issues.map((issue: any) => issue.issue_ref)).size).toBe(1);
+    expect(new Set(duplicatePage.issues.map((issue: any) => issue.issue_id)).size).toBe(2);
+    expect(new Set(duplicatePage.issues.map((issue: any) => issue.repo_id)).size).toBe(2);
+  });
+
   test("large JSON output is compact, minified, byte-bounded, and opaque-cursor paged", () => {
     seedIssues(75);
 
@@ -212,6 +251,8 @@ describe("repos issues CLI verb", () => {
     expect(full).toHaveLength(75);
     expect(full[0].url).toContain("/issues/");
     expect(fullStdout).toContain("\n  {");
+    const all = JSON.parse(new TextDecoder().decode(runCli(["issues", "--json", "--all"]).stdout));
+    expect(all).toEqual(full);
   });
 
   test("issue cursors fail closed on inserts, query changes, and numeric offsets", () => {

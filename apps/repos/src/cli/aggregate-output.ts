@@ -50,11 +50,16 @@ export type AggregatePage = {
   hint: string;
 };
 
-interface CursorPayload {
+interface CursorPayloadUnsigned {
   v: 1;
   k: string;
   s: string;
-  o: number;
+  a: string;
+  c: number;
+}
+
+interface CursorPayload extends CursorPayloadUnsigned {
+  i: string;
 }
 
 function canonicalJson(value: unknown): string {
@@ -73,8 +78,29 @@ function serializedBytes(value: unknown): number {
   return Buffer.byteLength(`${JSON.stringify(value)}\n`, "utf8");
 }
 
-function encodeCursor(contextDigest: string, snapshotDigest: string, offset: number): string {
-  const payload: CursorPayload = { v: 1, k: contextDigest, s: snapshotDigest, o: offset };
+function cursorIntegrity(payload: CursorPayloadUnsigned): string {
+  return digest({ domain: AGGREGATE_CURSOR_VERSION, payload });
+}
+
+function encodeCursor(
+  contextDigest: string,
+  snapshotDigest: string,
+  anchors: readonly string[],
+  occurrences: readonly number[],
+  nextOffset: number,
+): string {
+  const anchorIndex = nextOffset - 1;
+  if (anchorIndex < 0 || anchorIndex >= anchors.length) {
+    throw new Error("aggregate cursor anchor is outside the projected snapshot");
+  }
+  const unsigned: CursorPayloadUnsigned = {
+    v: 1,
+    k: contextDigest,
+    s: snapshotDigest,
+    a: anchors[anchorIndex]!,
+    c: occurrences[anchorIndex]!,
+  };
+  const payload: CursorPayload = { ...unsigned, i: cursorIntegrity(unsigned) };
   return Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
 }
 
@@ -82,7 +108,7 @@ function decodeCursor(
   token: string,
   contextDigest: string,
   snapshotDigest: string,
-  total: number,
+  anchors: readonly string[],
 ): number {
   if (token.length === 0 || token.length > MAX_CURSOR_CHARS || !/^[A-Za-z0-9_-]+$/.test(token)) {
     throw new AggregateCursorError("invalid aggregate cursor encoding");
@@ -102,10 +128,23 @@ function decodeCursor(
     row.v !== 1
     || typeof row.k !== "string"
     || typeof row.s !== "string"
-    || !Number.isSafeInteger(row.o)
-    || (row.o as number) < 0
+    || typeof row.a !== "string"
+    || row.a.length === 0
+    || !Number.isSafeInteger(row.c)
+    || (row.c as number) < 1
+    || typeof row.i !== "string"
   ) {
     throw new AggregateCursorError("invalid aggregate cursor payload");
+  }
+  const unsigned: CursorPayloadUnsigned = {
+    v: 1,
+    k: row.k,
+    s: row.s,
+    a: row.a,
+    c: row.c as number,
+  };
+  if (row.i !== cursorIntegrity(unsigned)) {
+    throw new AggregateCursorError("aggregate cursor integrity check failed");
   }
   if (row.k !== contextDigest) {
     throw new AggregateCursorError("aggregate cursor does not match this command, filters, or ordering");
@@ -113,10 +152,14 @@ function decodeCursor(
   if (row.s !== snapshotDigest) {
     throw new AggregateCursorError("aggregate cursor snapshot no longer matches; restart from the first page");
   }
-  if ((row.o as number) > total) {
-    throw new AggregateCursorError("aggregate cursor offset is outside the current snapshot");
+
+  let occurrence = 0;
+  for (let index = 0; index < anchors.length; index += 1) {
+    if (anchors[index] !== row.a) continue;
+    occurrence += 1;
+    if (occurrence === row.c) return index + 1;
   }
-  return row.o as number;
+  throw new AggregateCursorError("aggregate cursor anchor is absent from the current snapshot");
 }
 
 function envelope<U>(
@@ -129,6 +172,8 @@ function envelope<U>(
   maxBytes: number,
   contextDigest: string,
   snapshotDigest: string,
+  anchors: readonly string[],
+  occurrences: readonly number[],
 ): AggregatePage {
   const nextOffset = offset + rows.length;
   const hasMore = nextOffset < total;
@@ -138,7 +183,9 @@ function envelope<U>(
     total,
     limit,
     cursor: inputCursor,
-    next_cursor: hasMore ? encodeCursor(contextDigest, snapshotDigest, nextOffset) : null,
+    next_cursor: hasMore
+      ? encodeCursor(contextDigest, snapshotDigest, anchors, occurrences, nextOffset)
+      : null,
     has_more: hasMore,
     complete: !hasMore,
     compact: true,
@@ -163,9 +210,16 @@ export function buildAggregatePage<T, U>(options: AggregatePageOptions<T, U>): A
   const projected = items.map(project);
   const contextDigest = digest({ command, filters, ordering });
   const snapshotDigest = digest(projected);
+  const anchors = projected.map((row) => digest(row));
+  const seenAnchors = new Map<string, number>();
+  const occurrences = anchors.map((anchor) => {
+    const occurrence = (seenAnchors.get(anchor) ?? 0) + 1;
+    seenAnchors.set(anchor, occurrence);
+    return occurrence;
+  });
   const inputCursor = options.cursor ?? null;
   const start = inputCursor
-    ? decodeCursor(inputCursor, contextDigest, snapshotDigest, projected.length)
+    ? decodeCursor(inputCursor, contextDigest, snapshotDigest, anchors)
     : 0;
   const candidates = projected.slice(start, start + limit);
   const rows: U[] = [];
@@ -182,6 +236,8 @@ export function buildAggregatePage<T, U>(options: AggregatePageOptions<T, U>): A
       maxBytes,
       contextDigest,
       snapshotDigest,
+      anchors,
+      occurrences,
     );
     if (serializedBytes(candidate) > maxBytes) break;
     rows.push(row);
@@ -203,6 +259,8 @@ export function buildAggregatePage<T, U>(options: AggregatePageOptions<T, U>): A
     maxBytes,
     contextDigest,
     snapshotDigest,
+    anchors,
+    occurrences,
   );
   if (serializedBytes(page) > maxBytes) {
     throw new Error(`compact ${collection} envelope exceeds ${maxBytes} UTF-8 bytes`);

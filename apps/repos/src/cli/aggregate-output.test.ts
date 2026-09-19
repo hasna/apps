@@ -272,8 +272,11 @@ describe("aggregate JSON paging helper", () => {
     const inserted = [{ id: -1, value: "inserted" }, ...baseItems];
     const deleted = baseItems.slice(1);
     const reordered = [baseItems[1]!, baseItems[0]!, ...baseItems.slice(2)];
+    const projectedMutation = baseItems.map((item) =>
+      item.id === 5 ? { ...item, value: "changed-without-reordering" } : item
+    );
 
-    for (const items of [inserted, deleted, reordered]) {
+    for (const items of [inserted, deleted, reordered, projectedMutation]) {
       expect(() => buildAggregatePage({ ...baseOptions, items, cursor }))
         .toThrow("aggregate cursor snapshot no longer matches");
     }
@@ -285,6 +288,18 @@ describe("aggregate JSON paging helper", () => {
       .toThrow("aggregate cursor does not match");
     expect(() => buildAggregatePage({ ...baseOptions, items: baseItems, cursor: "7" }))
       .toThrow(AggregateCursorError);
+  });
+
+  test("rejects a structurally valid cursor whose anchor or occurrence was forged", () => {
+    const first = buildAggregatePage({ ...baseOptions, items: baseItems });
+    const decoded = JSON.parse(Buffer.from(first.next_cursor!, "base64url").toString("utf8"));
+    expect(decoded.o).toBeUndefined();
+
+    for (const patch of [{ a: "forged-anchor" }, { c: decoded.c + 1 }]) {
+      const forged = Buffer.from(JSON.stringify({ ...decoded, ...patch }), "utf8").toString("base64url");
+      expect(() => buildAggregatePage({ ...baseOptions, items: baseItems, cursor: forged }))
+        .toThrow("aggregate cursor integrity check failed");
+    }
   });
 });
 
@@ -354,6 +369,44 @@ describe("secondary aggregate CLI JSON", () => {
     expect(dirtyLegacy[0].repo_path).toContain("nested-path-segment");
     expect(dirtyLegacy[0].repo_id).toBeUndefined();
     expect(dirtyLegacy[0].repo_org).toBeUndefined();
+
+    const legacyCases: Array<{ args: string[]; length: number; keys: string[] }> = [
+      {
+        args: ["who", "aggregate@example.com", "--json", "--full"],
+        length: 62,
+        keys: ["commit_count", "deletions", "first_commit", "insertions", "last_commit", "repo_id", "repo_name"],
+      },
+      {
+        args: ["diff-stats", "--week", "--json", "--full"],
+        length: 32,
+        keys: ["authors", "commit_count", "deletions", "insertions", "repo_name"],
+      },
+      {
+        args: ["unpushed", "--json", "--full"],
+        length: 62,
+        keys: ["ahead", "branch", "repo_name", "repo_path"],
+      },
+      {
+        args: ["behind", "--json", "--full"],
+        length: 62,
+        keys: ["behind", "branch", "repo_name", "repo_path"],
+      },
+      {
+        args: ["graph", "deps", fixture.rootRepoName, "--json", "--full"],
+        length: 30,
+        keys: ["depth", "repo_id", "repo_name"],
+      },
+      {
+        args: ["graph", "authors", "--json", "--full"],
+        length: 30,
+        keys: ["author_email", "orgs", "total_commits"],
+      },
+    ];
+    for (const legacyCase of legacyCases) {
+      const rows = JSON.parse(runCli(fixture, legacyCase.args).stdout) as any[];
+      expect(rows, legacyCase.args.join(" ")).toHaveLength(legacyCase.length);
+      expect(Object.keys(rows[0]!).sort(), legacyCase.args.join(" ")).toEqual(legacyCase.keys);
+    }
   }, 30_000);
 
   test("fails closed when the population mutates between CLI pages or the filter changes", () => {
