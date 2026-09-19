@@ -98,6 +98,9 @@ test("audit findings and non-transient failures never retry", () => {
   expect(transientAuditStatus({ status: 1, stdout: "critical: vulnerability found", stderr: "error: audit request failed (status 503)" })).toBeNull();
   expect(transientAuditStatus({ status: 1, stdout: "severity=critical", stderr: "error: audit request failed (status 503)" })).toBeNull();
   expect(transientAuditStatus({ status: 1, stdout: "bun audit v1.3.14 (0d9b296a)\nextra diagnostic", stderr: "error: audit request failed (status 503)" })).toBeNull();
+  expect(transientAuditStatus({ status: 1, stdout: "MALICIOUS bun audit v1.3.14 (0d9b296a)", stderr: "error: audit request failed (status 503)" })).toBeNull();
+  expect(transientAuditStatus({ status: 1, stdout: "bun audit vnot-a-version (0d9b296a)", stderr: "error: audit request failed (status 503)" })).toBeNull();
+  expect(transientAuditStatus({ status: 1, stdout: "bun audit v1.3.14 (0d9b296a) trailing", stderr: "error: audit request failed (status 503)" })).toBeNull();
   expect(transientAuditStatus({ status: 1, stdout: "", stderr: "error: audit request failed (status 500)" })).toBeNull();
   const attempts = [];
   const result = runAuditWithRetry(

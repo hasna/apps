@@ -1,5 +1,5 @@
-const TRANSIENT_AUDIT_STATUS = /audit request failed \(status (429|502|503|504)\)/;
-const BUN_AUDIT_HEADER = /^bun audit v\S+ \([^\n]+\)$/i;
+const TRANSIENT_AUDIT_STATUS = /^error: audit request failed \(status (429|502|503|504)\)$/;
+const BUN_AUDIT_HEADER = /^bun audit v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)? \([0-9a-f]{8,}\)$/i;
 
 /** Return the registry HTTP status only for Bun's explicit transient audit error. */
 export function transientAuditStatus(result) {
