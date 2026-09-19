@@ -111,7 +111,9 @@ class Recovery:
             require(result.returncode == 0, 'DEPLOYMENT_INVENTORY_REFUSED')
             value = json.loads(result.stdout)
             require(value.get('total_count') == 0 and value.get('workflow_runs') == [], 'CONCURRENT_DEPLOYMENT')
-        result = self.command(['gh', 'api', f"repos/{self.plan['repository']}/actions/runs/{self.plan['run_id']}/attempts/{self.plan['run_attempt']}"])
+        # Read the latest attempt, not the immutable old-attempt endpoint: a
+        # later completed retry may have touched the database and must refuse.
+        result = self.command(['gh', 'api', f"repos/{self.plan['repository']}/actions/runs/{self.plan['run_id']}"])
         require(result.returncode == 0, 'FAILED_RUN_READ')
         value = json.loads(result.stdout)
         require(value.get('id') == self.plan['run_id'] and value.get('run_attempt') == self.plan['run_attempt']
