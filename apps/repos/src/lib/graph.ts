@@ -363,7 +363,7 @@ export function getCrossOrgAuthors(): Array<{
     WHERE e.source_type = 'author' AND e.relation = 'works_in'
     GROUP BY e.source_id
     HAVING COUNT(DISTINCT e.target_id) > 1
-    ORDER BY total_commits DESC
+    ORDER BY total_commits DESC, e.source_id ASC
   `).all().map((r: any) => ({
     ...r,
     orgs: r.orgs.split(","),

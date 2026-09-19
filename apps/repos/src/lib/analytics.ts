@@ -121,7 +121,7 @@ export function getStaleRepos(days = 30): StaleRepo[] {
     LEFT JOIN commits c ON c.repo_id = r.id
     GROUP BY r.id
     HAVING last_commit_date IS NULL OR last_commit_date < datetime('now', '-' || ? || ' days')
-    ORDER BY days_stale DESC
+    ORDER BY days_stale DESC, r.id ASC
   `).all(days) as StaleRepo[];
 }
 

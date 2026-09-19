@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { registerEventsCommands } from "@hasna/events/commander";
 import { execSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { program } from "commander";
 import { getCliVersion } from "./version.js";
@@ -16,8 +17,7 @@ import {
   listTags,
   listPullRequests,
   countPullRequests,
-  listIssues,
-  countIssues,
+  listAllIssues,
   countRepos,
   getRepoByRemote,
   searchAll,
@@ -59,6 +59,7 @@ import {
   type CheckoutHealth,
 } from "../lib/checkout-health.js";
 import { printError, printJson, printJsonLine, printLine } from "./stdout.js";
+import { AggregateCursorError, AGGREGATE_JSON_DEFAULT_LIMIT, buildAggregatePage } from "./aggregate-output.js";
 import { decodeRepoListCursor, encodeRepoListCursor } from "../lib/repo-list-cursor.js";
 import { syncGithubPRs, syncAllGithubPRs, fetchRepoMetadata } from "../lib/github.js";
 import { syncGithubIssues, syncAllGithubIssues, issueSyncDigestFromResults } from "../lib/github-issues.js";
@@ -374,6 +375,76 @@ function resolveLimit(opts: any, humanDefault = COMPACT_LIMIT, jsonDefault = hum
 function resolveOffset(opts: any): number {
   const flagName = opts.cursor !== undefined ? "--cursor" : "--offset";
   return intFlag(String(opts.cursor ?? opts.offset ?? "0"), flagName, 0);
+}
+
+interface AggregateCliOptions {
+  limit?: string;
+  cursor?: string;
+  json?: boolean;
+  full?: boolean;
+  all?: boolean;
+}
+
+function aggregateWindow<T>(items: readonly T[], opts: AggregateCliOptions): {
+  shown: T[];
+  limit: number;
+} {
+  if (opts.cursor !== undefined) {
+    printError("--cursor is an opaque machine-page cursor and requires --json");
+    process.exit(1);
+  }
+  if (opts.full || opts.all) {
+    return { shown: [...items], limit: items.length };
+  }
+  const limit = intFlag(String(opts.limit ?? AGGREGATE_JSON_DEFAULT_LIMIT), "--limit", 1);
+  return { shown: items.slice(0, limit), limit };
+}
+
+function repoReference(repoId: number | string, org: string | null | undefined, name: string): string {
+  return compactText(org ? `${org}/${name}` : `#${repoId}:${name}`, 180);
+}
+
+function stableCompactIdentity(kind: string, value: string): string {
+  return `${kind}:${createHash("sha256").update(value).digest("hex").slice(0, 24)}`;
+}
+
+function printAggregateJson<T, U, L = T>(
+  items: readonly T[],
+  opts: AggregateCliOptions,
+  config: {
+    collection: string;
+    command: string;
+    filters: Record<string, unknown>;
+    ordering: string;
+    project: (item: T) => U;
+    legacyProject?: (item: T) => L;
+  },
+): void {
+  if (opts.full || opts.all) {
+    // Preserve the exact pre-bounded contract behind an explicit compatibility
+    // escape. Pretty output is intentional here: this is the legacy surface.
+    printJson(config.legacyProject ? items.map(config.legacyProject) : items);
+    return;
+  }
+  const limit = intFlag(String(opts.limit ?? AGGREGATE_JSON_DEFAULT_LIMIT), "--limit", 1);
+  try {
+    printJsonLine(buildAggregatePage({
+      collection: config.collection,
+      command: config.command,
+      filters: config.filters,
+      ordering: config.ordering,
+      items,
+      cursor: opts.cursor,
+      limit,
+      project: config.project,
+    }));
+  } catch (error) {
+    if (error instanceof AggregateCursorError) {
+      printError(`error: ${error.message}`);
+      process.exit(1);
+    }
+    throw error;
+  }
 }
 
 /**
@@ -1747,19 +1818,18 @@ program
   .option("--state <state>", "Filter: open, closed")
   .option("--author <author>", "Filter by author")
   .option("--duplicates", "Emit one row per local checkout instead of one row per issue")
-  .option("-n, --limit <n>", "Max results (default: 20 human, 50 JSON)")
-  .option("-o, --offset <n>", "Skip first N results", "0")
-  .option("--cursor <n>", "Pagination cursor from a previous page")
+  .option("-n, --limit <n>", "Max rows per compact page", "20")
+  .option("--cursor <cursor>", "Opaque continuation cursor from next_cursor")
+  .option("--full", "Return the exhaustive legacy JSON array")
+  .option("--all", "Alias for --full")
   .option("--verbose", "Show author, dates, and URL")
-  .option("--json", "Output as JSON")
+  .option("--json", "Output bounded compact JSON")
   .action((opts) => {
     let repo_id: number | undefined;
     if (opts.repo) {
       const repo = requireRepo(opts.repo);
       repo_id = repo.id;
     }
-    const limit = resolveLimit(opts, COMPACT_LIMIT, 50);
-    const offset = resolveOffset(opts);
     const filter = {
       repo_id,
       state: opts.state,
@@ -1768,31 +1838,62 @@ program
       repo_name: opts.repoName,
       duplicates: Boolean(opts.duplicates),
     };
-    const issues = listIssues({ ...filter, limit, offset });
-    const total = countIssues(filter);
+    const issues = listAllIssues(filter);
+    const total = issues.length;
     if (opts.json) {
-      printJson(issues);
-      warnIfTruncated({ shown: issues.length, total, limit, offset, noun: "issue(s)" });
-    } else {
-      for (const issue of issues) {
-        const stateColor = issue.state === "open" ? chalk.green : chalk.red;
-        const slug = issue.org && issue.repo ? `${issue.org}/${issue.repo}` : "";
-        console.log(`  ${stateColor(`[${issue.state}]`)} ${slug}#${issue.number} ${compactText(issue.title, opts.verbose ? 160 : 100)}`);
-        if (opts.verbose) {
-          const reason = issue.state_reason ? ` reason ${issue.state_reason}` : "";
-          console.log(chalk.dim(`    by ${issue.author} created ${day(issue.created_at)} updated ${day(issue.updated_at)}${reason}${issue.url ? ` ${issue.url}` : ""}`));
-        }
-      }
-      printCompactHint({
-        count: issues.length,
-        noun: "issue(s)",
-        limit,
-        offset,
-        pageable: true,
-        verbose: opts.verbose,
-        detail: `${total} match this filter. Filter with --org, --repo, --repo-name, --state, or --author`,
+      printAggregateJson(issues, opts, {
+        collection: "issues",
+        command: "issues",
+        filters: {
+          repo_id: repo_id ?? null,
+          state: opts.state ?? null,
+          author: opts.author ?? null,
+          org: opts.org ?? null,
+          repo_name: opts.repoName ?? null,
+          duplicates: Boolean(opts.duplicates),
+        },
+        ordering: "created_at-desc,id-desc",
+        project: (issue) => {
+          const issueRef = issue.org && issue.repo
+            ? `${issue.org}/${issue.repo}#${issue.number}`
+            : `repo:${issue.repo_id}#${issue.number}`;
+          return {
+            issue_id: issue.id,
+            issue_key: stableCompactIdentity("issue", issue.url || issueRef),
+            issue_ref: compactText(issueRef, 180),
+            repo_id: issue.repo_id,
+            org: issue.org ? compactText(issue.org, 80) : null,
+            repo: issue.repo ? compactText(issue.repo, 120) : null,
+            number: issue.number,
+            state: issue.state,
+            state_reason: issue.state_reason,
+            title: compactText(issue.title, 140),
+            author: compactText(issue.author, 80),
+            created_at: issue.created_at,
+            updated_at: issue.updated_at,
+          };
+        },
       });
+      return;
     }
+
+    const { shown, limit } = aggregateWindow(issues, opts);
+    for (const issue of shown) {
+      const stateColor = issue.state === "open" ? chalk.green : chalk.red;
+      const slug = issue.org && issue.repo ? `${issue.org}/${issue.repo}` : "";
+      console.log(`  ${stateColor(`[${issue.state}]`)} ${slug}#${issue.number} ${compactText(issue.title, opts.verbose ? 160 : 100)}`);
+      if (opts.verbose) {
+        const reason = issue.state_reason ? ` reason ${issue.state_reason}` : "";
+        console.log(chalk.dim(`    by ${issue.author} created ${day(issue.created_at)} updated ${day(issue.updated_at)}${reason}${issue.url ? ` ${issue.url}` : ""}`));
+      }
+    }
+    printCompactHint({
+      count: shown.length,
+      noun: `of ${total} issue(s)`,
+      limit,
+      verbose: opts.verbose,
+      detail: "Filter with --org, --repo, --repo-name, --state, or --author; use --json for opaque continuation",
+    });
   });
 
 program
@@ -2009,16 +2110,32 @@ program
   .command("stale")
   .description("Show stale repos (no recent commits)")
   .option("--days <n>", "Stale threshold in days", "30")
-  .option("-n, --limit <n>", "Max results (human output only)", "20")
+  .option("-n, --limit <n>", "Max rows per compact page", "20")
+  .option("--cursor <cursor>", "Opaque continuation cursor from next_cursor")
+  .option("--full", "Return the exhaustive legacy JSON array")
+  .option("--all", "Alias for --full")
   .option("--verbose", "Show paths and orgs")
-  .option("--json", "Output as JSON")
+  .option("--json", "Output bounded compact JSON")
   .action((opts) => {
-    const stale = getStaleRepos(intFlag(opts.days, "--days", 1));
+    const days = intFlag(opts.days, "--days", 1);
+    const stale = getStaleRepos(days);
     if (opts.json) {
-      printJson(stale);
+      printAggregateJson(stale, opts, {
+        collection: "repos",
+        command: "stale",
+        filters: { days },
+        ordering: "days_stale-desc,repo_id-asc",
+        project: (repo) => ({
+          repo_id: repo.id,
+          name: compactText(repo.name, 120),
+          org: repo.org ? compactText(repo.org, 80) : null,
+          repo_ref: repoReference(repo.id, repo.org, repo.name),
+          last_commit_date: repo.last_commit_date,
+          days_stale: repo.days_stale,
+        }),
+      });
     } else {
-      const limit = resolveLimit(opts, COMPACT_LIMIT, stale.length || COMPACT_LIMIT);
-      const shown = stale.slice(0, limit);
+      const { shown, limit } = aggregateWindow(stale, opts);
       console.log(chalk.bold(`Repos with no commits in ${opts.days}+ days:`));
       for (const r of shown) {
         const lastDate = r.last_commit_date ? r.last_commit_date.slice(0, 10) : "never";
@@ -2795,15 +2912,37 @@ program
 program
   .command("who <query>")
   .description("Find author activity across all repos")
-  .option("-n, --limit <n>", "Max results (human output only)", "20")
+  .option("-n, --limit <n>", "Max rows per compact page", "20")
+  .option("--cursor <cursor>", "Opaque continuation cursor from next_cursor")
+  .option("--full", "Return the exhaustive legacy JSON array")
+  .option("--all", "Alias for --full")
   .option("--verbose", "Show full date range rows")
-  .option("--json", "Output as JSON")
+  .option("--json", "Output bounded compact JSON")
   .action((query, opts) => {
     const results = whoIs(query);
-    if (opts.json) { printJson(results); return; }
+    if (opts.json) {
+      printAggregateJson(results, opts, {
+        collection: "repos",
+        command: "who",
+        filters: { query },
+        ordering: "commit_count-desc,repo_id-asc",
+        project: (row) => ({
+          repo_id: row.repo_id,
+          repo_name: compactText(row.repo_name, 120),
+          org: row.repo_org ? compactText(row.repo_org, 80) : null,
+          repo_ref: repoReference(row.repo_id, row.repo_org, row.repo_name),
+          commit_count: row.commit_count,
+          first_commit: row.first_commit,
+          last_commit: row.last_commit,
+          insertions: row.insertions,
+          deletions: row.deletions,
+        }),
+        legacyProject: ({ repo_org: _repoOrg, ...row }) => row,
+      });
+      return;
+    }
     if (results.length === 0) { console.log(chalk.dim("No commits found for that author")); return; }
-    const limit = resolveLimit(opts, COMPACT_LIMIT, results.length || COMPACT_LIMIT);
-    const shown = results.slice(0, limit);
+    const { shown, limit } = aggregateWindow(results, opts);
     console.log(chalk.bold(`Author: ${query}`));
     for (const r of shown) {
       console.log(`  ${chalk.bold(r.repo_name)}: ${r.commit_count} commits (+${r.insertions}/-${r.deletions})`);
@@ -2819,37 +2958,79 @@ program
   .option("--today", "Today only")
   .option("--week", "Last 7 days")
   .option("--days <n>", "Custom days", "1")
-  .option("-n, --limit <n>", "Max results (human output only)", "20")
+  .option("-n, --limit <n>", "Max rows per compact page", "20")
+  .option("--cursor <cursor>", "Opaque continuation cursor from next_cursor")
+  .option("--full", "Return the exhaustive legacy JSON array")
+  .option("--all", "Alias for --full")
   .option("--verbose", "Show more authors per repo")
-  .option("--json", "Output as JSON")
+  .option("--json", "Output bounded compact JSON")
   .action((opts) => {
     const days = opts.week ? 7 : opts.today ? 1 : intFlag(opts.days, "--days", 1);
     const results = diffStats(days);
-    if (opts.json) { printJson(results); return; }
+    if (opts.json) {
+      printAggregateJson(results, opts, {
+        collection: "repos",
+        command: "diff-stats",
+        filters: { days },
+        ordering: "commit_count-desc,repo_id-asc",
+        project: (row) => ({
+          repo_id: row.repo_id,
+          repo_name: compactText(row.repo_name, 120),
+          org: row.repo_org ? compactText(row.repo_org, 80) : null,
+          repo_ref: repoReference(row.repo_id, row.repo_org, row.repo_name),
+          commit_count: row.commit_count,
+          insertions: row.insertions,
+          deletions: row.deletions,
+          authors: row.authors.slice(0, 5).map((author) => compactText(author, 80)),
+          author_count: row.authors.length,
+        }),
+        legacyProject: ({ repo_id: _repoId, repo_org: _repoOrg, ...row }) => row,
+      });
+      return;
+    }
     if (results.length === 0) { console.log(chalk.dim(`No activity in last ${days} day(s)`)); return; }
-    const limit = resolveLimit(opts, COMPACT_LIMIT, results.length || COMPACT_LIMIT);
-    const shown = results.slice(0, limit);
+    const { shown, limit } = aggregateWindow(results, opts);
     console.log(chalk.bold(`Activity in last ${days} day(s):`));
     for (const r of shown) {
       console.log(`  ${chalk.bold(r.repo_name)}: ${r.commit_count} commits (+${r.insertions}/-${r.deletions})`);
       if (opts.verbose) console.log(chalk.dim(`    Authors: ${compactList(r.authors, 10, 140)}`));
     }
-    printCompactHint({ count: shown.length, noun: `of ${results.length} repo(s)`, limit, verbose: opts.verbose, detail: "use --json for full aggregate rows" });
+    printCompactHint({ count: shown.length, noun: `of ${results.length} repo(s)`, limit, verbose: opts.verbose, detail: "use --json --full for exhaustive aggregate rows" });
   });
 
 // ── Dirty ──
 program
   .command("dirty")
   .description("List repos with uncommitted changes")
-  .option("-n, --limit <n>", "Max results (human output only)", "20")
+  .option("-n, --limit <n>", "Max rows per compact page", "20")
+  .option("--cursor <cursor>", "Opaque continuation cursor from next_cursor")
+  .option("--full", "Return the exhaustive legacy JSON array")
+  .option("--all", "Alias for --full")
   .option("--verbose", "Show repo paths")
-  .option("--json", "Output as JSON")
+  .option("--json", "Output bounded compact JSON")
   .action((opts) => {
     const dirty = getDirtyRepos();
-    if (opts.json) { printJson(dirty); return; }
+    if (opts.json) {
+      printAggregateJson(dirty, opts, {
+        collection: "repos",
+        command: "dirty",
+        filters: {},
+        ordering: "repo_id-asc",
+        project: (repo) => ({
+          repo_id: repo.repo_id,
+          repo_name: compactText(repo.repo_name, 120),
+          org: repo.repo_org ? compactText(repo.repo_org, 80) : null,
+          repo_ref: repoReference(repo.repo_id, repo.repo_org, repo.repo_name),
+          modified: repo.modified,
+          untracked: repo.untracked,
+          staged: repo.staged,
+        }),
+        legacyProject: ({ repo_id: _repoId, repo_org: _repoOrg, ...repo }) => repo,
+      });
+      return;
+    }
     if (dirty.length === 0) { console.log(chalk.green("✓ All repos clean")); return; }
-    const limit = resolveLimit(opts, COMPACT_LIMIT, dirty.length || COMPACT_LIMIT);
-    const shown = dirty.slice(0, limit);
+    const { shown, limit } = aggregateWindow(dirty, opts);
     console.log(chalk.bold(`${dirty.length} dirty repo(s):`));
     for (const r of shown) {
       const parts = [];
@@ -2859,28 +3040,47 @@ program
       console.log(`  ${chalk.bold(r.repo_name)}: ${parts.join(", ")}`);
       if (opts.verbose) console.log(chalk.dim(`    ${compactText(r.repo_path, 140)}`));
     }
-    printCompactHint({ count: shown.length, noun: `of ${dirty.length} dirty repo(s)`, limit, verbose: opts.verbose, detail: "use --json for full paths" });
+    printCompactHint({ count: shown.length, noun: `of ${dirty.length} dirty repo(s)`, limit, verbose: opts.verbose, detail: "use --json --full for full paths" });
   });
 
 // ── Unpushed ──
 program
   .command("unpushed")
   .description("List repos with unpushed commits")
-  .option("-n, --limit <n>", "Max results (human output only)", "20")
+  .option("-n, --limit <n>", "Max rows per compact page", "20")
+  .option("--cursor <cursor>", "Opaque continuation cursor from next_cursor")
+  .option("--full", "Return the exhaustive legacy JSON array")
+  .option("--all", "Alias for --full")
   .option("--verbose", "Show repo paths")
-  .option("--json", "Output as JSON")
+  .option("--json", "Output bounded compact JSON")
   .action((opts) => {
     const unpushed = getUnpushedRepos();
-    if (opts.json) { printJson(unpushed); return; }
+    if (opts.json) {
+      printAggregateJson(unpushed, opts, {
+        collection: "repos",
+        command: "unpushed",
+        filters: {},
+        ordering: "repo_id-asc",
+        project: (repo) => ({
+          repo_id: repo.repo_id,
+          repo_name: compactText(repo.repo_name, 120),
+          org: repo.repo_org ? compactText(repo.repo_org, 80) : null,
+          repo_ref: repoReference(repo.repo_id, repo.repo_org, repo.repo_name),
+          ahead: repo.ahead,
+          branch: compactText(repo.branch, 120),
+        }),
+        legacyProject: ({ repo_id: _repoId, repo_org: _repoOrg, ...repo }) => repo,
+      });
+      return;
+    }
     if (unpushed.length === 0) { console.log(chalk.green("✓ All repos pushed")); return; }
-    const limit = resolveLimit(opts, COMPACT_LIMIT, unpushed.length || COMPACT_LIMIT);
-    const shown = unpushed.slice(0, limit);
+    const { shown, limit } = aggregateWindow(unpushed, opts);
     console.log(chalk.bold(`${unpushed.length} repo(s) with unpushed commits:`));
     for (const r of shown) {
       console.log(`  ${chalk.bold(r.repo_name)}: ${chalk.yellow(`${r.ahead} ahead`)} on ${r.branch}`);
       if (opts.verbose) console.log(chalk.dim(`    ${compactText(r.repo_path, 140)}`));
     }
-    printCompactHint({ count: shown.length, noun: `of ${unpushed.length} repo(s)`, limit, verbose: opts.verbose, detail: "use --json for full paths" });
+    printCompactHint({ count: shown.length, noun: `of ${unpushed.length} repo(s)`, limit, verbose: opts.verbose, detail: "use --json --full for full paths" });
   });
 
 // ── Behind ──
@@ -2888,15 +3088,34 @@ program
   .command("behind")
   .description("List repos behind remote")
   .option("--fetch", "Fetch from remote first")
-  .option("-n, --limit <n>", "Max results (human output only)", "20")
+  .option("-n, --limit <n>", "Max rows per compact page", "20")
+  .option("--cursor <cursor>", "Opaque continuation cursor from next_cursor")
+  .option("--full", "Return the exhaustive legacy JSON array")
+  .option("--all", "Alias for --full")
   .option("--verbose", "Show repo paths")
-  .option("--json", "Output as JSON")
+  .option("--json", "Output bounded compact JSON")
   .action((opts) => {
     const behind = getBehindRepos(opts.fetch);
-    if (opts.json) { printJson(behind); return; }
+    if (opts.json) {
+      printAggregateJson(behind, opts, {
+        collection: "repos",
+        command: "behind",
+        filters: { fetch: Boolean(opts.fetch) },
+        ordering: "repo_id-asc",
+        project: (repo) => ({
+          repo_id: repo.repo_id,
+          repo_name: compactText(repo.repo_name, 120),
+          org: repo.repo_org ? compactText(repo.repo_org, 80) : null,
+          repo_ref: repoReference(repo.repo_id, repo.repo_org, repo.repo_name),
+          behind: repo.behind,
+          branch: compactText(repo.branch, 120),
+        }),
+        legacyProject: ({ repo_id: _repoId, repo_org: _repoOrg, ...repo }) => repo,
+      });
+      return;
+    }
     if (behind.length === 0) { console.log(chalk.green("✓ All repos up to date")); return; }
-    const limit = resolveLimit(opts, COMPACT_LIMIT, behind.length || COMPACT_LIMIT);
-    const shown = behind.slice(0, limit);
+    const { shown, limit } = aggregateWindow(behind, opts);
     console.log(chalk.bold(`${behind.length} repo(s) behind remote:`));
     for (const r of shown) {
       console.log(`  ${chalk.bold(r.repo_name)}: ${chalk.red(`${r.behind} behind`)} on ${r.branch}`);
@@ -3505,44 +3724,85 @@ graph
   .command("deps <repo>")
   .description("Show dependency tree for a repo")
   .option("--depth <n>", "Max depth", "3")
-  .option("-n, --limit <n>", "Max dependency rows (human output only)", "50")
+  .option("-n, --limit <n>", "Max rows per compact page", "20")
+  .option("--cursor <cursor>", "Opaque continuation cursor from next_cursor")
+  .option("--full", "Return the exhaustive legacy JSON array")
+  .option("--all", "Alias for --full")
   .option("--verbose", "Show wider dependency names")
-  .option("--json", "Output as JSON")
+  .option("--json", "Output bounded compact JSON")
   .action((repo, opts) => {
-    const deps = getDeps(repo, intFlag(opts.depth, "--depth", 1));
+    const depth = intFlag(opts.depth, "--depth", 1);
+    const deps = getDeps(repo, depth);
     if (opts.json) {
-      printJson(deps);
+      if (opts.full || opts.all) {
+        // Preserve the exact core-MCP/SDK-era dependency row shape and order.
+        printJson(deps);
+        return;
+      }
+      const identifiedDeps = deps.map((dependency) => {
+        const dependencyRepo = getRepo(Number(dependency.repo_id));
+        return { ...dependency, repo_org: dependencyRepo?.org ?? null };
+      }).sort((left, right) =>
+        left.depth - right.depth
+        || Number(left.repo_id) - Number(right.repo_id)
+        || left.repo_id.localeCompare(right.repo_id)
+      );
+      printAggregateJson(identifiedDeps, opts, {
+        collection: "dependencies",
+        command: "graph-deps",
+        filters: { repo, depth },
+        ordering: "depth-asc,repo_id-asc",
+        project: (dependency) => ({
+          repo_id: dependency.repo_id,
+          repo_name: compactText(dependency.repo_name, 120),
+          org: dependency.repo_org ? compactText(dependency.repo_org, 80) : null,
+          repo_ref: repoReference(dependency.repo_id, dependency.repo_org, dependency.repo_name),
+          depth: dependency.depth,
+        }),
+      });
     } else {
       if (deps.length === 0) { console.log(chalk.dim("No dependencies found")); return; }
-      const limit = resolveLimit(opts, 50, deps.length || 50);
-      const shown = deps.slice(0, limit);
+      const { shown, limit } = aggregateWindow(deps, opts);
       console.log(chalk.bold(`Dependencies of ${repo}:`));
       for (const d of shown) {
         const indent = "  ".repeat(d.depth);
         console.log(`${indent}└── ${compactText(d.repo_name, opts.verbose ? 120 : 72)}`);
       }
-      printCompactHint({ count: shown.length, noun: `of ${deps.length} dependency row(s)`, limit, verbose: opts.verbose, detail: "use --json for full dependency data" });
+      printCompactHint({ count: shown.length, noun: `of ${deps.length} dependency row(s)`, limit, verbose: opts.verbose, detail: "use --json --full for exhaustive dependency data" });
     }
   });
 
 graph
   .command("authors")
   .description("Show authors who work across multiple orgs")
-  .option("-n, --limit <n>", "Max results (human output only)", "20")
+  .option("-n, --limit <n>", "Max rows per compact page", "20")
+  .option("--cursor <cursor>", "Opaque continuation cursor from next_cursor")
+  .option("--full", "Return the exhaustive legacy JSON array")
+  .option("--all", "Alias for --full")
   .option("--verbose", "Show wider org lists")
-  .option("--json", "Output as JSON")
+  .option("--json", "Output bounded compact JSON")
   .action((opts) => {
     const authors = getCrossOrgAuthors();
     if (opts.json) {
-      printJson(authors);
+      printAggregateJson(authors, opts, {
+        collection: "authors",
+        command: "graph-authors",
+        filters: {},
+        ordering: "total_commits-desc,author_email-asc",
+        project: (author) => ({
+          author_email: compactText(author.author_email, 160),
+          orgs: author.orgs.slice(0, 8).map((org) => compactText(org, 80)),
+          org_count: author.orgs.length,
+          total_commits: author.total_commits,
+        }),
+      });
     } else {
-      const limit = resolveLimit(opts, COMPACT_LIMIT, authors.length || COMPACT_LIMIT);
-      const shown = authors.slice(0, limit);
+      const { shown, limit } = aggregateWindow(authors, opts);
       console.log(chalk.bold("Cross-org authors:"));
       for (const a of shown) {
         console.log(`  ${chalk.bold(compactText(a.author_email, 72))} — ${compactList(a.orgs, opts.verbose ? 10 : 4, opts.verbose ? 140 : 80)} (${a.total_commits} commits)`);
       }
-      printCompactHint({ count: shown.length, noun: `of ${authors.length} author(s)`, limit, verbose: opts.verbose, detail: "use --json for full author records" });
+      printCompactHint({ count: shown.length, noun: `of ${authors.length} author(s)`, limit, verbose: opts.verbose, detail: "use --json --full for exhaustive author records" });
     }
   });
 

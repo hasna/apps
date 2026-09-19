@@ -48,6 +48,7 @@ export function findFile(filename: string, limit = 50): Array<{
 export function whoIs(query: string): Array<{
   repo_name: string;
   repo_id: number;
+  repo_org: string | null;
   commit_count: number;
   first_commit: string;
   last_commit: string;
@@ -56,12 +57,12 @@ export function whoIs(query: string): Array<{
 }> {
   const db = getDb();
   return db.query(`
-    SELECT r.name as repo_name, r.id as repo_id, COUNT(*) as commit_count,
+    SELECT r.name as repo_name, r.id as repo_id, r.org as repo_org, COUNT(*) as commit_count,
       MIN(c.date) as first_commit, MAX(c.date) as last_commit,
       SUM(c.insertions) as insertions, SUM(c.deletions) as deletions
     FROM commits c JOIN repos r ON r.id = c.repo_id
     WHERE c.author_email LIKE ? OR c.author_name LIKE ?
-    GROUP BY r.id ORDER BY commit_count DESC
+    GROUP BY r.id ORDER BY commit_count DESC, r.id ASC
   `).all(`%${query}%`, `%${query}%`) as any[];
 }
 
@@ -69,6 +70,8 @@ export function whoIs(query: string): Array<{
 
 export function diffStats(days = 1): Array<{
   repo_name: string;
+  repo_id: number;
+  repo_org: string | null;
   commit_count: number;
   authors: string[];
   insertions: number;
@@ -76,12 +79,12 @@ export function diffStats(days = 1): Array<{
 }> {
   const db = getDb();
   return db.query(`
-    SELECT r.name as repo_name, COUNT(*) as commit_count,
+    SELECT r.name as repo_name, r.id as repo_id, r.org as repo_org, COUNT(*) as commit_count,
       GROUP_CONCAT(DISTINCT c.author_name) as authors,
       SUM(c.insertions) as insertions, SUM(c.deletions) as deletions
     FROM commits c JOIN repos r ON r.id = c.repo_id
     WHERE c.date >= datetime('now', '-' || ? || ' days')
-    GROUP BY r.id ORDER BY commit_count DESC
+    GROUP BY r.id ORDER BY commit_count DESC, r.id ASC
   `).all(days).map((r: any) => ({
     ...r,
     authors: r.authors ? r.authors.split(",") : [],
@@ -174,15 +177,17 @@ function commonSubstringLength(a: string, b: string): number {
 // ── repos dirty ──
 
 export function getDirtyRepos(): Array<{
+  repo_id: number;
   repo_name: string;
+  repo_org: string | null;
   repo_path: string;
   modified: number;
   untracked: number;
   staged: number;
 }> {
   const db = getDb();
-  const repos = db.query("SELECT name, path FROM repos").all() as any[];
-  const dirty: Array<{ repo_name: string; repo_path: string; modified: number; untracked: number; staged: number }> = [];
+  const repos = db.query("SELECT id as repo_id, name, org as repo_org, path FROM repos ORDER BY id ASC").all() as any[];
+  const dirty: Array<{ repo_id: number; repo_name: string; repo_org: string | null; repo_path: string; modified: number; untracked: number; staged: number }> = [];
 
   for (const repo of repos) {
     const status = git(repo.path, ["status", "--porcelain"], 5000);
@@ -197,7 +202,7 @@ export function getDirtyRepos(): Array<{
       else if (y !== " ") modified++;
     }
 
-    dirty.push({ repo_name: repo.name, repo_path: repo.path, modified, untracked, staged });
+    dirty.push({ repo_id: repo.repo_id, repo_name: repo.name, repo_org: repo.repo_org, repo_path: repo.path, modified, untracked, staged });
   }
 
   return dirty;
@@ -206,14 +211,16 @@ export function getDirtyRepos(): Array<{
 // ── repos unpushed ──
 
 export function getUnpushedRepos(): Array<{
+  repo_id: number;
   repo_name: string;
+  repo_org: string | null;
   repo_path: string;
   ahead: number;
   branch: string;
 }> {
   const db = getDb();
-  const repos = db.query("SELECT name, path FROM repos").all() as any[];
-  const unpushed: Array<{ repo_name: string; repo_path: string; ahead: number; branch: string }> = [];
+  const repos = db.query("SELECT id as repo_id, name, org as repo_org, path FROM repos ORDER BY id ASC").all() as any[];
+  const unpushed: Array<{ repo_id: number; repo_name: string; repo_org: string | null; repo_path: string; ahead: number; branch: string }> = [];
 
   for (const repo of repos) {
     const branch = git(repo.path, ["symbolic-ref", "--short", "HEAD"], 3000);
@@ -221,7 +228,7 @@ export function getUnpushedRepos(): Array<{
     const aheadStr = git(repo.path, ["rev-list", "--count", "@{upstream}..HEAD"], 3000);
     const ahead = parseInt(aheadStr) || 0;
     if (ahead > 0) {
-      unpushed.push({ repo_name: repo.name, repo_path: repo.path, ahead, branch });
+      unpushed.push({ repo_id: repo.repo_id, repo_name: repo.name, repo_org: repo.repo_org, repo_path: repo.path, ahead, branch });
     }
   }
 
@@ -231,14 +238,16 @@ export function getUnpushedRepos(): Array<{
 // ── repos behind ──
 
 export function getBehindRepos(fetch = false): Array<{
+  repo_id: number;
   repo_name: string;
+  repo_org: string | null;
   repo_path: string;
   behind: number;
   branch: string;
 }> {
   const db = getDb();
-  const repos = db.query("SELECT name, path FROM repos").all() as any[];
-  const behindRepos: Array<{ repo_name: string; repo_path: string; behind: number; branch: string }> = [];
+  const repos = db.query("SELECT id as repo_id, name, org as repo_org, path FROM repos ORDER BY id ASC").all() as any[];
+  const behindRepos: Array<{ repo_id: number; repo_name: string; repo_org: string | null; repo_path: string; behind: number; branch: string }> = [];
 
   for (const repo of repos) {
     if (fetch) git(repo.path, ["fetch", "--quiet"], 10000);
@@ -247,7 +256,7 @@ export function getBehindRepos(fetch = false): Array<{
     const behindStr = git(repo.path, ["rev-list", "--count", "HEAD..@{upstream}"], 3000);
     const behind = parseInt(behindStr) || 0;
     if (behind > 0) {
-      behindRepos.push({ repo_name: repo.name, repo_path: repo.path, behind, branch });
+      behindRepos.push({ repo_id: repo.repo_id, repo_name: repo.name, repo_org: repo.repo_org, repo_path: repo.path, behind, branch });
     }
   }
 

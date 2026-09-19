@@ -64,6 +64,7 @@ registered by `@hasna/events`.
 | `repos branches` | List branches |
 | `repos tags` | List tags |
 | `repos prs` | List pull requests |
+| `repos issues` | List detected GitHub issues through compact mutation-safe JSON pages |
 | `repos search <query>` | Unified search across all entities |
 | `repos stats` | Global statistics |
 | `repos status` | Stable metadata-only inventory status |
@@ -73,6 +74,7 @@ registered by `@hasna/events`.
 | `repos heatmap` | Commit activity heatmap |
 | `repos health` | Combined dirty, unpushed, behind, and stale report |
 | `repos sync-github` | Sync PRs from GitHub |
+| `repos sync-issues` | Read-only GitHub issue detection ingest with page/watermark guards |
 | `repos gh-info <name>` | Fetch GitHub metadata |
 | `repos gh-catalog` | Enumerate/cache GitHub repository catalog JSON for OpenLoops |
 | `repos package health [path]` | Check package scripts, bins, lockfiles, and release metadata |
@@ -100,13 +102,22 @@ registered by `@hasna/events`.
 | `repos events ...` / `repos webhooks ...` | Emit/replay events and manage event subscriptions |
 | `repos backup` / `repos restore` | Copy or restore the selected SQLite registry |
 
+Secondary aggregate commands (`issues`, `stale`, `who`, `diff-stats`,
+`dirty`, `unpushed`, `behind`, `graph deps`, and `graph authors`) return minified,
+20-row JSON pages by default. Pages are capped at 32 KiB and include `total`,
+`next_cursor`, and `has_more`. The opaque cursor is bound to the command,
+filters, deterministic ordering, and compact snapshot; a changed population
+fails closed instead of duplicating or skipping rows. Compact repository rows
+carry `repo_id`, `org`, and `repo_ref`; request exhaustive legacy arrays
+explicitly with `--full`/`--all`.
+
 CLI output is compact by default so it stays readable in agent terminals:
 
 - List/search/status-style commands show essential fields, truncate long text, and cap human rows by default.
 - Use `--verbose` for wider human rows and extra fields.
 - Use `--limit` plus `--cursor` or `--offset` on paginated list commands for more rows.
 - Use `repos show <name>` or `repos inspect <name>` for full repo detail.
-- Use `--json` for machine-readable records. JSON output keeps full fields where possible.
+- Use `--json` for machine-readable records. High-volume collections use bounded compact pages; request explicit full output only when needed.
 
 ### no-cloud registry inventory
 

@@ -1597,6 +1597,26 @@ export function listIssues(opts: ListIssueOptions = {}): IssueRecord[] {
     .all(...params, ...stateParams, limit, offset) as any[]).map(toIssueRecord);
 }
 
+/**
+ * Materialize one statement-consistent issue population for opaque-cursor
+ * fingerprinting. A separate COUNT followed by LIMIT can race an insert and
+ * silently omit the new leading row; this single query cannot.
+ */
+export function listAllIssues(opts: ListIssueOptions = {}): IssueRecord[] {
+  const db = getDb();
+  const { orderBy } = opts;
+  const { cte, params, stateFilter, stateParams } = buildIssueQuery(opts);
+  const order = orderBy === "updated"
+    ? "COALESCE(updated_at, created_at) DESC, id DESC"
+    : "created_at DESC, id DESC";
+
+  return (db
+    .query(`${cte}
+      SELECT * FROM (SELECT * FROM ranked WHERE rn = 1) ${stateFilter}
+      ORDER BY ${order}`)
+    .all(...params, ...stateParams) as any[]).map(toIssueRecord);
+}
+
 /** Total issues matching a filter, ignoring limit/offset. */
 export function countIssues(opts: ListIssueOptions = {}): number {
   const db = getDb();
