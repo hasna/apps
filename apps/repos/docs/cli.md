@@ -48,6 +48,7 @@ print unusable registry rows but exit non-zero unless
 | `repos branches` | Filter with `--repo`, `--remote`, or `--local`; pagination, `--verbose`, `--json` |
 | `repos tags` | `--repo`, pagination, `--verbose`, `--json` |
 | `repos prs` | `--repo`, `--org`, `--repo-name`, `--state`, `--author`, `--mine`, `--review`, `--duplicates`, pagination, `--verbose`, `--json` |
+| `repos issues` | `--repo`, `--org`, `--repo-name`, `--state` (open/closed), `--author`, `--duplicates`, pagination, `--verbose`, `--json` |
 | `repos pr-monitor` | PR monitor: syncs GitHub PR metadata first (default), classifies every open PR into NEW, CI_FAILING, REVIEW_NEEDED, NO_GO_OPEN, READY_TO_MERGE, BASE_MOVED, STALE_WORKTREE, or NEW_COMMENT, and emits only changed state; `--org <org>`, `--repo <repo>`, `-n/--limit <n>` (default 500), `--sync` (default), `--no-sync`, `--baseline`, `--verbose`, `--json` |
 | `repos search <query>` | Unified repo/commit/PR search; `-n/--limit`, `--verbose`, `--json` |
 | `repos stats` | Global totals and activity summaries; `--json` |
@@ -93,10 +94,33 @@ counts plus the full per-PR `state` read.
 | Command | Options and behavior |
 |---|---|
 | `repos sync-github` | Sync one `--repo` or all indexed repos, optionally by `--org`; `-n/--limit`, `--no-reconcile`, `--json` |
+| `repos sync-issues` | Read-only issue detection ingest for one `--repo` or all indexed repos, optionally by `--org`; `--state` (open/closed/all), `-n/--limit` per repo (0 = no local cap), `--page-size`, `--overlap-minutes`, `--max-repos`, `--json` |
 | `repos gh-catalog` | Cache/list GitHub repos; `--sync`, `--cache-only`, `--resume`, `--cursor`, `--max-pages`, `--page-size`, `--cache`, `--stale-minutes`, `--min-remaining`, filters, pagination, `--json` |
 
 Catalog filters are `--org`, `--repo`, `--language`, `--package-scope`,
 `--local-path`, `--tags`, `--include-archived`, and `--include-disabled`.
+
+`repos sync-issues` is additive to `repos sync-github`: it never touches the PR
+pipeline, the audit/fix/close flow, or `pr-monitor`. It reads `repository.issues`
+(read-only), stores rows in the local `issues` table, and keeps a per-remote
+`updated_at` watermark in the local-only `issue_sync_state` table. The guards
+are deliberately stricter than the PR sync path:
+
+- A response carrying a non-empty GraphQL `errors[]` fails that page even when
+  every node is present; a null node, a null `pageInfo`, or a `hasNextPage`
+  without an `endCursor` also fails the page. A failed page writes no rows.
+- The run-local cursor advances only from a sealed page, and the durable
+  watermark advances only after a traversal that is complete by exhaustion —
+  with an inclusive 1-hour overlap (`--overlap-minutes`) so re-reads are
+  idempotent upserts.
+- `0 new` is only reported for a sealed, untruncated run with no incomplete
+  pages and no skipped repository. Any rate limit, missing repository, dropped
+  node, local `--limit`, or transient failure renders the run as degraded
+  instead. A local `--limit` never advances the watermark.
+
+The first complete traversal per remote is a baseline run: it records the
+watermark and makes no new-issue claims. Issues are not reconciled for
+deletions, and this verb emits no monitor events.
 Without `--sync`, the command reads the cache only. `--sync` and `--cache-only`
 are mutually exclusive.
 

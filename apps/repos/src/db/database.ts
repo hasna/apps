@@ -973,6 +973,87 @@ const MIGRATIONS: Migration[] = [
       }
     },
   },
+  {
+    // Issue detection storage: the issue rows themselves plus the per-remote
+    // watermark that makes the incremental traversal safe.
+    //
+    // LOCAL-ONLY by design, exactly like pull_requests and pr_monitor_state:
+    // the issues table and its watermark are deliberately absent from the
+    // auto-index SYNC_TABLES list and never propagate to shared Postgres. The
+    // cloud/daemon surface for issues is a separate, explicitly deferred
+    // decision — inheriting "synced" silently would let a cloud reader answer
+    // from another machine's stale local data.
+    //
+    // The DDL follows pull_requests as a TEMPLATE, not verbatim: issues have
+    // no merged_at/base/head/diff/merge-gate columns, carry `state_reason`
+    // (IssueStateReason: COMPLETED, NOT_PLANNED, DUPLICATE, REOPENED), and the
+    // GitHub identity is resolved from the issue URL into gh_owner/gh_repo the
+    // same way PR rows do it. `updated_at` stays nullable in storage exactly
+    // as the PR table has it; the issue TRAVERSAL additionally requires it in
+    // every node, because a node without it cannot participate in watermark
+    // arithmetic (issue detection brief section 3.1.1 rule N3).
+    version: 16,
+    run(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS issues (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          repo_id INTEGER NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+          number INTEGER NOT NULL,
+          title TEXT NOT NULL,
+          state TEXT NOT NULL DEFAULT 'open',
+          state_reason TEXT,
+          author TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT,
+          closed_at TEXT,
+          url TEXT,
+          gh_owner TEXT,
+          gh_repo TEXT,
+          UNIQUE(repo_id, number)
+        );
+        CREATE INDEX IF NOT EXISTS idx_issues_repo ON issues(repo_id);
+        CREATE INDEX IF NOT EXISTS idx_issues_state ON issues(state);
+        CREATE INDEX IF NOT EXISTS idx_issues_author ON issues(author);
+        CREATE INDEX IF NOT EXISTS idx_issues_updated ON issues(updated_at);
+        CREATE INDEX IF NOT EXISTS idx_issues_owner ON issues(gh_owner, gh_repo);
+
+        CREATE TABLE IF NOT EXISTS issue_sync_state (
+          remote_url            TEXT PRIMARY KEY,
+          gh_owner              TEXT NOT NULL,
+          gh_repo               TEXT NOT NULL,
+          watermark_updated_at  TEXT,
+          first_complete_at     TEXT,
+          last_complete_at      TEXT,
+          last_run_at           TEXT NOT NULL DEFAULT (datetime('now')),
+          last_outcome          TEXT NOT NULL,
+          last_incomplete_reason TEXT
+        );
+      `);
+    },
+    verifyAfterMarker(db) {
+      // Scoped shape verification, the same pattern v15 established: compare
+      // only the tables this migration declares, so a divergent pre-existing
+      // table accepted by CREATE TABLE IF NOT EXISTS fails here (where the
+      // operator can see it) instead of at the first INSERT. No whole-database
+      // foreign_key_check — pre-existing orphan drift is a separately tracked
+      // repair lane and must not brick this migration.
+      for (const [table, declared] of [
+        ["issues", ISSUE_COLUMNS],
+        ["issue_sync_state", ISSUE_SYNC_STATE_COLUMNS],
+      ] as const) {
+        const columns = columnNames(db, table);
+        const missing = declared.filter((column) => !columns.has(column));
+        if (missing.length > 0) {
+          throw new Error(
+            `issue detection migration failed shape verification; ${table} missing columns: ${missing.join(", ")}`,
+          );
+        }
+      }
+      if (db.query("PRAGMA foreign_key_check(issues)").all().length > 0) {
+        throw new Error("issue detection migration failed foreign-key verification");
+      }
+    },
+  },
 ];
 
 /**
@@ -1033,6 +1114,45 @@ const PR_MONITOR_STATE_COLUMNS = [
   "ci_failing_json",
   "base_ref_oid",
   "current_main_sha",
+] as const;
+
+/**
+ * Every column migration v16 declares for `issues`. Compared against the live
+ * table after the migration runs so a divergent pre-existing table is refused
+ * at migration time rather than at the first issue INSERT.
+ */
+const ISSUE_COLUMNS = [
+  "id",
+  "repo_id",
+  "number",
+  "title",
+  "state",
+  "state_reason",
+  "author",
+  "created_at",
+  "updated_at",
+  "closed_at",
+  "url",
+  "gh_owner",
+  "gh_repo",
+] as const;
+
+/**
+ * Every column migration v16 declares for `issue_sync_state`, the per-remote
+ * `updated_at` watermark. LOCAL-ONLY (see the migration comment): absent from
+ * SYNC_TABLES by design, so no other machine's reader can mistake one
+ * station's traversal cursor for its own.
+ */
+const ISSUE_SYNC_STATE_COLUMNS = [
+  "remote_url",
+  "gh_owner",
+  "gh_repo",
+  "watermark_updated_at",
+  "first_complete_at",
+  "last_complete_at",
+  "last_run_at",
+  "last_outcome",
+  "last_incomplete_reason",
 ] as const;
 
 function tableExists(db: Database, name: string): boolean {
