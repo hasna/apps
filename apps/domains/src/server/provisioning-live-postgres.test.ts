@@ -226,7 +226,7 @@ describeLive("Domains provisioning against live PostgreSQL", () => {
       origin_hostname: "origin.us-east-1.elb.amazonaws.com",
       origin_tls_mode: "full",
     };
-    const adopted = await left.reserveAdoption(adoption, hash(adoption), {
+    const adopted = await left.reserveAdoption(adoption, provisioningRequestHash(adoption), {
       registrar: "Brandsight",
       auto_renew: true,
       nameservers: ["ns05.gcd-dns.com", "ns06.gcd-dns.com"],
