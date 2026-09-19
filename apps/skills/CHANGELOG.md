@@ -6,6 +6,7 @@
 
 - 98446d8: Scope native skill hook discovery to the requested agent.
 - f6be7d0: Add protected publisher scope maintenance operations.
+- dedfea8: Support Codex 0.155.1 hook trust negotiation.
 
 ## 0.9.2
 
