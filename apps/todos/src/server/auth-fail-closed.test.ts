@@ -116,8 +116,8 @@ function mintStoredKey(dbPath: string): void {
   const previousDbPath = process.env["TODOS_DB_PATH"];
   process.env["TODOS_DB_PATH"] = dbPath;
   resetDatabase();
-  getDatabase();
-  createApiKey({ name: "stored-key startup probe" });
+  const db = getDatabase(dbPath);
+  createApiKey({ name: "stored-key startup probe" }, db);
   closeDatabase();
   resetDatabase();
   if (previousDbPath === undefined) delete process.env["TODOS_DB_PATH"];
@@ -190,6 +190,34 @@ describe("unconfigured server fails closed", () => {
     }
   }, HOOK_TIMEOUT_MS);
 
+  it("refuses production storage when authentication is configured but no PostgreSQL DSN or local opt-in exists", async () => {
+    const port = reserveFreePort(19725 + Math.floor(Math.random() * 100));
+    const home = join(tmpDir, "production-storage-refusal");
+    const dbPath = join(home, "must-not-exist.db");
+    const proc = spawnServer(port, {
+      ...defaultPostureEnv(home),
+      NODE_ENV: "production",
+      PORT: String(port),
+      HOST: "0.0.0.0",
+      HASNA_TODOS_SERVER_API_KEY: "fixture-server-key",
+      TODOS_DB_PATH: dbPath,
+    });
+
+    try {
+      const exitCode = await waitForExit(proc, 15_000);
+      const stderr = await new Response(proc.stderr as ReadableStream).text();
+      expect(exitCode).not.toBeNull();
+      expect(exitCode).not.toBe(0);
+      expect(stderr).toContain("TODOS_SERVER_STORAGE_CONFIG_MISSING");
+      expect(stderr).toContain("HASNA_TODOS_DATABASE_URL");
+      expect(stderr).toContain("HASNA_TODOS_LOCAL=1");
+      expect(await Bun.file(dbPath).exists()).toBe(false);
+    } finally {
+      proc.kill();
+      await proc.exited;
+    }
+  }, HOOK_TIMEOUT_MS);
+
   it("refuses --allow-anonymous on a non-loopback bind host", async () => {
     const port = reserveFreePort(19750 + Math.floor(Math.random() * 100));
     const dbPath = join(tmpDir, "anon-offbox.db");
@@ -236,13 +264,15 @@ describe("unconfigured server fails closed", () => {
     }
   }, HOOK_TIMEOUT_MS);
 
-  it("still starts for the documented --allow-anonymous local-dev path without the local opt-in", async () => {
-    // The other half of the same contract: the server IS an explicit storage
-    // handle, so it must open the local store even when the client-fallback
-    // guard would refuse an implicit open. The gate's install-smoke requires
-    // this startup line.
+  it("still starts for the documented --allow-anonymous local-dev path with the explicit local opt-in", async () => {
+    // Local server storage is no longer inferred from a missing production DSN.
+    // The anonymous loopback posture remains available only when the operator
+    // explicitly selects the local-only SQLite service.
     const port = reserveFreePort(19850 + Math.floor(Math.random() * 100));
-    const proc = spawnServer(port, defaultPostureEnv(tmpDir), ["--allow-anonymous"]);
+    const proc = spawnServer(port, localRoutingTestEnv({
+      HOME: tmpDir,
+      TODOS_AUTO_PROJECT: "false",
+    }), ["--allow-anonymous"]);
 
     try {
       const stdout = await readUntil(proc.stdout as ReadableStream<Uint8Array>, "Todos HTTP server running at", 15_000);
@@ -255,7 +285,7 @@ describe("unconfigured server fails closed", () => {
 });
 
 // ── 1b. A stored generated key IS a documented credential source ──────────────
-describe("a stored generated key authorizes startup without the local opt-in", () => {
+describe("a stored generated key authorizes explicitly selected local server storage", () => {
   let tmpDir: string;
 
   beforeAll(async () => {
@@ -266,20 +296,16 @@ describe("a stored generated key authorizes startup without the local opt-in", (
     await rm(tmpDir, { recursive: true, force: true });
   });
 
-  it("starts and enforces auth on a store that already holds a live generated key", async () => {
-    // Regression (0.16.0): the posture read the key through the ambient client
-    // singleton, which the client-fallback guard refuses without the local
-    // opt-in — so a store that DID hold a live key looked empty (the guard threw
-    // API_DATABASE_FALLBACK_FORBIDDEN, the catch returned false) and the server
-    // refused to start where published 0.15.52 started and enforced auth. The
-    // shipped README's auth table lists "at least one `todos api-keys create`
-    // key exists" as a credential source with no opt-in caveat.
+  it("starts and enforces auth when the store and local-only intent are both explicit", async () => {
+    // A stored key authorizes callers; HASNA_TODOS_LOCAL selects the SQLite
+    // backend. Neither fact is allowed to imply the other.
     const port = reserveFreePort(20100 + Math.floor(Math.random() * 100));
     const dbPath = join(tmpDir, "stored-key.db");
     mintStoredKey(dbPath);
 
     const proc = spawnServer(port, {
       ...defaultPostureEnv(tmpDir),
+      HASNA_TODOS_LOCAL: "1",
       TODOS_DB_PATH: dbPath,
     });
     try {
@@ -311,8 +337,8 @@ describe("data routes reject credential-less requests", () => {
     const previousDbPath = process.env["TODOS_DB_PATH"];
     process.env["TODOS_DB_PATH"] = dbPath;
     resetDatabase();
-    getDatabase();
-    apiKey = createApiKey({ name: "auth route test" }).key;
+    const db = getDatabase(dbPath);
+    apiKey = createApiKey({ name: "auth route test" }, db).key;
     closeDatabase();
     resetDatabase();
     if (previousDbPath === undefined) delete process.env["TODOS_DB_PATH"];
@@ -458,8 +484,8 @@ describe("anonymous-loopback upgrades to enforce when a key appears", () => {
     const previousDbPath = process.env["TODOS_DB_PATH"];
     process.env["TODOS_DB_PATH"] = dbPath;
     resetDatabase();
-    getDatabase();
-    const minted = createApiKey({ name: "minted while serving" }).key;
+    const db = getDatabase(dbPath);
+    const minted = createApiKey({ name: "minted while serving" }, db).key;
     closeDatabase();
     resetDatabase();
     if (previousDbPath === undefined) delete process.env["TODOS_DB_PATH"];

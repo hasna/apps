@@ -173,6 +173,14 @@ import {
   renderReleaseCompatibilityMarkdown,
 } from "../../lib/release-compatibility.js";
 import { TaskNotFoundError, VersionConflictError } from "../../types/index.js";
+import { compactJson } from "../token-utils.js";
+import {
+  buildCollectionPage,
+  legacyCollectionText,
+  MAX_MCP_COLLECTION_BYTES,
+  MAX_MCP_COLLECTION_LIMIT,
+  truncateUtf8,
+} from "../collection-page.js";
 
 interface TaskProjectContext {
   shouldRegisterTool: (name: string) => boolean;
@@ -182,6 +190,115 @@ interface TaskProjectContext {
   formatTaskDetail: (task: Task, maxDescriptionChars?: number) => string;
   getAgentFocus: (agentId: string) => { agent_id: string; project_id?: string } | undefined;
 }
+
+function compactProjectRow(project: any): Record<string, unknown> {
+  return {
+    id: truncateUtf8(project.id, 128),
+    short_id: truncateUtf8(project.short_id || project.id?.slice(0, 8), 64),
+    name: truncateUtf8(project.name, 160),
+    status: truncateUtf8(project.status ?? "unknown", 32),
+    path: truncateUtf8(project.path, 320),
+    description: truncateUtf8(project.description, 240),
+    task_list_id: truncateUtf8(project.task_list_id, 128),
+    updated_at: truncateUtf8(project.updated_at, 64),
+  };
+}
+
+function compactTaskListRow(list: any): Record<string, unknown> {
+  return {
+    id: truncateUtf8(list.id, 128),
+    slug: truncateUtf8(list.slug, 160),
+    name: truncateUtf8(list.name, 160),
+    status: truncateUtf8(list.status ?? "active", 32),
+    project_id: truncateUtf8(list.project_id, 128),
+    description: truncateUtf8(list.description, 240),
+    updated_at: truncateUtf8(list.updated_at, 64),
+  };
+}
+
+function compactPlanRow(plan: any): Record<string, unknown> {
+  return {
+    id: truncateUtf8(plan.id, 128),
+    slug: truncateUtf8(plan.slug, 160),
+    name: truncateUtf8(plan.name, 160),
+    status: truncateUtf8(plan.status, 32),
+    project_id: truncateUtf8(plan.project_id, 128),
+    task_list_id: truncateUtf8(plan.task_list_id, 128),
+    description: truncateUtf8(plan.description, 240),
+    start_date: truncateUtf8(plan.start_date, 64),
+    end_date: truncateUtf8(plan.end_date, 64),
+    updated_at: truncateUtf8(plan.updated_at, 64),
+  };
+}
+
+function compactNestedTask(task: Task): Record<string, unknown> {
+  return {
+    id: truncateUtf8(task.id, 128),
+    short_id: truncateUtf8(task.short_id || task.id.slice(0, 8), 64),
+    title: truncateUtf8(task.title, 240),
+    status: truncateUtf8(task.status, 32),
+    priority: truncateUtf8(task.priority, 32),
+    assigned_to: truncateUtf8(task.assigned_to, 128),
+    project_id: truncateUtf8(task.project_id, 128),
+    due_at: truncateUtf8(task.due_at, 64),
+    updated_at: truncateUtf8(task.updated_at, 64),
+    tags: task.tags?.slice(0, 8).map((tag) => truncateUtf8(tag, 64)).filter((tag): tag is string => tag !== null),
+    description: truncateUtf8(task.description, 240),
+  };
+}
+
+function stableNameOrder(value: unknown): string {
+  return typeof value === "string" ? value.normalize("NFKC").toLowerCase() : "";
+}
+
+function boundedNestedTaskJson(
+  metadata: Record<string, unknown>,
+  collection: "task-list-tasks" | "plan-tasks",
+  parentId: string,
+  tasks: Task[],
+  options: { limit?: number; offset?: number; cursor?: string },
+): string {
+  let nestedBudget = MAX_MCP_COLLECTION_BYTES;
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const page = buildCollectionPage({
+      collection,
+      query: { parent_id: parentId },
+      order: "created_at:asc,id:asc:v1",
+      key: "tasks",
+      rows: tasks,
+      project: compactNestedTask,
+      identity: (task) => task.id,
+      orderKey: (task) => task.created_at ?? "",
+      snapshotValue: (task) => task,
+      limit: options.limit,
+      offset: options.offset,
+      cursor: options.cursor,
+      maxBytes: nestedBudget,
+    });
+    const text = compactJson({ ...metadata, tasks: page });
+    const overflow = Buffer.byteLength(text, "utf8") - MAX_MCP_COLLECTION_BYTES;
+    if (overflow <= 0) return text;
+    nestedBudget -= overflow;
+    if (nestedBudget < 1024) break;
+  }
+  throw new Error(`Final ${collection} response exceeds the ${MAX_MCP_COLLECTION_BYTES}-byte response ceiling`);
+}
+
+function boundedMetadataJson(payload: Record<string, unknown>, kind: string): string {
+  const text = compactJson(payload);
+  if (Buffer.byteLength(text, "utf8") > MAX_MCP_COLLECTION_BYTES) {
+    throw new Error(`${kind} metadata exceeds the ${MAX_MCP_COLLECTION_BYTES}-byte response ceiling`);
+  }
+  return text;
+}
+
+const collectionPaginationSchema = {
+  limit: z.number().int().min(1).max(MAX_MCP_COLLECTION_LIMIT).optional().describe("Page size (default: 20, max: 500)"),
+  offset: z.number().int().min(0).optional().describe("Pagination offset; continue with next_offset"),
+  cursor: z.string().min(1).max(1024).optional().describe("Opaque cursor returned as next_cursor; pass cursor or offset, not both"),
+  full: z.boolean().optional().describe("Return the legacy exhaustive prose output, subject to safety maxima"),
+  all: z.boolean().optional().describe("Compatibility alias for full exhaustive prose output"),
+};
 
 export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectContext) {
   const { shouldRegisterTool, resolveId, formatError, formatTask } = ctx;
@@ -1681,20 +1798,30 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
   if (shouldRegisterTool("list_projects")) {
     server.tool(
       "list_projects",
-      "List all projects.",
+      "List a compact 20-row project page by default. Continue with next_cursor; pass full/all for the legacy exhaustive prose view.",
       {
         status: z.enum(["active", "completed", "on_hold", "archived"]).optional(),
-        limit: z.number().int().min(1).max(10000).optional(),
+        ...collectionPaginationSchema,
       },
-      async ({ status, limit }) => {
+      async ({ status, limit, offset, cursor, full, all }) => {
         try {
           const cloud = getTodosCloudClient();
           let projects = cloud ? await cloudListProjects(cloud) : listProjects();
-          if (status) projects = projects.filter((p) => p.status === status);
-          if (limit) projects = projects.slice(0, limit);
-          if (projects.length === 0) return { content: [{ type: "text" as const, text: "No projects found." }] };
-          const lines = projects.map(p => `[${p.status ?? "unknown"}] ${p.short_id || p.id.slice(0,8)} ${p.name}`);
-          return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+          if (status) projects = projects.filter((project) => project.status === status);
+          if (full || all) {
+            const selected = full && limit ? projects.slice(0, limit) : projects;
+            const text = selected.length === 0
+              ? "No projects found."
+              : selected.map((project) => `[${project.status ?? "unknown"}] ${project.short_id || project.id.slice(0,8)} ${project.name}`).join("\n");
+            return { content: [{ type: "text" as const, text: legacyCollectionText("projects", selected.length, text) }] };
+          }
+          const page = buildCollectionPage({
+            collection: "projects", query: { status: status ?? null }, order: "name.casefold:asc,id:asc:v1",
+            key: "projects", rows: projects, project: compactProjectRow,
+            identity: (project) => project.id, orderKey: (project) => stableNameOrder(project.name), snapshotValue: (project) => project,
+            limit, offset, cursor,
+          });
+          return { content: [{ type: "text" as const, text: compactJson(page) }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
         }
@@ -1816,19 +1943,30 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
   if (shouldRegisterTool("list_task_lists")) {
     server.tool(
       "list_task_lists",
-      "List all task lists.",
+      "List a compact 20-row task-list page by default. Continue with next_cursor; pass full/all for the legacy exhaustive prose view.",
       {
         project_id: z.string().trim().min(1).optional().describe("Filter by project"),
         status: z.enum(["active", "completed", "archived"]).optional(),
+        ...collectionPaginationSchema,
       },
-      async ({ project_id, status }) => {
+      async ({ project_id, status, limit, offset, cursor, full, all }) => {
         try {
           const client = requireTodosCloudClient("Task-list");
           const projectId = project_id ? await cloudResolveProjectRef(client, project_id) : undefined;
           const lists = (await listSharedTaskLists(client, projectId)).filter(list => status === undefined || (list.status ?? "active") === status);
-          if (lists.length === 0) return { content: [{ type: "text" as const, text: "No task lists found." }] };
-          const lines = lists.map(l => `[${l.status ?? "active"}] ${l.name} (${l.id.slice(0,8)})`);
-          return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+          if (full || all) {
+            const text = lists.length === 0
+              ? "No task lists found."
+              : lists.map((list) => `[${list.status ?? "active"}] ${list.name} (${list.id.slice(0,8)})`).join("\n");
+            return { content: [{ type: "text" as const, text: legacyCollectionText("task lists", lists.length, text) }] };
+          }
+          const page = buildCollectionPage({
+            collection: "task-lists", query: { project_id: projectId ?? null, status: status ?? null }, order: "name.casefold:asc,id:asc:v1",
+            key: "task_lists", rows: lists, project: compactTaskListRow,
+            identity: (list) => list.id, orderKey: (list) => stableNameOrder(list.name), snapshotValue: (list) => list,
+            limit, offset, cursor,
+          });
+          return { content: [{ type: "text" as const, text: compactJson(page) }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
         }
@@ -1839,25 +1977,38 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
   if (shouldRegisterTool("get_task_list")) {
     server.tool(
       "get_task_list",
-      "Get a task list with its tasks.",
+      "Get compact task-list metadata and task_count. Set include_tasks=true for a bounded nested task page; pass full/all for legacy exhaustive prose.",
       {
         task_list_id: z.string().trim().min(1).describe("Task list ID"),
-        include_tasks: z.boolean().optional().describe("Include tasks (default: true)"),
+        include_tasks: z.boolean().optional().describe("Include a bounded nested task page (default: false)"),
+        tasks_limit: z.number().int().min(1).max(MAX_MCP_COLLECTION_LIMIT).optional().describe("Nested task page size (default: 20, max: 500)"),
+        tasks_offset: z.number().int().min(0).optional().describe("Nested task offset"),
+        tasks_cursor: z.string().min(1).max(1024).optional().describe("Nested task cursor from the previous response"),
+        full: z.boolean().optional().describe("Return the legacy exhaustive prose response, subject to safety maxima"),
+        all: z.boolean().optional().describe("Compatibility alias for full exhaustive prose output"),
       },
-      async ({ task_list_id, include_tasks = true }) => {
+      async ({ task_list_id, include_tasks = false, tasks_limit, tasks_offset, tasks_cursor, full, all }) => {
         try {
           const client = requireTodosCloudClient("Task-list");
           const list = await resolveSharedTaskList(client, task_list_id);
-          const tasks = include_tasks ? await cloudListTaskListTasks(client, list.id) : [];
-          const lines = [
-            `ID:    ${list.id}`,
-            `Name:  ${list.name}`,
-            list.project_id ? `Project: ${list.project_id}` : null,
-            `Tasks: ${tasks.length}`,
-            tasks.length > 0 ? "\nTasks:" : null,
-            ...tasks.map(t => `  ${t.status} [${t.priority}] ${t.title} (${t.id.slice(0,8)})`),
-          ].filter(Boolean);
-          return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+          const tasks = await cloudListTaskListTasks(client, list.id);
+          if (full || all) {
+            const lines = [
+              `ID:    ${list.id}`,
+              `Name:  ${list.name}`,
+              list.project_id ? `Project: ${list.project_id}` : null,
+              `Tasks: ${tasks.length}`,
+              tasks.length > 0 ? "\nTasks:" : null,
+              ...tasks.map((task) => `  ${task.status} [${task.priority}] ${task.title} (${task.id.slice(0,8)})`),
+            ].filter(Boolean);
+            const text = lines.join("\n");
+            return { content: [{ type: "text" as const, text: legacyCollectionText("task-list tasks", tasks.length, text) }] };
+          }
+          const payload: Record<string, unknown> = { task_list: compactTaskListRow(list), task_count: tasks.length };
+          const text = include_tasks
+            ? boundedNestedTaskJson(payload, "task-list-tasks", list.id, tasks, { limit: tasks_limit, offset: tasks_offset, cursor: tasks_cursor })
+            : boundedMetadataJson(payload, "task-list");
+          return { content: [{ type: "text" as const, text }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
         }
@@ -1943,19 +2094,30 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
   if (shouldRegisterTool("list_plans")) {
     server.tool(
       "list_plans",
-      "List plans.",
+      "List a compact 20-row plan page by default. Continue with next_cursor; pass full/all for the legacy exhaustive prose view.",
       {
         project_id: z.string().trim().min(1).optional().describe("Filter by project"),
         status: z.enum(["planning", "active", "completed", "cancelled", "archived"]).optional(),
+        ...collectionPaginationSchema,
       },
-      async ({ project_id, status }) => {
+      async ({ project_id, status, limit, offset, cursor, full, all }) => {
         try {
           const cloud = requireTodosCloudClient("Plan");
           const project = project_id ? await cloudResolveProjectRef(cloud, project_id) : undefined;
           const plans = (await listSharedPlans(cloud, project)).filter(plan => status === undefined || plan.status === status);
-          if (plans.length === 0) return { content: [{ type: "text" as const, text: "No plans found." }] };
-          const lines = plans.map(p => `[${p.status}] ${p.name} (${p.id.slice(0,8)})`);
-          return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+          if (full || all) {
+            const text = plans.length === 0
+              ? "No plans found."
+              : plans.map((plan) => `[${plan.status}] ${plan.name} (${plan.id.slice(0,8)})`).join("\n");
+            return { content: [{ type: "text" as const, text: legacyCollectionText("plans", plans.length, text) }] };
+          }
+          const page = buildCollectionPage({
+            collection: "plans", query: { project_id: project ?? null, status: status ?? null }, order: "name.casefold:asc,id:asc:v1",
+            key: "plans", rows: plans, project: compactPlanRow,
+            identity: (plan) => plan.id, orderKey: (plan) => stableNameOrder(plan.name), snapshotValue: (plan) => plan,
+            limit, offset, cursor,
+          });
+          return { content: [{ type: "text" as const, text: compactJson(page) }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
         }
@@ -1966,32 +2128,42 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
   if (shouldRegisterTool("get_plan")) {
     server.tool(
       "get_plan",
-      "Get a plan with its tasks.",
+      "Get compact plan metadata and task_count. Set include_tasks=true for a bounded nested task page; pass full/all for legacy exhaustive prose.",
       {
         plan_id: z.string().trim().min(1).describe("Plan ID"),
-        include_tasks: z.boolean().optional().describe("Include tasks (default: true)"),
+        include_tasks: z.boolean().optional().describe("Include a bounded nested task page (default: false)"),
+        tasks_limit: z.number().int().min(1).max(MAX_MCP_COLLECTION_LIMIT).optional().describe("Nested task page size (default: 20, max: 500)"),
+        tasks_offset: z.number().int().min(0).optional().describe("Nested task offset"),
+        tasks_cursor: z.string().min(1).max(1024).optional().describe("Nested task cursor from the previous response"),
+        full: z.boolean().optional().describe("Return the legacy exhaustive prose response, subject to safety maxima"),
+        all: z.boolean().optional().describe("Compatibility alias for full exhaustive prose output"),
       },
-      async ({ plan_id, include_tasks = true }) => {
+      async ({ plan_id, include_tasks = false, tasks_limit, tasks_offset, tasks_cursor, full, all }) => {
         try {
           const cloud = requireTodosCloudClient("Plan");
           const plan = await cloudResolvePlan(cloud, plan_id);
           if (!plan) throw new TaskNotFoundError(`Plan not found: ${plan_id}`);
-          let tasks: Task[] = [];
-          if (include_tasks) {
-            tasks = await cloudListPlanTasks(cloud, plan.id);
+          const tasks = await cloudListPlanTasks(cloud, plan.id);
+          if (full || all) {
+            const lines = [
+              `ID:    ${plan.id}`,
+              `Name:  ${plan.name}`,
+              `Status: ${plan.status}`,
+              plan.project_id ? `Project: ${plan.project_id}` : null,
+              plan.start_date ? `Start:   ${plan.start_date}` : null,
+              plan.end_date ? `End:     ${plan.end_date}` : null,
+              `Tasks: ${tasks.length}`,
+              tasks.length > 0 ? "\nTasks:" : null,
+              ...tasks.map((task) => `  ${task.status} [${task.priority}] ${task.title} (${task.id.slice(0,8)})`),
+            ].filter(Boolean);
+            const text = lines.join("\n");
+            return { content: [{ type: "text" as const, text: legacyCollectionText("plan tasks", tasks.length, text) }] };
           }
-          const lines = [
-            `ID:    ${plan.id}`,
-            `Name:  ${plan.name}`,
-            `Status: ${plan.status}`,
-            plan.project_id ? `Project: ${plan.project_id}` : null,
-            plan.start_date ? `Start:   ${plan.start_date}` : null,
-            plan.end_date ? `End:     ${plan.end_date}` : null,
-            `Tasks: ${tasks.length}`,
-            tasks.length > 0 ? "\nTasks:" : null,
-            ...tasks.map(t => `  ${t.status} [${t.priority}] ${t.title} (${t.id.slice(0,8)})`),
-          ].filter(Boolean);
-          return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+          const payload: Record<string, unknown> = { plan: compactPlanRow(plan), task_count: tasks.length };
+          const text = include_tasks
+            ? boundedNestedTaskJson(payload, "plan-tasks", plan.id, tasks, { limit: tasks_limit, offset: tasks_offset, cursor: tasks_cursor })
+            : boundedMetadataJson(payload, "plan");
+          return { content: [{ type: "text" as const, text }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
         }

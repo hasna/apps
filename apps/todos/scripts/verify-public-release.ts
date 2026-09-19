@@ -424,7 +424,7 @@ function expectServeStartup(command: string, env: NodeJS.ProcessEnv): void {
   const result = runCapture(
     "timeout",
     [SERVE_PROBE_TIMEOUT_SECONDS, command, `--port=${port}`, "--host", "127.0.0.1", "--allow-anonymous"],
-    env,
+    { ...env, HASNA_TODOS_LOCAL: "1" },
   );
   const output = `${result.stdout}\n${result.stderr}`;
   if (!output.includes("Todos HTTP server running at")) {

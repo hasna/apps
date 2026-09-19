@@ -152,7 +152,6 @@ export const CONTENT_EXCEPTIONS: Array<{ member: string; entry: RegExp; pattern:
   { member: "secrets", entry: /^dist\/api-display-url\.d\.ts$/, pattern: "hasna-xyz-domain", reason: "doc comment names the `<app>.hasna.xyz` origin as the pre-#1512 todos exception; scrub with the api-display-url rewrite." },
   { member: "telephony", entry: /^src\/lib\/request-origin\.ts$/, pattern: "hasna-xyz-domain", reason: "packed source comment explains forwarded-origin recovery with a `<app>.hasna.xyz` example; reword to the gateway form." },
   { member: "guardrails", entry: /^docs\/boundaries\.md$/, pattern: "hasna-xyz-domain", reason: "boundaries doc explains the gateway→origin hop with `<app>.hasna.xyz`; reword to 'origin' once the origins are private." },
-  { member: "todos", entry: /^docs\/native-storage\.md$/, pattern: "hasna-xyz-domain", reason: "native-storage doc names the `<app>.hasna.xyz` origin; reword to the gateway form (W6 todos alignment PR)." },
 ];
 
 /**

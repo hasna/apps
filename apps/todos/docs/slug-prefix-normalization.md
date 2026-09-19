@@ -16,7 +16,7 @@ sanitization only). All projects created before the removal carry the prefix
 and must be renamed to the unprefixed slug so the fleet converges on one slug
 shape.
 
-## 2. Measured population (hosted authority, todos.hasna.xyz)
+## 2. Measured population (hosted authority before the gateway cutover)
 
 Taken read-only via the installed CLI (`todos projects --json`), 2026-08-14:
 

@@ -1,8 +1,8 @@
 // Client-IP resolution for rate-limit buckets and audit keys.
 //
-// The fleet is reachable both directly (`https://<app>.hasna.xyz`) and through
-// the api.hasna.com Cloudflare-worker gateway, which forwards
-// `https://api.hasna.com/<app>/...` to the origin and sets `x-real-ip` (the
+// The fleet is reached through the api.hasna.com Cloudflare-worker gateway,
+// which forwards `https://api.hasna.com/<app>/...` to the private service
+// origin and sets `x-real-ip` (the
 // real client, from `cf-connecting-ip`), `x-forwarded-for`, `x-forwarded-proto`
 // and `x-forwarded-prefix` on the way. Between the gateway and this service
 // sits the ALB, which APPENDS its socket-peer view to `x-forwarded-for`.

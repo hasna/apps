@@ -45,6 +45,8 @@ Options:
   -h, --help        display help for command
 
 Environment:
+  HASNA_TODOS_DATABASE_URL=<dsn>     Required for hosted/production PostgreSQL service mode.
+  HASNA_TODOS_LOCAL=1                Explicit local-only SQLite mode for self-host/dev.
   HASNA_TODOS_SERVER_API_KEY=<key>   Require this API key for API requests.
                                      The client credential names (HASNA_TODOS_API_KEY
                                      / TODOS_API_KEY) are accepted as a documented
@@ -264,8 +266,11 @@ async function main() {
     });
   } catch (error) {
     // Fail closed and LOUD: never fall back to serving data anonymously.
-    const { AuthNotConfiguredError } = await import("./auth-posture.js");
-    if (error instanceof AuthNotConfiguredError) {
+    const [{ AuthNotConfiguredError }, { ServerStorageNotConfiguredError }] = await Promise.all([
+      import("./auth-posture.js"),
+      import("./storage-posture.js"),
+    ]);
+    if (error instanceof AuthNotConfiguredError || error instanceof ServerStorageNotConfiguredError) {
       console.error(`\n${error.message}\n`);
       process.exit(1);
     }

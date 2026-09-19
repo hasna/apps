@@ -71,9 +71,10 @@ pgTest('fresh signed MCP plan workflow persists advertised fields and complete p
   const plan=(await store.plans.list())[0]!;expect(plan).toMatchObject({name:"MCP plan",slug:"mcp-plan",status:"planning",start_date:"2028-02-29"});
   const template=await store.tasks.create({title:"paged",plan_id:plan.id});
   for(let i=1;i<201;i++){const task={...template,id:randomUUID()};await client.query(`INSERT INTO ${table}(service,object_type,object_id,payload,updated_at,version) VALUES ('plans-fixture','tasks',$1,$2::text::jsonb,$3::timestamptz,1)`,[task.id,JSON.stringify(task),task.updated_at]);}
-  const detail=await call("get_plan",{plan_id:plan.id});expect(detail.isError,text(detail)).not.toBe(true);expect(text(detail)).toContain("Tasks: 201");
-  expect(text(await call("list_plans",{status:"planning"}))).toContain("MCP plan");
-  expect(text(await call("list_plans",{status:"cancelled"}))).toContain("No plans");
+  const detail=await call("get_plan",{plan_id:plan.id});expect(detail.isError,text(detail)).not.toBe(true);expect(JSON.parse(text(detail))).toMatchObject({task_count:201});expect(JSON.parse(text(detail)).tasks).toBeUndefined();
+  const paged=await call("get_plan",{plan_id:plan.id,include_tasks:true});const pagedBody=JSON.parse(text(paged));expect(pagedBody.task_count).toBe(201);expect(pagedBody.tasks).toMatchObject({count:20,total:201,has_more:true,next_offset:20});
+  expect(JSON.parse(text(await call("list_plans",{status:"planning"}))).plans[0].name).toBe("MCP plan");
+  expect(JSON.parse(text(await call("list_plans",{status:"cancelled"})))).toMatchObject({count:0,total:0,has_more:false});
   expect((await call("update_plan",{plan_id:plan.id,status:"cancelled",end_date:"2028-03-02"})).isError).not.toBe(true);
   expect(await store.plans.get(plan.id)).toMatchObject({status:"cancelled",end_date:"2028-03-02"});
   expect((await call("delete_plan",{plan_id:plan.id})).isError).toBe(true);

@@ -35,8 +35,10 @@ exactly two arms on each side of the HTTP boundary:
   the explicit local opt-in `HASNA_TODOS_LOCAL=1` / `TODOS_LOCAL=1`) or `http`
   (the authenticated Todos `/v1` authority). The client never opens Postgres
   directly.
-- **Server (`todos-serve`) / native storage tooling** — `sqlite` (no database
-  URL configured) or `postgres` (a `HASNA_TODOS_DATABASE_URL` is present).
+- **Server (`todos-serve`) / native storage tooling** — `sqlite` only under
+  the explicit `HASNA_TODOS_LOCAL=1` / `TODOS_LOCAL=1` opt-in, or `postgres`
+  when a `HASNA_TODOS_DATABASE_URL` is present. Absence selects nothing and the
+  server exits non-zero.
 
 `HASNA_TODOS_API_URL` + `HASNA_TODOS_API_KEY` select the authenticated HTTP
 authority (client). `HASNA_TODOS_DATABASE_URL` selects the Postgres backend
@@ -70,8 +72,9 @@ is impossible (the incident 715712 response was tightened by the ruling).
 The URL must use HTTPS, except for loopback development authorities. Userinfo,
 query strings, fragments, redirects, `/api/v1`, and other non-`<app>[//v1]`
 paths are rejected. The gateway form `https://api.hasna.com/<app>` is accepted
-and `/v1` is appended (the gateway strips the `<app>` segment and forwards to
-the `https://<app>.hasna.xyz` origin); `<app>/v1` is used verbatim. The CLI
+and `/v1` is appended exactly once by the client; `<app>/v1` is used verbatim.
+The origin topology behind the public gateway is intentionally not part of the
+published client contract. The CLI
 does not infer an authority from `TODOS_URL`, does not use a private SaaS
 route, and does not send the bearer credential across redirects.
 
@@ -373,9 +376,11 @@ caller passes a Postgres-style query client to
   the connected client.
 - `createPostgresTodosStorageAdapter` is also exported directly for callers
   that want to bypass backend selection.
-- Local SQLite remains the default unless `HASNA_TODOS_DATABASE_URL` is set
-  explicitly (with the one carve-out that a shadow mirror
-  `HASNA_TODOS_SHADOW=1` keeps SQLite as the source of truth).
+- `todos-serve` never selects SQLite from an absent database URL. Hosted/service
+  mode requires `HASNA_TODOS_DATABASE_URL` (or its documented DSN fallback);
+  local SQLite requires the explicit `HASNA_TODOS_LOCAL=1` / `TODOS_LOCAL=1`
+  opt-in. A shadow mirror remains a local-only feature and therefore also
+  requires that local storage posture.
 
 ## S3 Artifact Sync
 

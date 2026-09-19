@@ -31,9 +31,10 @@ pgTest('fresh signed MCP task-list workflow persists advertised fields and compl
   const plan=(await store.taskLists.list())[0]!;expect(plan).toMatchObject({name:"MCP list",slug:"mcp-list",status:"completed"});
   const template=await store.tasks.create({title:"paged",task_list_id:plan.id});
   for(let i=1;i<201;i++){const task={...template,id:randomUUID()};await client.query(`INSERT INTO ${table}(service,object_type,object_id,payload,updated_at,version) VALUES ('lists-fixture','tasks',$1,$2::text::jsonb,$3::timestamptz,1)`,[task.id,JSON.stringify(task),task.updated_at]);}
-  const detail=await call("get_task_list",{task_list_id:plan.id});expect(detail.isError,text(detail)).not.toBe(true);expect(text(detail)).toContain("Tasks: 201");
-  expect(text(await call("list_task_lists",{status:"completed"}))).toContain("MCP list");
-  expect(text(await call("list_task_lists",{status:"archived"}))).toContain("No task lists");
+  const detail=await call("get_task_list",{task_list_id:plan.id});expect(detail.isError,text(detail)).not.toBe(true);expect(JSON.parse(text(detail))).toMatchObject({task_count:201});expect(JSON.parse(text(detail)).tasks).toBeUndefined();
+  const paged=await call("get_task_list",{task_list_id:plan.id,include_tasks:true});const pagedBody=JSON.parse(text(paged));expect(pagedBody.task_count).toBe(201);expect(pagedBody.tasks).toMatchObject({count:20,total:201,has_more:true,next_offset:20});
+  expect(JSON.parse(text(await call("list_task_lists",{status:"completed"}))).task_lists[0].name).toBe("MCP list");
+  expect(JSON.parse(text(await call("list_task_lists",{status:"archived"})))).toMatchObject({count:0,total:0,has_more:false});
   expect((await call("update_task_list",{task_list_id:plan.id,status:"archived"})).isError).not.toBe(true);
   expect(await store.taskLists.get(plan.id)).toMatchObject({status:"archived"});
   expect((await call("delete_task_list",{task_list_id:plan.id})).isError).toBe(true);

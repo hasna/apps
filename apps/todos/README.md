@@ -1759,6 +1759,19 @@ High-volume tools return compact payloads by default. Pass `detail: "full"` to
 MCP calls such as `get_task`, `get_status`, `get_context`, `bootstrap`, and
 `task_context` when you need full data.
 
+The residual MCP collection tools are bounded the same way. `list_projects`,
+`list_task_lists`, `list_plans`, and `list_agents` default to minified 20-row
+pages with `count`, truthful `total`, `has_more`, `next_offset`, and a canonical
+opaque `next_cursor`. Cursors bind the collection, filters, stable order, prior
+identity boundary, and complete snapshot fingerprint; a mutation or tamper is
+refused and callers restart at page one. Compact responses have a hard 32 KiB
+UTF-8 ceiling and capped string fields. Pass `full=true` or `all=true` only for the legacy exhaustive
+prose shape, which still refuses output above the package's row/byte safety
+maxima. `get_task_list` and `get_plan` now return metadata plus `task_count` by
+default. Set `include_tasks=true` to receive a nested bounded task page and
+continue it with `tasks_cursor`; use `full`/`all` only when exhaustive legacy
+output is genuinely required.
+
 `list_tasks` is a 50-row page when `limit` is omitted. One authoritative
 response supplies the rows and its pagination receipt: `total`, the requested
 and effective/server-capped limit, the consumed server `offset`, `has_more`,
@@ -1805,16 +1818,17 @@ refuses to start unless one of the following is true:
 
 | Configuration | Result |
 | --- | --- |
-| `HASNA_TODOS_SERVER_API_KEY=<key>` (or `--api-key <key>`) | `/api/*` + `/mcp` require the key |
-| at least one `todos api-keys create` key exists | `/api/*` + `/mcp` require a key |
-| `--allow-anonymous` **and** a loopback bind | anonymous, loopback peers only (local dev) |
-| a cloud `DATABASE_URL` is configured (hosted `/v1` deployment) | `/api/*` + `/mcp` are **not served**; `/v1` stays authenticated |
-| nothing of the above | **server exits non-zero** with the env var to set |
+| `HASNA_TODOS_DATABASE_URL=<dsn>` (or documented DSN fallback) | hosted PostgreSQL `/v1`; SQLite is never selected as an absence fallback |
+| `HASNA_TODOS_LOCAL=1` plus `HASNA_TODOS_SERVER_API_KEY=<key>` (or `--api-key`) | explicit local-only SQLite; `/api/*` + `/mcp` require the key |
+| `HASNA_TODOS_LOCAL=1` plus at least one `todos api-keys create` key | explicit local-only SQLite; `/api/*` + `/mcp` require a key |
+| `HASNA_TODOS_LOCAL=1`, `--allow-anonymous`, and a loopback bind | explicit local-only SQLite, anonymous loopback peers only (dev) |
+| a server credential but no DSN and no local opt-in | **server exits non-zero** with `TODOS_SERVER_STORAGE_CONFIG_MISSING` |
+| nothing configured | **server exits non-zero** with the auth/storage setting to provide |
 
 ```bash
-todos api-keys create "My app"          # then send x-api-key / Authorization: Bearer
-HASNA_TODOS_SERVER_API_KEY=<key> todos-serve --host 0.0.0.0
-todos serve --allow-anonymous           # local dev only; refused for a non-loopback --host
+HASNA_TODOS_LOCAL=1 todos api-keys create "My app"
+HASNA_TODOS_LOCAL=1 HASNA_TODOS_SERVER_API_KEY=<key> todos-serve --host 127.0.0.1
+HASNA_TODOS_LOCAL=1 todos serve --allow-anonymous   # local dev only; loopback only
 ```
 
 `--allow-anonymous` (or `TODOS_ALLOW_ANONYMOUS=1`) is refused for any non-loopback

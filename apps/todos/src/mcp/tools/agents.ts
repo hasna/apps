@@ -5,6 +5,8 @@ import { getAgentPoolForProject } from "../../lib/config.js";
 import { getDatabase, resolvePartialId } from "../../db/database.js";
 import { IdentityAliasAmbiguousError } from "../../types/index.js";
 import { getTodosCloudClient, cloudListAgents, cloudRegisterAgent, cloudHeartbeatAgent, cloudReleaseAgent, cloudGetAgent } from "../../cli/cloud-router.js";
+import { compactJson } from "../token-utils.js";
+import { buildCollectionPage, legacyCollectionText, MAX_MCP_COLLECTION_LIMIT, truncateUtf8 } from "../collection-page.js";
 
 interface AgentFocus {
   agent_id: string;
@@ -19,6 +21,19 @@ type Helpers = {
   agentFocusMap: Map<string, AgentFocus>;
   getAgentFocus: (agentId: string) => AgentFocus | undefined;
 };
+
+function compactAgentRow(agent: any): Record<string, unknown> {
+  return {
+    id: truncateUtf8(agent.id, 128),
+    name: truncateUtf8(agent.name, 120),
+    status: truncateUtf8(agent.status ?? "active", 32),
+    description: truncateUtf8(agent.description, 240),
+    role: truncateUtf8(agent.role, 120),
+    title: truncateUtf8(agent.title, 120),
+    active_project_id: truncateUtf8(agent.active_project_id, 128),
+    last_seen_at: truncateUtf8(agent.last_seen_at, 64),
+  };
+}
 
 export function registerAgentTools(server: McpServer, { shouldRegisterTool, resolveId, formatError, agentFocusMap, getAgentFocus }: Helpers): void {
 
@@ -214,11 +229,16 @@ export function registerAgentTools(server: McpServer, { shouldRegisterTool, reso
   if (shouldRegisterTool("list_agents")) {
     server.tool(
       "list_agents",
-      "List all registered agents. By default shows only active agents — set include_archived to see archived ones too.",
+      "List a compact 20-row agent page by default. Continue with next_cursor; pass full/all for the legacy exhaustive prose view.",
       {
         include_archived: z.boolean().optional().describe("Include archived agents in the list (default: false)"),
+        limit: z.number().int().min(1).max(MAX_MCP_COLLECTION_LIMIT).optional().describe("Page size (default: 20, max: 500)"),
+        offset: z.number().int().min(0).optional().describe("Pagination offset; continue with next_offset"),
+        cursor: z.string().min(1).max(1024).optional().describe("Opaque cursor returned as next_cursor; pass cursor or offset, not both"),
+        full: z.boolean().optional().describe("Return the legacy exhaustive prose output, subject to safety maxima"),
+        all: z.boolean().optional().describe("Compatibility alias for full exhaustive prose output"),
       },
-      async ({ include_archived }) => {
+      async ({ include_archived, limit, offset, cursor, full, all }) => {
         try {
           // http authority routing: list agents from the shared <app-host>/v1
           // dataset rather than this machine's local SQLite island.
@@ -226,14 +246,22 @@ export function registerAgentTools(server: McpServer, { shouldRegisterTool, reso
           const agents = cloud
             ? await cloudListAgents(cloud, { include_archived: include_archived ?? false })
             : listAgents({ include_archived: include_archived ?? false });
-          if (agents.length === 0) {
-            return { content: [{ type: "text" as const, text: "No agents registered." }] };
+          if (full || all) {
+            const body = agents.map((agent) => {
+              const statusTag = agent.status === "archived" ? " [archived]" : "";
+              return `${agent.id} | ${agent.name}${statusTag}${agent.description ? ` - ${agent.description}` : ""} (last seen: ${agent.last_seen_at})`;
+            }).join("\n");
+            const text = agents.length === 0 ? "No agents registered." : `${agents.length} agent(s):\n${body}`;
+            return { content: [{ type: "text" as const, text: legacyCollectionText("agents", agents.length, text) }] };
           }
-          const text = agents.map((a) => {
-            const statusTag = a.status === "archived" ? " [archived]" : "";
-            return `${a.id} | ${a.name}${statusTag}${a.description ? ` - ${a.description}` : ""} (last seen: ${a.last_seen_at})`;
-          }).join("\n");
-          return { content: [{ type: "text" as const, text: `${agents.length} agent(s):\n${text}` }] };
+          const page = buildCollectionPage({
+            collection: "agents", query: { include_archived: include_archived === true }, order: "name.casefold:asc,id:asc:v1",
+            key: "agents", rows: agents, project: compactAgentRow,
+            identity: (agent) => agent.id,
+            orderKey: (agent) => typeof agent.name === "string" ? agent.name.normalize("NFKC").toLowerCase() : "",
+            snapshotValue: (agent) => agent, limit, offset, cursor,
+          });
+          return { content: [{ type: "text" as const, text: compactJson(page) }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
         }

@@ -2,7 +2,9 @@ import { afterEach, describe, expect, it } from "bun:test";
 import {
   TodosClient,
   TodosError,
+  TODOS_CREDENTIAL_MISSING_MESSAGE,
   TODOS_DEFAULT_FLEET_URL,
+  TODOS_LOCAL_OPT_IN_ENV_KEYS,
   TODOS_LOCAL_SERVE_URL,
   __resetTodosLocalModeNotice,
 } from "./client.js";
@@ -15,6 +17,8 @@ const originalTodosApiUrl = process.env["TODOS_API_URL"];
 const originalTodosUrl = process.env["TODOS_URL"];
 const originalHasnaApiKey = process.env["HASNA_TODOS_API_KEY"];
 const originalHasnaApiUrl = process.env["HASNA_TODOS_API_URL"];
+const originalHasnaLocal = process.env["HASNA_TODOS_LOCAL"];
+const originalTodosLocal = process.env["TODOS_LOCAL"];
 
 /**
  * Run a body with EVERY authority and credential name this client reads unset.
@@ -28,17 +32,28 @@ function withNoTodosEnv<T>(body: () => T): T {
   const names = [
     "HASNA_TODOS_API_URL", "TODOS_API_URL", "TODOS_URL",
     "HASNA_TODOS_API_KEY", "TODOS_API_KEY",
+    ...TODOS_LOCAL_OPT_IN_ENV_KEYS,
   ];
   const saved = new Map(names.map((name) => [name, process.env[name]]));
-  for (const name of names) delete process.env[name];
-  try {
-    return body();
-  } finally {
+  const restore = () => {
     for (const [name, value] of saved) {
       if (value === undefined) delete process.env[name];
       else process.env[name] = value;
     }
+  };
+  for (const name of names) delete process.env[name];
+  let result: T;
+  try {
+    result = body();
+  } catch (error) {
+    restore();
+    throw error;
   }
+  if (result && typeof (result as { then?: unknown }).then === "function") {
+    return (Promise.resolve(result).finally(restore) as unknown) as T;
+  }
+  restore();
+  return result;
 }
 
 afterEach(() => {
@@ -55,12 +70,15 @@ afterEach(() => {
   else process.env["TODOS_API_URL"] = originalTodosApiUrl;
   if (originalTodosUrl === undefined) delete process.env["TODOS_URL"];
   else process.env["TODOS_URL"] = originalTodosUrl;
+  if (originalHasnaLocal === undefined) delete process.env["HASNA_TODOS_LOCAL"];
+  else process.env["HASNA_TODOS_LOCAL"] = originalHasnaLocal;
+  if (originalTodosLocal === undefined) delete process.env["TODOS_LOCAL"];
+  else process.env["TODOS_LOCAL"] = originalTodosLocal;
 });
 
 describe("TodosClient", () => {
-  it("should create with default options", () => {
-    const client = new TodosClient();
-    expect(client).toBeDefined();
+  it("fails closed with default options when no authority, credential, or local selector resolves", () => {
+    withNoTodosEnv(() => expect(() => new TodosClient()).toThrow(TODOS_CREDENTIAL_MISSING_MESSAGE));
   });
 
   it("should create with custom baseUrl", () => {
@@ -68,23 +86,23 @@ describe("TodosClient", () => {
     expect(client).toBeDefined();
   });
 
-  it("should create with agent name", () => {
-    const client = new TodosClient({ agentName: "testagent" });
+  it("should create with agent name when an explicit authority is supplied", () => {
+    const client = new TodosClient({ baseUrl: TODOS_LOCAL_SERVE_URL, agentName: "testagent" });
     expect(client).toBeDefined();
   });
 
   it("should throw if init called without name", async () => {
-    const client = new TodosClient();
+    const client = new TodosClient({ baseUrl: TODOS_LOCAL_SERVE_URL });
     expect(client.init()).rejects.toThrow("Agent name required");
   });
 
   it("should throw if me called before init", async () => {
-    const client = new TodosClient();
+    const client = new TodosClient({ baseUrl: TODOS_LOCAL_SERVE_URL });
     expect(client.me()).rejects.toThrow("Call init() first");
   });
 
   it("should throw if myQueue called before init", async () => {
-    const client = new TodosClient();
+    const client = new TodosClient({ baseUrl: TODOS_LOCAL_SERVE_URL });
     expect(client.myQueue()).rejects.toThrow("Call init() first");
   });
 });
@@ -305,9 +323,8 @@ describe("todosTools", () => {
 });
 
 /**
- * The 2026-09-04 ruling (hasna/apps#1720) in this package's terms: the unhosted
- * localhost default is reachable only when NO authority and NO credential
- * resolve, and when it IS taken this client says so once.
+ * The local serve is selected only through an explicit environment selector or
+ * explicit baseUrl. Missing configuration fails closed without touching fetch.
  */
 describe("TodosClient local mode", () => {
   function captureStderr(): { lines: string[]; restore: () => void } {
@@ -331,15 +348,30 @@ describe("TodosClient local mode", () => {
     return () => ({ url, auth });
   }
 
-  it("takes the local serve and announces it once when nothing resolves", async () => {
+  it("fails closed with no configuration and never calls fetch or announces local mode", async () => {
+    let fetches = 0;
+    globalThis.fetch = (async () => { fetches++; return new Response("[]"); }) as unknown as typeof fetch;
+    const stderr = captureStderr();
+    try {
+      await withNoTodosEnv(async () => {
+        __resetTodosLocalModeNotice();
+        expect(() => new TodosClient()).toThrow(TODOS_CREDENTIAL_MISSING_MESSAGE);
+      });
+    } finally {
+      stderr.restore();
+    }
+    expect(fetches).toBe(0);
+    expect(stderr.lines.filter((line) => line.includes("LOCAL mode"))).toHaveLength(0);
+  });
+
+  it("takes the local serve only with an explicit selector and announces it once", async () => {
     const read = stubFetch();
     const stderr = captureStderr();
     try {
       await withNoTodosEnv(async () => {
         __resetTodosLocalModeNotice();
-        const client = new TodosClient();
-        await client.listTasks();
-        // A second client in the same process must not repeat the line.
+        process.env["HASNA_TODOS_LOCAL"] = "1";
+        await new TodosClient().listTasks();
         await new TodosClient().listTasks();
       });
     } finally {
@@ -350,6 +382,7 @@ describe("TodosClient local mode", () => {
     expect(read().auth).toBeNull();
     const announcements = stderr.lines.filter((line) => line.includes("LOCAL mode"));
     expect(announcements).toHaveLength(1);
+    expect(announcements[0]).toContain("HASNA_TODOS_LOCAL");
     expect(announcements[0]).toContain(TODOS_LOCAL_SERVE_URL);
   });
 
