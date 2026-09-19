@@ -35,10 +35,6 @@ function request(name: string, key: string): DomainProvisioningRequest {
   };
 }
 
-function hash(value: DomainProvisioningRequest): string {
-  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
-}
-
 function legacyShortlinksPurchaseHash(value: DomainProvisioningRequest): string {
   return createHash("sha256").update(JSON.stringify({
     auto_renew: value.auto_renew,
@@ -98,7 +94,7 @@ describeLive("Domains provisioning against live PostgreSQL", () => {
     const domain = `pg-${suffix}.example`;
     const idempotencyKey = `domains-pg-${suffix}`;
     const input = request(domain, idempotencyKey);
-    const requestHash = hash(input);
+    const requestHash = provisioningRequestHash(input);
     const left = new DomainsProvisioningRepo(client);
     const right = new DomainsProvisioningRepo(client);
 
@@ -127,9 +123,14 @@ describeLive("Domains provisioning against live PostgreSQL", () => {
 
     const legacyInput = request(`legacy-${suffix}.example`, `domains-legacy-${suffix}`);
     const legacyHash = legacyShortlinksPurchaseHash(legacyInput);
-    const legacyJob = await left.reserve(legacyInput, legacyHash);
     const canonicalHash = provisioningRequestHash(legacyInput);
     expect(canonicalHash).not.toBe(legacyHash);
+    await expect(left.reserve(legacyInput, legacyHash)).rejects.toMatchObject({ status: 409 });
+    const legacyJob = await left.reserve(legacyInput, canonicalHash);
+    await client.execute(
+      "UPDATE domain_provisioning_jobs SET request_hash = $2 WHERE id = $1",
+      [legacyJob.id, legacyHash],
+    );
     const compatibleReplay = await right.reserve(legacyInput, canonicalHash);
     expect(compatibleReplay.id).toBe(legacyJob.id);
     expect(compatibleReplay.request_hash).toBe(legacyHash);
@@ -183,7 +184,7 @@ describeLive("Domains provisioning against live PostgreSQL", () => {
       origin_hostname: "origin.us-east-1.elb.amazonaws.com",
       origin_tls_mode: "full",
     };
-    const website = await left.reserve(websiteInput, hash(websiteInput));
+    const website = await left.reserve(websiteInput, provisioningRequestHash(websiteInput));
     expect(website).toMatchObject({
       target: "website_origin",
       worker_name: null,
@@ -196,6 +197,6 @@ describeLive("Domains provisioning against live PostgreSQL", () => {
     );
     expect(persisted).toEqual({ origin_tls_mode: "full" });
     const conflicting = { ...websiteInput, origin_tls_mode: "strict" as const };
-    await expect(left.reserve(conflicting, hash(conflicting))).rejects.toMatchObject({ status: 409 });
+    await expect(left.reserve(conflicting, provisioningRequestHash(conflicting))).rejects.toMatchObject({ status: 409 });
   });
 });

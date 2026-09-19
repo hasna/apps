@@ -274,8 +274,9 @@ export function provisioningRequestHashMatches(
   currentHash: string,
   request: DomainProvisioningRequest,
 ): boolean {
-  if (storedHash === currentHash) return true;
-  if (currentHash !== provisioningRequestHash(request)) return false;
+  const canonicalHash = provisioningRequestHash(request);
+  if (currentHash !== canonicalHash) return false;
+  if (storedHash === canonicalHash) return true;
   if (
     request.acquisition_mode !== "purchase" ||
     request.target !== "shortlinks" ||

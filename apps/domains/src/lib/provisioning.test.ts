@@ -385,6 +385,23 @@ describe("DomainProvisioningService", () => {
     expect(legacyHash).not.toBe(currentHash);
     expect(provisioningRequestHashMatches(legacyHash, currentHash, normalized)).toBe(true);
     expect(provisioningRequestHashMatches("not-a-real-hash", currentHash, normalized)).toBe(false);
+    expect(provisioningRequestHashMatches("attacker-chosen", "attacker-chosen", normalized)).toBe(false);
+    expect(provisioningRequestHashMatches(
+      "attacker-chosen",
+      "attacker-chosen",
+      { ...normalized, acquisition_mode: "adopt" },
+    )).toBe(false);
+    expect(provisioningRequestHashMatches(
+      "attacker-chosen",
+      "attacker-chosen",
+      {
+        ...normalized,
+        target: "website_origin",
+        worker_name: null,
+        origin_hostname: "origin.us-east-1.elb.amazonaws.com",
+        origin_tls_mode: "strict",
+      },
+    )).toBe(false);
     expect(provisioningRequestHashMatches(legacyHash, "not-canonical", normalized)).toBe(false);
     expect(provisioningRequestHashMatches(legacyHash, provisioningRequestHash({
       ...normalized,
