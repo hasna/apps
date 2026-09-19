@@ -8,10 +8,10 @@
  * one per remote ever synced.
  *
  * The watermark is a GitHub `updated_at` timestamp, never a local clock
- * reading (issue detection brief section 3.1.1 rule W1), and it stores the
- * value the NEXT run passes to `filterBy.since`: `max(updatedAt) − overlap`.
- * It only ever moves forward (rule W7) and only after a traversal complete by
- * exhaustion (rule W2).
+ * reading. It is an observational high-water receipt (`max(updatedAt) −
+ * overlap`) and only moves after a stable complete snapshot. Canonical syncs
+ * intentionally re-read the full `state=all` connection: an incremental or
+ * filtered query cannot reconcile closures/removals safely.
  */
 import { getDb } from "../db/database.js";
 
@@ -20,7 +20,7 @@ export interface IssueSyncStateRow {
   remote_url: string;
   gh_owner: string;
   gh_repo: string;
-  /** The `since` boundary for the next run (`max(updatedAt) − overlap`). */
+  /** Observed high-water receipt (`max(updatedAt) − overlap`). */
   watermark_updated_at: string | null;
   first_complete_at: string | null;
   last_complete_at: string | null;

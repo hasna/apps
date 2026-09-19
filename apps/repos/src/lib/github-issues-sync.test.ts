@@ -50,6 +50,7 @@ function pageOf(init: {
   nodes?: unknown[];
   hasNextPage?: boolean;
   endCursor?: string | null;
+  totalCount?: number;
   errors?: string[];
   transport_failure?: string | null;
 } = {}): RawIssuePage {
@@ -58,7 +59,7 @@ function pageOf(init: {
     data: {
       repository: {
         issues: {
-          totalCount: nodes.length,
+          totalCount: init.totalCount ?? nodes.length,
           pageInfo: {
             hasNextPage: init.hasNextPage ?? false,
             endCursor: init.endCursor === undefined ? "cursor-1" : init.endCursor,
@@ -162,10 +163,17 @@ describe("issue ingest storage", () => {
 describe("watermark discipline (rules W/C)", () => {
   it("(d) a complete two-page traversal advances to max(updatedAt) − overlap", () => {
     upsertRepo({ path: "/w/apps", name: "apps", org: "hasna", remote_url: "github.com/hasna/apps" });
-    const client = stubClient([
-      pageOf({ nodes: [ghIssue(1, { updatedAt: "2026-09-10T10:00:00Z" })], hasNextPage: true, endCursor: "c1" }),
-      pageOf({ nodes: [ghIssue(2, { updatedAt: "2026-09-10T12:00:00Z" })] }),
-    ]);
+    const firstPage = pageOf({
+      nodes: [ghIssue(2, { updatedAt: "2026-09-10T12:00:00Z" })],
+      hasNextPage: true,
+      endCursor: "c1",
+      totalCount: 2,
+    });
+    const secondPage = pageOf({
+      nodes: [ghIssue(1, { updatedAt: "2026-09-10T10:00:00Z" })],
+      totalCount: 2,
+    });
+    const client = stubClient([firstPage, secondPage, firstPage, secondPage]);
 
     const result = syncRemoteIssues("github.com/hasna/apps", "hasna/apps", { client, retryAttempts: 1, sleep: noSleep });
 
@@ -180,7 +188,7 @@ describe("watermark discipline (rules W/C)", () => {
     expect(state.first_complete_at).not.toBeNull();
   });
 
-  it("(d) the next run pins the inclusive watermark as since and upserts idempotently", () => {
+  it("a later canonical run re-reads state=all and upserts idempotently", () => {
     const repo = upsertRepo({ path: "/w/apps", name: "apps", org: "hasna", remote_url: "github.com/hasna/apps" });
     seedWatermark();
 
@@ -188,13 +196,13 @@ describe("watermark discipline (rules W/C)", () => {
     // or after), plus one genuinely new issue.
     const client = stubClient([pageOf({
       nodes: [
-        ghIssue(1, { updatedAt: "2026-09-10T12:00:00Z" }),
         ghIssue(2, { updatedAt: "2026-09-10T13:00:00Z", title: "Newer issue" }),
+        ghIssue(1, { updatedAt: "2026-09-10T12:00:00Z" }),
       ],
     })]);
     const second = syncRemoteIssues("github.com/hasna/apps", "hasna/apps", { client, retryAttempts: 1, sleep: noSleep });
 
-    expect(client.requests[0]!.request.since).toBe("2026-09-10T11:00:00Z");
+    expect(client.requests[0]!.request.since).toBeNull();
     expect(second.sealed).toBe(true);
     expect(second.baseline).toBe(false);
     expect(second.new_issues).toBe(1);
@@ -295,6 +303,85 @@ describe("watermark discipline (rules W/C)", () => {
     const state = getIssueSyncState("github.com/hasna/apps")!;
     expect(state.last_outcome).toBe("complete");
     expect(state.watermark_updated_at).toBeNull();
+  });
+});
+
+
+
+describe("atomic canonical snapshot publication", () => {
+  it("publishes no rows when a later page fails", () => {
+    const repo = upsertRepo({ path: "/w/apps", name: "apps", org: "hasna", remote_url: "github.com/hasna/apps" });
+    syncRemoteIssues("github.com/hasna/apps", "hasna/apps", {
+      client: stubClient([pageOf({ nodes: [ghIssue(9)] })]),
+      retryAttempts: 1,
+      sleep: noSleep,
+    });
+
+    const client = stubClient([
+      pageOf({ nodes: [ghIssue(2)], hasNextPage: true, endCursor: "c1", totalCount: 2 }),
+      pageOf({ nodes: [ghIssue(1)], totalCount: 2, errors: ["second page failed"] }),
+    ]);
+    const failed = syncRemoteIssues("github.com/hasna/apps", "hasna/apps", {
+      client,
+      pageSize: 1,
+      retryAttempts: 1,
+      sleep: noSleep,
+    });
+
+    expect(failed.sealed).toBe(false);
+    expect(failed.rows_written).toBe(0);
+    expect(failed.rows_deleted).toBe(0);
+    expect(listIssueNumbers(repo.id)).toEqual([9]);
+  });
+
+  it("reconciles open to closed and removes rows absent from a stable full snapshot", () => {
+    const repo = upsertRepo({ path: "/w/apps", name: "apps", org: "hasna", remote_url: "github.com/hasna/apps" });
+    syncRemoteIssues("github.com/hasna/apps", "hasna/apps", {
+      client: stubClient([pageOf({ nodes: [ghIssue(1)] })]),
+      retryAttempts: 1,
+      sleep: noSleep,
+    });
+    expect(listIssues({})[0]!.state).toBe("open");
+
+    const closed = syncRemoteIssues("github.com/hasna/apps", "hasna/apps", {
+      client: stubClient([pageOf({ nodes: [ghIssue(1, {
+        state: "CLOSED",
+        stateReason: "COMPLETED",
+        closedAt: "2026-09-03T00:00:00Z",
+        updatedAt: "2026-09-03T00:00:00Z",
+      })] })]),
+      retryAttempts: 1,
+      sleep: noSleep,
+    });
+    expect(closed.sealed).toBe(true);
+    expect(listIssues({})[0]).toMatchObject({ number: 1, state: "closed", state_reason: "COMPLETED" });
+
+    const removed = syncRemoteIssues("github.com/hasna/apps", "hasna/apps", {
+      client: stubClient([pageOf({ nodes: [] })]),
+      retryAttempts: 1,
+      sleep: noSleep,
+    });
+    expect(removed.rows_deleted).toBe(1);
+    expect(listIssueNumbers(repo.id)).toEqual([]);
+  });
+
+  it("fails closed when a filtered state is requested and preserves canonical rows", () => {
+    const repo = upsertRepo({ path: "/w/apps", name: "apps", org: "hasna", remote_url: "github.com/hasna/apps" });
+    syncRemoteIssues("github.com/hasna/apps", "hasna/apps", {
+      client: stubClient([pageOf({ nodes: [ghIssue(1)] })]),
+      retryAttempts: 1,
+      sleep: noSleep,
+    });
+    const client = stubClient([pageOf({ nodes: [] })]);
+
+    expect(() => syncRemoteIssues("github.com/hasna/apps", "hasna/apps", {
+      state: "open",
+      client,
+      retryAttempts: 1,
+      sleep: noSleep,
+    })).toThrow("requires state=all");
+    expect(client.requests).toHaveLength(0);
+    expect(listIssueNumbers(repo.id)).toEqual([1]);
   });
 });
 
