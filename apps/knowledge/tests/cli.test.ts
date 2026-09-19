@@ -1387,7 +1387,7 @@ describe('knowledge cli', () => {
     expect(context.exitCode).toBe(0);
     const contextOut = JSON.parse(new TextDecoder().decode(context.stdout));
     expect(contextOut.results[0]).toMatchObject({ kind: 'legacy_item', id: addOut.item.id });
-    expect(contextOut.excerpts[0].text).toContain('local-first hosted wrapper');
+    expect(contextOut.excerpts[0].text_preview).toContain('local-first hosted wrapper');
 
     const pack = runCli([
       'context',
@@ -3466,8 +3466,11 @@ describe('knowledge cli', () => {
     expect(sourceSearch.exitCode).toBe(0);
     const sourceSearchOut = JSON.parse(new TextDecoder().decode(sourceSearch.stdout));
     expect(sourceSearchOut.mode.semantic).toBe(false);
+    expect(sourceSearchOut.detail).toBe('compact');
     expect(sourceSearchOut.results.some((entry: any) => entry.kind === 'source_chunk' && entry.source.uri === sourceRef)).toBe(true);
-    expect(sourceSearchOut.results[0].text).toContain('source-governed company wiki content');
+    expect(sourceSearchOut.results[0].text).toBeUndefined();
+    expect(sourceSearchOut.results[0].text_preview).toContain('source-governed company wiki content');
+    expect(new TextDecoder().decode(sourceSearch.stdout).trim()).not.toContain('\n');
 
     const compactJsonSearch = runCli(['search', 'source', 'company', 'wiki', '--scope', 'project', '--json', '--detail', 'compact'], dir);
     expect(compactJsonSearch.exitCode).toBe(0);
@@ -3510,9 +3513,17 @@ describe('knowledge cli', () => {
 
     const context = runCli(['search', 'company', 'wiki', 'content', '--context', '--scope', 'project', '--semantic', '--fake', '--dimensions', '8', '--json'], dir);
     expect(context.exitCode).toBe(0);
-    const contextOut = JSON.parse(new TextDecoder().decode(context.stdout));
+    const contextText = new TextDecoder().decode(context.stdout).trim();
+    const contextOut = JSON.parse(contextText);
+    expect(contextText).not.toContain('\n');
+    expect(contextOut.detail).toBe('compact');
     expect(contextOut.excerpts.length).toBeGreaterThan(0);
-    expect(contextOut.citations[0].provenance.source_owner).toBe('open-files');
+    expect(contextOut.excerpts[0].text).toBeUndefined();
+    expect(contextOut.citations[0].source_uri).toBe(sourceRef);
+
+    const fullContext = runCli(['search', 'company', 'wiki', 'content', '--context', '--scope', 'project', '--semantic', '--fake', '--dimensions', '8', '--json', '--detail', 'full'], dir);
+    expect(fullContext.exitCode).toBe(0);
+    expect(JSON.parse(new TextDecoder().decode(fullContext.stdout)).citations[0].provenance.source_owner).toBe('open-files');
 
     const compactJsonContext = runCli(['search', 'company', 'wiki', 'content', '--context', '--scope', 'project', '--semantic', '--fake', '--dimensions', '8', '--json', '--detail', 'compact'], dir);
     expect(compactJsonContext.exitCode).toBe(0);
@@ -4364,5 +4375,32 @@ describe('Knowledge CLI transport selection', () => {
     const explicitFixtureKey = ['k_explicit', 'login_key'].join('_');
     expect(contents).toContain(`${KNOWLEDGE_API_KEY_ENV_KEYS[0]}=${explicitFixtureKey}`);
     expect(contents).not.toContain('k_ambient_env_key');
+  });
+
+
+  test('auth login stores an unversioned Knowledge base and transport appends /v1 once', () => {
+    const home = sandboxHome();
+    const versioned = 'https://api.hasna.com/knowledge/v1';
+    const unversioned = 'https://api.hasna.com/knowledge';
+    const login = runCliWithCleanRoute(['auth', 'login', '--api-url', versioned, '--api-key', 'k_versioned_login_fixture', '--json'], {
+      ...home,
+      HASNA_KNOWLEDGE_LOCAL: '',
+    });
+    expect(login.exitCode).toBe(0);
+    expect(JSON.parse(decode(login.stdout))).toMatchObject({ ok: true, api_url: unversioned });
+
+    const credentials = join(home.HOME, '.hasna', 'knowledge', 'config', 'credentials');
+    const contents = readFileSync(credentials, 'utf8');
+    expect(contents).toContain(`HASNA_KNOWLEDGE_API_URL=${unversioned}\n`);
+    expect(contents).not.toContain('/knowledge/v1');
+
+    const transport = runCliWithCleanRoute(['transport', '--json'], {
+      ...home,
+      HASNA_KNOWLEDGE_LOCAL: '',
+    });
+    expect(transport.exitCode).toBe(0);
+    const report = JSON.parse(decode(transport.stdout));
+    expect(report.base_url).toBe(`${unversioned}/v1`);
+    expect(report.base_url).not.toContain('/v1/v1');
   });
 });

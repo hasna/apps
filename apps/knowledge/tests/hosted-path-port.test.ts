@@ -291,7 +291,7 @@ async function runCli(args: string[], extraEnv: Record<string, string> = {}) {
 async function withMcp<T>(fn: (client: Client) => Promise<T>): Promise<T> {
   const transport = new StdioClientTransport({
     command: process.execPath,
-    args: [MCP],
+    args: [MCP, '--mcp-profile', 'full'],
     cwd: sandboxCwd,
     stderr: 'pipe',
     env: hostedEnv,
@@ -544,7 +544,7 @@ describe('knowledge-mcp — hosted tools reach exact /knowledge/v1 routes', () =
       const atSearch = mark();
       const okSearch = toolJson(await client.callTool({
         name: 'ok_search',
-        arguments: { query: 'searchable', limit: 1, detail: 'compact' },
+        arguments: { query: 'searchable', limit: 1 },
       }));
       expect(okSearch.body).toMatchObject({ ok: true, detail: 'compact' });
       expect((okSearch.body.results as Record<string, unknown>[])[0]?.text).toBeUndefined();
@@ -555,7 +555,7 @@ describe('knowledge-mcp — hosted tools reach exact /knowledge/v1 routes', () =
       const atKnowledgeSearch = mark();
       const knowledgeSearch = toolJson(await client.callTool({
         name: 'knowledge_search',
-        arguments: { query: 'searchable', limit: 1, detail: 'compact' },
+        arguments: { query: 'searchable', limit: 1 },
       }));
       expect(knowledgeSearch.body).toMatchObject({ ok: true, detail: 'compact' });
       expect((knowledgeSearch.body.results as Record<string, unknown>[])[0]?.text).toBeUndefined();
