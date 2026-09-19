@@ -29,6 +29,16 @@ const source = "a".repeat(40);
 const digest = `sha256:${"b".repeat(64)}`;
 const image = `123456789012.dkr.ecr.us-east-1.amazonaws.com/fixture-repository@${digest}`;
 
+describe("Domains manifest secret projection", () => {
+  test("requires Cloudflare provider authority in the manifest and injects it into the candidate", () => {
+    const workflow = readFileSync(join(root, ".github", "workflows", "deploy-domains.yml"), "utf8");
+    expect(workflow).toContain('has("CLOUDFLARE_API_TOKEN")');
+    expect(workflow).toContain("MANIFEST_WEB_SECRETS");
+    expect(workflow).toContain("required_secrets");
+    expect(workflow).toContain("valueFrom:.value");
+  });
+});
+
 describe("Domains deployment runtime guards", () => {
   test("service anchor accepts the captured revision and rejects a concurrent race", async () => {
     const dir = temp();

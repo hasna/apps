@@ -280,6 +280,16 @@ jobs:
           health_url="$(get_string '.health_url')"
           subnets="$(jq -er '.subnets | arrays | select(length > 0) | join(",")' <<<"${manifest}")"
           security_groups="$(jq -er '.security_groups | arrays | select(length > 0) | join(",")' <<<"${manifest}")"
+          web_secrets="$(jq -ce --arg region "${AWS_REGION}" --arg account "${EXPECTED_ACCOUNT_ID}" '
+            .web_secrets
+            | objects
+            | select(has("CLOUDFLARE_API_TOKEN"))
+            | select(length > 0)
+            | select(all(to_entries[];
+                (.key | test("^[A-Z][A-Z0-9_]{0,127}$")) and
+                (.value | test("^arn:aws:secretsmanager:" + $region + ":" + $account + ":secret:[A-Za-z0-9/_+=.@-]+$"))
+              ))
+          ' <<<"${manifest}")"
 
           expected_ecr_url="${EXPECTED_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${EXPECTED_ECR_REPOSITORY}"
           [[ "${cluster}" == "${EXPECTED_CLUSTER}" ]] || { echo "manifest cluster mismatch" >&2; exit 1; }
@@ -310,6 +320,7 @@ jobs:
             printf 'subnets=%s\n' "${subnets}"
             printf 'security_groups=%s\n' "${security_groups}"
             printf 'health_url=%s\n' "${health_url}"
+            printf 'web_secrets=%s\n' "${web_secrets}"
           } >> "${GITHUB_OUTPUT}"
 
       - name: Resolve authenticated receipt credential before mutation
@@ -340,6 +351,12 @@ jobs:
           jq -e '.services[0].status == "ACTIVE" and .services[0].desiredCount > 0' <<<"${service_json}" >/dev/null
           previous_task_definition="$(jq -er '.services[0].taskDefinition' <<<"${service_json}")"
           [[ "${previous_task_definition}" == *":task-definition/${WEB_FAMILY}:"* ]]
+          completed_deployments="$(jq --arg td "${previous_task_definition}" '[.services[0].deployments[]? | select(.taskDefinition == $td and .rolloutState == "COMPLETED")] | length' <<<"${service_json}")"
+          failed_primary="$(jq '[.services[0].deployments[]? | select(.status == "PRIMARY" and .rolloutState == "FAILED")] | length' <<<"${service_json}")"
+          [[ "${completed_deployments}" == "1" && "${failed_primary}" == "0" ]] || {
+            echo "Domains service requires reconciliation before deployment: taskDefinition=${previous_task_definition} completedMatches=${completed_deployments} failedPrimary=${failed_primary}" >&2
+            exit 1
+          }
 
           task_json="$(aws ecs describe-task-definition --task-definition "${previous_task_definition}" --output json)"
           [[ "$(jq --arg c "${WEB_CONTAINER}" '[.taskDefinition.containerDefinitions[] | select(.name == $c)] | length' <<<"${task_json}")" == "1" ]]
@@ -549,20 +566,32 @@ jobs:
           WEB_CONTAINER: ${{ steps.manifest.outputs.web_container }}
           PREVIOUS_TASK_DEFINITION: ${{ steps.before.outputs.previous_task_definition }}
           IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+          MANIFEST_WEB_SECRETS: ${{ steps.manifest.outputs.web_secrets }}
         run: |
           set -Eeuo pipefail
           task_definition="$(aws ecs describe-task-definition --task-definition "${PREVIOUS_TASK_DEFINITION}" --query taskDefinition --output json)"
           [[ "$(jq -r '.taskDefinitionArn' <<<"${task_definition}")" == "${PREVIOUS_TASK_DEFINITION}" ]]
           [[ "$(jq -r '.family' <<<"${task_definition}")" == "${WEB_FAMILY}" ]]
           [[ "$(jq --arg c "${WEB_CONTAINER}" '[.containerDefinitions[] | select(.name == $c)] | length' <<<"${task_definition}")" == "1" ]]
-          replacement="$(jq --arg image "${IMAGE}" --arg c "${WEB_CONTAINER}" '
+          jq -e 'type == "object" and has("CLOUDFLARE_API_TOKEN")' <<<"${MANIFEST_WEB_SECRETS}" >/dev/null
+          replacement="$(jq --arg image "${IMAGE}" --arg c "${WEB_CONTAINER}" --argjson required_secrets "${MANIFEST_WEB_SECRETS}" '
             .containerDefinitions |= map(
               if .name == $c then
                 .image = $image
+                | .secrets = (
+                    ((.secrets // []) | map(select(.name as $name | ($required_secrets | has($name) | not))))
+                    + ($required_secrets | to_entries | map({name:.key,valueFrom:.value}))
+                    | sort_by(.name)
+                  )
               else . end
             )
             | del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy,.deregisteredAt)
           ' <<<"${task_definition}")"
+          jq -e --arg c "${WEB_CONTAINER}" --argjson required "${MANIFEST_WEB_SECRETS}" '
+            .containerDefinitions[] | select(.name == $c)
+            | (.secrets // []) as $actual
+            | all($required | to_entries[]; . as $entry | any($actual[]; .name == $entry.key and .valueFrom == $entry.value))
+          ' <<<"${replacement}" >/dev/null
           deployed_task_definition="$(aws ecs register-task-definition --cli-input-json "${replacement}" --query taskDefinition.taskDefinitionArn --output text)"
           [[ "${deployed_task_definition}" == *":task-definition/${WEB_FAMILY}:"* ]]
           printf 'deployed_task_definition=%s\n' "${deployed_task_definition}" >> "${GITHUB_OUTPUT}"
