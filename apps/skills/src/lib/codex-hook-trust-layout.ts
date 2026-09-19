@@ -10,13 +10,31 @@ const canonicalizeTableOrder = (text: string): string => {
   const headers = [...text.matchAll(/^[ \t]*(\[\[?[^\r\n]+\]\]?)[ \t]*(#[^\r\n]*)?(?:\r?\n|$)/gm)];
   if (!headers.length) return text;
   // Array-of-tables and parent/child table ordering carry parser-sensitive
-  // structure. The native writer is admitted only for the simple unrelated
-  // table reorder observed in Codex 0.154; all other layouts remain fail-closed
-  // under the ordinary preservation witness.
+  // structure. A Codex 0.154 write can move a simple unrelated table across
+  // an unchanged array-of-tables run (the observed skills.bundled/skills.config
+  // layout). Preserve the array run and reject every parent/child or repeated
+  // table shape before admitting that narrow normalization.
   const keys = headers.map(header => header[1]!.trim());
-  if (keys.some(key => key.startsWith("[[") || keys.filter(other => other === key).length > 1)) return text;
-  const plain = keys.map(key => key.slice(1, -1).trim());
-  if (plain.some((key, index) => plain.some((other, otherIndex) => index !== otherIndex && (other.startsWith(`${key}.`) || key.startsWith(`${other}.`))))) return text;
+  const repeated = keys.filter(key => !key.startsWith("[[")).filter((key, index, simple) => simple.indexOf(key) !== index);
+  const arrayKeys = keys.filter(key => key.startsWith("[["));
+  const plain = keys.map(key => key.replace(/^\[\[?/, "").replace(/\]\]?$/, "").trim());
+  const parentChild = plain.some((key, index) => plain.some((other, otherIndex) => index !== otherIndex && (other.startsWith(`${key}.`) || key.startsWith(`${other}.`))));
+  if (repeated.length || parentChild) return text;
+  if (!arrayKeys.length) {
+    const first = headers[0]!.index!;
+    const prefix = text.slice(0, first);
+    const blocks = headers.map((header, index) => ({
+      key: header[1]!,
+      order: index,
+      text: text.slice(header.index!, headers[index + 1]?.index ?? text.length),
+    }));
+    blocks.sort((a, b) => a.key.localeCompare(b.key) || a.order - b.order);
+    return prefix + blocks.map(block => block.text).join("");
+  }
+  // Keep every array-of-tables block and every simple table in its original
+  // relative order. Only their interleaving may change, which covers the
+  // observed native writer move without admitting a reorder among unrelated
+  // tables or among array entries.
   const first = headers[0]!.index!;
   const prefix = text.slice(0, first);
   const blocks = headers.map((header, index) => ({
@@ -24,8 +42,9 @@ const canonicalizeTableOrder = (text: string): string => {
     order: index,
     text: text.slice(header.index!, headers[index + 1]?.index ?? text.length),
   }));
-  blocks.sort((a, b) => a.key.localeCompare(b.key) || a.order - b.order);
-  return prefix + blocks.map(block => block.text).join("");
+  const simple = blocks.filter(block => !block.key.startsWith("[["));
+  const arrays = blocks.filter(block => block.key.startsWith("[["));
+  return prefix + [...simple, ...arrays].map(block => block.text).join("");
 };
 
 /** Conservative admission and text witness, never a TOML writer. Native Codex

@@ -17,7 +17,7 @@ function intentFor(f: ReturnType<typeof fixture>, plan: any, hooksText: Buffer, 
   const nativeHooks = f.entries.map((hook: any) => ({ key: hook.key, eventName: hook.eventName, handlerType: hook.handlerType, command: hook.command, matcher: hook.matcher, timeoutSec: hook.timeoutSec, async: hook.async, statusMessage: hook.statusMessage, additionalContextLimit: hook.additionalContextLimit, sourcePath: hook.sourcePath, source: hook.source, pluginId: hook.pluginId, isManaged: hook.isManaged, currentHash: hook.currentHash, enabled: hook.enabled, trustStatus: hook.trustStatus }));
   return { version: 1, home: f.home, planDigest: plan.planDigest, skillsCli: plan.skillsCli, nativeVersion: "codex-cli 0.154.0", configPath: f.configPath, configSha256: createHash("sha256").update(f.before).digest("hex"), configVersion: `sha256:${"b".repeat(64)}`, hooksSha256: createHash("sha256").update(hooksText).digest("hex"), policySha256: createHash("sha256").update(policyText).digest("hex"), declarations, admitted: plan.planned, hooks: plan.planned, nativeHooks };
 }
-function fixture() {
+function fixture(extraConfig = "") {
   const home = mkdtempSync(join(tmpdir(), "skills-native-trust-")); roots.push(home);
   const dataDir = join(home, ".hasna/skills"), root = join(home, ".codex"), command = join(home, "bin/skills");
   mkdirSync(root, { recursive: true, mode: 0o700 });
@@ -28,7 +28,7 @@ function fixture() {
   symlinkSync(cli, command); process.env.PATH = join(home, "bin") + ":" + initialPath;
   const reviewedSkillsCli = { path: command, version: "0.8.9", sha256: createHash("sha256").update(readFileSync(cli)).digest("hex") };
   const configPath = join(root, "config.toml"), hooksPath = join(root, "hooks.json");
-  writeFileSync(configPath, '# preserve this comment\nmodel = "synthetic"\n', { mode: 0o600 });
+  writeFileSync(configPath, '# preserve this comment\nmodel = "synthetic"\n' + extraConfig, { mode: 0o600 });
   applyAgentIntegration(planAgentIntegration({ home, dataDir, agents: ["codex"], command, profileId: "synthetic" }));
   const hooks = JSON.parse(readFileSync(hooksPath, "utf8"));
   const names = { UserPromptSubmit: "user_prompt_submit", SessionStart: "session_start", SubagentStart: "subagent_start" };
@@ -73,6 +73,14 @@ function fixture() {
           const without = text.slice(0, bundled).trimEnd();
           writeFileSync(configPath, without + "\n\n" + block + "\n");
         }
+        if (mode === "arrayReorder") {
+          const text = readFileSync(configPath, "utf8"), headers = [...text.matchAll(/^[ \t]*(\[\[?[^\r\n]+\]\]?)[ \t]*(?:#[^\r\n]*)?(?:\r?\n|$)/gm)];
+          const bundled = headers.findIndex(header => header[1] === "[skills.bundled]"), array = headers.findIndex(header => header[1]?.startsWith("[["));
+          expect(bundled).toBeGreaterThanOrEqual(0); expect(array).toBeGreaterThanOrEqual(0);
+          const blocks = headers.map((header, index) => text.slice(header.index!, headers[index + 1]?.index ?? text.length));
+          [blocks[bundled], blocks[array]] = [blocks[array]!, blocks[bundled]!];
+          writeFileSync(configPath, text.slice(0, headers[0]!.index!) + blocks.join("").trimEnd() + "\n");
+        }
         if (mode === "array") writeFileSync(configPath, readFileSync(configPath, "utf8") + "\n[[fruits]]\nname = \"apple\"\n[[fruits]]\nname = \"pear\"\n");
         if (mode === "nested") writeFileSync(configPath, readFileSync(configPath, "utf8") + "\n[parent]\nvalue = \"one\"\n[parent.child]\nvalue = \"two\"\n");
         for (const entry of entries) entry.enabled = true;
@@ -95,6 +103,13 @@ test("native trust accepts Codex table reordering while preserving unrelated con
   const result = await enrollCodexNativeHooks({ ...f, apply: true, reviewedPlanDigest: plan.planDigest }, f.connect);
   expect(result.applied).toBe(true); expect(result.nativeEligible).toBe(true);
   expect(readFileSync(f.configPath, "utf8")).toContain("preserve unrelated");
+});
+test("native trust accepts a simple table move across an unchanged array-of-tables run", async () => {
+  const f = fixture('\n[[codex.unrelated]]\npath = "/fixture/unrelated/SKILL.md"\nenabled = false\n');
+  f.setMode("arrayReorder"); const plan = await enrollCodexNativeHooks(f, f.connect);
+  const result = await enrollCodexNativeHooks({ ...f, apply: true, reviewedPlanDigest: plan.planDigest }, f.connect);
+  expect(result.applied).toBe(true); expect(result.nativeEligible).toBe(true);
+  expect(readFileSync(f.configPath, "utf8")).toContain('path = "/fixture/unrelated/SKILL.md"');
 });
 test("native CAS enrollment preserves other trust/comments and becomes idempotent", async () => {
   const f = fixture(); const plan = await enrollCodexNativeHooks(f, f.connect); const result = await enrollCodexNativeHooks({ ...f, apply: true, reviewedPlanDigest: plan.planDigest }, f.connect);
