@@ -27,6 +27,16 @@ test("native migration covers project ancestors without duplicate archive entrie
   expect(readFileSync(join(archived.entries[0]!.archive, "SKILL.md"), "utf8")).toBe("Synthetic ancestor instructions\n");
 });
 
+test("a Claude hook plan does not inspect unrelated Codex plugin roots", () => {
+  const f = fixture(), codexPluginRoot = join(f.home, ".codex", "plugins", "cache", "openai-bundled", "chrome", "latest");
+  mkdirSync(codexPluginRoot, { recursive: true });
+  mkdirSync(join(f.home, ".codex"), { recursive: true });
+  symlinkSync(codexPluginRoot, join(f.home, ".codex", "skills"), "dir");
+  expect(() => planAgentIntegration({ ...f, agents: ["claude"] })).not.toThrow();
+  expect(() => inventoryNativeSkills(f.home, { agents: ["claude"] })).not.toThrow();
+  expect(() => inventoryNativeSkills(f.home)).toThrow("symlink");
+});
+
 test("native drift identifies bounded escaped paths without exposing document contents", () => {
   const f = fixture(); applyAgentIntegration(planAgentIntegration({ ...f, agents: ["claude"] }));
   const projectDir = join(f.home, ...Array.from({ length: 5 }, () => "long-parent".repeat(18)));
