@@ -36,6 +36,7 @@ const selectorSchema = z.object({
   checkGlobalCoverage: z.boolean(),
   assetSurface: nonempty.optional(),
   assetScope: z.enum(["global", "project", "session"]).optional(),
+  claudeProjectImport: z.object({ providerVersion: z.literal("2.1.278") }).strict().optional(),
 }).strict();
 
 export interface SessionRefreshResult {
@@ -131,6 +132,16 @@ function readManagedManifest(targetHome: string): { manifest: SessionRenderManif
     throw new Error("SESSION_REFRESH_MANIFEST_INVALID: project-scoped render is missing its recorded project root.");
   }
   manifest.refreshSelector = normalizeSessionHostedProfileSelector(manifest.refreshSelector);
+  const companion = manifest.claudeProjectImport;
+  if (Boolean(companion) !== Boolean(manifest.refreshSelector.claudeProjectImport)
+    || (companion && (manifest.tool !== "sumi" || manifest.targetKind !== "project-root"
+      || companion.providerVersion !== manifest.refreshSelector.claudeProjectImport?.providerVersion
+      || companion.capability !== "claude-project-relative-import/v1" || companion.canonicalPath !== "AGENTS.md"
+      || companion.importPath !== "CLAUDE.md"
+      || manifest.files.find((file) => file.relativePath === "AGENTS.md")?.sha256 !== companion.canonicalSha256
+      || !manifest.files.some((file) => file.relativePath === "CLAUDE.md")))) {
+    throw new Error("SESSION_REFRESH_COMPANION_INVALID: shared project capability, selector and canonical file must agree.");
+  }
   return { manifest, sha256: createHash("sha256").update(raw).digest("hex") };
 }
 
@@ -180,6 +191,7 @@ export async function refreshSessionRender(input: {
         : {}),
     sessionId: previous.manifest.sessionId ?? undefined,
     refreshSelector: selector,
+    claudeProjectImport: selector.claudeProjectImport,
     codewithNativeImports: selector.codewithNativeImports,
     allowEmptySources: selector.allowEmptySources,
     configs, bindings,

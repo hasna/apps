@@ -22,7 +22,7 @@ import type {
   SessionProviderSurface,
   SessionRenderTool,
 } from "./session-render.js";
-import { isNativeProfileSessionTarget, planSessionRender, sourceFromConfig } from "./session-render.js";
+import { isNativeProfileSessionTarget, planCompiledProfileSessionRender, sourceFromConfig } from "./session-render.js";
 import { providerVersionSatisfies } from "./provider-version.js";
 import { compileAssetPlan, type AssetPlanMode } from "./asset-plan.js";
 import { instructionSourceRejection } from "./instruction-source-policy.js";
@@ -530,6 +530,20 @@ export function planProfileSessionRender(input: Omit<SessionRenderInput, "source
     context: { provider: input.tool, provider_version: input.provider_version, ...input.graph_context,
       ...(nativeProfile ? { provider_variant: "native-profile" } : {}) },
   });
+  let companionSources: SessionInstructionSource[] | undefined;
+  if (input.claudeProjectImport) {
+    if (input.extra_sources?.length) throw new Error("CLAUDE_PROJECT_IMPORT_UNBOUND: shared project imports cannot include extra sources outside explicit profile bindings.");
+    for (const unit of compiled.plan.units) {
+      const providers = input.bindings.find((row) => row.config_id === unit.config_id && row.profile_id === input.profile_id)?.binding.providers;
+      if (!providers?.some((entry) => entry.provider === "sumi") || !providers.some((entry) => entry.provider === "claude")) {
+        throw new Error(`CLAUDE_PROJECT_IMPORT_BINDING: ${unit.config_id} requires explicit Sumi and Claude provider bindings.`);
+      }
+    }
+    companionSources = compileInstructionGraph({
+      profile_id: input.profile_id, configs: input.configs, bindings: input.bindings,
+      context: { ...input.graph_context, provider: "claude", provider_version: input.claudeProjectImport.providerVersion, provider_variant: undefined },
+    }).sources;
+  }
   const assetPlan = compileAssetPlan({
     profileId: input.profile_id,
     provider: input.tool,
@@ -563,13 +577,13 @@ export function planProfileSessionRender(input: Omit<SessionRenderInput, "source
     ]);
   }
   return deepFreeze({
-    ...planSessionRender({
+    ...planCompiledProfileSessionRender({
       ...renderInput,
       ...(compiled.capability.session_surface ? { providerSurface: compiled.capability.session_surface } : {}),
       sources: [...compiled.sources, ...(input.extra_sources ?? [])],
       assetPlan,
       assetContents: Object.fromEntries((input.asset_configs ?? []).map((config) => [config.id, config.content])),
-    }),
+    }, companionSources),
     instructionGraph: compiled.plan,
   });
 }

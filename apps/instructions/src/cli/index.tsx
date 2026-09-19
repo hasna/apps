@@ -343,6 +343,7 @@ async function buildSessionRenderPlan(
     allowEmptySources?: boolean;
     compileProfile?: string;
     providerVersion?: string;
+    claudeProjectImport?: string;
     providerVariant?: string;
     model?: string;
     path?: string;
@@ -361,6 +362,7 @@ async function buildSessionRenderPlan(
   const station = opts.stationProfile === false ? null : stationProfileSource();
   const ownedClaudeAuthorities = tool === "claude" ? await loadOwnedClaudeAuthorities(store) : undefined;
   if (!opts.compileProfile) {
+    if (opts.claudeProjectImport) throw new Error("--claude-project-import requires --compile-profile with explicit shared provider bindings.");
     if (opts.providerVariant) throw new Error("--provider-variant requires --compile-profile.");
     const sources = await collectSessionSources(opts, tool, store);
     if (station) sources.push(station);
@@ -377,6 +379,8 @@ async function buildSessionRenderPlan(
     });
   }
   if (!opts.providerVersion?.trim()) throw new Error("--provider-version is required with --compile-profile.");
+  if (opts.claudeProjectImport && opts.claudeProjectImport !== "2.1.278") throw new Error("--claude-project-import supports only verified Claude 2.1.278.");
+  const claudeProjectImport = opts.claudeProjectImport ? { providerVersion: "2.1.278" as const } : undefined;
   if ((opts.source?.length ?? 0) || (opts.config?.length ?? 0) || (opts.identityExport?.length ?? 0) || (opts.replaceSource?.length ?? 0)) {
     throw new Error("--compile-profile cannot be mixed with --source, --config, --identity-export, or --replace-source.");
   }
@@ -391,6 +395,7 @@ async function buildSessionRenderPlan(
   return planProfileSessionRender({
     profile_id: profile.id,
     provider_version: opts.providerVersion,
+    claudeProjectImport,
     tool,
     profile: opts.profile,
     targetHome: opts.targetHome,
@@ -402,6 +407,7 @@ async function buildSessionRenderPlan(
         authority: store.v1BaseUrl,
         profileId: profile.id,
         providerVersion: opts.providerVersion,
+        ...(claudeProjectImport ? { claudeProjectImport } : {}),
         ...(opts.providerVariant ? { providerVariant: opts.providerVariant } : {}),
         ...(opts.model ? { model: opts.model } : {}),
         ...(opts.path ? { path: opts.path } : {}),
@@ -1722,6 +1728,7 @@ sessionCmd.command("plan")
   .option("--replace-source <replacer-id>[=<target-source-id>]", "source id that broadly replaces earlier layers, or targets one earlier source", collectOption, [])
   .option("--compile-profile <id-or-slug>", "compile persisted config bindings from this Instructions profile")
   .option("--provider-version <semver>", "installed provider version used for capability matching")
+  .option("--claude-project-import <version>", "manage a Claude relative import of the same Sumi project AGENTS.md; requires explicit shared profile bindings and --no-station-profile")
   .option("--provider-variant <variant>", "explicit provider capability variant (for example OpenCode v2-agents)")
   .option("--model <model>", "active model used for model activation")
   .option("--path <path>", "active path recorded in the graph context")
@@ -1803,6 +1810,7 @@ sessionCmd.command("apply")
   .option("--replace-source <replacer-id>[=<target-source-id>]", "source id that broadly replaces earlier layers, or targets one earlier source", collectOption, [])
   .option("--compile-profile <id-or-slug>", "compile persisted config bindings from this Instructions profile")
   .option("--provider-version <semver>", "installed provider version used for capability matching")
+  .option("--claude-project-import <version>", "manage a Claude relative import of the same Sumi project AGENTS.md; requires explicit shared profile bindings and --no-station-profile")
   .option("--provider-variant <variant>", "explicit provider capability variant (for example OpenCode v2-agents)")
   .option("--model <model>", "active model used for model activation")
   .option("--path <path>", "active path recorded in the graph context")

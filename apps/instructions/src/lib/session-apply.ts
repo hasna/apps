@@ -265,6 +265,24 @@ function applySessionRenderUnlocked(
   const manifestPath = resolvePlannedFilePath(plan, plan.manifestFile, targetHome);
   assertManifestPrecondition(manifestPath, targetHome, options.expectedManifestSha256);
   const previousManifest = readPreviousManifest(manifestPath);
+  if (plan.manifest.claudeProjectImport || previousManifest?.claudeProjectImport) {
+    if (options.force) throw new SessionApplyError("CLAUDE_PROJECT_IMPORT_FORCE: shared project ownership cannot be forced.");
+    if (previousManifest && (previousManifest.tool !== plan.tool || previousManifest.profile !== plan.profile
+      || previousManifest.targetKind !== "project-root" || previousManifest.targetHome !== targetHome
+      || previousManifest.targetOwner?.writer?.id !== SESSION_RENDERER_OWNER_ID)) {
+      throw new SessionApplyError("CLAUDE_PROJECT_IMPORT_OWNER: existing manifest belongs to another target or profile.");
+    }
+    if (previousManifest && !options.expectedManifestSha256) {
+      throw new SessionApplyError("CLAUDE_PROJECT_IMPORT_CAS: changing a managed shared project requires its exact manifest preimage.");
+    }
+    if (previousManifest?.claudeProjectImport && !plan.manifest.claudeProjectImport) {
+      throw new SessionApplyError("CLAUDE_PROJECT_IMPORT_RETIREMENT: removing a shared consumer requires an explicit reviewed migration; automatic removal is unsupported.");
+    }
+    if (plan.manifest.claudeProjectImport && !previousManifest?.claudeProjectImport
+      && existsSync(join(targetHome, "CLAUDE.md"))) {
+      throw new SessionApplyError("CLAUDE_PROJECT_IMPORT_CONFLICT: existing unmanaged CLAUDE.md cannot be adopted as an import companion.");
+    }
+  }
   const previousHashes = previousManifest
     ? new Map(previousManifest.files.map((file) => [file.relativePath, file.sha256]))
     : new Map<string, string>();
@@ -1738,7 +1756,7 @@ function writeSessionSnapshot(
         content,
       };
     });
-  if (!previousManifest && existingFiles.length === 0 && plan.tool !== "codewith") {
+  if (!previousManifest && existingFiles.length === 0 && plan.tool !== "codewith" && !plan.manifest.claudeProjectImport) {
     return {
       schema: "hasna.configs.session-render-rollback/v1",
       status: "unsupported",
