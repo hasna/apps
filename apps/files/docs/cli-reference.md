@@ -107,48 +107,57 @@ Failed downloads remove the newly created output. Older services without size
 metadata remain compatible, but their byte count cannot be independently checked
 against an expected size. This check does not verify a checksum or pin a revision.
 
-For machine output, the historical contract stays available unchanged:
+For machine output, compact pages are the safe default and the historical
+full-record arrays remain an explicit compatibility escape:
 
 ```bash
-files list --json                    # full bare array, pretty-printed
-files search contract --json         # full bare array, pretty-printed
+files list --json                    # compact, minified receipt-bearing page
+files search contract --json         # compact ranked page
+files list --json --full             # legacy full bare array, pretty-printed
+files search contract --json --full  # legacy full bare array, pretty-printed
 ```
 
-The agent-oriented page contract is explicit:
+Compact page controls apply directly to `--json`:
 
 ```bash
-files list --agent-json
-files list --agent-json --fields id,name,path,size
-files list --agent-json --detail full --pretty
-files search contract --agent-json --fields id,name,rank,search_match_sources
-files list --agent-json --all --max-bytes 1048576
+files list --json --fields id,name,path,size
+files list --json --detail full --pretty
+files search contract --json --fields id,name,rank,search_match_sources
+files list --json --all --max-bytes 1048576
+files list --json --cursor '<next_cursor>'
 ```
 
-`--agent-json` is minified and compact by default. `_meta` reports the emitted
-`count`, requested `limit`, `offset`, `next_offset`, `has_more`, `end_reached`,
-whole-query `complete`, `all`, `detail`, actual fields, and the compact response
-byte receipt. Compact output has a 32-KiB default ceiling; `--max-bytes` accepts
-1 KiB through 1 MiB. Normal agent pages are capped at 500 rows. The client asks
-the existing `/v1/files` route for one continuation row to prove `has_more`;
-it does not change authority or use local fallback. `--detail full` expands
-only the requested page. `--fields` accepts a comma-separated allowlisted
-compact projection, always retains the immutable `id`, and cannot be combined
-with `--detail full`. Use `--pretty` only when human-readable JSON whitespace
-is wanted.
+`--agent-json` remains a deprecated alias for compact `--json` output so callers
+can migrate without losing the bounded contract. Compact JSON is minified by
+default. `_meta` reports the emitted `count`, requested `limit`, `offset`,
+`next_offset`, query-bound `cursor`/`next_cursor`, `cursor_contract`, `has_more`,
+`end_reached`, whole-query `complete`, `all`, `detail`, actual fields, and the
+response byte receipt. Compact output has a 32-KiB default ceiling;
+`--max-bytes` accepts 1 KiB through 1 MiB. Normal pages are capped at 500 rows.
+The client asks the existing `/v1/files` route for one continuation row to prove
+`has_more`; it does not change authority or use local fallback. `--detail full`
+expands only the requested page. `--fields` accepts a comma-separated allowlisted
+projection, always retains the immutable `id`, and cannot be combined with
+`--detail full`. Use `--pretty` only when human-readable JSON whitespace is
+wanted.
 
-`--all` requires `--agent-json`, compact detail, and offset zero. It walks
-bounded 500-row service pages and succeeds only if the whole query fits within
-the hard 5,000-row and 1-MiB boundaries. If either bound is exceeded, the
-command refuses instead of returning a success-shaped partial result.
-`end_reached` means no page follows the current offset; `complete` is true only
-when the response covers the whole query from offset zero.
+Follow `._meta.next_cursor` while `._meta.has_more` is true. Cursors are opaque,
+deterministic, and bound to the list/search filters so accidental reuse with a
+different query fails before a read. The current `/v1/files` collection route
+does not expose a snapshot token, so the cursor retains the route's existing
+offset-consistency semantics rather than claiming snapshot isolation.
 
-Legacy scripts using `files list --json | jq '.[]'` or
-`files search ... --json | jq '.[]'` continue unchanged. New agent callers use
-`.items[]` and follow `._meta.next_offset` while `._meta.has_more` is true. `--detail`,
-`--fields`, `--pretty`, `--max-bytes`, and `--all` are agent-page controls and
-are rejected with a stable usage error unless `--agent-json` is selected;
-compact detail is defaulted only after that selection.
+`--all` requires compact JSON, compact detail, and offset zero. It walks bounded
+500-row service pages and succeeds only if the whole query fits within the hard
+5,000-row and 1-MiB boundaries. If either bound is exceeded, the command refuses
+instead of returning a success-shaped partial result. `end_reached` means no page
+follows the current offset; `complete` is true only when the response covers the
+whole query from offset zero.
+
+Legacy scripts can migrate from `files list --json | jq '.[]'` to
+`files list --json --full | jq '.[]'`. New agent callers use `.items[]` and
+prefer `._meta.next_cursor`; `next_offset` remains present for explicit offset
+clients. `--full` cannot be combined with page controls.
 
 ## Source Commands
 

@@ -29,7 +29,7 @@ function file(index: number) {
 }
 
 describe("Files CLI compact machine output", () => {
-  test("legacy --json remains a full bare array with no continuation probe", async () => {
+  test("--json defaults to a compact page and --full preserves the legacy bare array", async () => {
     const rows = Array.from({ length: 21 }, (_, index) => file(index));
     const requests: URL[] = [];
     const server = Bun.serve({
@@ -46,29 +46,42 @@ describe("Files CLI compact machine output", () => {
     try {
       const listed = await runCli(["list", "--json"], server.port);
       expect(listed.exitCode).toBe(0);
-      const listRows = JSON.parse(listed.stdout) as Array<Record<string, unknown>>;
-      expect(Array.isArray(listRows)).toBe(true);
-      expect(listRows).toHaveLength(21);
-      expect(listRows[0]).toHaveProperty("description");
-      expect(requests).toHaveLength(1);
-      expect(requests[0]?.searchParams.get("limit")).toBe("50");
+      const listPage = JSON.parse(listed.stdout) as { items: Array<Record<string, unknown>>; _meta: Record<string, unknown> };
+      expect(Array.isArray(listPage.items)).toBe(true);
+      expect(listPage.items).toHaveLength(20);
+      expect(listPage.items[0]).not.toHaveProperty("description");
+      expect(listPage._meta).toMatchObject({ count: 20, has_more: true, next_offset: 20, max_bytes: 32_768 });
+      expect(listPage._meta.next_cursor).toEqual(expect.any(String));
+      expect(requests[0]?.searchParams.get("limit")).toBe("21");
+
+      const legacyList = await runCli(["list", "--json", "--full"], server.port);
+      const legacyListRows = JSON.parse(legacyList.stdout) as Array<Record<string, unknown>>;
+      expect(Array.isArray(legacyListRows)).toBe(true);
+      expect(legacyListRows).toHaveLength(21);
+      expect(legacyListRows[0]).toHaveProperty("description");
+      expect(requests[1]?.searchParams.get("limit")).toBe("50");
 
       const searched = await runCli(["search", "contract", "--json"], server.port);
-      const searchRows = JSON.parse(searched.stdout) as Array<Record<string, unknown>>;
-      expect(Array.isArray(searchRows)).toBe(true);
-      expect(searchRows).toHaveLength(20);
-      expect(searchRows[0]).toHaveProperty("rank");
-      expect(requests[1]?.searchParams.get("limit")).toBe("20");
+      const searchPage = JSON.parse(searched.stdout) as { items: Array<Record<string, unknown>>; _meta: Record<string, unknown> };
+      expect(searchPage.items).toHaveLength(20);
+      expect(searchPage.items[0]).toHaveProperty("rank");
+      expect(searchPage._meta.next_cursor).toEqual(expect.any(String));
+      expect(requests[2]?.searchParams.get("limit")).toBe("21");
 
-      const listDetailWithoutAgent = await runCli(["list", "--json", "--detail", "compact"], server.port);
-      expect(listDetailWithoutAgent.exitCode).toBe(1);
-      expect(listDetailWithoutAgent.stderr).toContain("--detail");
-      expect(listDetailWithoutAgent.stderr).toContain("require --agent-json");
+      const legacySearch = await runCli(["search", "contract", "--json", "--full"], server.port);
+      const legacySearchRows = JSON.parse(legacySearch.stdout) as Array<Record<string, unknown>>;
+      expect(Array.isArray(legacySearchRows)).toBe(true);
+      expect(legacySearchRows).toHaveLength(20);
+      expect(legacySearchRows[0]).toHaveProperty("description");
+      expect(requests[3]?.searchParams.get("limit")).toBe("20");
 
-      const searchDetailWithoutAgent = await runCli(["search", "contract", "--json", "--detail", "compact"], server.port);
-      expect(searchDetailWithoutAgent.exitCode).toBe(1);
-      expect(searchDetailWithoutAgent.stderr).toContain("--detail");
-      expect(searchDetailWithoutAgent.stderr).toContain("require --agent-json");
+      const listDetail = await runCli(["list", "--json", "--detail", "compact"], server.port);
+      expect(listDetail.exitCode).toBe(0);
+      expect((JSON.parse(listDetail.stdout) as { _meta: { detail: string } })._meta.detail).toBe("compact");
+
+      const detailWithoutJson = await runCli(["search", "contract", "--detail", "compact"], server.port);
+      expect(detailWithoutJson.exitCode).toBe(1);
+      expect(detailWithoutJson.stderr).toContain("require --json");
     } finally {
       server.stop(true);
     }
@@ -118,11 +131,16 @@ describe("Files CLI compact machine output", () => {
       expect(requests[0]?.url.searchParams.get("limit")).toBe("21");
       expect(requests[0]?.authenticated).toBe(true);
 
-      const final = await runCli(["list", "--limit", "20", "--offset", "20", "--agent-json"], server.port);
+      const nextCursor = String(page._meta.next_cursor);
+      const final = await runCli(["list", "--limit", "20", "--cursor", nextCursor, "--json"], server.port);
       const finalPage = JSON.parse(final.stdout) as { items: Array<{ id: string }>; _meta: Record<string, unknown> };
       expect(finalPage.items.map((item) => item.id)).toEqual(["f_020"]);
-      expect(finalPage._meta).toMatchObject({ count: 1, offset: 20, next_offset: null, has_more: false, end_reached: true, complete: false });
+      expect(finalPage._meta).toMatchObject({ count: 1, offset: 20, next_offset: null, has_more: false, end_reached: true, complete: false, cursor: nextCursor, next_cursor: null });
       expect(requests.at(-1)?.url.searchParams.get("offset")).toBe("20");
+
+      const mismatched = await runCli(["list", "--source", "different", "--cursor", nextCursor, "--json"], server.port);
+      expect(mismatched.exitCode).toBe(1);
+      expect(mismatched.stderr).toContain("does not match this query");
     } finally {
       server.stop(true);
     }
@@ -150,7 +168,7 @@ describe("Files CLI compact machine output", () => {
 
       const missingJson = await runCli(["search", "contract", "--fields", "name"], server.port);
       expect(missingJson.exitCode).toBe(1);
-      expect(missingJson.stderr).toContain("require --agent-json");
+      expect(missingJson.stderr).toContain("require --json");
 
       const fullWithBudget = await runCli(["search", "contract", "--agent-json", "--detail", "full", "--max-bytes", "4096"], server.port);
       expect(fullWithBudget.exitCode).toBe(1);
@@ -249,18 +267,18 @@ describe("Files CLI compact machine output", () => {
         { limit: 500, offset: 1_000 },
       ]);
 
-      const legacyAll = await runCli(["list", "--json", "--all"], server.port);
+      const legacyAll = await runCli(["list", "--json", "--full", "--all"], server.port);
       expect(legacyAll.exitCode).toBe(1);
-      expect(legacyAll.stderr).toContain("require --agent-json");
+      expect(legacyAll.stderr).toContain("--full cannot be combined");
 
       const offsetAll = await runCli(["list", "--agent-json", "--all", "--offset", "1"], server.port);
       expect(offsetAll.exitCode).toBe(1);
-      expect(offsetAll.stderr).toContain("--all requires --offset 0");
+      expect(offsetAll.stderr).toContain("--all requires offset 0");
 
       const tooSmall = await runCli(["list", "--agent-json", "--all", "--max-bytes", "1024"], server.port);
       expect(tooSmall.exitCode).toBe(1);
       expect(tooSmall.stdout).toBe("");
-      expect(tooSmall.stderr).toContain("use paginated --agent-json output");
+      expect(tooSmall.stderr).toContain("use paginated --json output");
     } finally {
       server.stop(true);
     }

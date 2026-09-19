@@ -169,15 +169,17 @@ OPEN_FILES_MCP_ALLOW_INDEXING=1 files-mcp
 OPEN_FILES_MCP_ALLOW_DESTRUCTIVE=1 files-mcp
 ```
 
-`list_files` and `search_files` preserve their historical full bare-array
-response by default. Set `format: "page"` for minified agent output with
-`count`, `limit`, `offset`, `next_offset`, `has_more`, `end_reached`, and
-whole-query `complete`; compact pages additionally report the enforced byte
-budget. Pages are capped at 500 rows; use `detail: "full"` for full page
-records or `fields` for an exact compact projection (`id` is always retained).
-`all: true` exhausts from offset zero within a 5,000-row/1-MiB hard safety
-boundary and refuses rather than claiming partial success. `get_file` remains
-the exact full-detail path.
+`list_files` and `search_files` default to compact, minified 20-row pages
+with `count`, `limit`, `offset`, `next_offset`, query-bound
+`cursor`/`next_cursor`, `has_more`, `end_reached`, and whole-query `complete`;
+compact pages additionally report the enforced byte budget. Set
+`format: "legacy"` for the historical full bare array. CLI `list/search --json`
+uses the same compact default and `--json --full` is the legacy compatibility
+escape (`--agent-json` remains a deprecated compact alias). Pages are capped at
+500 rows; use `detail: "full"` for full page records or `fields` for an exact
+compact projection (`id` is always retained). `all: true` exhausts from offset
+zero within a 5,000-row/1-MiB hard safety boundary and refuses rather than
+claiming partial success. `get_file` remains the exact full-detail path.
 
 The standard profile exposes read-only `build_context_pack` and
 `search_context_pack` for bounded excerpts, citations, attachment refs, and
