@@ -8,7 +8,7 @@
  * `files-serve --version` (hasna/apps#1720, station03 release verification).
  */
 import { createRequire } from "module";
-import { startServer } from "./serve.js";
+import { startServer, validateServiceStartup } from "./serve.js";
 import { getCurrentMachine } from "../db/machines.js";
 import { listSources } from "../db/sources.js";
 import { indexLocalSource } from "../lib/indexer.js";
@@ -72,6 +72,13 @@ if (shouldShowHelp()) {
   process.exit(0);
 }
 
+try {
+  validateServiceStartup();
+} catch (error) {
+  console.error((error as Error).message);
+  process.exit(1);
+}
+
 const requestedPort = getRequestedPort();
 const port = await findFreePort(requestedPort);
 if (port !== requestedPort) console.log(`Port ${requestedPort} in use, using ${port}`);
@@ -81,7 +88,7 @@ startServer(port);
 // the database directly and does NOT index local folders or sync peers (that
 // path lives in the CLIENT, not the service).
 const postgresBackend = Boolean(
-  process.env.HASNA_FILES_DATABASE_URL ?? process.env.FILES_DATABASE_URL,
+  (process.env.HASNA_FILES_DATABASE_URL ?? process.env.FILES_DATABASE_URL)?.trim(),
 );
 
 if (!postgresBackend) {
