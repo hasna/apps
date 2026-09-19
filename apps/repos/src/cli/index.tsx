@@ -2218,7 +2218,7 @@ program
   .description("Sync issues from GitHub (read-only detection ingest with page and watermark guards)")
   .option("--repo <name>", "Sync specific repo")
   .option("--org <org>", "Sync repos for a specific org")
-  .option("--state <state>", "Issue states to fetch: open, closed, all", "all")
+  .option("--state <state>", "Canonical sync state (must be all)", "all")
   .option("-n, --limit <n>", "Max issues to fetch per repo (0 = no local cap)", "500")
   .option("--page-size <n>", "GraphQL page size (max 100)", "100")
   .option("--overlap-minutes <n>", "Inclusive re-read window subtracted from the watermark", "60")
@@ -2227,8 +2227,8 @@ program
   .addHelpText("after", "\nGuard policy: a non-empty errors[], a null node, or an unusable pageInfo fails the page, stops that repo's traversal, and leaves its watermark unchanged. \"0 new\" is only printed for a sealed, untruncated run; anything else reports degraded. Read-only: this verb never writes to GitHub.")
   .action((opts) => {
     const state = String(opts.state ?? "all").toLowerCase();
-    if (state !== "open" && state !== "closed" && state !== "all") {
-      printError(`sync-issues: --state must be open, closed, or all (got ${opts.state})`);
+    if (state !== "all") {
+      printError(`sync-issues: --state must be all for closure-safe canonical sync (got ${opts.state})`);
       process.exit(1);
     }
     const limit = intFlag(opts.limit, "--limit", 0);

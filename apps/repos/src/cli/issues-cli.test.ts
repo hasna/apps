@@ -333,6 +333,17 @@ describe("repos issues CLI verb", () => {
     expect(secondOut).toContain("0 new");
   });
 
+  test("sync rejects filtered state before reading GitHub", () => {
+    seedRepo();
+    writeFakeGh(CLEAN_PAGE);
+    closeDb();
+
+    const result = runCli(["sync-issues", "--repo", "apps", "--state", "open", "--json"]);
+    const stderr = new TextDecoder().decode(result.stderr);
+    expect(result.exitCode).toBe(1);
+    expect(stderr).toContain("--state must be all");
+  });
+
   test("a degraded run reports incomplete[] and never renders as 0 new", () => {
     seedRepo();
     writeFakeGh(ERROR_PAGE, 1);

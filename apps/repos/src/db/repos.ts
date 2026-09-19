@@ -1653,12 +1653,7 @@ export interface IssueInput {
   url?: string | null;
 }
 
-export function bulkInsertIssues(issues: IssueInput[]): number {
-  const db = getDb();
-  // Upsert, never INSERT OR REPLACE: REPLACE deletes and re-inserts the row,
-  // which changes its rowid. Overlap re-reads (the watermark's inclusive 1-hour
-  // boundary) are idempotent precisely because this is an upsert keyed
-  // (repo_id, number).
+function writeIssueRows(db: Database, issues: IssueInput[]): number {
   const stmt = db.query(`INSERT INTO issues
     (repo_id, number, title, state, state_reason, author, created_at, updated_at, closed_at, url, gh_owner, gh_repo)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -1680,21 +1675,79 @@ export function bulkInsertIssues(issues: IssueInput[]): number {
   };
 
   let count = 0;
+  for (const issue of issues) {
+    const owner = repoFor(issue.repo_id);
+    const origin = resolveIssueOrigin(issue.url, owner.remote_url, owner.org);
+    stmt.run(
+      issue.repo_id, issue.number, issue.title, issue.state,
+      issue.state_reason ?? null, issue.author, issue.created_at, issue.updated_at,
+      issue.closed_at ?? null, issue.url ?? null,
+      origin.org, origin.repo,
+    );
+    count++;
+  }
+  return count;
+}
+
+export function bulkInsertIssues(issues: IssueInput[]): number {
+  const db = getDb();
+  // Upsert, never INSERT OR REPLACE: REPLACE deletes and re-inserts the row,
+  // which changes its rowid. Overlap re-reads remain idempotent because this
+  // is keyed by (repo_id, number).
+  let count = 0;
   const tx = db.transaction(() => {
-    for (const issue of issues) {
-      const owner = repoFor(issue.repo_id);
-      const origin = resolveIssueOrigin(issue.url, owner.remote_url, owner.org);
-      stmt.run(
-        issue.repo_id, issue.number, issue.title, issue.state,
-        issue.state_reason ?? null, issue.author, issue.created_at, issue.updated_at,
-        issue.closed_at ?? null, issue.url ?? null,
-        origin.org, origin.repo,
-      );
-      count++;
-    }
+    count = writeIssueRows(db, issues);
   });
   tx();
   return count;
+}
+
+export interface IssueSnapshotWriteResult {
+  rows_written: number;
+  rows_deleted: number;
+}
+
+/**
+ * Atomically publish one complete canonical remote snapshot to every local
+ * checkout. Nothing calls this until the GraphQL traversal and its independent
+ * verification pass have both sealed. Rows no longer present in the complete
+ * `state=all` snapshot are deleted, which reconciles closures/deletions rather
+ * than leaving an old open row canonical forever.
+ */
+export function replaceIssueSnapshot(
+  repoIds: number[],
+  issues: IssueInput[],
+): IssueSnapshotWriteResult {
+  const db = getDb();
+  const uniqueRepoIds = [...new Set(repoIds)];
+  const allowed = new Set(uniqueRepoIds);
+  const desired = new Map<number, Set<number>>(
+    uniqueRepoIds.map((repoId) => [repoId, new Set<number>()]),
+  );
+  for (const issue of issues) {
+    if (!allowed.has(issue.repo_id)) {
+      throw new Error(`issue snapshot contains unexpected repo_id ${issue.repo_id}`);
+    }
+    desired.get(issue.repo_id)!.add(issue.number);
+  }
+
+  let rows_written = 0;
+  let rows_deleted = 0;
+  const existing = db.query("SELECT number FROM issues WHERE repo_id = ?");
+  const remove = db.query("DELETE FROM issues WHERE repo_id = ? AND number = ?");
+  const tx = db.transaction(() => {
+    rows_written = writeIssueRows(db, issues);
+    for (const repoId of uniqueRepoIds) {
+      const keep = desired.get(repoId)!;
+      const stored = existing.all(repoId) as Array<{ number: number }>;
+      for (const row of stored) {
+        if (keep.has(row.number)) continue;
+        rows_deleted += Number(remove.run(repoId, row.number).changes);
+      }
+    }
+  });
+  tx();
+  return { rows_written, rows_deleted };
 }
 
 // ── Unified Search ──
