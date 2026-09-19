@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.1
+
+### Patch Changes
+
+- c8cf9c2: Fail closed on hosted skill lifecycle HTTP errors with typed, safe error output.
+- 0f85a86: Preserve remote skill revision and lifecycle metadata in `skills info --remote --json`, including catalogue-only records.
+- 5c2edc0: Add guarded owner/admin admission of `skills:publish` onto an existing API key with tenant and scope CAS checks.
+
 ## 0.9.0
 
 ### Minor Changes
