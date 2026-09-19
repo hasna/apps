@@ -113,6 +113,44 @@ export type ApiKeyScopeUpdateResult =
   | { kind: "not_found" }
   | { kind: "stale"; scopes: string[] };
 
+/**
+ * A maintenance task's provenance is deliberately separate from ApiPrincipal.
+ * An ECS task is not a user and must never be represented by impersonating an
+ * API key, user id, or role in the audit row.
+ */
+export interface OperatorScopeEnrollmentInput {
+  keyId: string;
+  stationId: string;
+  orgId: string;
+  expectedScopes: string[];
+  operationId: string;
+  manifestDigest: string;
+  operatorJobId: string;
+  operatorTaskArn: string;
+}
+
+export function validOperatorScopeEnrollmentInput(input: OperatorScopeEnrollmentInput): boolean {
+  const bounded = (value: string, max = 256) => typeof value === "string" && value.length > 0 && value.length <= max && !/[\u0000-\u001f\u007f]/.test(value);
+  return bounded(input.keyId) && bounded(input.stationId) && bounded(input.orgId) && bounded(input.operationId) && bounded(input.manifestDigest, 64) && /^[a-f0-9]{64}$/.test(input.manifestDigest) && bounded(input.operatorJobId) && bounded(input.operatorTaskArn, 512) && input.expectedScopes.length > 0 && input.expectedScopes.length <= 32 && input.expectedScopes.every((scope) => bounded(scope, 128) && /^[a-z][a-z0-9_-]*:[a-z][a-z0-9_-]*$/.test(scope));
+}
+
+export function validOperatorScopeList(scopes: unknown): scopes is string[] {
+  return Array.isArray(scopes) && scopes.length <= 32 && scopes.every((scope) => typeof scope === "string" && scope.length > 0 && scope.length <= 128 && /^[a-z][a-z0-9_-]*:[a-z][a-z0-9_-]*$/.test(scope));
+}
+
+export type OperatorScopeEnrollmentResult =
+  | { kind: "updated"; scopes: string[] }
+  | { kind: "already_applied"; scopes: string[] }
+  | { kind: "not_found" }
+  | { kind: "target_mismatch" }
+  | { kind: "invalid" }
+  | { kind: "stale"; scopes: string[] };
+
+export type OperatorScopeTargetSnapshot =
+  | { kind: "not_found" }
+  | { kind: "target_mismatch" }
+  | { kind: "found"; scopes: string[] };
+
 export interface ServerRunRecord {
   id: string;
   orgId: string;
@@ -404,6 +442,11 @@ export interface SkillsProductStore {
     expectedScopes: string[],
     addScopes: string[],
   ): Promise<ApiKeyScopeUpdateResult>;
+  /** Add only skills:publish to an existing key from a protected maintenance task. */
+  enrollPublishScopeByOperator?(
+    input: OperatorScopeEnrollmentInput,
+  ): Promise<OperatorScopeEnrollmentResult>;
+  inspectOperatorScopeTarget?(keyId: string, orgId: string): Promise<OperatorScopeTargetSnapshot>;
   ensureBootstrapApiKey?(token: string, principal?: Partial<ApiPrincipal>): Promise<void>;
   createRun(input: CreateRunInput): Promise<ServerRunRecord>;
   listRuns(principal: ApiPrincipal, limit: number): Promise<ServerRunRecord[]>;
