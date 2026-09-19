@@ -11,6 +11,7 @@ import {
   resolveKnowledgeApiUrl,
   saveKnowledgeCredentials,
 } from '../src/auth';
+import { resolveKnowledgeClientTransport } from '../src/client-transport';
 import { createKnowledgeService } from '../src/service';
 import { defaultKnowledgeConfig, projectKnowledgeHome, writeKnowledgeConfig } from '../src/workspace';
 
@@ -160,9 +161,34 @@ describe('API environment and server contracts', () => {
     rmSync(home, { recursive: true, force: true });
   });
 
-  test('normalizes API origins to the bare https origin', () => {
+  test('normalizes API origins to the unversioned service base', () => {
     expect(normalizeKnowledgeApiOrigin('https://knowledge.example.com/api/v1')).toBe('https://knowledge.example.com');
+    expect(normalizeKnowledgeApiOrigin('https://api.hasna.com/knowledge/v1')).toBe('https://api.hasna.com/knowledge');
+    expect(normalizeKnowledgeApiOrigin('https://api.hasna.com/knowledge/v1/')).toBe('https://api.hasna.com/knowledge');
     expect(() => normalizeKnowledgeApiOrigin('ftp://knowledge.example.com')).toThrow('http or https');
+  });
+
+  test('credential writes strip terminal /v1 and reads append it exactly once', () => {
+    const home = mkdtempSync(join(tmpdir(), 'ok-hosted-versioned-login-'));
+    const env = { HOME: home, USERPROFILE: home, HASNA_KNOWLEDGE_LOCAL: '' };
+    try {
+      const saved = saveKnowledgeCredentials({
+        api_key: 'kh_versioned_login_test',
+        api_url: 'https://api.hasna.com/knowledge/v1',
+      }, env);
+      expect(saved.api_url).toBe('https://api.hasna.com/knowledge');
+      const credentials = readFileSync(knowledgeCredentialsPath(env), 'utf8');
+      expect(credentials).toContain('HASNA_KNOWLEDGE_API_URL=https://api.hasna.com/knowledge\n');
+      expect(credentials).not.toContain('/knowledge/v1');
+      expect(resolveKnowledgeApiUrl(env)).toBe('https://api.hasna.com/knowledge');
+      expect(resolveKnowledgeClientTransport(env)).toMatchObject({
+        transport: 'http',
+        base_url: 'https://api.hasna.com/knowledge/v1',
+      });
+      expect(resolveKnowledgeClientTransport(env).base_url).not.toContain('/v1/v1');
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 
   test('the canonical HASNA API URL wins; the alias is the documented fallback; the gateway is the default', () => {
