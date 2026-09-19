@@ -128,7 +128,7 @@ jobs:
           cd "$RUNNER_TEMP/knowledge-source/apps/knowledge"
           bun install --frozen-lockfile --ignore-scripts
           cd "$RUNNER_TEMP/knowledge-source"
-          bun test tooling/deploy/knowledge/database-phase.integration.test.ts
+          bun test tooling/deploy/knowledge/backup-upload.test.ts tooling/deploy/knowledge/database-phase.integration.test.ts
       - name: Scan exact candidate before AWS authentication
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
