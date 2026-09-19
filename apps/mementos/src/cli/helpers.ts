@@ -147,7 +147,11 @@ export function outputJsonAndExit(data: unknown, code: number): Promise<never> {
     };
     const onError = (): void => finish(1);
     process.stdout.once("error", onError);
-    process.stdout.write(payload, () => finish(code));
+    try {
+      process.stdout.write(payload, () => finish(code));
+    } catch {
+      finish(1);
+    }
   });
 }
 
@@ -408,13 +412,13 @@ export function formatMemoryDetail(m: Memory): string {
 // Error handler
 // ============================================================================
 
-export function makeHandleError(program: Command): (e: unknown) => never {
-  return function handleError(e: unknown): never {
+export function makeHandleError(program: Command): (e: unknown) => Promise<never> | never {
+  return function handleError(e: unknown): Promise<never> | never {
     const globalOpts = program.opts<GlobalOpts>();
     if (globalOpts.json || globalOpts.format === "json") {
-      outputJson({
+      return outputJsonAndExit({
         error: e instanceof Error ? e.message : String(e),
-      });
+      }, 1);
     } else {
       console.error(chalk.red(e instanceof Error ? e.message : String(e)));
     }

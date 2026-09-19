@@ -736,10 +736,10 @@ export function registerCrudCommands(program: Command): void {
         // other read surface. The echoed `keyOrId` is the caller's own argument
         // and is left verbatim.
         if (globalOpts.json) {
-          outputJson({
+          await outputJsonAndExit({
             error: `Ambiguous key "${keyOrId}" — ${matches.length} memories found. Use --all to delete all, or specify an ID.`,
             matches: matches.map((m) => ({ id: m.id, key: redactCredentialKey(m.key), scope: m.scope, category: m.category, agent_id: m.agent_id })),
-          });
+          }, 1);
         } else {
           console.log(chalk.yellow(`Ambiguous key "${keyOrId}" — ${matches.length} memories found:`));
           for (const m of matches) {
@@ -747,7 +747,7 @@ export function registerCrudCommands(program: Command): void {
           }
           console.log(chalk.dim("\nUse --all to delete all, or specify an ID."));
         }
-        process.exit(1);
+        if (!globalOpts.json) process.exit(1);
       } catch (e) {
         handleError(e);
       }
