@@ -55,11 +55,11 @@ postgresTest("PostgreSQL archive lifecycle: both race orders fence archive and p
       const published = await publish(slug);
       await first.selectionStore.saveProfile(principal, profileId, [], null);
       const profile = await first.selectionStore.getProfile(principal, profileId);
-      const archiveOp = first.setSkillLifecycle(principal, slug, { lifecycle: "archived", reason: "synthetic replacement" }, published.revisionId);
-      const selectionOp = second.selectionStore.saveProfile(principal, profileId, [selection(slug)], profile!.revision);
+      const startArchive = () => first.setSkillLifecycle(principal, slug, { lifecycle: "archived", reason: "synthetic replacement" }, published.revisionId);
+      const startSelection = () => second.selectionStore.saveProfile(principal, profileId, [selection(slug)], profile!.revision);
       const [archive, selectedResult] = archiveFirst
-        ? await Promise.allSettled([archiveOp, selectionOp])
-        : await Promise.allSettled([selectionOp, archiveOp]).then(([selectionResult, archiveResult]) => [archiveResult, selectionResult] as const);
+        ? await Promise.allSettled([startArchive(), startSelection()])
+        : await Promise.allSettled([startSelection(), startArchive()]).then(([selectionResult, archiveResult]) => [archiveResult, selectionResult] as const);
       const archived = archive.status === "fulfilled" && archive.value?.lifecycle === "archived";
       const selected = selectedResult.status === "fulfilled" && selectedResult.value !== null;
       expect(Number(archived) + Number(selected)).toBe(1);
