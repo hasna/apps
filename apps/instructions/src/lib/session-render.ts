@@ -2350,6 +2350,7 @@ export function planCompiledProfileSessionRender(input: SessionRenderInput, comp
 function assertNoUnmanagedClaudeImports(content: string): void {
   const markdown = new Marked({ gfm: false, async: false, renderer: {
     codespan: () => "",
+    def: ({ raw }) => raw,
     code: ({ raw }) => {
       // Indented and unclosed blocks are deliberately not exempted. Only the
       // native-proven closed fenced representation may carry literal @ text.

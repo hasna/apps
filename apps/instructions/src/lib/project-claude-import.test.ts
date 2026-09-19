@@ -106,6 +106,7 @@ describe("managed Claude relative project import", () => {
     const args = input();
     for (const content of ["@README", "Read @./missing.md", "@../outside.md", "@/absolute.md", "@~/.claude/private.md", "@hasna/emails", "`unclosed @README", "```\n@README", "owner@example.test/path",
       "\\`literal @README end`", "`unclosed\n\n@README\n\nclosing`", "`unclosed\n# Heading @README\nclosing`", "<!--\n```\n-->\n@README\n```", "<span data-code=\"`\">@README</span>`",
+      "COMMON\n\n[unused]: @README\n",
     ]) {
       expect(() => planProfileSessionRender({ ...args, configs: [{ ...config, content }] })).toThrow("CLAUDE_PROJECT_IMPORT_NESTED");
     }
