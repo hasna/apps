@@ -28,6 +28,7 @@ import { resolveDatabaseTarget, type DatabaseTarget } from "./database-url.js";
 import { artifactId, nowIso, normalizeLimit, rowToArtifact, rowToLog, rowToPin, rowToRun, rowToSkill, rowToSkillBundle, rowToSkillVersion, parseJsonArray, runId } from "./rows.js";
 import { revisionIdOfRecord, type RevisionContent } from "../lib/revision.js";
 import { SqliteSkillsStore, type SqliteStoreOptions } from "./sqlite-store.js";
+import { validOperatorScopeEnrollmentInput } from "./types.js";
 
 /**
  * The content fields a revision id is computed over, resolved from a publish input
@@ -173,6 +174,7 @@ export class MemorySkillsStore implements SkillsProductStore {
   }
 
   async enrollPublishScopeByOperator(input: OperatorScopeEnrollmentInput): Promise<OperatorScopeEnrollmentResult> {
+    if (!validOperatorScopeEnrollmentInput(input)) return { kind: "invalid" };
     const previous = this.operatorEnrollments.get(input.operationId);
     if (previous) {
       if (previous.keyId !== input.keyId || previous.manifestDigest !== input.manifestDigest) return { kind: "target_mismatch" };
@@ -781,8 +783,15 @@ export class PostgresSkillsStore implements SkillsProductStore {
   }
 
   async enrollPublishScopeByOperator(input: OperatorScopeEnrollmentInput): Promise<OperatorScopeEnrollmentResult> {
+    if (!validOperatorScopeEnrollmentInput(input)) return { kind: "invalid" };
     if (input.expectedScopes.includes("skills:publish")) return { kind: "stale", scopes: input.expectedScopes };
     return this.sql.begin(async (tx) => {
+      const operation = await tx`
+        SELECT org_id, target_id FROM skills_audit_events
+        WHERE action = ${"api_key_scopes_added"} AND operator_operation_id = ${input.operationId}
+        LIMIT 1
+      `;
+      if (operation[0] && (String(operation[0].org_id) !== input.orgId || String(operation[0].target_id) !== input.keyId)) return { kind: "target_mismatch" };
       const rows = await tx`
         SELECT id, org_id, name, scopes_json FROM api_keys
         WHERE id = ${input.keyId} AND revoked_at IS NULL

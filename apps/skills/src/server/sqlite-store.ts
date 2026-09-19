@@ -47,6 +47,7 @@ import type {
 } from "./types.js";
 import { SkillLifecycleConflictError, SkillRevisionConflictError, SkillVersionExistsError, StaleLeaseGenerationError } from "./types.js";
 import { revisionIdOfRecord } from "../lib/revision.js";
+import { validOperatorScopeEnrollmentInput } from "./types.js";
 
 export interface SqliteStoreOptions {
   /** Apply pending migrations on open. Default true - it is what makes zero-config work. */
@@ -268,7 +269,10 @@ export class SqliteSkillsStore implements SkillsProductStore {
   }
 
   async enrollPublishScopeByOperator(input: OperatorScopeEnrollmentInput): Promise<OperatorScopeEnrollmentResult> {
+    if (!validOperatorScopeEnrollmentInput(input)) return { kind: "invalid" };
     if (input.expectedScopes.includes("skills:publish")) return { kind: "stale", scopes: input.expectedScopes };
+    const operation = this.get("SELECT org_id, target_id FROM skills_audit_events WHERE action = ? AND operator_operation_id = ? LIMIT 1", ["api_key_scopes_added", input.operationId]);
+    if (operation && (String(operation.org_id) !== input.orgId || String(operation.target_id) !== input.keyId)) return { kind: "target_mismatch" };
     const row = this.get("SELECT id, org_id, name, scopes_json FROM api_keys WHERE id = ? AND revoked_at IS NULL LIMIT 1", [input.keyId]);
     if (!row) return { kind: "not_found" };
     if (String(row.org_id) !== input.orgId) return { kind: "target_mismatch" };

@@ -66,6 +66,8 @@ postgresTest("operator enrollment is atomic, concurrent and readback-verifiable 
     const stale = await first.enrollPublishScopeByOperator({ ...input, operationId: "pg-operation-2" });
     expect(stale).toMatchObject({ kind: "stale", scopes: [...input.expectedScopes, "skills:publish"] });
     expect((await first.enrollPublishScopeByOperator({ ...input, orgId: "foreign-org", operationId: "foreign-op" })).kind).toBe("target_mismatch");
+    await first.ensureBootstrapApiKey("pg-second-secret", { apiKeyId: "pg-second-key", orgId: input.orgId, scopes: [...input.expectedScopes] });
+    expect((await first.enrollPublishScopeByOperator({ ...input, keyId: "pg-second-key" })).kind).toBe("target_mismatch");
 
     const check = await open(database!.url);
     const after = await check`SELECT key_hash, org_id, scopes_json FROM api_keys WHERE id = ${input.keyId}`;

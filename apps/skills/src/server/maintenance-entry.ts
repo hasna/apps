@@ -58,7 +58,7 @@ function readManifest(path: string, receiptPath: string): EnrollmentManifest {
   for (const field of ["keyId", "stationId", "orgId", "operationId", "manifestDigest", "expiresAt"] as const) {
     if (typeof parsed[field] !== "string" || !parsed[field]!.trim()) throw new Error(`maintenance manifest is missing ${field}`);
   }
-  if (!Array.isArray(parsed.expectedScopes) || parsed.expectedScopes.length === 0 || parsed.expectedScopes.some((scope) => typeof scope !== "string" || !scope.trim())) {
+  if (!Array.isArray(parsed.expectedScopes) || parsed.expectedScopes.length === 0 || parsed.expectedScopes.length > 32 || parsed.expectedScopes.some((scope) => typeof scope !== "string" || !scope.trim() || scope.length > 128 || !/^[a-z][a-z0-9_-]*:[a-z][a-z0-9_-]*$/.test(scope))) {
     throw new Error("maintenance manifest expectedScopes must be a non-empty string array");
   }
   if (parsed.expectedScopes.includes("skills:publish")) throw new Error("maintenance manifest must describe current scopes without skills:publish");
@@ -84,7 +84,7 @@ export function registerMaintenance(parent: Command): void {
       let manifest: EnrollmentManifest;
       try {
         manifest = readManifest(options.manifest, options.operatorReceipt);
-        const databaseUrl = process.env.HASNA_SKILLS_DATABASE_URL || process.env.DATABASE_URL;
+        const databaseUrl = process.env.HASNA_SKILLS_DATABASE_URL;
         if (!databaseUrl) throw new Error("maintenance requires HASNA_SKILLS_DATABASE_URL");
         const store = await createStore({ databaseUrl });
         const snapshot = await store.inspectOperatorScopeTarget?.(manifest.keyId, manifest.orgId);
@@ -103,9 +103,10 @@ export function registerMaintenance(parent: Command): void {
         if (result.kind === "updated" || result.kind === "already_applied") return;
         process.exitCode = 1;
       } catch (error) {
-        const message = error instanceof Error ? error.message : "maintenance operation failed";
-        if (options.json || !process.stdout.isTTY) console.log(JSON.stringify({ status: "failed", error: message }));
-        else console.error(message);
+        const message = error instanceof Error ? error.message : "";
+        const code = message.includes("expired") || message.includes("expiry") ? "INVALID_EXPIRY" : message.includes("receipt") || message.includes("operator") ? "INVALID_OPERATOR_RECEIPT" : message.includes("manifest") || message.includes("input") ? "INVALID_MANIFEST" : message.includes("database") || message.includes("store") ? "STORE_UNAVAILABLE" : "MAINTENANCE_FAILED";
+        if (options.json || !process.stdout.isTTY) console.log(JSON.stringify({ status: "failed", code }));
+        else console.error(code);
         process.exitCode = 1;
       }
     });

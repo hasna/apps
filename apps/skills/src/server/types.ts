@@ -129,11 +129,17 @@ export interface OperatorScopeEnrollmentInput {
   operatorTaskArn: string;
 }
 
+export function validOperatorScopeEnrollmentInput(input: OperatorScopeEnrollmentInput): boolean {
+  const bounded = (value: string, max = 256) => typeof value === "string" && value.length > 0 && value.length <= max && !/[\u0000-\u001f\u007f]/.test(value);
+  return bounded(input.keyId) && bounded(input.stationId) && bounded(input.orgId) && bounded(input.operationId) && bounded(input.manifestDigest, 64) && /^[a-f0-9]{64}$/.test(input.manifestDigest) && bounded(input.operatorJobId) && bounded(input.operatorTaskArn, 512) && input.expectedScopes.length > 0 && input.expectedScopes.length <= 32 && input.expectedScopes.every((scope) => bounded(scope, 128) && /^[a-z][a-z0-9_-]*:[a-z][a-z0-9_-]*$/.test(scope));
+}
+
 export type OperatorScopeEnrollmentResult =
   | { kind: "updated"; scopes: string[] }
   | { kind: "already_applied"; scopes: string[] }
   | { kind: "not_found" }
   | { kind: "target_mismatch" }
+  | { kind: "invalid" }
   | { kind: "stale"; scopes: string[] };
 
 export type OperatorScopeTargetSnapshot =
