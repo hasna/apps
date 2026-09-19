@@ -10,11 +10,12 @@
 
 import { getLlmConfig, LLMClient } from "./llm.js";
 
-const STRIP_PROMPT = `You are a data extraction assistant. Your job is to take raw API output and return ONLY the essential, structured data.
+export const STRIP_PROMPT = `You are a data extraction assistant. Your job is to take raw API output and return ONLY the essential, structured data.
 
 Rules:
 - Return valid JSON only (no markdown, no explanation)
-- Remove pagination metadata, rate limit headers, empty fields, null values
+- Preserve pagination and continuation metadata exactly (count, total, limit, cursor, nextCursor, next_cursor, hasMore, has_more, complete)
+- Remove rate limit headers, empty fields, and null values that are not continuation markers
 - Keep all meaningful data fields
 - If the input is already minimal, return it unchanged
 - If input is not JSON, extract key facts as a JSON object
