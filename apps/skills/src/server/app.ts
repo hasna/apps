@@ -154,7 +154,7 @@ export async function createSkillsFetchHandler(options: SkillsServerOptions = {}
         if (request.method === "GET" && url.pathname === "/api/v1/capabilities") {
           const response = await handleProfileApi(store, principal, request, ["capabilities"], config);
           const payload = await response!.json() as Record<string, any>;
-          return json({ ...payload, cloudExecution: Boolean(runtime), capabilities: [...payload.capabilities, ...(runtime ? ["skills.cloud-execution"] : [])] });
+          return json({ ...payload, cloudExecution: Boolean(runtime), cloudExecutionContracts: runtime ? ["pdf.v1", "regex-test.v1"] : [], capabilities: [...payload.capabilities, ...(runtime ? ["skills.cloud-execution"] : [])] });
         }
 
         if (request.method === "GET" && url.pathname === "/api/auth/whoami") {

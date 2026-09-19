@@ -1,0 +1,116 @@
+name: emails-current-migration-deploy
+
+# Reviewed, roll-forward-only deployment for a current Emails image whose actual
+# migration inputs differ from the live image. Image preparation is available;
+# task preparation and migration execution remain disabled. Separate from npm release.
+on:
+  workflow_dispatch:
+    inputs:
+      phase:
+        type: choice
+        options: [image, reconcile, prepare, execute]
+        required: true
+        default: reconcile
+      anchor_reconciliation_run_id:
+        type: string
+        default: ""
+        description: Prior successful search reconciliation that binds the healthy live anchor
+      anchor_reconciled_sha256:
+        type: string
+        default: ""
+        description: Reviewed SHA256 of the anchor reconciled.json
+      failed_deploy_run_id_1:
+        type: string
+        default: ""
+        description: First failed image-only deployment run
+      failed_deploy_run_id_2:
+        type: string
+        default: ""
+        description: Second failed image-only deployment run
+      migration_reconciliation_run_id:
+        type: string
+        default: ""
+        description: Reviewed successful reconcile phase run
+      migration_reconciled_sha256:
+        type: string
+        default: ""
+        description: Reviewed SHA256 of migration reconciled.json
+      migration_plan_run_id:
+        type: string
+        default: ""
+        description: Reviewed successful prepare phase run
+      migration_plan_sha256:
+        type: string
+        default: ""
+        description: Reviewed SHA256 of prepared.json
+
+concurrency:
+  group: emails-search-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    name: gate (exact main CI + reviewed migration evidence)
+    if: ${{ github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify exact main and phase evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PHASE: ${{ inputs.phase }}
+          ANCHOR_RUN: ${{ inputs.anchor_reconciliation_run_id }}
+          ANCHOR_SHA: ${{ inputs.anchor_reconciled_sha256 }}
+          FAILED_RUN_1: ${{ inputs.failed_deploy_run_id_1 }}
+          FAILED_RUN_2: ${{ inputs.failed_deploy_run_id_2 }}
+          MIGRATION_RECONCILIATION_RUN: ${{ inputs.migration_reconciliation_run_id }}
+          MIGRATION_RECONCILED_SHA: ${{ inputs.migration_reconciled_sha256 }}
+          PLAN_RUN: ${{ inputs.migration_plan_run_id }}
+          PLAN_SHA: ${{ inputs.migration_plan_sha256 }}
+        run: |
+          set -Eeuo pipefail
+          python3 -I -B tooling/deploy/emails-migration/gate.py \
+            --phase "$PHASE" \
+            --source "$GITHUB_SHA" \
+            --anchor-run "$ANCHOR_RUN" \
+            --anchor-sha256 "$ANCHOR_SHA" \
+            --failed-run "$FAILED_RUN_1" \
+            --failed-run "$FAILED_RUN_2" \
+            --migration-reconciliation-run "$MIGRATION_RECONCILIATION_RUN" \
+            --migration-reconciled-sha256 "$MIGRATION_RECONCILED_SHA" \
+            --plan-run "$PLAN_RUN" \
+            --plan-sha256 "$PLAN_SHA"
+
+  execute:
+    needs: gate
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    uses: ./.github/workflows/emails-search-promotion-execute.yml
+    with:
+      phase: ${{ inputs.phase == 'image' && 'migration_image' || inputs.phase == 'reconcile' && 'migration_reconcile' || inputs.phase == 'prepare' && 'migration_prepare' || 'migration_execute' }}
+      source: ${{ github.sha }}
+      prepared_run_id: ""
+      prepared_sha256: ""
+      reconciliation_run_id: ""
+      reconciled_sha256: ""
+      anchor_reconciliation_run_id: ${{ inputs.anchor_reconciliation_run_id }}
+      anchor_reconciled_sha256: ${{ inputs.anchor_reconciled_sha256 }}
+      failed_deploy_run_id_1: ${{ inputs.failed_deploy_run_id_1 }}
+      failed_deploy_run_id_2: ${{ inputs.failed_deploy_run_id_2 }}
+      migration_reconciliation_run_id: ${{ inputs.migration_reconciliation_run_id }}
+      migration_reconciled_sha256: ${{ inputs.migration_reconciled_sha256 }}
+      migration_plan_run_id: ${{ inputs.migration_plan_run_id }}
+      migration_plan_sha256: ${{ inputs.migration_plan_sha256 }}

@@ -177,9 +177,27 @@ export class ResendAdapter implements ProviderAdapter {
 
     const result = await this.client.emails.send(payload);
     if (result.error) {
-      throw new Error(`Resend send failed: ${result.error.message}`);
+      // The SDK returns an error object rather than throwing. Keep its numeric
+      // status so the send classifier can distinguish rejection from uncertainty.
+      // Do not infer a status from its name/message or copy the response object:
+      // provider headers, request data and causes must not follow this error.
+      const detail = typeof result.error.message === "string" ? `: ${result.error.message}` : "";
+      const error = new Error(`Resend send failed${detail}`.slice(0, 600));
+      error.name = typeof result.error.name === "string" && /^[A-Za-z0-9_.:-]{1,100}$/.test(result.error.name)
+        ? result.error.name : "ResendSendError";
+      const status = result.error.statusCode;
+      if (typeof status === "number" && Number.isInteger(status) && status >= 400 && status <= 599) {
+        Object.assign(error, { statusCode: status });
+      }
+      throw error;
     }
-    return result.data?.id ?? "";
+    const id = result.data?.id;
+    if (typeof id !== "string" || !id.trim() || /[\u0000-\u001f\u007f]/.test(id)) {
+      // A successful HTTP response without a usable receipt does not prove
+      // acceptance or rejection. Keep this uncertain, without a numeric status.
+      throw new Error("Resend send outcome is uncertain: provider response did not include a valid message ID");
+    }
+    return id;
   }
 
   async pullEvents(since?: string): Promise<RemoteEvent[]> {

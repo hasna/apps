@@ -43,6 +43,14 @@ export interface RunLimits {
   maxConcurrency: number;
 }
 
+/** Trusted, versioned adapter identity. Absent only for legacy PDF admissions. */
+export interface PureExecutionContract {
+  id: "regex-test.v1";
+  descriptorDigest: string;
+  entrypoint: string;
+  entrypointDigest: string;
+}
+
 /** Everything frozen at admission under one stable run_id. */
 export interface FrozenAdmission {
   contractVersion: number;
@@ -56,6 +64,7 @@ export interface FrozenAdmission {
   runtimeImageDigest: string;
   /** Prebuilt dependency layer tag, when the manifest's system_deps are allowlisted. */
   dependencyLayerTag: string | null;
+  executionContract?: PureExecutionContract;
   /** sha256 of the canonical serialization of the run input. */
   inputDigest: string;
   runtime: RuntimeName;
@@ -132,6 +141,7 @@ export interface AttemptReceipt {
   runtimeImageDigest: string;
   bundleDigest: string;
   dependencyLayerTag: string | null;
+  executionContract?: PureExecutionContract;
   policy: RunPolicy;
   limits: RunLimits;
   exitCode: number | null;

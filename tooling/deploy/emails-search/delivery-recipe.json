@@ -1,0 +1,50 @@
+{
+  "schema": "emails.delivery-overlay-recipe.v1",
+  "purpose": "delivery-headers",
+  "baseImageDigest": "sha256:10403087ae6cc7fac75b4b4c544f3615ad0c9d9d99dd9d33ef291f1c8f3caed2",
+  "baseConfigDigest": "sha256:961400f176ef78689353a060e658ce72b7748a395a6f5713959f7dc2d74ce36c",
+  "sourceCommit": "d6506d4455e562355690cdaf5e5b45e06a177b59",
+  "sourceCommits": [
+    "f7129b8fb72aeb9322d8233bba50ad79ffaea807",
+    "d6506d4455e562355690cdaf5e5b45e06a177b59"
+  ],
+  "patchFile": "delivery-headers.patch",
+  "patchSha256": "b400154e84bc9a7940ab5241db8eb9a8e2c22a919bfe99257641d0bea9cd0c34",
+  "files": [
+    {
+      "path": "app/src/lib/email-address.ts",
+      "beforeSha256": "f961c335c33f2970bc1f0947a36f9bd10e95147454f7c281f6904cea06ec171e",
+      "afterSha256": "4d25365da33151f46867824c457f5299394f46f2f776ddf85c28f7c76461dee4",
+      "beforeBytes": 2709,
+      "afterBytes": 4050,
+      "uid": 1000,
+      "gid": 1000,
+      "mode": 436
+    },
+    {
+      "path": "app/src/server/self-hosted/service.ts",
+      "beforeSha256": "09597712a881acba03577a73d82654b8aba703f03c75ba11cdda4873a0185dcb",
+      "afterSha256": "f031d5594ecdeb8534d46c1348ea93bdf2c9a87a7849b2f4aeecf0945a7e8a68",
+      "beforeBytes": 116250,
+      "afterBytes": 116215,
+      "uid": 0,
+      "gid": 0,
+      "mode": 436
+    },
+    {
+      "path": "app/src/providers/ses.ts",
+      "beforeSha256": "0cbca6722498a3114e8b991ebf45170417995504d49e5ae91f6903bec13bd06c",
+      "afterSha256": "83c830b56f4c2d5c297d890d69b28dc1781f87a9386a5daf7050394750532a80",
+      "beforeBytes": 24426,
+      "afterBytes": 24617,
+      "uid": 1000,
+      "gid": 1000,
+      "mode": 436
+    }
+  ],
+  "packageVersionPreserved": "1.4.10",
+  "dependenciesChanged": false,
+  "migrationsChanged": false,
+  "entrypointChanged": false,
+  "fullProducerEquivalenceClaimed": false
+}

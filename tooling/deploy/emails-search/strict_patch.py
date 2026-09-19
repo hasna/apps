@@ -1,12 +1,13 @@
 """Apply a reviewed three-file source patch in memory, without fuzzy matching."""
 import hashlib
+import importlib.util
+from pathlib import Path
 import re
 
-ALLOWED_PATHS = frozenset({
-    'app/src/server/self-hosted/search-admission.ts',
-    'app/src/server/self-hosted/serve.ts',
-    'app/src/server/self-hosted/store.ts',
-})
+_spec = importlib.util.spec_from_file_location("emails_overlay_recipes", Path(__file__).with_name("recipes.py"))
+_recipes = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_recipes)
+ALLOWED_PATHS = frozenset(_recipes.SEARCH_PATHS)
 MAX_FILE_BYTES = 1024 * 1024
 MAX_PATCH_BYTES = 1024 * 1024
 HUNK = re.compile(rb'@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@\n')
@@ -22,21 +23,24 @@ def require(condition, code):
 def digest(data):
     return hashlib.sha256(data).hexdigest()
 
-def apply_reviewed_patch(recipe, patch, preimages):
+def apply_reviewed_patch(recipe, patch, preimages, purpose="search-capacity"):
     """Return {archive_relative_path: new_bytes}; never read or write files."""
-    require(isinstance(recipe, dict) and recipe.get('schema') == 'emails.source-overlay-recipe.v1', 'RECIPE_SCHEMA')
+    identity = _recipes.select(purpose)
+    allowed_paths = frozenset(identity["paths"])
+    require(isinstance(recipe, dict) and recipe.get('schema') == identity['schema'], 'RECIPE_SCHEMA')
+    require(recipe.get('purpose') == (None if purpose == _recipes.SEARCH else purpose), 'RECIPE_PURPOSE')
     files = recipe.get('files')
     require(isinstance(files, list) and len(files) == 3, 'RECIPE_FILE_COUNT')
     rows = {}
     for row in files:
-        require(isinstance(row, dict) and row.get('path') in ALLOWED_PATHS and row['path'] not in rows, 'RECIPE_PATH')
-        require(all(type(row.get(k)) is int for k in ('uid', 'gid', 'mode')) and row.get('uid') == 0 and row.get('gid') == 0 and row.get('mode') == 0o644, 'RECIPE_METADATA')
+        require(isinstance(row, dict) and row.get('path') in allowed_paths and row['path'] not in rows, 'RECIPE_PATH')
+        require(all(type(row.get(k)) is int for k in ('uid', 'gid', 'mode')) and tuple(row.get(k) for k in ('uid', 'gid', 'mode')) == identity['metadata'][row['path']], 'RECIPE_METADATA')
         for key in ('beforeSha256', 'afterSha256'):
             require(isinstance(row.get(key), str) and SHA.fullmatch(row[key]), 'RECIPE_HASH')
         for key in ('beforeBytes', 'afterBytes'):
             require(type(row.get(key)) is int and 0 < row[key] <= MAX_FILE_BYTES, 'RECIPE_FILE_BOUND')
         rows[row['path']] = row
-    require(set(rows) == ALLOWED_PATHS and isinstance(preimages, dict) and set(preimages) == ALLOWED_PATHS, 'PREIMAGE_MEMBERSHIP')
+    require(set(rows) == allowed_paths and isinstance(preimages, dict) and set(preimages) == allowed_paths, 'PREIMAGE_MEMBERSHIP')
     require(type(patch) is bytes and 0 < len(patch) <= MAX_PATCH_BYTES, 'PATCH_BOUND')
     require(digest(patch) == recipe.get('patchSha256'), 'PATCH_HASH')
     require(b'\x00' not in patch and b'\r' not in patch and patch.endswith(b'\n'), 'PATCH_ENCODING')
@@ -93,5 +97,5 @@ def apply_reviewed_patch(recipe, patch, preimages):
         value = b''.join(out)
         require(len(value) == rows[path]['afterBytes'] and digest(value) == rows[path]['afterSha256'], 'POSTIMAGE_HASH')
         result[path] = value
-    require(set(result) == ALLOWED_PATHS, 'PATCH_FILE_MEMBERSHIP')
+    require(set(result) == allowed_paths, 'PATCH_FILE_MEMBERSHIP')
     return result

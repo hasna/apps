@@ -1,3 +1,10 @@
+## 0.7.5
+
+### Patch Changes
+
+- Refuse Win32 drive-relative OpenCode references before URI classification and remove case, encoded, mixed-separator, drive-root-relative, UNC, `file://`, and trailing-dot/space aliases into any Instructions-managed namespace while preserving truly unmanaged paths.
+- Retire automatic native Inbox skill repair from profile application and bootstrap (#2443). Legacy `managed-skills` reports preserve native files, never invoke Conversations, and direct operators to manage versioned skill content through the Skills CLI.
+
 ## 0.7.4
 
 ### Patch Changes

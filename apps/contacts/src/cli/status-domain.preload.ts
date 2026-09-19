@@ -3,7 +3,7 @@ import { mock } from "bun:test";
 import * as childProcess from "node:child_process";
 import { appendFileSync, lstatSync, realpathSync } from "node:fs";
 import { basename, join } from "node:path";
-import { diskFixtureKey, envFixtureKey, fixtureStation } from "./status-fixture";
+import { fixtureStation } from "./status-fixture";
 
 const home = process.env.HOME ?? "";
 const info = lstatSync(home);
@@ -36,13 +36,21 @@ Bun.listen = refuse as typeof Bun.listen;
 Bun.serve = refuse as typeof Bun.serve;
 globalThis.WebSocket = function () { return refuse(); } as unknown as typeof WebSocket;
 
+// Resolve the key the mock must see through the SAME @hasna/contracts client
+// seam the CLI uses, imported here (after the mocks) so it resolves against
+// the fixture tiers. The fixture asserts the credential the resolver actually
+// selects; a hand-rolled `process.env.HASNA_CONTACTS_API_KEY` read would be
+// the credential-seam defect this boundary exists to catch.
+const { resolveCredential } = await import("@hasna/contracts/client");
+const { contactsResolverCredentials } = await import("../cloud/resolver-inputs.js");
+const expectedKey = resolveCredential("contacts", process.env, contactsResolverCredentials(process.env))?.apiKey;
+
 // No environment rewrite and no originalFetch fallback: disk/env selection,
 // normalized authority and headers must come from @hasna/contracts itself.
 globalThis.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
   const request = new Request(input, init);
   const url = new URL(request.url);
   const origin = mode === "success" ? "https://contacts.example.test" : "https://contacts.example.invalid";
-  const expectedKey = mode === "success" || process.env.HASNA_CONTACTS_API_KEY !== undefined ? envFixtureKey : diskFixtureKey;
   if (mode === "unconfigured" || url.origin !== origin || request.method !== "GET" ||
       !["/v1/contacts", "/v1/companies"].includes(url.pathname) || url.search !== "?limit=1" ||
       request.headers.get("x-api-key") !== expectedKey || request.headers.get("authorization") !== `Bearer ${expectedKey}` ||

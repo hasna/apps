@@ -27,6 +27,9 @@ import {
   RUNTIME_TIMEOUT_MS,
   type RuntimeConfig,
 } from "./runtime-policy.js";
+import { PURE_DESCRIPTOR, PURE_LIMITS, pureInput, uniqueJson,
+  inspectPureBundle, validatePureOutput, assertPureAdmission } from "./runtime-pure-contract.js";
+import type { FrozenAdmission, PureExecutionContract } from "../sdk/execution/types.js";
 import { isTerminalStatus } from "../sdk/execution/types.js";
 export interface RuntimeService {
   config: RuntimeConfig;
@@ -130,7 +133,7 @@ async function body(request: Request, max: number): Promise<unknown> {
     }
     chunks.push(v.value);
   }
-  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  return uniqueJson(Buffer.concat(chunks).toString("utf8"));
 }
 const scope = (p: ApiPrincipal, action: string) =>
   p.scopes.includes("*") ||
@@ -148,6 +151,7 @@ function publicJob(job: RuntimeJob) {
     bundleDigest: a.bundleDigest,
     inputDigest: a.inputDigest,
     runtimeImageDigest: a.runtimeImageDigest,
+    executionContract: a.executionContract ?? { id: "pdf.v1" },
     status: job.execution.status,
     createdAt: a.createdAt,
     updatedAt: job.execution.updatedAt,
@@ -159,6 +163,26 @@ function publicJob(job: RuntimeJob) {
       : {}),
     artifacts: (job.result?.artifacts ?? []).map(({ base64, ...meta }) => meta),
   };
+}
+function findReview(service: RuntimeService, tenant: string, slug: string, version: string, sha256: string) {
+  return service.config.reviewedBundles.find(b => b.slug === slug && b.version === version && b.sha256 === sha256 &&
+    (!b.executionContract || (b.tenantId === tenant && b.imageDigest === service.config.imageDigest)));
+}
+function sameContract(admission: FrozenAdmission, contract: PureExecutionContract | undefined, image: string): boolean {
+  return digestInput(admission.executionContract ?? null) === digestInput(contract ?? null) &&
+    (!contract || admission.runtimeImageDigest === image);
+}
+class RuntimeBundleError extends Error {
+  constructor(readonly code: string, readonly status: number) { super(code); }
+}
+async function reviewedBytes(service: RuntimeService, principal: ApiPrincipal, digest: string): Promise<Uint8Array> {
+  const bundle = await service.productStore.getSkillBundle(principal, digest);
+  if (!bundle) throw new RuntimeBundleError("BUNDLE_UNAVAILABLE", 503);
+  if (bundle.byteSize > RUNTIME_MAX_BUNDLE_BYTES) throw new RuntimeBundleError("BUNDLE_LIMIT", 413);
+  const bytes = await service.artifacts.readBundle(bundle);
+  if (!bytes || bytes.length > RUNTIME_MAX_BUNDLE_BYTES || hashBytes(bytes) !== digest)
+    throw new RuntimeBundleError("BUNDLE_INTEGRITY_FAILED", 503);
+  return bytes;
 }
 /** Called after normal bearer authentication. Dedicated paths avoid changing /runs. */
 export async function handleRuntimeApiRequest(
@@ -181,10 +205,29 @@ export async function handleRuntimeApiRequest(
   if (!id || segments.length > 6 || !/^[a-z0-9_-]+$/.test(id))
     return refusal("INVALID_EXECUTION_PATH", 400);
   try {
+    if (request.method === "GET" && sub === "eligibility" && segments.length === 5) {
+      const query = new URL(request.url).searchParams;
+      const versionName = query.get("version");
+      if (!versionName || !/^\d+\.\d+\.\d+$/.test(versionName)) return refusal("REVIEWED_VERSION_REQUIRED", 400);
+      const skill = await service.productStore.getSkill(principal, id);
+      const version = skill && !skill.tombstonedAt && await service.productStore.getSkillVersion(principal, id, versionName);
+      if (!version) return refusal("SKILL_VERSION_NOT_FOUND", 404);
+      const pinned = query.get("bundleDigest");
+      if (pinned && pinned.replace(/^sha256:/, "") !== version.bundleSha256) return refusal("SELECTION_DIGEST_MISMATCH", 409);
+      const review = findReview(service, principal.orgId, id, versionName, version.bundleSha256);
+      if (!review) return json({ contractVersion: 1, eligible: false, reason: "BUNDLE_NOT_REVIEWED_FOR_CLOUD",
+        skill: id, version: versionName, bundleDigest: version.bundleSha256 });
+      if (review.executionContract) {
+        const bytes = await reviewedBytes(service, principal, version.bundleSha256);
+        await inspectPureBundle(bytes, review.executionContract);
+      }
+      return json({ contractVersion: 1, eligible: true, skill: id, version: versionName, bundleDigest: version.bundleSha256,
+        runtimeImageDigest: service.config.imageDigest, executionContract: review.executionContract ?? { id: "pdf.v1" },
+        secrets: "none", egress: "deny", ...(review.executionContract ? { descriptor: PURE_DESCRIPTOR, limits: PURE_LIMITS } : {}) });
+    }
     if (request.method === "POST" && !sub) {
       const raw = (await body(request, 150_000)) as Record<string, unknown>;
       if (
-        id !== "pdf-generate" ||
         typeof raw.version !== "string" ||
         !/^\d+\.\d+\.\d+$/.test(raw.version)
       )
@@ -204,7 +247,6 @@ export async function handleRuntimeApiRequest(
         return refusal("UNSUPPORTED_EXECUTION_FIELD", 400);
       if (raw.workspaceId !== undefined && raw.workspaceId !== principal.orgId)
         return refusal("SELECTION_WORKSPACE_MISMATCH", 409);
-      const input = runtimeInput(raw.input);
       const key = request.headers.get("idempotency-key") ?? raw.idempotencyKey;
       if (typeof key !== "string" || !/^[A-Za-z0-9._:-]{1,128}$/.test(key))
         return refusal("IDEMPOTENCY_KEY_REQUIRED", 400);
@@ -222,34 +264,25 @@ export async function handleRuntimeApiRequest(
           raw.bundleDigest.replace(/^sha256:/, "") !== version.bundleSha256)
       )
         return refusal("SELECTION_DIGEST_MISMATCH", 409);
-      if (
-        !service.config.reviewedBundles.some(
-          (b) =>
-            b.slug === id &&
-            b.version === raw.version &&
-            b.sha256 === version.bundleSha256,
-        )
-      )
-        return refusal("BUNDLE_NOT_REVIEWED_FOR_CLOUD", 403);
+      const review = findReview(service, principal.orgId, id, raw.version, version.bundleSha256);
+      if (!review) return refusal("BUNDLE_NOT_REVIEWED_FOR_CLOUD", 403);
+      const contract = review.executionContract;
+      // Pure calls pin both the selected workspace and exact content; no ambient selection.
+      if (contract && (raw.workspaceId !== principal.orgId || typeof raw.bundleDigest !== "string"))
+        return refusal("PURE_SELECTION_REQUIRED", 400);
+      const input = contract ? pureInput(raw.input) : runtimeInput(raw.input);
       const existing = await service.store.getRunByKey(principal.orgId, key);
       if (
         existing &&
         (existing.admission.skillId !== id ||
           existing.admission.skillVersion !== raw.version ||
           existing.admission.bundleDigest !== version.bundleSha256 ||
-          existing.admission.inputDigest !== digestInput(input))
+          existing.admission.inputDigest !== digestInput(input) ||
+          !sameContract(existing.admission, contract, service.config.imageDigest))
       )
         return refusal("IDEMPOTENCY_CONFLICT", 409);
-      const bundle = await service.productStore.getSkillBundle(
-        principal,
-        version.bundleSha256,
-      );
-      if (!bundle) return refusal("BUNDLE_UNAVAILABLE", 503);
-      if (bundle.byteSize > RUNTIME_MAX_BUNDLE_BYTES)
-        return refusal("BUNDLE_LIMIT", 413);
-      const bytes = await service.artifacts.readBundle(bundle);
-      if (!bytes || hashBytes(bytes) !== version.bundleSha256)
-        return refusal("BUNDLE_INTEGRITY_FAILED", 503);
+      const bytes = await reviewedBytes(service, principal, version.bundleSha256);
+      if (contract) await inspectPureBundle(bytes, contract);
       const admission = createSubmitRunService({
         store: service.store,
         imageProfiles: createImageProfileRegistry({
@@ -271,7 +304,8 @@ export async function handleRuntimeApiRequest(
         input,
         idempotencyKey: key,
         runtime: "bun",
-        limits: {
+        ...(contract ? { executionContract: contract } : {}),
+        limits: contract ? PURE_LIMITS : {
           maxDurationMs: RUNTIME_TIMEOUT_MS,
           maxArtifactsBytes: RUNTIME_MAX_ARTIFACT_BYTES,
         },
@@ -283,7 +317,8 @@ export async function handleRuntimeApiRequest(
         run.skillId !== id ||
         run.skillVersion !== raw.version ||
         run.bundleDigest !== version.bundleSha256 ||
-        run.inputDigest !== digestInput(input)
+        run.inputDigest !== digestInput(input) ||
+        !sameContract(run, contract, service.config.imageDigest)
       )
         return refusal("IDEMPOTENCY_CONFLICT", 409);
       await service.store.mutate(run.runId, (j) => {
@@ -399,6 +434,7 @@ export async function handleRuntimeApiRequest(
     }
     return refusal("EXECUTION_ROUTE_NOT_FOUND", 404);
   } catch (error) {
+    if (error instanceof RuntimeBundleError) return refusal(error.code, error.status);
     if ((error as Error).message === "Runtime concurrency limit reached")
       return refusal("RUNTIME_CONCURRENCY_LIMIT", 429);
     return refusal(
@@ -462,7 +498,7 @@ export async function handleRuntimeWorkerRequest(
   }
   if (request.method === "POST" && s[4] === "complete") {
     try {
-      const result = validatedResult(await body(request, 3_000_000));
+      const result = validatedResult(await body(request, 3_000_000), job);
       await service.store.mutate(s[3]!, (j) => {
         if (j.execution.status === "cancelled")
           throw Error("Execution cancelled");
@@ -509,7 +545,7 @@ export async function handleRuntimeWorkerRequest(
   }
   return refusal("METHOD_NOT_ALLOWED", 405);
 }
-function validatedResult(value: unknown): RuntimeResult {
+function validatedResult(value: unknown, job: RuntimeJob): RuntimeResult {
   if (!value || typeof value !== "object") throw Error("Invalid result");
   const v = value as RuntimeResult;
   if (
@@ -524,6 +560,15 @@ function validatedResult(value: unknown): RuntimeResult {
     v.artifacts.length > 2
   )
     throw Error("Invalid result");
+  if (job.execution.admission.executionContract) {
+    assertPureAdmission(job.execution.admission);
+    if (v.artifacts.length || Buffer.byteLength(v.stdout) > PURE_DESCRIPTOR.stdoutBytes ||
+        Buffer.byteLength(v.stderr) > PURE_DESCRIPTOR.stderrBytes) throw Error("Invalid pure result limits");
+    if (v.exitCode === 0) validatePureOutput(v.stdout, pureInput(job.input));
+    return { exitCode: v.exitCode, stdout: v.stdout, stderr: v.stderr, artifacts: [],
+      ...(typeof v.error === "string" ? { error: v.error.slice(0, 500) } : {}) };
+  }
+  if (job.execution.admission.skillId !== "pdf-generate") throw Error("Missing execution contract");
   let total = 0;
   const seen = new Set<string>();
   for (const a of v.artifacts) {

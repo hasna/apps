@@ -1759,6 +1759,41 @@ High-volume tools return compact payloads by default. Pass `detail: "full"` to
 MCP calls such as `get_task`, `get_status`, `get_context`, `bootstrap`, and
 `task_context` when you need full data.
 
+`list_tasks` is a 50-row page when `limit` is omitted. One authoritative
+response supplies the rows and its pagination receipt: `total`, the requested
+and effective/server-capped limit, the consumed server `offset`, `has_more`,
+`next_offset`, and (when supplied) `snapshot`/`next_cursor`. Prefer
+`next_cursor`; otherwise continue from `next_offset`. A predecessor envelope
+without `total` is still usable but reports `total: null`, `has_more: null`, and
+`complete: null` rather than pretending the page is a complete snapshot. The
+hosted read uses the configured `https://api.hasna.com/todos` authority through
+exactly one `/v1` prefix and never falls back to local storage.
+
+The CLI task list is paged the same way:
+
+```bash
+todos list --format json                         # structured 50-row page
+todos list --format json --offset 50             # next page
+todos list --format compact --limit 20 --offset 40
+todos list --all --format json                   # explicit bounded exhaustion
+```
+
+Explicit `--format json` returns `{tasks,count,total,requested_limit,limit,
+offset,has_more,next_offset,next_cursor,snapshot,complete,...}`. Nullable
+pagination fields mean the authority did not prove them; they are never guessed
+from a separate probe. If a large authority page would cross the 64 KiB page
+budget, the CLI re-requests a smaller prefix from the same cursor/snapshot and
+emits that authority-returned continuation. It fails closed if the authority
+cannot reproduce the prefix, rather than discarding a snapshot cursor or
+advancing a plain offset by fewer rows than the authority consumed. Compact
+output ends with the same continuation facts and retains zero-byte stdout for
+an empty result. The legacy global `--json` spelling remains a bare task array, but it is
+also bounded to 50 rows unless a limit is supplied. Limits above 50 require the
+existing `--all` acknowledgement. `--all` without a limit exhausts only up to
+5,000 rows and 1 MiB; the byte gate measures the actual pretty-printed legacy
+`--json --all` payload before writing it. Larger results fail closed and must be
+narrowed or paged.
+
 ## REST API
 
 ```bash

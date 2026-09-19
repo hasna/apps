@@ -1844,24 +1844,39 @@ function pathIsManagedOpenCodeInstruction(
 ): boolean {
   const normalizedManagedDir = posix.normalize(managedDir.replaceAll("\\", "/"));
   const candidates = canonicalOpenCodeInstructionPaths(reference, targetHome, projectRoot);
-  return candidates.some((candidate) =>
-    candidate === normalizedManagedDir
-    || candidate.endsWith(`/${normalizedManagedDir}`)
-    || candidate.includes(`/${normalizedManagedDir}/`)
-  );
+  return candidates.some((candidate) => {
+    const path = candidate.caseInsensitive ? candidate.path.toLowerCase() : candidate.path;
+    const namespace = candidate.caseInsensitive ? normalizedManagedDir.toLowerCase() : normalizedManagedDir;
+    return path === namespace
+      || path.endsWith(`/${namespace}`)
+      || path.includes(`/${namespace}/`);
+  });
+}
+
+interface CanonicalOpenCodeInstructionPath {
+  path: string;
+  caseInsensitive: boolean;
 }
 
 function canonicalOpenCodeInstructionPaths(
   reference: string,
   targetHome: string,
   projectRoot?: string,
-): string[] {
-  const portable = decodeOpenCodePathEscapes(reference.replaceAll("\\", "/")).replaceAll("\\", "/");
+): CanonicalOpenCodeInstructionPath[] {
+  const decodedReference = decodeOpenCodePathEscapes(reference);
+  const portable = decodedReference.replaceAll("\\", "/");
   if (portable.includes("\0")) {
     throw new Error("OpenCode config instruction references cannot contain NUL bytes.");
   }
+  if (/^[A-Za-z]:(?!\/)/.test(portable)) {
+    throw new Error("OpenCode config instruction references cannot use Win32 drive-relative paths.");
+  }
   const windowsAbsolute = /^[A-Za-z]:\//.test(portable);
-  const uriScheme = windowsAbsolute ? null : /^([A-Za-z][A-Za-z0-9+.-]*):/.exec(portable)?.[1]?.toLowerCase();
+  const uncAbsolute = portable.startsWith("//");
+  const windowsRootRelative = /^\\(?![\\/])/.test(decodedReference);
+  const uriScheme = windowsAbsolute || uncAbsolute || windowsRootRelative
+    ? null
+    : /^([A-Za-z][A-Za-z0-9+.-]*):/.exec(portable)?.[1]?.toLowerCase();
   if (uriScheme && uriScheme !== "file") return [];
 
   if (uriScheme === "file") {
@@ -1878,25 +1893,43 @@ function canonicalOpenCodeInstructionPaths(
     if (url.protocol !== "file:" || url.username || url.password || url.port || url.search || url.hash) {
       throw new Error("OpenCode config contains an invalid file URL instruction reference.");
     }
-    const pathname = decodeOpenCodePathEscapes(url.pathname);
+    const pathname = decodeOpenCodePathEscapes(url.pathname).replaceAll("\\", "/");
     if (pathname.includes("\0")) {
       throw new Error("OpenCode config instruction references cannot contain NUL bytes.");
     }
+    if (/^\/[A-Za-z]:(?!\/)/.test(pathname)) {
+      throw new Error("OpenCode config instruction references cannot use Win32 drive-relative paths.");
+    }
     const host = url.hostname && url.hostname !== "localhost" ? `//${url.hostname}` : "";
-    return [normalizePortableOpenCodePath(`${host}${pathname}`)];
+    return [{
+      path: normalizePortableOpenCodePath(`${host}${pathname}`, true),
+      // A file URL can name a Windows drive or UNC path, and the planner may
+      // inspect it on a different host. Match the reserved namespace
+      // conservatively without relying on the current platform's case rules.
+      caseInsensitive: true,
+    }];
   }
 
-  if (posix.isAbsolute(portable) || windowsAbsolute || portable.startsWith("//")) {
-    return [normalizePortableOpenCodePath(portable)];
+  if (posix.isAbsolute(portable) || windowsAbsolute || uncAbsolute || windowsRootRelative) {
+    const windowsPathSemantics = windowsAbsolute || uncAbsolute || windowsRootRelative;
+    return [{
+      path: normalizePortableOpenCodePath(portable, windowsPathSemantics),
+      caseInsensitive: windowsPathSemantics,
+    }];
   }
 
   const roots = [
     ...(projectRoot ? [resolveSessionPath(projectRoot)] : []),
     resolveSessionPath(targetHome),
   ];
-  return [...new Set(roots.map((root) =>
-    normalizePortableOpenCodePath(posix.join(root.replaceAll("\\", "/"), portable))
-  ))];
+  const candidates = new Map<string, CanonicalOpenCodeInstructionPath>();
+  for (const root of roots) {
+    const portableRoot = root.replaceAll("\\", "/");
+    const caseInsensitive = /^[A-Za-z]:\//.test(portableRoot) || portableRoot.startsWith("//");
+    const path = normalizePortableOpenCodePath(posix.join(portableRoot, portable));
+    candidates.set(`${caseInsensitive ? "i" : "s"}:${path}`, { path, caseInsensitive });
+  }
+  return [...candidates.values()];
 }
 
 function decodeOpenCodePathEscapes(value: string): string {
@@ -1909,9 +1942,20 @@ function decodeOpenCodePathEscapes(value: string): string {
   });
 }
 
-function normalizePortableOpenCodePath(value: string): string {
-  const normalized = posix.normalize(value.replaceAll("\\", "/"));
+function normalizePortableOpenCodePath(value: string, windowsPathSemantics = false): string {
+  const portable = value.replaceAll("\\", "/");
+  const componentNormalized = windowsPathSemantics
+    ? portable.split("/").map(normalizeWin32PathComponent).join("/")
+    : portable;
+  const normalized = posix.normalize(componentNormalized);
   return normalized.startsWith("//") ? `/${normalized.replace(/^\/+/u, "")}` : normalized;
+}
+
+function normalizeWin32PathComponent(component: string): string {
+  if (!component || /^[A-Za-z]:$/.test(component)) return component;
+  const withoutTrailingSpaces = component.replace(/ +$/u, "");
+  if (withoutTrailingSpaces === "." || withoutTrailingSpaces === "..") return withoutTrailingSpaces;
+  return component.replace(/[ .]+$/u, "");
 }
 
 function buildAntigravityRuleFiles(

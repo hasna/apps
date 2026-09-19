@@ -1,4 +1,5 @@
 import { listMemories, createMemory, cleanExpiredMemories, touchMemory, getMemoryBriefing, listLowTrustMemories } from "../../db/memories.js";
+import { getProject } from "../../db/projects.js";
 import { getDbPath, loadConfig } from "../../lib/config.js";
 import { runCleanup } from "../../lib/retention.js";
 import {
@@ -157,6 +158,11 @@ addRoute("GET", "/api/inject", (req, url) => {
   const gate = isAuthenticated(req) ? null : checkWriteOriginOrHost(req);
   if (gate) return gate;
   const q = getSearchParams(url);
+  const project = q["project_id"] === undefined ? null : getProject(q["project_id"]);
+  if (q["project_id"] !== undefined && !project) {
+    return errorResponse("Project not found", 404);
+  }
+  const projectId = project?.id;
   const maxTokens = q["max_tokens"] ? parseInt(q["max_tokens"], 10) : 500;
   const minImportance = 3;
   const categories: MemoryCategory[] = [
@@ -175,20 +181,20 @@ addRoute("GET", "/api/inject", (req, url) => {
     category: categories,
     min_importance: minImportance,
     status: "active",
-    project_id: q["project_id"],
+    project_id: projectId,
     ...visibleToMachineFilter(visibleMachineId),
     limit: 50,
   });
   allMemories.push(...globalMems);
 
   // Shared memories (project-scoped)
-  if (q["project_id"]) {
+  if (projectId) {
     const sharedMems = listMemories({
       scope: "shared",
       category: categories,
       min_importance: minImportance,
       status: "active",
-      project_id: q["project_id"],
+      project_id: projectId,
       ...visibleToMachineFilter(visibleMachineId),
       limit: 50,
     });
@@ -203,6 +209,7 @@ addRoute("GET", "/api/inject", (req, url) => {
       min_importance: minImportance,
       status: "active",
       agent_id: q["agent_id"],
+      project_id: projectId,
       ...visibleToMachineFilter(visibleMachineId),
       limit: 50,
     });

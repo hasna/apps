@@ -14,7 +14,7 @@ import type { ImageProfileRegistry } from "./image-profile.js";
 import { resolveImageProfile } from "./image-profile.js";
 import type { RunExecutionStore } from "./storage.js";
 import { newRunId } from "./storage.js";
-import { EXECUTION_PROTOCOL_VERSION, canonicalJson, type FrozenAdmission, type RunLimits, type RunPolicy, type RuntimeName } from "./types.js";
+import { EXECUTION_PROTOCOL_VERSION, canonicalJson, type FrozenAdmission, type RunLimits, type RunPolicy, type RuntimeName, type PureExecutionContract } from "./types.js";
 
 export interface SubmitRunInput {
   tenantId: string;
@@ -29,6 +29,7 @@ export interface SubmitRunInput {
   systemDeps?: string[];
   policy?: Partial<RunPolicy>;
   limits?: Partial<RunLimits>;
+  executionContract?: PureExecutionContract;
 }
 
 export interface SubmitRunResult {
@@ -70,14 +71,17 @@ export function createSubmitRunService(options: SubmitRunServiceOptions): Submit
       // Own every admission field before a store lookup can yield to the caller.
       // Raw input is represented only by its canonical digest in the admission.
       const policy = { ...DEFAULT_RUN_POLICY, ...input.policy };
-      input = { ...input, systemDeps: [...(input.systemDeps ?? [])],
+      input = { ...input, ...(input.executionContract ? { executionContract: { ...input.executionContract } } : {}), systemDeps: [...(input.systemDeps ?? [])],
         policy: { ...policy, egressAllowlist: [...policy.egressAllowlist] },
         limits: { ...DEFAULT_RUN_LIMITS, ...input.limits } };
       const inputDigest = digestInput(input.input);
       const byKey = await store.getRunByKey(input.tenantId, input.idempotencyKey);
       if (byKey) return { run: ownedAdmission(byKey.admission), created: false };
 
-      const byDigests = await store.getRunByDigests({
+      // Pure jobs use the caller's explicit key. A different key may deliberately
+      // repeat input under a newly reviewed image/contract; historical PDF
+      // consumers retain their existing digest-tuple deduplication semantics.
+      const byDigests = input.executionContract ? null : await store.getRunByDigests({
         tenantId: input.tenantId,
         skillId: input.skillId,
         skillVersion: input.skillVersion,
@@ -100,6 +104,7 @@ export function createSubmitRunService(options: SubmitRunServiceOptions): Submit
         bundleDigest: input.bundleDigest,
         runtimeImageDigest: image.runtimeImageDigest,
         dependencyLayerTag: image.dependencyLayerTag,
+        ...(input.executionContract ? { executionContract: { ...input.executionContract } } : {}),
         inputDigest,
         runtime: image.runtime,
         policy: { ...DEFAULT_RUN_POLICY, ...input.policy },
@@ -117,7 +122,7 @@ export function createSubmitRunService(options: SubmitRunServiceOptions): Submit
 /** The service does not expose a store-owned record. Raw in-memory store
  * instances remain trusted embedding interfaces with their own reference semantics. */
 function ownedAdmission(admission: FrozenAdmission): FrozenAdmission {
-  return { ...admission, policy: { ...admission.policy, egressAllowlist: [...admission.policy.egressAllowlist] },
+  return { ...admission, ...(admission.executionContract ? { executionContract: { ...admission.executionContract } } : {}), policy: { ...admission.policy, egressAllowlist: [...admission.policy.egressAllowlist] },
     limits: { ...admission.limits } };
 }
 
