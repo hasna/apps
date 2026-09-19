@@ -28,7 +28,7 @@ publishLoopbackReadiness(readyPath, { url });
 
 // Private child IPC only: legacy/corrupt fixtures never become public HTTP routes.
 process.on("message", (input: unknown) => {
-  const request = input as { id: string; patchMessages?:Array<{id:number;pinned_at:string|null}>; inspect?:boolean; channels?:Array<Record<string,any>>; presence?:Array<Record<string,any>>; removeChannels?:string[]; authorized?: boolean; messages?: Array<Record<string, unknown>>; channel?: { row: Record<string, unknown>; members: string[] } };
+  const request = input as { id: string; patchMessages?:Array<{id:number;pinned_at:string|null}>; inspect?:boolean; channels?:Array<Record<string,any>>; presence?:Array<Record<string,any>>; subscriptions?:Array<Record<string,any>>; removeChannels?:string[]; authorized?: boolean; messages?: Array<Record<string, unknown>>; channel?: { row: Record<string, unknown>; members: string[] } };
   try {
     if (request.authorized !== undefined) { registered.clear(); if (request.authorized) registered.add(minted.kid); }
     if (request.messages) fake.__debug.seedMessages(request.messages);
@@ -41,7 +41,11 @@ process.on("message", (input: unknown) => {
     for (const channel of request.channels ?? []) fake.__debug.channels[String(channel.name)] = {...fake.__debug.channels[String(channel.name)], ...channel};
     for (const name of request.removeChannels ?? []) delete fake.__debug.channels[name];
     for (const row of request.presence ?? []) { const key=String(row.agent).toLowerCase(); fake.__debug.agentPresence.set(key,{...fake.__debug.agentPresence.get(key),...row}); }
-    process.send?.({ id: request.id, ok: true, ...(request.inspect ? {data:{messages:fake.__debug.messages,channels:Object.values(fake.__debug.channels),presence:[...fake.__debug.agentPresence.values()],presenceArchive:fake.__debug.agentPresenceReapArchive}} : {}) });
+    for (const row of request.subscriptions ?? []) {
+      const existing = fake.__debug.channelSubscriptions.find((entry:any) => entry.channel === row.channel && entry.agent === row.agent);
+      if (existing) Object.assign(existing, row); else fake.__debug.channelSubscriptions.push({...row});
+    }
+    process.send?.({ id: request.id, ok: true, ...(request.inspect ? {data:{messages:fake.__debug.messages,channels:Object.values(fake.__debug.channels),presence:[...fake.__debug.agentPresence.values()],presenceArchive:fake.__debug.agentPresenceReapArchive,subscriptions:fake.__debug.channelSubscriptions}} : {}) });
   } catch {
     process.send?.({ id: request.id, ok: false });
   }

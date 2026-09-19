@@ -100,7 +100,7 @@ export interface CompactFooterOptions {
   shown: number;
   total?: number;
   hasMore?: boolean;
-  nextCursor?: number | null;
+  nextCursor?: number | string | null;
   detailHint?: string;
   limitCapped?: boolean;
   /**

@@ -50,8 +50,8 @@ export async function startLoopbackApiFixture() {
         child.send({ id, ...data });
       });
     };
-    const seed = async (data: { patchMessages?: Array<{id:number;pinned_at:string|null}>; authorized?: boolean; messages?: Array<Record<string, unknown>>; channel?: {row:Record<string,unknown>;members:string[]}; channels?: Array<Record<string,unknown>>; presence?: Array<Record<string,unknown>>; removeChannels?:string[] }) => { await control(data); };
-    const inspect = async () => await control({inspect:true}) as {messages:Array<Record<string,any>>;channels:Array<Record<string,any>>;presence:Array<Record<string,any>>;presenceArchive:Array<Record<string,any>>};
+    const seed = async (data: { patchMessages?: Array<{id:number;pinned_at:string|null}>; authorized?: boolean; messages?: Array<Record<string, unknown>>; channel?: {row:Record<string,unknown>;members:string[]}; channels?: Array<Record<string,unknown>>; presence?: Array<Record<string,unknown>>; subscriptions?: Array<Record<string,unknown>>; removeChannels?:string[] }) => { await control(data); };
+    const inspect = async () => await control({inspect:true}) as {messages:Array<Record<string,any>>;channels:Array<Record<string,any>>;presence:Array<Record<string,any>>;presenceArchive:Array<Record<string,any>>;subscriptions:Array<Record<string,any>>};
 
     return { root, home, backendHome, env, url, stop, seed, inspect };
   } catch (error) {

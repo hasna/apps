@@ -24,7 +24,7 @@ import { registerTmuxTools } from "./tools/tmux.js";
 import { registerTaskTools } from "./tools/tasks.js";
 import { registerThreadTools } from "./tools/threads.js";
 import { isStdioMode, resolveMcpHttpPort, startMcpHttpServer } from "./http.js";
-import { ConversationsToolCatalog, createProfiledConversationsServer, resolveConversationsMcpProfile, type ConversationsMcpProfile } from "./profile.js";
+import { ConversationsToolCatalog, createProfiledConversationsServer, resolveConversationsMcpProfile, selectConversationsMcpProfile } from "./profile.js";
 
 import pkg from "../../package.json";
 
@@ -79,15 +79,16 @@ export async function disposeServer(srv: McpServer): Promise<void> {
   try { await drain; } finally { serverDrains.delete(srv); }
 }
 
-export function buildServer(forHttp = false, profile: ConversationsMcpProfile = "full"): McpServer {
+export function buildServer(forHttp = false, profile = "full"): McpServer {
+  const selection = selectConversationsMcpProfile(profile);
   const srv = new McpServer({
     name: "conversations",
     version: pkg.version,
   }, {
-    instructions: `Active MCP profile: ${profile}. The default core profile keeps discovery bounded; set HASNA_CONVERSATIONS_MCP_PROFILE=full only when the complete administrative inventory is required.`,
+    instructions: `Active MCP profiles: ${selection.profiles.join(",")}. The default 25-tool core keeps discovery bounded; compose specialist profiles or use full explicitly.`,
   });
   const catalog = new ConversationsToolCatalog();
-  const tools = createProfiledConversationsServer(srv, profile, catalog);
+  const tools = createProfiledConversationsServer(srv, selection, catalog);
 
   registerMessagingTools(tools, resolveProjectId);
   registerChannelTools(tools);
@@ -154,7 +155,7 @@ export function assertMcpStoreConfigured(env: Record<string, string | undefined>
   assertUnambiguousStoreEnv(env);
 }
 
-async function connectStdio(profile: ConversationsMcpProfile): Promise<void> {
+async function connectStdio(profile: string): Promise<void> {
   const transport = new StdioServerTransport();
   await buildServer(false, profile).connect(transport);
 }
@@ -183,12 +184,13 @@ Usage:
   conversations-mcp              stdio transport (default)
   conversations-mcp --http         Streamable HTTP on 127.0.0.1:8856
   conversations-mcp --http --port <n>
-  conversations-mcp --mcp-profile <core|full>
+  conversations-mcp --mcp-profile <profile[,profile...]>
 
 Environment:
   MCP_HTTP=1           Enable HTTP mode
   MCP_HTTP_PORT=<n>    Override default port (8856)
-  HASNA_CONVERSATIONS_MCP_PROFILE=full  Restore the legacy complete tool inventory
+  HASNA_CONVERSATIONS_MCP_PROFILE=core,tasks  Compose specialist inventories
+  HASNA_CONVERSATIONS_MCP_PROFILE=full        Restore the legacy complete tool inventory
 `);
     return;
   }

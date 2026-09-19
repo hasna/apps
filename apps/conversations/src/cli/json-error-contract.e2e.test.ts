@@ -90,7 +90,7 @@ describe("--json error contract", () => {
 
     const members = runCli(["channel", "members", "existing-empty-members", "--json"]);
     expect(members.exitCode, members.stderr).toBe(0);
-    expect(JSON.parse(members.stdout)).toEqual([]);
+    expect(JSON.parse(members.stdout)).toMatchObject({ members: [], count: 0, total: 0, has_more: false, next_cursor: null, compact: true });
   });
 
   test("without --json the same error stays human-readable on stderr", () => {

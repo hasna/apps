@@ -2,14 +2,14 @@ import type { Command } from "commander";
 import { getStore } from "../../lib/store/index.js";
 import chalk from "chalk";
 import { resolveIdentity } from "../../lib/identity.js";
-import { windowItems } from "../../lib/compact-output.js";
+import { buildCompactCollectionEnvelope, compareSessionCollectionRows, summarizeSession, windowItems } from "../../lib/compact-output.js";
 import { storeStatusLocation, type StoreStatusLocation } from "../../lib/store/status-location.js";
 import { checkForUpdate } from "../../lib/version-check.js";
-import { getCliWindow, printCompactFooter, printJsonDisclosure, windowJsonList } from "../compact.js";
+import { getCliWindow, printCompactFooter, windowJsonList } from "../compact.js";
 import { SESSION_LIST_ORDER } from "../../lib/list-order.js";
 import { emitCliError } from "../cli-error.js";
 import { parseMessageReference } from "../../lib/message-reference.js";
-import { printErrorLine, printJson, printLine } from "../../lib/stdout.js";
+import { printErrorLine, printJson, printJsonLine, printLine } from "../../lib/stdout.js";
 
 export function registerAnalyticsCommands(program: Command): void {
   // ---- graph ----
@@ -309,40 +309,57 @@ export function registerAnalyticsCommands(program: Command): void {
     .description("List conversation sessions")
     .option("--agent <id>", "Filter sessions involving this agent")
     .option("--limit <n>", "Max sessions to show", parseInt)
-    .option("--cursor <n>", "Skip first N sessions for pagination", parseInt)
-    .option("-j, --json", "Output as JSON")
+    .option("--cursor <token>", "Opaque continuation cursor from next_cursor")
+    .option("-j, --json", "Output bounded compact JSON")
+    .option("--full", "Return the legacy full-record JSON array")
+    .option("--all", "Alias for --full")
     .action(async (opts) => {
       const sessions = await getStore().listSessions(opts.agent);
-      const window = getCliWindow({ limit: opts.limit, cursor: opts.cursor });
-      const page = windowItems(sessions, window);
+      if (opts.json && (opts.full || opts.all)) {
+        if (opts.cursor !== undefined) throw new Error("--cursor cannot be combined with --full or --all; use ordinary --json for safe continuation");
+        const listing = windowJsonList(sessions, opts.all ? {} : { limit: opts.limit });
+        printJson(listing.rows);
+        return;
+      }
+      const page = (() => {
+        try {
+          return buildCompactCollectionEnvelope({
+        collection: "sessions",
+        items: sessions,
+        summarize: summarizeSession,
+        compare: compareSessionCollectionRows,
+        key: (row) => ({ session_id: row.session_id }),
+        snapshot: summarizeSession,
+        filters: { agent: opts.agent ?? null },
+        tieBreakers: ["session_id asc"],
+        limit: opts.limit,
+        cursor: opts.cursor,
+        sort: SESSION_LIST_ORDER,
+        hint: "Continue with the opaque next_cursor; restart from page one if the collection changes. Pass --full or --all for the legacy array.",
+      });;
+        } catch (error) {
+          emitCliError(error instanceof Error ? error.message : String(error), opts);
+        }
+      })()
 
       if (opts.json) {
-        const listing = windowJsonList(sessions, opts);
-        printJson(listing.rows);
-        printJsonDisclosure({
-          shown: listing.rows.length,
-          total: listing.page.total,
-          hasMore: listing.bounded && listing.page.hasMore,
-          nextCursor: listing.page.nextCursor,
-          sort: SESSION_LIST_ORDER,
-        });
+        printJsonLine(page);
       } else {
-        if (sessions.length === 0) {
+        const rows = page.sessions as ReturnType<typeof summarizeSession>[];
+        if (rows.length === 0) {
           printLine(chalk.dim("No sessions found."));
         } else {
-          for (const s of page.items) {
-            const unread = s.unread_count > 0 ? chalk.green(` (${s.unread_count} unread)`) : "";
-            const participants = s.participants.join(", ");
-            printLine(
-              `${chalk.bold(s.session_id)} — ${participants} — ${s.message_count} messages${unread}`
-            );
+          for (const session of rows) {
+            const unread = session.unread_count > 0 ? chalk.green(` (${session.unread_count} unread)`) : "";
+            const participants = session.participants.join(", ");
+            printLine(`${chalk.bold(session.session_id)} — ${participants} — ${session.message_count} messages${unread}`);
           }
           printCompactFooter({
             shown: page.count,
             total: page.total,
-            hasMore: page.hasMore,
-            nextCursor: page.nextCursor,
-            limitCapped: window.limitCapped,
+            hasMore: page.has_more,
+            nextCursor: page.next_cursor,
+            limitCapped: page.limit_capped,
             sort: SESSION_LIST_ORDER,
             detailHint: "Use conversations read --session <id> --verbose for message bodies.",
           });

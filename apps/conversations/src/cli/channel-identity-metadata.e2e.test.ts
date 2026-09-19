@@ -148,7 +148,7 @@ describe("channel canonical identity repair CLI", () => {
 
     const members = runCli(["channel", "members", "sample", "--json"]);
     expect(members.exitCode, members.stderr).toBe(0);
-    expect(JSON.parse(members.stdout).map((member: { agent: string }) => member.agent).sort())
+    expect(JSON.parse(members.stdout).members.map((member: { agent: string }) => member.agent).sort())
       .toEqual(["alice", "bob"]);
 
     const messages = runCli(["channel", "read", "sample", "--json"]);

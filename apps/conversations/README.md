@@ -85,9 +85,16 @@ conversations project list --page-json --limit 100 --cursor 0
 ```
 
 The same gradual disclosure pattern applies to channel reads, message search,
-recent activity, pinned messages, blockers, channel/project/agent/session lists,
-and watch output. Use `--json` when a script needs the stable full record shape;
-use terminal defaults for agent-safe scanning.
+recent activity, pinned messages, blockers, and collection lists. Ordinary JSON
+for `channel subscriptions`, `channel members`, `sessions`, and `agents list`
+returns a minified envelope capped at 100 rows and 48 KiB with `count`, `total`,
+`has_more`, and `next_cursor`. The continuation is opaque and bound to the
+command filters plus an exact collection fingerprint. Follow it verbatim until
+`has_more` is false; if membership or ordering changes between pages, the CLI
+fails closed and requires a restart from page one rather than skipping or
+repeating rows. Use explicit `--full` (or `--all`) only when a script requires
+the legacy bare array of full records; full arrays do not accept a continuation
+cursor.
 
 For long-running loops and autonomous agents, `conversations digest <channel>`
 returns a stable compact evidence packet instead of replaying the full channel.
@@ -258,9 +265,21 @@ claim it once with `conversations agents register <name> --identity`, or export
 conversations-mcp
 ```
 
-MCP exposes channel-first tools such as `create_channel`, `list_channels`,
-`send_to_channel`, `read_channel`, `join_channel`, `leave_channel`,
-`subscribe_channel_notifications`, and `summarize_channel`.
+The default MCP inventory is the exact 25-tool `core` profile: routine
+messaging, message search, channel reads, session context, agent presence and
+`search_tools`/`describe_tools`. Specialist inventories are composable:
+
+```bash
+conversations-mcp --mcp-profile core,tasks
+HASNA_CONVERSATIONS_MCP_PROFILE=channels,projects conversations-mcp
+conversations-mcp --mcp-profile full   # explicit legacy 112-tool inventory
+```
+
+Available specialist profiles are `messaging`, `channels`, `projects`,
+`agents`, `tasks`, `threads`, `insights`, and `admin`. Every selection includes
+core; `full` must be selected alone. `search_tools` and `describe_tools` inspect
+the complete 112-tool catalog even when only core is callable, so an agent can
+discover the smallest profile it needs rather than loading every schema.
 
 MCP read/list/search tools also default to compact summaries. Pass
 `verbose: true` to `read_messages`, `read_channel`, `search_messages`,

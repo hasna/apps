@@ -1,6 +1,8 @@
 import type {
   AgentPresence,
   ChannelInfo,
+  ChannelMember,
+  ChannelNotificationSubscription,
   Message,
   ProjectInfo,
   SearchResult,
@@ -9,12 +11,15 @@ import type {
   Session,
   TaskInfo,
 } from "../types.js";
+import { createHash } from "node:crypto";
 import { takeWindow } from "./message-window.js";
+import type { SortDescriptor } from "./list-order.js";
 
 export const DEFAULT_COMPACT_LIMIT = 10;
 export const DEFAULT_PREVIEW_CHARS = 160;
 export const MAX_COMPACT_LIMIT = 100;
 export const DEFAULT_SEARCH_MAX_BYTES = 48 * 1024;
+export const DEFAULT_COLLECTION_MAX_BYTES = 48 * 1024;
 
 export interface OutputWindow {
   limit: number;
@@ -269,26 +274,293 @@ export function summarizeProject(project: ProjectInfo, maxChars = DEFAULT_PREVIE
 
 export function summarizeAgent(agent: AgentPresence) {
   return {
-    agent: agent.agent,
-    role: agent.role,
-    status: agent.status,
+    agent: previewText(agent.agent, 96),
+    session_id: agent.session_id ? previewText(agent.session_id, 96) : null,
+    role: previewText(agent.role, 64),
+    status: previewText(agent.status, 96),
     online: agent.online,
-    project_id: agent.project_id,
+    project_id: agent.project_id ? previewText(agent.project_id, 96) : null,
     last_seen_at: agent.last_seen_at,
+  };
+}
+
+export function summarizeChannelMember(member: ChannelMember) {
+  return {
+    channel: previewText(member.channel, 96),
+    agent: previewText(member.agent, 96),
+    joined_at: member.joined_at,
+  };
+}
+
+export function summarizeChannelSubscription(subscription: ChannelNotificationSubscription) {
+  return {
+    channel: previewText(subscription.channel, 96),
+    agent: previewText(subscription.agent, 96),
+    created_at: subscription.created_at,
+    preview_chars: subscription.preview_chars,
+    since_message_id: subscription.since_message_id,
   };
 }
 
 export function summarizeSession(session: Session) {
   const participantLimit = 8;
   return {
-    session_id: session.session_id,
-    participants: session.participants.slice(0, participantLimit),
+    session_id: previewText(session.session_id, 96),
+    participants: session.participants.slice(0, participantLimit).map((participant) => previewText(participant, 96)),
     participant_count: session.participants.length,
     participants_truncated: session.participants.length > participantLimit,
     last_message_at: session.last_message_at,
     message_count: session.message_count,
     unread_count: session.unread_count,
   };
+}
+
+
+
+export type CompactCollectionKind = "agents" | "sessions" | "members" | "subscriptions";
+
+export const MAX_COMPACT_COLLECTION_CURSOR_BYTES = 1_024;
+const COMPACT_COLLECTION_CURSOR_VERSION = 1;
+const COMPACT_COLLECTION_CURSOR_DOMAIN = "hasna.conversations.compact-collection.v1";
+
+interface CompactCollectionCursorPayload {
+  v: 1;
+  collection: CompactCollectionKind;
+  query: string;
+  snapshot: string;
+  after: string;
+  check: string;
+}
+
+function canonicalJson(value: unknown): string {
+  if (value === null) return "null";
+  if (typeof value === "string" || typeof value === "boolean") return JSON.stringify(value);
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw new Error("Compact collection fingerprints require finite numbers");
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) return `[${value.map((entry) => canonicalJson(entry ?? null)).join(",")}]`;
+  if (typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record).filter((key) => record[key] !== undefined).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(",")}}`;
+  }
+  throw new Error(`Unsupported compact collection fingerprint value: ${typeof value}`);
+}
+
+function digest(value: unknown): string {
+  return createHash("sha256").update(canonicalJson(value)).digest("base64url");
+}
+
+function cursorCheck(payload: Omit<CompactCollectionCursorPayload, "check">): string {
+  return digest({ domain: COMPACT_COLLECTION_CURSOR_DOMAIN, ...payload });
+}
+
+function encodeCompactCollectionCursor(payload: Omit<CompactCollectionCursorPayload, "check">): string {
+  const complete: CompactCollectionCursorPayload = { ...payload, check: cursorCheck(payload) };
+  return Buffer.from(canonicalJson(complete), "utf8").toString("base64url");
+}
+
+function decodeCompactCollectionCursor(
+  raw: unknown,
+  collection: CompactCollectionKind,
+  query: string,
+): CompactCollectionCursorPayload | null {
+  if (raw === undefined || raw === null || raw === "") return null;
+  if (
+    typeof raw !== "string"
+    || Buffer.byteLength(raw, "utf8") > MAX_COMPACT_COLLECTION_CURSOR_BYTES
+    || !/^[A-Za-z0-9_-]+$/.test(raw)
+  ) throw new Error(`Invalid ${collection} continuation cursor`);
+  let decoded: Buffer;
+  let value: unknown;
+  try {
+    decoded = Buffer.from(raw, "base64url");
+    if (decoded.toString("base64url") !== raw) throw new Error("noncanonical cursor");
+    value = JSON.parse(decoded.toString("utf8"));
+  } catch {
+    throw new Error(`Invalid ${collection} continuation cursor`);
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`Invalid ${collection} continuation cursor`);
+  }
+  const payload = value as Partial<CompactCollectionCursorPayload> & Record<string, unknown>;
+  if (
+    Object.keys(payload).sort().join(",") !== "after,check,collection,query,snapshot,v"
+    || payload.v !== COMPACT_COLLECTION_CURSOR_VERSION
+    || payload.collection !== collection
+    || payload.query !== query
+    || typeof payload.snapshot !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(payload.snapshot)
+    || typeof payload.after !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(payload.after)
+    || typeof payload.check !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(payload.check)
+  ) throw new Error(`${collection} continuation cursor does not match this collection or its filters`);
+  const withoutCheck = {
+    v: 1 as const,
+    collection,
+    query,
+    snapshot: payload.snapshot,
+    after: payload.after,
+  };
+  if (payload.check !== cursorCheck(withoutCheck) || encodeCompactCollectionCursor(withoutCheck) !== raw) {
+    throw new Error(`Invalid ${collection} continuation cursor`);
+  }
+  return payload as CompactCollectionCursorPayload;
+}
+
+function compareText(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+/** Stable total ordering: newest heartbeat first, then immutable presence identity. */
+export function compareAgentCollectionRows(left: AgentPresence, right: AgentPresence): number {
+  return compareText(right.last_seen_at, left.last_seen_at)
+    || compareText(left.agent, right.agent)
+    || compareText(left.id, right.id);
+}
+
+/** Stable total ordering: newest session first, then unique session id. */
+export function compareSessionCollectionRows(left: Session, right: Session): number {
+  return compareText(right.last_message_at, left.last_message_at)
+    || compareText(left.session_id, right.session_id);
+}
+
+/** Stable total ordering: earliest join first, then unique channel member identity. */
+export function compareMemberCollectionRows(left: ChannelMember, right: ChannelMember): number {
+  return compareText(left.joined_at, right.joined_at)
+    || compareText(left.agent, right.agent)
+    || compareText(left.channel, right.channel);
+}
+
+/** Stable total ordering: earliest subscription first, then channel and agent identity. */
+export function compareSubscriptionCollectionRows(left: ChannelNotificationSubscription, right: ChannelNotificationSubscription): number {
+  return compareText(left.created_at, right.created_at)
+    || compareText(left.channel, right.channel)
+    || compareText(left.agent, right.agent);
+}
+
+export interface CompactCollectionEnvelope<T> {
+  [key: string]: unknown;
+  count: number;
+  total: number;
+  limit: number;
+  cursor: string | null;
+  next_cursor: string | null;
+  has_more: boolean;
+  limit_capped: boolean;
+  max_bytes: number;
+  byte_length: number;
+  compact: true;
+  sort: SortDescriptor;
+  tie_breakers: string[];
+  collection_fingerprint: string;
+  hint: string;
+}
+
+/**
+ * Build a minified collection page with an opaque keyset continuation bound to
+ * the tool, filters and the exact ordered snapshot. Any insertion, deletion,
+ * reordering or projected-field mutation between pages invalidates the cursor
+ * and fails closed instead of silently skipping or duplicating rows.
+ */
+export function buildCompactCollectionEnvelope<T, S>(opts: {
+  collection: CompactCollectionKind;
+  items: T[];
+  summarize: (item: T) => S;
+  compare: (left: T, right: T) => number;
+  key: (item: T) => unknown;
+  filters?: Record<string, unknown>;
+  snapshot?: (item: T) => unknown;
+  tieBreakers: string[];
+  limit?: unknown;
+  cursor?: unknown;
+  defaultLimit?: number;
+  maxLimit?: number;
+  maxBytes?: number;
+  sort: SortDescriptor;
+  hint: string;
+}): CompactCollectionEnvelope<S> {
+  const window = resolveOutputWindow({
+    limit: opts.limit,
+    defaultLimit: opts.defaultLimit ?? DEFAULT_COMPACT_LIMIT,
+    maxLimit: opts.maxLimit ?? MAX_COMPACT_LIMIT,
+  });
+  const maxBytes = Math.max(1024, Math.min(
+    Math.floor(opts.maxBytes ?? DEFAULT_COLLECTION_MAX_BYTES),
+    DEFAULT_COLLECTION_MAX_BYTES,
+  ));
+  const query = digest({ collection: opts.collection, filters: opts.filters ?? {} });
+  const ordered = [...opts.items].sort(opts.compare);
+  const keyed = ordered.map((item) => ({
+    item,
+    key: digest(opts.key(item)),
+    snapshot: (opts.snapshot ?? opts.summarize)(item),
+  }));
+  if (new Set(keyed.map((entry) => entry.key)).size !== keyed.length) {
+    throw new Error(`${opts.collection} collection lacks a unique stable identity; safe traversal is impossible`);
+  }
+  const collectionFingerprint = digest(keyed.map((entry) => ({ key: entry.key, value: entry.snapshot })));
+  const decoded = decodeCompactCollectionCursor(opts.cursor, opts.collection, query);
+  if (decoded && decoded.snapshot !== collectionFingerprint) {
+    throw new Error(`${opts.collection} collection changed during pagination; restart from the first page`);
+  }
+  let start = 0;
+  if (decoded) {
+    const afterIndex = keyed.findIndex((entry) => entry.key === decoded.after);
+    if (afterIndex < 0) {
+      throw new Error(`${opts.collection} continuation no longer names a member; restart from the first page`);
+    }
+    start = afterIndex + 1;
+  }
+  const selected = keyed.slice(start, start + window.limit);
+  const rows = selected.map((entry) => opts.summarize(entry.item));
+
+  const build = (): CompactCollectionEnvelope<S> => {
+    const emitted = rows.length;
+    const nextOffset = start + emitted;
+    const hasMore = nextOffset < keyed.length;
+    const lastKey = emitted > 0 ? selected[emitted - 1]!.key : null;
+    const nextCursor = hasMore && lastKey
+      ? encodeCompactCollectionCursor({
+          v: 1,
+          collection: opts.collection,
+          query,
+          snapshot: collectionFingerprint,
+          after: lastKey,
+        })
+      : null;
+    const envelope: CompactCollectionEnvelope<S> = {
+      [opts.collection]: [...rows],
+      count: emitted,
+      total: keyed.length,
+      limit: window.limit,
+      cursor: typeof opts.cursor === "string" && opts.cursor ? opts.cursor : null,
+      next_cursor: nextCursor,
+      has_more: hasMore,
+      limit_capped: window.limitCapped,
+      max_bytes: maxBytes,
+      byte_length: 0,
+      compact: true,
+      sort: opts.sort,
+      tie_breakers: [...opts.tieBreakers],
+      collection_fingerprint: collectionFingerprint,
+      hint: opts.hint,
+    };
+    for (let index = 0; index < 4; index += 1) {
+      const next = Buffer.byteLength(JSON.stringify(envelope), "utf8");
+      if (next === envelope.byte_length) break;
+      envelope.byte_length = next;
+    }
+    return envelope;
+  };
+
+  let envelope = build();
+  while (envelope.byte_length > maxBytes && rows.length > 0) {
+    rows.pop();
+    envelope = build();
+  }
+  if (envelope.byte_length > maxBytes || (rows.length === 0 && start < keyed.length)) {
+    throw new Error(`Compact ${opts.collection} envelope cannot advance within max_bytes (${maxBytes}).`);
+  }
+  return envelope;
 }
 
 export function compactCollection<T>(items: T[], opts: {

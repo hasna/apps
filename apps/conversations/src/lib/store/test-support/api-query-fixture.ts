@@ -13,6 +13,7 @@ export function makeFakeClient(
   const channels: Record<string, any> = {};
   const channelAliases: Record<string, string> = {};
   const channelMembers = new Set<string>();
+  const channelMemberJoinedAt = new Map<string, string>();
   const messages: any[] = [];
   const reactions: any[] = [];
   const readReceipts: any[] = [];
@@ -227,7 +228,7 @@ export function makeFakeClient(
           .filter((entry) => entry.startsWith(`${channel}:`))
           .map((entry) => {
             const [, agent] = entry.split(":");
-            return { channel, agent, joined_at: "2026-07-23T08:15:39.781Z" };
+            return { channel, agent, joined_at: channelMemberJoinedAt.get(entry) ?? "2026-07-23T08:15:39.781Z" };
           });
       }
       if (/SELECT message_id, agent, read_at FROM message_read_receipts/i.test(sql)) return readReceipts.filter(row => row.message_id === Number(_p[0]));
@@ -528,7 +529,9 @@ export function makeFakeClient(
         return { rows: [row], rowCount: 1 };
       }
       if (/DELETE FROM channel_members WHERE channel = \$1 AND agent = \$2/i.test(sql)) {
-        const removed = channelMembers.delete(`${p[0]}:${p[1]}`);
+        const key = `${p[0]}:${p[1]}`;
+        const removed = channelMembers.delete(key);
+        channelMemberJoinedAt.delete(key);
         return { rows: [], rowCount: removed ? 1 : 0 };
       }
       if (/INSERT INTO channel_members/i.test(sql)) {
@@ -537,7 +540,9 @@ export function makeFakeClient(
           throw new Error("injected channel member insert failure");
         }
         const [channel, agent] = p as any[];
-        channelMembers.add(`${channel}:${agent}`);
+        const key = `${channel}:${agent}`;
+        if (!channelMembers.has(key)) channelMemberJoinedAt.set(key, new Date().toISOString());
+        channelMembers.add(key);
         return { rows: [], rowCount: 1 };
       }
       if (/INSERT INTO channel_subscriptions/i.test(sql)) {
@@ -1288,6 +1293,7 @@ export function makeFakeClient(
         channels,
         channelAliases,
       channelMembers,
+      channelMemberJoinedAt,
       messages,
       reactions,
       messageAttachments,
@@ -1307,7 +1313,11 @@ export function makeFakeClient(
       },
       seedChannel(input: Record<string, any>, members: string[], channelMessages: any[]) {
         channels[input.name] = { ...input };
-        for (const agent of members) channelMembers.add(`${input.name}:${agent}`);
+        for (const agent of members) {
+          const key = `${input.name}:${agent}`;
+          channelMembers.add(key);
+          channelMemberJoinedAt.set(key, "2026-07-23T08:15:39.781Z");
+        }
         messages.push(...channelMessages);
       },
       failRenameWhen(pattern: RegExp) {
