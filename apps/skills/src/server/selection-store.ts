@@ -148,7 +148,7 @@ export class SqliteSkillSelectionStore implements SkillSelectionStore {
         ? this.db.query("INSERT INTO skills_profiles(org_id,profile_id,revision,selections_json,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(org_id,profile_id) DO NOTHING RETURNING *").get(p.orgId, id, revision, JSON.stringify(selected), timestamp)
         : this.db.query("UPDATE skills_profiles SET revision=?,selections_json=?,updated_at=? WHERE org_id=? AND profile_id=? AND revision=? RETURNING *").get(revision, JSON.stringify(selected), timestamp, p.orgId, id, expected);
       return row ? profile(row as Row) : null;
-    })();
+    }).immediate();
   }
   async getStationState(p: ApiPrincipal, id: string) {
     const row = this.db

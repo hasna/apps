@@ -722,7 +722,7 @@ export class SqliteSkillsStore implements SkillsProductStore {
       const row = this.get("UPDATE skills_registry SET lifecycle=?, archived_at=?, archive_reason=?, replacement_slug=?, revision_id=?, revision_number=revision_number+1, updated_at=? WHERE org_id=? AND slug=? AND tombstoned_at IS NULL AND revision_id=? RETURNING *", [next.lifecycle, next.archivedAt ?? null, next.archiveReason ?? null, next.replacementSlug ?? null, revisionIdOfRecord(next), next.updatedAt, principal.orgId, slug, current.revisionId]);
       if (!row) throw new SkillRevisionConflictError(slug, expectedRevisionId, this.getSkillSync(principal, slug)?.revisionId ?? null);
       return rowToSkill(row);
-    })();
+    }).immediate();
   }
 
   private getSkillSync(principal: ApiPrincipal, slug: string): ServerSkillRecord | null {

@@ -50,4 +50,26 @@ describe("skill archive lifecycle", () => {
     expect(refused).toBeNull();
     await store.close();
   });
+
+  test("SQLite two-connection race commits one side of the lifecycle fence", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "skills-archive-race-"));
+    const dbPath = join(dir, "server.db");
+    const first = new SqliteSkillsStore(dbPath);
+    await first.ensureBootstrapApiKey("synthetic", { orgId: principal.orgId, orgSlug: principal.orgSlug, orgName: principal.orgName, userId: principal.userId, email: principal.email, apiKeyId: principal.apiKeyId });
+    const published = await first.publishSkill(input());
+    await first.selectionStore.saveProfile(principal, "fleet", [], null);
+    const profile = await first.selectionStore.getProfile(principal, "fleet");
+    const second = new SqliteSkillsStore(dbPath);
+    const [archive, selection] = await Promise.allSettled([
+      first.setSkillLifecycle(principal, "legacy-skill", { lifecycle: "archived" }, published.revisionId),
+      second.selectionStore.saveProfile(principal, "fleet", [{ slug: "legacy-skill", version: "1.0.0", bundleDigest: `sha256:${"a".repeat(64)}` }], profile!.revision),
+    ]);
+    const archived = archive.status === "fulfilled" && archive.value?.lifecycle === "archived";
+    const selected = selection.status === "fulfilled" && selection.value !== null;
+    expect(Number(archived) + Number(selected)).toBe(1);
+    const current = await first.getSkill(principal, "legacy-skill");
+    expect(current?.lifecycle).toBe(archived ? "archived" : "active");
+    await first.close();
+    await second.close();
+  });
 });
