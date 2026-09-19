@@ -6,7 +6,7 @@ import { getMemoryByKey, touchMemory } from "../../db/memories.js";
 import { searchMemories } from "../../lib/search.js";
 import type { MemoryScope } from "../../types/index.js";
 import {
-  resolveAgentFilter, outputJson, formatMemoryDetail, makeHandleError, type GlobalOpts } from "../helpers.js";
+  resolveAgentFilter, outputJson, outputJsonAndExit, formatMemoryDetail, makeHandleError, type GlobalOpts } from "../helpers.js";
 import { redactMemoryForOutput, redactSearchResultForOutput } from "../../lib/redact.js";
 import { RECALL_EXIT_FUZZY, RECALL_EXIT_NOT_FOUND } from "./memory-cmd-recall-exit.js";
 
@@ -21,7 +21,7 @@ export function registerRecallCommand(program: Command): void {
     .option("--agent <name>", "Agent filter")
     .option("--project <path>", "Project filter")
     .option("--fuzzy", "If the exact key is absent, return the nearest match instead (exits 2)")
-    .action((key: string, opts) => {
+    .action(async (key: string, opts) => {
       try {
         const globalOpts = program.opts<GlobalOpts>();
         const agentId = resolveAgentFilter((opts.agent as string | undefined) || globalOpts.agent);
@@ -67,14 +67,14 @@ export function registerRecallCommand(program: Command): void {
             const safeBest = redactSearchResultForOutput(results[0]!);
             touchMemory(safeBest.memory.id);
             if (globalOpts.json) {
-              outputJson({
+              await outputJsonAndExit({
                 fuzzy_match: true,
                 requested_key: key,
                 returned_key: safeBest.memory.key,
                 score: safeBest.score,
                 match_type: safeBest.match_type,
                 memory: safeBest.memory,
-              });
+              }, RECALL_EXIT_FUZZY);
             } else {
               console.error(
                 chalk.yellow(
@@ -86,7 +86,8 @@ export function registerRecallCommand(program: Command): void {
             }
             // A substituted record is not the record that was asked for, so the
             // exit status must not say "found".
-            process.exit(RECALL_EXIT_FUZZY);
+            if (!globalOpts.json) process.exit(RECALL_EXIT_FUZZY);
+            return;
           }
         }
 
@@ -95,11 +96,12 @@ export function registerRecallCommand(program: Command): void {
           : `No memory found for key: ${key} (exact match; pass --fuzzy to return the nearest record instead)`;
 
         if (globalOpts.json) {
-          outputJson({ error: message, requested_key: key });
+          await outputJsonAndExit({ error: message, requested_key: key }, RECALL_EXIT_NOT_FOUND);
         } else {
           console.error(chalk.yellow(message));
         }
-        process.exit(RECALL_EXIT_NOT_FOUND);
+        if (!globalOpts.json) process.exit(RECALL_EXIT_NOT_FOUND);
+        return;
       } catch (e) {
         handleError(e);
       }

@@ -6,6 +6,7 @@ import { setFocus, getFocus } from "../../lib/focus.js";
 import {
   DEFAULT_COMPACT_LIMIT,
   outputJson,
+  outputJsonAndExit,
   makeHandleError,
   cursorOrOffset,
   positiveIntOrDefault,
@@ -161,7 +162,7 @@ export function registerAgentCommands(program: Command): void {
     .option("--name <name>", "New agent name")
     .option("-d, --description <text>", "New description")
     .option("-r, --role <role>", "New role")
-    .action((id: string, opts) => {
+    .action(async (id: string, opts) => {
       try {
         const globalOpts = program.opts<GlobalOpts>();
         const updates: { name?: string; description?: string; role?: string } = {};
@@ -171,21 +172,23 @@ export function registerAgentCommands(program: Command): void {
 
         if (Object.keys(updates).length === 0) {
           if (globalOpts.json) {
-            outputJson({ error: "No updates provided. Use --name, --description, or --role." });
+            await outputJsonAndExit({ error: "No updates provided. Use --name, --description, or --role." }, 1);
           } else {
             console.error(chalk.red("No updates provided. Use --name, --description, or --role."));
           }
-          process.exit(1);
+          if (!globalOpts.json) process.exit(1);
+          return;
         }
 
         const agent = updateAgent(id, updates);
         if (!agent) {
           if (globalOpts.json) {
-            outputJson({ error: `Agent not found: ${id}` });
+            await outputJsonAndExit({ error: `Agent not found: ${id}` }, 1);
           } else {
             console.error(chalk.red(`Agent not found: ${id}`));
           }
-          process.exit(1);
+          if (!globalOpts.json) process.exit(1);
+          return;
         }
 
         if (globalOpts.json) {
