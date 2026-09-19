@@ -126,6 +126,26 @@ Use this skill when porting an existing folder.
     }
   });
 
+  test("infers Python runtime metadata from a legacy Python package entrypoint", () => {
+    const home = mkdtempSync(join(tmpdir(), "portable-python-home-"));
+    const sourceRoot = mkdtempSync(join(tmpdir(), "portable-python-source-"));
+    try {
+      const source = join(sourceRoot, "python-skill");
+      mkdirSync(join(source, "src"), { recursive: true });
+      writeFileSync(join(source, "SKILL.md"), "---\nname: python-skill\ndescription: Legacy Python skill.\nversion: 1.0.0\n---\n\n# Python skill\n");
+      writeFileSync(join(source, "package.json"), JSON.stringify({ name: "python-skill", version: "1.0.0", bin: { "python-skill": "src/main.py" } }, null, 2));
+      writeFileSync(join(source, "src", "main.py"), "print('synthetic')\n");
+
+      const result = portPortableSkill(source, { rootDir: getPortableSkillsRoot({ homeDir: home }) });
+      const manifest = readPortableSkillManifest(result.path);
+      expect(manifest.runtime).toMatchObject({ runtime: "python3", entrypoint: "src/main.py" });
+      expect(manifest.runtime?.timeout).toBe(900);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+      rmSync(sourceRoot, { recursive: true, force: true });
+    }
+  });
+
   test("validates an instruction skill with only SKILL.md (no commands, inputs, or AGENTS.md)", () => {
     const home = mkdtempSync(join(tmpdir(), "portable-skill-home-"));
     try {

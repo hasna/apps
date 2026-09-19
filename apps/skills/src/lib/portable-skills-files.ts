@@ -145,6 +145,11 @@ function readManifest(skillPath: string, fallbackName: string, normalizeName: (n
   const commands = parseManifestCommands(jsonManifest)
     ?? (kind === "instruction" ? [] : inferPackageCommands(pkg, name))
     ?? [];
+  // A legacy executable source may have no portable skill.json yet. Preserve
+  // the runtime implied by a Python package entry instead of letting the
+  // generic Bun default claim a .py file. Other runtimes remain explicit: an
+  // extension alone cannot establish their policy or dependency contract.
+  const runtime = parseManifestRuntime(jsonManifest) ?? inferRuntimeFromCommands(commands);
 
   return {
     $schema: stringField(jsonManifest, "$schema") ?? PORTABLE_SKILL_SCHEMA,
@@ -158,7 +163,7 @@ function readManifest(skillPath: string, fallbackName: string, normalizeName: (n
     ...(kind ? { kind } : {}),
     inputs: kind === "instruction" ? (parseManifestInputs(jsonManifest) ?? []) : (parseManifestInputs(jsonManifest) ?? DEFAULT_INPUTS),
     commands,
-    ...(parseManifestRuntime(jsonManifest) ? { runtime: parseManifestRuntime(jsonManifest) } : {}),
+    ...(runtime ? { runtime } : {}),
     ...(parseManifestProvenance(jsonManifest) ? { provenance: parseManifestProvenance(jsonManifest) } : {}),
   };
 }
@@ -659,6 +664,12 @@ function inferPackageCommands(pkg: PackageJson | undefined, fallbackName: string
     return [{ name: fallbackName, entry: match[1].replace(/^\.\//, ""), description: `Run ${displayName(fallbackName)}.` }];
   }
   return undefined;
+}
+
+function inferRuntimeFromCommands(commands: PortableSkillCommand[]): PortableSkillRuntimeContract | undefined {
+  const entrypoint = commands.find(command => command.entry)?.entry;
+  if (!entrypoint || !entrypoint.toLowerCase().endsWith(".py")) return undefined;
+  return { ...defaultRuntimeContract(entrypoint), runtime: "python3" };
 }
 
 function readJsonObject(path: string): Record<string, unknown> {
