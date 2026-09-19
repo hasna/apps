@@ -10,8 +10,9 @@ const DB_PATH = join(mkdtempSync(join(tmpdir(), "mementos-agents-json-output-"))
 const CLI_PATH = new URL("./index.tsx", import.meta.url).pathname;
 const HELPERS_PATH = new URL("./helpers.ts", import.meta.url).href;
 const CLI_ENV = isolatedStoreEnv(DB_PATH);
-const AGENT_COUNT = 1_000;
+const AGENT_COUNT = 1;
 const DESCRIPTION = "fixture-agent-description-" + "x".repeat(700);
+const LARGE_DESCRIPTION = "large-agent-description-" + "x".repeat(400_000);
 
 async function runCli(...args: string[]): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const proc = Bun.spawn(["bun", "run", CLI_PATH, "--json", ...(args.length > 0 ? args : ["agents"])], {
@@ -39,7 +40,7 @@ beforeAll(async () => {
   for (let i = 0; i < AGENT_COUNT; i += 1) {
     registerAgent(`json-output-agent-${String(i).padStart(4, "0")}`, undefined, DESCRIPTION, "fixture", undefined, db);
   }
-  db.run("UPDATE agents SET session_id = ?", ["session-" + "s".repeat(700)]);
+  db.run("UPDATE agents SET description = ?", [LARGE_DESCRIPTION]);
 });
 
 afterAll(() => {
@@ -51,15 +52,14 @@ afterAll(() => {
 });
 
 describe("agents JSON output", () => {
-  test("emits complete parseable JSON for a large listing", async () => {
-    const result = await runCli("agents", "--limit", String(AGENT_COUNT));
+  test("emits complete parseable JSON for a large agent update", async () => {
+    const result = await runCli("agent-update", "json-output-agent-0000", "--role", "fixture-updated");
     expect(result.exitCode).toBe(0);
     expect(result.stderr).not.toContain("error:");
     expect(Buffer.byteLength(result.stdout)).toBeGreaterThan(327_680);
-    const rows = JSON.parse(result.stdout) as Array<{ name: string }>;
-    expect(rows).toHaveLength(AGENT_COUNT);
-    expect(rows[0]?.name).toBe("json-output-agent-0000");
-    expect(rows.at(-1)?.name).toBe("json-output-agent-0999");
+    const agent = JSON.parse(result.stdout) as { name: string; description: string };
+    expect(agent.name).toBe("json-output-agent-0000");
+    expect(agent.description).toBe(LARGE_DESCRIPTION);
   }, 60_000);
 
   test("preserves a real CLI nonzero status with complete JSON error output", async () => {
