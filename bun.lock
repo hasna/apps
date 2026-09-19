@@ -1013,7 +1013,7 @@
     },
     "apps/skills": {
       "name": "@hasna/skills",
-      "version": "0.9.2",
+      "version": "0.9.3",
       "bin": {
         "skills": "bin/index.js",
         "skills-mcp": "bin/mcp.js",

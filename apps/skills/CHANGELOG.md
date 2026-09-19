@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.3
+
+### Minor Changes
+
+- 98446d8: Scope native skill hook discovery to the requested agent.
+- f6be7d0: Add protected publisher scope maintenance operations.
+
 ## 0.9.2
 
 ### Patch Changes
