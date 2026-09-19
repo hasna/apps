@@ -23,10 +23,11 @@ async function fixture(permission: boolean | undefined, action: (invoke: (args: 
     const path = new URL(request.url).pathname;
     calls.push(`${request.method} ${path}`);
     expect(request.headers.get("authorization")).toBe(`Bearer ${token}`);
-    if (path === "/api/auth/whoami") return Response.json({ user: { id: "user", role: permission === true ? "member" : "owner" }, organization: { id: "workspace" }, apiKey: canary });
+    if (path === "/api/auth/whoami") return Response.json({ user: { id: "user", role: permission === true ? "member" : "owner" }, organization: { id: "workspace" }, apiKey: { id: "key_fixture", scopes: [permission ? "skills:publish" : "skills:read"] } });
     if (path === "/api/v1/capabilities") return Response.json({ contractVersion: 1, apiVersion: 1, capabilities: ["skills.registry"],
       ...(permission === undefined ? {} : { scopes: [permission ? "skills:publish" : "skills:read"], permissions: { publish: permission, profilesWrite: permission, apiKey: canary } }), apiKey: canary });
     if (path === "/api/v1/skills/owned-draft") return Response.json({ code: "SKILL_NOT_FOUND" }, { status: 404 });
+    if (path === "/api/v1/admin/keys/key_target/scopes" && request.method === "PATCH") return Response.json({ keyId: "key_target", orgId: "workspace", scopes: ["skills:read", "skills:publish"], updated: true, token: "MUST_NOT_PRINT", nested: { secret: "MUST_NOT_PRINT" } });
     if (path === "/api/v1/skills" && request.method === "POST") return Response.json({ version: "1.0.0" }, { status: 201 });
     if (path === "/api/v1/profiles/fleet" && request.method === "PUT") return Response.json({ id: "fleet", revision: "one", selections: [] });
     return Response.json({ code: "NOT_FOUND" }, { status: 404 });
@@ -56,6 +57,7 @@ test("built CLI shows denied owner access and refuses both writes without POST o
   const identity = await invoke(["auth", "whoami", "--json"]);
   expect(identity).toMatchObject({ code: 0 });
   expect(JSON.parse(identity.stdout)).toMatchObject({ role: "owner", scopes: ["skills:read"], permissions: { publish: false, profilesWrite: false } });
+  expect(JSON.parse(identity.stdout)).toMatchObject({ apiKeyId: "key_fixture" });
   const capabilities = await invoke(["capabilities", "--json"]);
   expect(capabilities.code).toBe(0);
   expect(JSON.parse(capabilities.stdout)).toMatchObject({ scopes: ["skills:read"], permissions: { publish: false, profilesWrite: false } });
@@ -78,4 +80,12 @@ for (const permission of [true, undefined]) test(`built CLI preserves ${permissi
   expect((await invoke(["push", "owned-draft", "--json"])).code).toBe(0);
   expect((await invoke(["profiles", "set", "fleet", "--file", profile, "--json"])).code).toBe(0);
   expect(calls.filter(call => !call.startsWith("GET "))).toEqual(["POST /api/v1/skills", "PUT /api/v1/profiles/fleet"]);
+}));
+
+test("built CLI projects only safe key scope metadata from a hostile update response", () => fixture(true, async (invoke, calls) => {
+  const result = await invoke(["auth", "keys", "add-publish-scope", "key_target", "--expected-scopes", "skills:read", "--json"]);
+  expect(result.code).toBe(0);
+  expect(JSON.parse(result.stdout)).toEqual({ keyId: "key_target", orgId: "workspace", scopes: ["skills:read", "skills:publish"], updated: true });
+  expect(result.stdout + result.stderr).not.toContain("MUST_NOT_PRINT");
+  expect(calls).toContain("PATCH /api/v1/admin/keys/key_target/scopes");
 }));

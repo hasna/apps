@@ -653,7 +653,7 @@
     },
     "apps/mementos": {
       "name": "@hasna/mementos",
-      "version": "0.16.0",
+      "version": "0.17.0",
       "bin": {
         "mementos": "dist/cli/index.js",
         "mementos-mcp": "dist/mcp/index.js",
@@ -1012,7 +1012,7 @@
     },
     "apps/skills": {
       "name": "@hasna/skills",
-      "version": "0.9.0",
+      "version": "0.9.1",
       "bin": {
         "skills": "bin/index.js",
         "skills-mcp": "bin/mcp.js",

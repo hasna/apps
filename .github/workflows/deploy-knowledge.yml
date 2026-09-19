@@ -169,9 +169,44 @@ jobs:
           docker pull "$registry/knowledge@$image_digest"
           test "$(docker inspect --format '{{.Id}}' "$LOCAL_IMAGE_REF")" = "$(docker inspect --format '{{.Id}}' "$registry/knowledge@$image_digest")"
           printf 'IMAGE_DIGEST=%s\n' "$image_digest" >> "$GITHUB_ENV"
-          aws ecr wait image-scan-complete --repository-name knowledge --image-id imageDigest="$image_digest"
-          aws ecr describe-image-scan-findings --repository-name knowledge --image-id imageDigest="$image_digest" > "$RUNNER_TEMP/knowledge-ecr-scan.json"
-          jq -e '.imageScanStatus.status == "COMPLETE" and (.imageScanFindings.findingSeverityCounts.CRITICAL // 0) == 0 and (.imageScanFindings.findingSeverityCounts.HIGH // 0) == 0' "$RUNNER_TEMP/knowledge-ecr-scan.json" >/dev/null
+      - name: Wait for ECR scan and enforce vulnerability gate
+        run: |
+          set -Eeuo pipefail
+          [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          scan_complete=false
+          findings=''
+          error_file="$RUNNER_TEMP/knowledge-ecr-scan-error.txt"
+          for attempt in {1..60}; do
+            if response="$(aws ecr describe-image-scan-findings \
+              --repository-name knowledge \
+              --image-id imageDigest="$IMAGE_DIGEST" \
+              --query '{status:imageScanStatus.status,counts:imageScanFindings.findingSeverityCounts}' \
+              --output json 2>"$error_file")"; then
+              status="$(jq -er '.status | strings | select(length > 0)' <<<"$response")"
+              case "$status" in
+                COMPLETE)
+                  findings="$(jq -ce '.counts | if type == "object" then . else error("invalid counts") end' <<<"$response")"
+                  scan_complete=true
+                  break
+                  ;;
+                IN_PROGRESS) ;;
+                *) echo "ECR scan entered terminal status $status" >&2; exit 1 ;;
+              esac
+            else
+              error_text="$(<"$error_file")"
+              [[ "$error_text" == *ScanNotFoundException* ]] || { echo "ECR scan query failed" >&2; exit 1; }
+            fi
+            if (( attempt < 60 )); then sleep 5; fi
+          done
+          rm -f "$error_file"
+          [[ "$scan_complete" == "true" ]] || { echo "ECR scan did not complete" >&2; exit 1; }
+          critical="$(jq -er '(if has("CRITICAL") then .CRITICAL else 0 end) | numbers | select(. >= 0 and floor == .)' <<<"$findings")"
+          high="$(jq -er '(if has("HIGH") then .HIGH else 0 end) | numbers | select(. >= 0 and floor == .)' <<<"$findings")"
+          if (( critical > 0 || high > 0 )); then
+            echo "ECR scan rejected the candidate: critical=$critical, high=$high" >&2
+            exit 1
+          fi
+          printf '%s\n' "$response" > "$RUNNER_TEMP/knowledge-ecr-scan.json"
       - name: Recheck main before any production service mutation
         run: |
           set -Eeuo pipefail

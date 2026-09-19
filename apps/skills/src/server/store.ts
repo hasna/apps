@@ -14,6 +14,7 @@ import type {
   ServerSkillBundle,
   ServerSkillRecord,
   ServerSkillVersion,
+  ApiKeyScopeUpdateResult,
   SkillsProductStore,
   StoreBackendInfo,
   UpdateSkillPatch,
@@ -151,6 +152,20 @@ export class MemorySkillsStore implements SkillsProductStore {
 
   async authenticateApiKeyHash(hash: string): Promise<ApiPrincipal | null> {
     return this.apiKeys.get(hash) ?? null;
+  }
+
+  async updateApiKeyScopes(actor: ApiPrincipal, keyId: string, expectedScopes: string[], addScopes: string[]): Promise<ApiKeyScopeUpdateResult> {
+    for (const [hash, target] of this.apiKeys) {
+      if (target.apiKeyId !== keyId || target.orgId !== actor.orgId) continue;
+      if (target.scopes.length !== expectedScopes.length || target.scopes.some((scope, index) => scope !== expectedScopes[index])) {
+        return { kind: "stale", scopes: [...target.scopes] };
+      }
+      const scopes = [...target.scopes, ...addScopes.filter((scope) => !target.scopes.includes(scope))];
+      const updated = { ...target, scopes };
+      this.apiKeys.set(hash, updated);
+      return { kind: "updated", scopes };
+    }
+    return { kind: "not_found" };
   }
 
   async createRun(input: CreateRunInput): Promise<ServerRunRecord> {
@@ -690,6 +705,38 @@ export class PostgresSkillsStore implements SkillsProductStore {
       role: typeof row.role === "string" ? row.role : "member",
       scopes: parseJsonArray(row.scopes_json),
     };
+  }
+
+  async updateApiKeyScopes(actor: ApiPrincipal, keyId: string, expectedScopes: string[], addScopes: string[]): Promise<ApiKeyScopeUpdateResult> {
+    return this.sql.begin(async (tx) => {
+      const rows = await tx`
+        SELECT scopes_json FROM api_keys
+        WHERE id = ${keyId} AND org_id = ${actor.orgId} AND revoked_at IS NULL
+        LIMIT 1
+      `;
+      const row = rows[0];
+      if (!row) return { kind: "not_found" };
+      const current = parseJsonArray(row.scopes_json);
+      if (current.length !== expectedScopes.length || current.some((scope, index) => scope !== expectedScopes[index])) {
+        return { kind: "stale", scopes: current };
+      }
+      const scopes = [...current, ...addScopes.filter((scope) => !current.includes(scope))];
+      const updated = await tx`
+        UPDATE api_keys SET scopes_json = ${JSON.stringify(scopes)}::jsonb
+        WHERE id = ${keyId} AND org_id = ${actor.orgId} AND revoked_at IS NULL
+          AND scopes_json = ${JSON.stringify(expectedScopes)}::jsonb
+        RETURNING scopes_json
+      `;
+      if (!updated[0]) {
+        const latest = await tx`SELECT scopes_json FROM api_keys WHERE id = ${keyId} AND org_id = ${actor.orgId} AND revoked_at IS NULL LIMIT 1`;
+        return { kind: "stale", scopes: latest[0] ? parseJsonArray(latest[0].scopes_json) : current };
+      }
+      await tx`
+        INSERT INTO skills_audit_events (org_id, user_id, api_key_id, action, target_type, target_id, metadata_json)
+        VALUES (${actor.orgId}, ${actor.userId}, ${actor.apiKeyId}, ${"api_key_scopes_added"}, ${"api_key"}, ${keyId}, ${JSON.stringify({ added: addScopes, scopes })}::jsonb)
+      `;
+      return { kind: "updated", scopes };
+    });
   }
 
   /**

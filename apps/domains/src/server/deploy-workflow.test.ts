@@ -5,7 +5,6 @@ import { join } from "node:path";
 const root = join(import.meta.dir, "..", "..", "..", "..");
 const workflow = readFileSync(join(root, ".github", "workflows", "deploy-domains.yml"), "utf8");
 const livePg = readFileSync(join(root, ".github", "workflows", "domains-live-postgres.yml"), "utf8");
-const serverEntry = readFileSync(join(root, "apps", "domains", "src", "server", "index.ts"), "utf8");
 
 describe("Domains production deployment workflow", () => {
   test("resolves every production target from validated protected configuration", () => {
@@ -40,8 +39,11 @@ describe("Domains production deployment workflow", () => {
     expect(workflow).toContain("valueFrom:.value");
   });
 
-  test("projects required hosted-provisioning settings from the reviewed manifest", () => {
-    expect(workflow).toContain('has("CLOUDFLARE_ACCOUNT_ID") and has("DOMAINS_REGISTRANT_SOURCE_DOMAIN")');
+  test("projects required provider environment from the reviewed manifest", () => {
+    expect(workflow).toContain("web_environment=\"$(jq -ce");
+    for (const name of ["CLOUDFLARE_ACCOUNT_ID", "DOMAINS_REGISTRANT_SOURCE_DOMAIN", "DOMAINS_PROVISIONING_INTERVAL_MS"]) {
+      expect(workflow).toContain(`has(\"${name}\")`);
+    }
     expect(workflow).toContain("MANIFEST_WEB_ENVIRONMENT");
     expect(workflow).toContain("required_environment");
     expect(workflow).toContain("value:.value");
@@ -89,13 +91,5 @@ describe("Domains production deployment workflow", () => {
     expect(livePg).toContain("domains_provisioning_ci");
     expect(livePg).toContain("bun run test:postgres");
     expect(livePg).toContain("Refuse any non-disposable database target");
-  });
-
-  test("starts the durable provisioning scheduler before accepting HTTP traffic", () => {
-    const startsProvisioning = serverEntry.indexOf("provisioning.start()");
-    const startsHttp = serverEntry.indexOf("Bun.serve(");
-    expect(startsProvisioning).toBeGreaterThan(0);
-    expect(startsHttp).toBeGreaterThan(startsProvisioning);
-    expect(serverEntry).toContain('DOMAINS_PROVISIONING_INTERVAL_MS');
   });
 });

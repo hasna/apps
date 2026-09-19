@@ -125,6 +125,11 @@ function authIdentityPayload(
   const userId = stringField(user?.id) ?? cached?.userId;
   const orgId = stringField(organization?.id) ?? cached?.orgId;
   const role = stringField(user?.role);
+  const apiKey = recordField(root.apiKey) ?? recordField(data?.apiKey);
+  const apiKeyId = stringField(apiKey?.id);
+  const apiKeyScopes = apiKey?.scopes;
+  const safeApiKeyId = apiKeyId && /^[A-Za-z0-9_-]{1,256}$/.test(apiKeyId) ? apiKeyId : undefined;
+  const safeApiKeyScopes = Array.isArray(apiKeyScopes) && apiKeyScopes.length <= 32 && apiKeyScopes.every((scope) => typeof scope === "string" && scope.length <= 128 && /^(?:\*|[a-z][a-z0-9_-]*:(?:\*|[a-z][a-z0-9_-]*))$/.test(scope)) ? [...new Set(apiKeyScopes as string[])] : undefined;
 
   return {
     status: "authenticated",
@@ -136,6 +141,7 @@ function authIdentityPayload(
     ...(userId ? { userId } : {}),
     ...(orgId ? { orgId } : {}),
     ...(role ? { role } : {}),
+    ...(safeApiKeyId && safeApiKeyScopes ? { apiKeyId: safeApiKeyId, scopes: safeApiKeyScopes } : {}),
   };
 }
 
@@ -143,6 +149,7 @@ function printWhoami(payload: Record<string, unknown>): void {
   if (payload.email) console.log(chalk.bold("Email:  ") + payload.email);
   if (payload.organization) console.log(chalk.bold("Org:    ") + payload.organization);
   if (payload.role) console.log(chalk.bold("Role:   ") + payload.role);
+  if (payload.apiKeyId) console.log(chalk.bold("Key:    ") + payload.apiKeyId);
   if (payload.organizationName) console.log(chalk.bold("Name:   ") + payload.organizationName);
   if (payload.authSource) console.log(chalk.dim(`Auth:   ${payload.authSource}`));
   const permissions = recordField(payload.permissions);
@@ -483,6 +490,22 @@ export function registerAuth(parent: Command) {
     .action(async (id: string, options: { json: boolean; email: string; code: string }) => {
       try { const target = await captureProfileWorkspace("Revoke API key"); target.unchanged(); console.log(JSON.stringify(await new RemoteSkillsAuthClient(target.origin).revokeApiKey(options.email, options.code, id, target.context), null, 2)); }
       catch (error) { writeCommandError(error, "Failed to revoke API key", options.json); }
+    });
+  keys.command("add-publish-scope").argument("<key-id>").requiredOption("--expected-scopes <csv>", "Current comma-separated scopes; stale values are refused")
+    .option("--json", "Output as JSON", false)
+    .description("Add skills:publish to one existing key without minting or rotating it")
+    .action(async (id: string, options: { expectedScopes: string; json: boolean }) => {
+      try {
+        const connection = await resolveSkillsConnection();
+        if (!connection) throw new Error("A hosted Skills credential is required for key scope administration");
+        const identity = await apiRequest("/api/auth/whoami", { headers: { Authorization: `Bearer ${connection.apiKey}` } }, connection.apiOrigin);
+        const identityOrg = recordField(identity.organization);
+        const orgId = stringField(identityOrg?.id);
+        if (!orgId) throw new Error("The Skills authority did not return a tenant identity; refusing key scope administration");
+        const result = await new RemoteSkillsClient(connection.apiKey, connection.apiOrigin).addSkillPublishScope(id, options.expectedScopes.split(",").map((scope) => scope.trim()).filter(Boolean), orgId);
+        if (options.json || !isTTY) console.log(JSON.stringify(result, null, 2));
+        else console.log(chalk.green(`Added skills:publish to ${id}; scopes read back from the server.`));
+      } catch (error) { writeCommandError(error, "Failed to add Skills publication scope", options.json); }
     });
 
   auth
