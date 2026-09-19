@@ -18,6 +18,7 @@ export const PROVISIONING_STATUSES = [
 
 export type ProvisioningStatus = (typeof PROVISIONING_STATUSES)[number];
 export type OriginTlsMode = "strict" | "full";
+export type ProvisioningRegistrar = "route53" | "brandsight";
 
 export interface DomainProvisioningRequest {
   name: string;
@@ -26,7 +27,7 @@ export interface DomainProvisioningRequest {
   years: number;
   auto_renew: boolean;
   acquisition_mode: "purchase" | "adopt";
-  registrar: "route53";
+  registrar: ProvisioningRegistrar;
   dns_provider: "cloudflare";
   target: "shortlinks" | "website_origin";
   worker_name: string | null;
@@ -105,6 +106,15 @@ export interface DomainProvisioningProviderState {
   last_provider_status?: string;
   registration_submitted_at?: string;
   nameservers_submitted_at?: string;
+  delegation_dns_preserved_count?: number;
+  delegation_dns_preserved_sha256?: string;
+  delegation_dns_preserved_at?: string;
+}
+
+export interface PortfolioDomainRegistration extends RegisteredDomainDetail {
+  id: string;
+  status: string;
+  registrar: string;
 }
 
 export interface DomainProvisioningJob extends DomainProvisioningRequest {
@@ -125,6 +135,7 @@ export interface DomainProvisioningStore {
   reserve(request: DomainProvisioningRequest, requestHash: string): Promise<DomainProvisioningJob>;
   get(id: string): Promise<DomainProvisioningJob | null>;
   getByName(name: string): Promise<DomainProvisioningJob | null>;
+  getPortfolioRegistration(name: string): Promise<PortfolioDomainRegistration | null>;
   listRunnable(limit: number): Promise<DomainProvisioningJob[]>;
   claim(id: string, leaseToken: string, leaseUntil: string): Promise<DomainProvisioningJob | null>;
   update(
@@ -174,6 +185,11 @@ export interface RegisteredDomainDetail {
   registrar?: string;
 }
 
+export interface DelegationDnsPreservation {
+  count: number;
+  sha256: string;
+}
+
 export interface CloudflareZoneState {
   id: string;
   status: string;
@@ -188,10 +204,19 @@ export interface DomainProvisioningProviders {
     autoRenew: boolean;
   }): Promise<{ operationId: string }>;
   getOperationStatus(operationId: string): Promise<ProviderOperationStatus>;
-  getDomainDetail(name: string): Promise<RegisteredDomainDetail | null>;
+  getDomainDetail(name: string, registrar?: ProvisioningRegistrar): Promise<RegisteredDomainDetail | null>;
   ensureCloudflareZone(name: string): Promise<CloudflareZoneState>;
-  updateNameservers(name: string, nameservers: string[]): Promise<{ operationId: string }>;
+  updateNameservers(
+    name: string,
+    nameservers: string[],
+    registrar?: ProvisioningRegistrar,
+  ): Promise<{ operationId: string; completed?: boolean }>;
   resolvePublicNameservers(name: string): Promise<string[]>;
+  preserveRegistrarDnsBeforeDelegation(input: {
+    hostname: string;
+    zoneId: string;
+    registrar: ProvisioningRegistrar;
+  }): Promise<DelegationDnsPreservation>;
   bindWorkerDomain(input: { hostname: string; zoneId: string; workerName: string }): Promise<void>;
   workerDomainReady(input: { hostname: string; zoneId: string; workerName: string }): Promise<boolean>;
   configureWebsiteOrigin(input: {
@@ -229,6 +254,13 @@ export interface DomainProvisioningProviders {
     hostedZoneId: string;
     registrarNameservers: string[];
   }): Promise<boolean>;
+}
+
+export class RegistrarActionRequiredError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RegistrarActionRequiredError";
+  }
 }
 
 export interface ProvisioningWorkerOptions {
@@ -391,6 +423,24 @@ function normalizeRequest(input: Partial<DomainProvisioningRequest>): DomainProv
   };
 }
 
+function adoptionRegistrar(value: string): ProvisioningRegistrar {
+  const normalized = value.trim().toLowerCase().replace(/[^a-z0-9]+/gu, " ").trim();
+  if (
+    normalized === "route53"
+    || normalized === "route 53"
+    || normalized === "aws route 53"
+    || normalized === "amazon registrar"
+  ) {
+    return "route53";
+  }
+  if (normalized === "brandsight" || normalized === "godaddy corporate domains") {
+    return "brandsight";
+  }
+  throw new RegistrarActionRequiredError(
+    `owned domain registrar '${value}' is not supported by hosted provisioning`,
+  );
+}
+
 /** A hosted website origin is an AWS ALB DNS hostname, never a URL or an IP. */
 export function normalizeWebsiteOriginHostname(value: unknown): string {
   if (typeof value !== "string") {
@@ -510,17 +560,42 @@ export class DomainProvisioningService {
       origin_hostname: input.origin_hostname as string | null | undefined,
       origin_tls_mode: input.origin_tls_mode as OriginTlsMode | null | undefined,
     });
+    const existing = await this.store.getByName(normalized.name);
+    const portfolio = existing
+      ? null
+      : await this.store.getPortfolioRegistration(normalized.name);
+    if (!existing && !portfolio) {
+      throw new RegistrarActionRequiredError(
+        "owned domain is not present in the hosted Domains portfolio",
+      );
+    }
+    if (portfolio && portfolio.status !== "active" && portfolio.status !== "purchased") {
+      throw new RegistrarActionRequiredError(
+        `owned domain portfolio status '${portfolio.status}' is not eligible for adoption`,
+      );
+    }
+    const registrar = existing?.registrar ?? adoptionRegistrar(portfolio!.registrar);
     const request: DomainProvisioningRequest = {
       ...normalized,
       acquisition_mode: "adopt",
       max_price_usd: 0,
+      registrar,
     };
     const hash = requestHash(request);
-    if (await this.store.getByName(request.name)) {
+    if (existing) {
       return this.store.reserveAdoption(request, hash, { nameservers: [] });
     }
-    const detail = await this.providers.getDomainDetail(normalized.name);
-    if (!detail) throw new Error("registrar does not report this domain as already owned");
+    const detail = await this.providers.getDomainDetail(normalized.name, registrar);
+    if (!detail) {
+      throw new RegistrarActionRequiredError(
+        `${registrar} does not report this portfolio domain as already owned`,
+      );
+    }
+    if (detail.registrar && adoptionRegistrar(detail.registrar) !== registrar) {
+      throw new RegistrarActionRequiredError(
+        "registrar ownership readback does not match the portfolio authority",
+      );
+    }
     return this.store.reserveAdoption(request, hash, detail);
   }
 
@@ -624,7 +699,10 @@ export class DomainProvisioningService {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const ambiguous = claimed.status === "registration_submitting";
-      const status: ProvisioningStatus = ambiguous ? "manual_review" : claimed.status;
+      const actionRequired = error instanceof RegistrarActionRequiredError;
+      const status: ProvisioningStatus = ambiguous || actionRequired
+        ? "manual_review"
+        : claimed.status;
       const updated = await this.store.update(claimed.id, {
         status,
         attempts: claimed.attempts + 1,
@@ -711,7 +789,7 @@ export class DomainProvisioningService {
         }, leaseToken))!;
       }
       case "registration_submitting": {
-        const detail = await this.providers.getDomainDetail(job.name);
+        const detail = await this.providers.getDomainDetail(job.name, job.registrar);
         if (!detail) return update({ status: "manual_review", error: "registration submission outcome is ambiguous", ...clearLease });
         return update({ status: "registered", ...clearLease });
       }
@@ -743,7 +821,123 @@ export class DomainProvisioningService {
       case "zone_ready": {
         const nameservers = job.provider_state.cloudflare_nameservers ?? [];
         if (!nameservers.length) return update({ status: "failed", error: "Cloudflare zone returned no nameservers", ...clearLease });
-        const operation = await this.providers.updateNameservers(job.name, nameservers);
+        const publicNameservers = await this.providers.resolvePublicNameservers(job.name);
+        if (job.acquisition_mode === "adopt" && nameserversEqual(publicNameservers, nameservers)) {
+          return update({
+            status: "delegated",
+            provider_state: {
+              ...job.provider_state,
+              last_provider_status: "PUBLIC_NAMESERVERS_ALREADY_DELEGATED",
+            },
+            ...clearLease,
+          });
+        }
+        if (job.acquisition_mode === "adopt") {
+          const zoneId = job.provider_state.cloudflare_zone_id;
+          if (!zoneId) {
+            return update({ status: "manual_review", error: "Cloudflare zone id is missing", ...clearLease });
+          }
+          if (job.target === "website_origin") {
+            if (!job.origin_tls_mode) {
+              return update({ status: "manual_review", error: "website origin TLS mode is missing", ...clearLease });
+            }
+            const tls = await this.providers.ensureWebsiteOriginTls({
+              zoneId,
+              requestedMode: job.origin_tls_mode,
+            });
+            if (tls.downgradeRefused) {
+              return update({
+                status: "manual_review",
+                error: `refused to weaken existing Cloudflare ${tls.mode} origin TLS mode to ${job.origin_tls_mode}`,
+                provider_state: {
+                  ...job.provider_state,
+                  origin_tls_mode_configured: tls.mode,
+                  origin_tls_mode_checked_at: this.now().toISOString(),
+                },
+                ...clearLease,
+              });
+            }
+            if (tls.mode !== job.origin_tls_mode) {
+              return update({
+                status: "manual_review",
+                error: `Cloudflare origin TLS readback is ${tls.mode}, expected ${job.origin_tls_mode}`,
+                provider_state: {
+                  ...job.provider_state,
+                  origin_tls_mode_configured: tls.mode,
+                  origin_tls_mode_checked_at: this.now().toISOString(),
+                },
+                ...clearLease,
+              });
+            }
+            if (job.provider_state.origin_tls_mode_configured !== job.origin_tls_mode) {
+              return update({
+                provider_state: {
+                  ...job.provider_state,
+                  origin_tls_mode_configured: job.origin_tls_mode,
+                  origin_tls_mode_checked_at: this.now().toISOString(),
+                },
+                ...clearLease,
+              });
+            }
+          }
+          const hasDnsPreservationCheckpoint =
+            job.provider_state.delegation_dns_preserved_count !== undefined
+            && /^[0-9a-f]{64}$/u.test(job.provider_state.delegation_dns_preserved_sha256 ?? "");
+          const registrarDetail = await this.providers.getDomainDetail(job.name, job.registrar);
+          if (registrarDetail && nameserversEqual(registrarDetail.nameservers, nameservers)) {
+            if (!hasDnsPreservationCheckpoint) {
+              return update({
+                status: "manual_review",
+                error: "registrar nameservers changed before the DNS preservation checkpoint was recorded",
+                ...clearLease,
+              });
+            }
+            return update({
+              status: "delegated",
+              provider_state: {
+                ...job.provider_state,
+                nameservers_submitted_at: job.provider_state.nameservers_submitted_at ?? this.now().toISOString(),
+                last_provider_status: "REGISTRAR_NAMESERVERS_ALREADY_DELEGATED",
+              },
+              ...clearLease,
+            });
+          }
+          const preservation = await this.providers.preserveRegistrarDnsBeforeDelegation({
+            hostname: job.name,
+            zoneId,
+            registrar: job.registrar,
+          });
+          const previousHash = job.provider_state.delegation_dns_preserved_sha256;
+          const previousCount = job.provider_state.delegation_dns_preserved_count;
+          if (previousHash !== preservation.sha256 || previousCount !== preservation.count) {
+            return update({
+              provider_state: {
+                ...job.provider_state,
+                delegation_dns_preserved_count: preservation.count,
+                delegation_dns_preserved_sha256: preservation.sha256,
+                delegation_dns_preserved_at: this.now().toISOString(),
+              },
+              ...clearLease,
+            });
+          }
+        }
+        const operation = await this.providers.updateNameservers(
+          job.name,
+          nameservers,
+          job.registrar,
+        );
+        if (operation.completed === true) {
+          return update({
+            status: "delegated",
+            provider_state: {
+              ...job.provider_state,
+              nameserver_operation_id: operation.operationId,
+              nameservers_submitted_at: this.now().toISOString(),
+              last_provider_status: "SUCCESSFUL",
+            },
+            ...clearLease,
+          });
+        }
         return update({
           status: "nameservers_submitted",
           provider_state: {
@@ -764,7 +958,7 @@ export class DomainProvisioningService {
         return update({ status: "delegated", provider_state: { ...job.provider_state, last_provider_status: status.status }, ...clearLease });
       }
       case "delegated": {
-        const detail = await this.providers.getDomainDetail(job.name);
+        const detail = await this.providers.getDomainDetail(job.name, job.registrar);
         const zone = await this.providers.ensureCloudflareZone(job.name);
         const publicNameservers = await this.providers.resolvePublicNameservers(job.name);
         if (!detail || zone.status !== "active" || !nameserversEqual(detail.nameservers, zone.nameservers) || !nameserversEqual(publicNameservers, zone.nameservers)) {
@@ -861,7 +1055,7 @@ export class DomainProvisioningService {
           });
         }
         if (!ready) return update({ ...clearLease });
-        const detail = await this.providers.getDomainDetail(job.name);
+        const detail = await this.providers.getDomainDetail(job.name, job.registrar);
         if (!detail) return update({ status: "manual_review", error: "registered domain detail is missing", ...clearLease });
         // Update the portfolio before making the job terminal. If this write
         // fails, the worker-bound job remains retryable instead of becoming a
@@ -872,6 +1066,8 @@ export class DomainProvisioningService {
         };
         const baseline = finalProviderState.route53_zone_ids_before_registration;
         if (
+          job.registrar === "route53"
+          &&
           !finalProviderState.route53_hosted_zone_id
           && baseline
           && this.providers.listRoute53HostedZoneIds
@@ -904,7 +1100,7 @@ export class DomainProvisioningService {
           ...clearLease,
         });
         const hostedZoneId = finalProviderState.route53_hosted_zone_id;
-        if (this.providers.cleanupRoute53HostedZone && hostedZoneId) {
+        if (job.registrar === "route53" && this.providers.cleanupRoute53HostedZone && hostedZoneId) {
           try {
             const cleaned = await this.providers.cleanupRoute53HostedZone({
               name: job.name,

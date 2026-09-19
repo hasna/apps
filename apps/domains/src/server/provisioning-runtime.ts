@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { promises as dns } from "node:dns";
 import {
   checkAvailability,
@@ -8,7 +9,12 @@ import {
   getRegistrationStatus,
   registerDomain,
   updateNameservers,
+  createRoute53Provider,
 } from "../lib/route53.js";
+import {
+  createBrandsightProvider,
+  resolveBrandsightConfig,
+} from "../lib/brandsight.js";
 import {
   bindWorkerCustomDomain,
   boundedResponseText,
@@ -18,11 +24,17 @@ import {
   getZoneOriginTlsMode,
   listRecords,
   reconcileRecords,
+  deleteRecordByNameType,
   upsertRecord,
   workerCustomDomainReady,
   type CloudflareConfig,
 } from "../lib/cloudflare.js";
-import type { DomainProvisioningProviders } from "../lib/provisioning.js";
+import type { ProviderDnsRecord } from "../lib/registrar.js";
+import {
+  RegistrarActionRequiredError,
+  type DomainProvisioningProviders,
+  type ProvisioningRegistrar,
+} from "../lib/provisioning.js";
 
 function sourceDomain(env: NodeJS.ProcessEnv): string {
   const value = env["DOMAINS_REGISTRANT_SOURCE_DOMAIN"]?.trim();
@@ -48,11 +60,104 @@ function nameserversEqual(left: string[], right: string[]): boolean {
   return JSON.stringify(norm(left)) === JSON.stringify(norm(right));
 }
 
+const PRESERVABLE_DNS_TYPES = new Set([
+  "A", "AAAA", "CAA", "CNAME", "MX", "NS", "TXT",
+]);
+
+interface CanonicalDelegationRecord {
+  type: string;
+  name: string;
+  value: string;
+  ttl: number;
+  priority: number | null;
+}
+
+function delegationRecordName(value: string, hostname: string): string {
+  const raw = value.trim().toLowerCase().replace(/\.$/u, "");
+  const name = raw === "@" || raw === ""
+    ? hostname
+    : raw === hostname || raw.endsWith(`.${hostname}`)
+      ? raw
+      : `${raw}.${hostname}`;
+  if (
+    name.length > 253
+    || !/^(?:\*\.)?[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?(?:\.[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?)*$/u.test(name)
+    || (name !== hostname && !name.endsWith(`.${hostname}`))
+  ) {
+    throw new RegistrarActionRequiredError("registrar DNS contains a record outside the adopted domain");
+  }
+  return name;
+}
+
+function delegationRecordValue(type: string, value: unknown, hostname: string): string {
+  const raw = String(value ?? "").trim();
+  if (!raw || raw.length > 8_192 || /[\0\r\n]/u.test(raw)) {
+    throw new RegistrarActionRequiredError("registrar DNS contains an invalid record value");
+  }
+  if (!["CNAME", "MX", "NS"].includes(type)) return raw;
+  const target = raw.toLowerCase().replace(/\.$/u, "");
+  return target.includes(".") ? target : `${target}.${hostname}`;
+}
+
+export function canonicalDelegationRecords(
+  records: ProviderDnsRecord[],
+  hostname: string,
+): CanonicalDelegationRecord[] {
+  if (records.length > 500) {
+    throw new RegistrarActionRequiredError("registrar DNS has more than 500 records; automatic preservation is refused");
+  }
+  const canonical: CanonicalDelegationRecord[] = [];
+  for (const record of records) {
+    const type = String(record.type ?? "").trim().toUpperCase();
+    const name = delegationRecordName(String(record.name ?? ""), hostname);
+    if (type === "SOA" || (type === "NS" && name === hostname)) continue;
+    if (!PRESERVABLE_DNS_TYPES.has(type)) {
+      throw new RegistrarActionRequiredError(`registrar DNS record type '${type}' cannot be preserved automatically`);
+    }
+    const value = delegationRecordValue(type, record.value, hostname);
+    const ttl = Number(record.ttl);
+    if (!Number.isInteger(ttl) || ttl < 60 || ttl > 86_400) {
+      throw new RegistrarActionRequiredError("registrar DNS contains a TTL outside 60-86400 seconds");
+    }
+    const priority = record.priority === undefined || record.priority === null
+      ? null
+      : Number(record.priority);
+    if (priority !== null && (!Number.isInteger(priority) || priority < 0 || priority > 65_535)) {
+      throw new RegistrarActionRequiredError("registrar DNS contains an invalid priority");
+    }
+    canonical.push({ type, name, value, ttl, priority });
+  }
+  canonical.sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
+  if (new Set(canonical.map((record) => JSON.stringify(record))).size !== canonical.length) {
+    throw new RegistrarActionRequiredError("registrar DNS contains duplicate records");
+  }
+  return canonical;
+}
+
+function delegationRecordHash(records: CanonicalDelegationRecord[]): string {
+  return createHash("sha256").update(JSON.stringify(records)).digest("hex");
+}
+
 export function createHostedProvisioningProviders(
   env: NodeJS.ProcessEnv = process.env,
 ): DomainProvisioningProviders {
   const cloudflareConfig = hostedCloudflareConfig(env);
   const registrantSourceDomain = sourceDomain(env);
+  const brandsightConfig = resolveBrandsightConfig(env);
+  const brandsight = brandsightConfig.apiKey
+    && brandsightConfig.apiSecret
+    && brandsightConfig.customerId
+    ? createBrandsightProvider(brandsightConfig)
+    : null;
+  const route53 = createRoute53Provider();
+  const requireBrandsight = () => {
+    if (!brandsight) {
+      throw new RegistrarActionRequiredError(
+        "Brandsight ownership or delegation requires the existing BRANDSIGHT_API_KEY, BRANDSIGHT_API_SECRET, and BRANDSIGHT_CUSTOMER_ID credential references",
+      );
+    }
+    return brandsight;
+  };
   return {
     async checkAvailability(name) {
       const availability = await checkAvailability(name);
@@ -85,7 +190,29 @@ export function createHostedProvisioningProviders(
       return getRegistrationStatus(operationId);
     },
 
-    async getDomainDetail(name) {
+    async getDomainDetail(name, registrar: ProvisioningRegistrar = "route53") {
+      if (registrar === "brandsight") {
+        try {
+          const detail = await requireBrandsight().getDomainInfo(name);
+          if (detail.domain.toLowerCase().replace(/\.$/u, "") !== name) {
+            throw new RegistrarActionRequiredError(
+              "Brandsight ownership readback returned a different domain",
+            );
+          }
+          return {
+            registered_at: detail.created || undefined,
+            expires_at: detail.expires || undefined,
+            auto_renew: detail.auto_renew,
+            nameservers: detail.nameservers,
+            registrar: "Brandsight",
+          };
+        } catch (error) {
+          if (error instanceof RegistrarActionRequiredError) throw error;
+          const message = error instanceof Error ? error.message : String(error);
+          if (/not found|not registered|404/i.test(message)) return null;
+          throw error;
+        }
+      }
       try {
         const detail = await getDomainDetail(name);
         return {
@@ -107,12 +234,69 @@ export function createHostedProvisioningProviders(
       return { id: zone.id, status: zone.status, nameservers: zone.nameservers };
     },
 
-    updateNameservers(name, nameservers) {
+    async updateNameservers(
+      name,
+      nameservers,
+      registrar: ProvisioningRegistrar = "route53",
+    ) {
+      if (registrar === "brandsight") {
+        const provider = requireBrandsight();
+        if (!provider.updateNameservers) {
+          throw new RegistrarActionRequiredError("Brandsight nameserver updates are unavailable");
+        }
+        const result = await provider.updateNameservers(name, nameservers);
+        if (!result.success) {
+          throw new Error("Brandsight nameserver update was not accepted");
+        }
+        return {
+          operationId: result.operationId || `brandsight:completed:${name}`,
+          completed: true,
+        };
+      }
       return updateNameservers(name, nameservers);
     },
 
     async resolvePublicNameservers(name) {
       return dns.resolveNs(name).catch(() => [] as string[]);
+    },
+
+    async preserveRegistrarDnsBeforeDelegation(input) {
+      const registrar = input.registrar === "brandsight" ? requireBrandsight() : route53;
+      const registrarRecords = await registrar.getDnsRecords(input.hostname);
+      if (input.registrar === "route53" && registrarRecords.length === 0) {
+        throw new RegistrarActionRequiredError(
+          "Route 53 has no readable hosted-zone records to preserve before delegation",
+        );
+      }
+      const source = canonicalDelegationRecords(
+        registrarRecords,
+        input.hostname,
+      );
+      await reconcileRecords(input.zoneId, source.map((record) => ({
+        type: record.type,
+        name: record.name,
+        content: record.value,
+        ttl: record.ttl,
+        ...(record.priority === null ? {} : { priority: record.priority }),
+        ...(["A", "AAAA", "CNAME"].includes(record.type) ? { proxied: false } : {}),
+      })), cloudflareConfig);
+      const expectedGroups = new Set(source.map((record) => `${record.type}|${record.name}`));
+      const readback = canonicalDelegationRecords(
+        (await listRecords(input.zoneId, cloudflareConfig))
+          .filter((record) => expectedGroups.has(`${record.type.toUpperCase()}|${record.name.toLowerCase().replace(/\.$/u, "")}`))
+          .map((record) => ({
+            type: record.type,
+            name: record.name,
+            value: record.content,
+            ttl: record.ttl,
+            priority: record.priority,
+          })),
+        input.hostname,
+      );
+      if (JSON.stringify(readback) !== JSON.stringify(source)) {
+        throw new RegistrarActionRequiredError("Cloudflare DNS readback does not match the registrar DNS snapshot");
+      }
+      return { count: source.length, sha256: delegationRecordHash(source) };
     },
 
     async bindWorkerDomain(input) {
@@ -136,6 +320,8 @@ export function createHostedProvisioningProviders(
         ttl: 1,
       }));
       for (const record of records) {
+        await deleteRecordByNameType(input.zoneId, record.name, "A", cloudflareConfig);
+        await deleteRecordByNameType(input.zoneId, record.name, "AAAA", cloudflareConfig);
         await upsertRecord(input.zoneId, record, cloudflareConfig);
       }
       return records.map((record) => ({

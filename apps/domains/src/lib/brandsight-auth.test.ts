@@ -11,11 +11,15 @@ import {
   _setFetch,
 } from "./brandsight.js";
 
+const originalProviderTimeout = process.env["DOMAINS_PROVIDER_HTTP_TIMEOUT_MS"];
+
 afterEach(() => {
   _setFetch(null);
   delete process.env["BRANDSIGHT_API_KEY"];
   delete process.env["BRANDSIGHT_DEMO_STUBS"];
   delete process.env["BRANDSIGHT_ALLOW_STUBS"];
+  if (originalProviderTimeout === undefined) delete process.env["DOMAINS_PROVIDER_HTTP_TIMEOUT_MS"];
+  else process.env["DOMAINS_PROVIDER_HTTP_TIMEOUT_MS"] = originalProviderTimeout;
 });
 
 describe("resolveBrandsightConfig", () => {
@@ -274,6 +278,34 @@ describe("Brandsight Domain API", () => {
       apiSecret: "secret",
       customerId: "customer",
     })).resolves.toBe(true);
+  });
+
+  it("rejects an oversized Domain API body before buffering it", async () => {
+    _setFetch((async () => new Response("", {
+      status: 200,
+      headers: { "content-length": "1048577" },
+    })) as typeof fetch);
+
+    await expect(getDnsRecords("example.com", {
+      apiKey: "key",
+      apiSecret: "secret",
+      customerId: "customer",
+    })).rejects.toThrow("exceeds 1048576 bytes");
+  });
+
+  it("times out when Domain API headers arrive but the response body stalls", async () => {
+    process.env["DOMAINS_PROVIDER_HTTP_TIMEOUT_MS"] = "10";
+    _setFetch((async () => new Response(new ReadableStream({
+      start() {
+        // The body never produces a byte; the configured whole-response timer must cancel it.
+      },
+    }), { status: 200 })) as typeof fetch);
+
+    await expect(getDnsRecords("example.com", {
+      apiKey: "key",
+      apiSecret: "secret",
+      customerId: "customer",
+    })).rejects.toThrow();
   });
 
   it("does not silently return demo brand-monitor stubs unless explicitly enabled", async () => {

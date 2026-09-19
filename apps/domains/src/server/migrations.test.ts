@@ -158,4 +158,5 @@ test("declares the durable provisioning ledger with financial idempotency and le
   expect(sql).toContain("status IN ('requested','applying','ready','manual_review')");
   expect(sql).toContain("ADD COLUMN IF NOT EXISTS acquisition_mode TEXT NOT NULL DEFAULT 'purchase'");
   expect(sql).toContain("acquisition_mode = 'adopt' AND max_price_usd = 0");
+  expect(sql).toContain("registrar IN ('route53', 'brandsight')");
 });

@@ -206,4 +206,8 @@ export const PG_MIGRATIONS: string[] = [
         OR
         (target = 'website_origin' AND worker_name IS NULL AND origin_hostname IS NOT NULL AND origin_tls_mode IN ('strict', 'full'))
       )`,
+  `ALTER TABLE domain_provisioning_jobs
+    DROP CONSTRAINT IF EXISTS domain_provisioning_jobs_registrar_check,
+    ADD CONSTRAINT domain_provisioning_jobs_registrar_check
+      CHECK (registrar IN ('route53', 'brandsight'))`,
 ];

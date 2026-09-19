@@ -123,6 +123,20 @@ describe("getDnsRecords pagination", () => {
     expect(records.map((r) => r.name)).toEqual(small.map((r) => r.name));
     expect(urls).toHaveLength(1);
   });
+
+  it("fails closed when the registrar returns more than 5000 DNS records", async () => {
+    const urls: string[] = [];
+    const oversized = Array.from({ length: 5001 }, (_, i) => ({
+      type: "TXT",
+      name: `large-${i}`,
+      data: "value",
+      ttl: 600,
+    }));
+    _setFetch(serveRecordsByRowOffset(oversized, urls));
+
+    await expect(getDnsRecords("example.com", CFG)).rejects.toThrow("5000-record safety bound");
+    expect(urls).toHaveLength(6);
+  });
 });
 
 describe("listDomains marker pagination", () => {
