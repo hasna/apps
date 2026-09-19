@@ -198,7 +198,7 @@ describe("mementos read verbs never leak credential-shaped TAGS or when_to_use o
     const j = await runCli(env, "search", "fixture", "--format", "json", "--limit", "100");
     expect(j.exitCode).toBe(0);
     expect(j.stdout).not.toContain(NPM_REGISTRY_TOKEN);
-    const parsed = JSON.parse(j.stdout) as Array<{ memory: Record<string, unknown>; score: number }>;
+    const parsed = (JSON.parse(j.stdout) as { results: Array<{ memory: Record<string, unknown>; score: number }> }).results;
     expect(parsed.length).toBe(2);
     const tagRow = parsed.find((r) => r.memory.id === "m-srch-tag");
     expect(tagRow).toBeTruthy();
@@ -226,10 +226,10 @@ describe("mementos read verbs never leak credential-shaped TAGS or when_to_use o
     rows.push({ id: "m-tagpop-last", key: "tagpop-last", value: "shared population value", tags: [`last-${NPM_REGISTRY_TOKEN}`] });
 
     const { dbPath, env } = await seeded(rows);
-    const { stdout, exitCode } = await runCli(env, "search", "population", "--format", "json", "--limit", "1000");
+    const { stdout, exitCode } = await runCli(env, "search", "population", "--format", "json", "--all");
     expect(exitCode).toBe(0);
     expect(stdout).not.toContain(NPM_REGISTRY_TOKEN);
-    const parsed = JSON.parse(stdout) as Array<{ memory: Record<string, unknown> }>;
+    const parsed = (JSON.parse(stdout) as { results: Array<{ memory: Record<string, unknown> }> }).results;
     expect(parsed.length).toBe(121);
     const allTags = parsed.flatMap((r) => r.memory.tags as string[]).join(",");
     expect(allTags).not.toContain(NPM_REGISTRY_TOKEN);

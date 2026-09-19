@@ -191,9 +191,10 @@ describe("library injector explicit project visibility", () => {
 const mcpStrategies = [
   ["default", {}],
   ["hints", { mode: "hints" }],
-  ["smart-query", { strategy: "smart", query: "synthetic scope fixture" }],
-  ["activation", { task_context: "synthetic scope fixture" }],
-  ["smart-pipeline", { strategy: "smart", task_context: "synthetic scope fixture" }],
+  ["explicit-full", { mode: "full" }],
+  ["smart-query", { mode: "full", strategy: "smart", query: "synthetic scope fixture" }],
+  ["activation", { mode: "full", task_context: "synthetic scope fixture" }],
+  ["smart-pipeline", { mode: "full", strategy: "smart", task_context: "synthetic scope fixture" }],
 ] as const;
 describe("MCP injector explicit project visibility", () => {
   for (const [name, strategy] of mcpStrategies) {
@@ -202,7 +203,7 @@ describe("MCP injector explicit project visibility", () => {
       const result = await invokeMcp({ ...strategy, project_id: "project-a", agent_id: "owner", session_id: "fixture-session", machine_id: "fixture-machine", max_tokens: 12000, min_importance: 1, categories: ["fact"], format: "compact" });
       expect(result.isError).not.toBe(true);
       const output = result.content[0]!.text;
-      if (name === "hints") {
+      if (name === "default" || name === "hints") {
         expect(output).toContain("Facts (5)");
         expect(output).toContain("unassigned");
       } else {
@@ -218,7 +219,7 @@ describe("MCP injector explicit project visibility", () => {
       const result = await invokeMcp({ ...strategy, project_id: "project-a", agent_id: "owner", session_id: "fixture-session", machine_id: "fixture-machine", max_tokens: 12000, min_importance: 1, categories: ["fact"], format: "compact" });
       expect(result.isError).not.toBe(true);
       const output = result.content[0]!.text;
-      if (name === "hints") {
+      if (name === "default" || name === "hints") {
         // MCP default candidates: selected global/shared, selected and
         // unassigned private, and selected working memory = five facts.
         expect(output).toContain("Facts (5)");
@@ -240,7 +241,7 @@ describe("MCP injector explicit project visibility", () => {
       const result = await invokeMcp({ ...strategy, agent_id: "owner", session_id: "fixture-session", machine_id: "fixture-machine", max_tokens: 12000, min_importance: 1, categories: ["fact"], format: "compact" });
       expect(result.isError).not.toBe(true);
       const output = result.content[0]!.text;
-      if (name === "hints") {
+      if (name === "default" || name === "hints") {
         expect(output).toContain("Facts (11)");
         expect(output).toContain("elsewhere");
         expect(output).toContain("unassigned");
@@ -271,7 +272,7 @@ describe("MCP injector explicit project visibility", () => {
           });
           expect(result.isError).not.toBe(true);
           const output = result.content[0]!.text;
-          if (name === "hints") {
+          if (name === "default" || name === "hints") {
             expect(output).toContain("alias");
           } else {
             for (const key of ["shared-alias-selected", "private-alias-selected", "working-alias-selected"]) {

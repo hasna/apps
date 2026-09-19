@@ -88,6 +88,33 @@ describe("mementos status", () => {
     expect(stdout).not.toContain("test-key-not-a-real-credential");
   });
 
+  test("credentials-file authority is reported instead of API: (none)", async () => {
+    const { mkdtempSync, mkdirSync, writeFileSync, chmodSync, rmSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const { tmpdir } = await import("node:os");
+    const home = mkdtempSync(join(tmpdir(), "mementos-status-credentials-"));
+    try {
+      const configRoot = join(home, "config-root");
+      const configDir = join(configRoot, "mementos");
+      mkdirSync(configDir, { recursive: true });
+      const credentials = join(configDir, "credentials");
+      writeFileSync(credentials, "HASNA_MEMENTOS_API_URL=https://api.hasna.com/mementos\nHASNA_MEMENTOS_API_KEY=status-file-test-key\n", { mode: 0o600 });
+      chmodSync(credentials, 0o600);
+      const { stdout, exitCode } = await runStatus(cliEnv({ HOME: home, HASNA_CONFIG_HOME: configRoot }), "--json");
+      expect(exitCode).toBe(0);
+      const parsed = JSON.parse(stdout) as Record<string, unknown>;
+      expect(parsed).toMatchObject({
+        transport: "http",
+        api_url: "https://api.hasna.com/mementos/v1",
+        api_base: "https://api.hasna.com/mementos",
+        api_key_present: true,
+      });
+      expect(stdout).not.toContain("status-file-test-key");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   test("runs with no env configured instead of being blocked by the store guard", async () => {
     // The whole point of a status command is answering "what am I pointed at?"
     // when the answer is "nothing" — it must not inherit the fail-closed

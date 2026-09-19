@@ -8,19 +8,30 @@ import {
   resolveAgentFilter,
   outputJson,
   makeHandleError,
+  cursorOrOffset,
   type GlobalOpts,
 } from "../helpers.js";
+import {
+  structuredCollectionOutput,
+  structuredMaxBytes,
+  structuredPageLimit,
+} from "../structured-json.js";
 
 export function registerExportCommand(program: Command): void {
   const handleError = makeHandleError(program);
 
   program
     .command("export")
-    .description("Export memories as JSON")
+    .description("Export a truthful full-detail JSON page; use --all for the exhaustive legacy array")
     .option("--scope <scope>", "Scope filter")
     .option("-c, --category <cat>", "Category filter")
     .option("--agent <name>", "Agent filter")
     .option("--project <path>", "Project filter")
+    .option("--limit <n>", "Page size (default: 100, maximum: 1000)", parseInt)
+    .option("--cursor <n>", "Cursor offset for the next page", parseInt)
+    .option("--offset <n>", "Offset for pagination", parseInt)
+    .option("--max-bytes <n>", "Paginated response byte ceiling (default: 65536)", parseInt)
+    .option("--all", "Exhaust the complete query and emit the legacy full JSON array")
     .action((opts) => {
       try {
         const globalOpts = program.opts<GlobalOpts>();
@@ -39,23 +50,45 @@ export function registerExportCommand(program: Command): void {
           agent_id: agentId,
           project_id: projectId,
         };
+        const exhaustive = Boolean(opts.all);
+        const offset = cursorOrOffset(opts.cursor, opts.offset) ?? 0;
+        if (exhaustive && opts.limit !== undefined) {
+          throw new Error("--all cannot be combined with --limit");
+        }
+        if (exhaustive && offset !== 0) {
+          throw new Error("--all requires --cursor/--offset 0");
+        }
+        if (exhaustive && opts.maxBytes !== undefined) {
+          throw new Error("--max-bytes applies to paginated exports; exhaustive --all is an explicit unbounded compatibility escape");
+        }
 
-        // Export targets up to 10000 rows; the server caps single responses at
-        // 1000, so the requested population is assembled by walking bounded
-        // pages (BUG 2796806b).
-        const memories = listMemoriesBounded(filter, 10000).rows;
+        if (exhaustive) {
+          const complete = listMemoriesBounded(filter, undefined).rows.map(redactMemoryForOutput);
+          outputJson(complete);
+          return;
+        }
 
-        // Read-path redaction (todos e12c7659): `export` is a bulk read verb
-        // whose stdout lands in the session transcript, so every raw Memory
-        // field — key, value, summary, tags, when_to_use, metadata — would
-        // reach it verbatim. Project the full population through
-        // redactMemoryForOutput before the single JSON emit; coordination
-        // metadata (id, scope, category, importance, status, timestamps,
-        // attribution) survives.
-        const sanitized = memories.map(redactMemoryForOutput);
-
-        // Export always outputs JSON
-        outputJson(sanitized);
+        const limit = structuredPageLimit(opts.limit, 100);
+        const page = listMemoriesBounded({ ...filter, offset }, limit);
+        const sanitized = page.rows.map(redactMemoryForOutput);
+        process.stdout.write(structuredCollectionOutput({
+          collection: "memories",
+          receipt: "mementos.export.page.v1",
+          items: sanitized,
+          offset,
+          limit,
+          sourceHasMore: page.has_more,
+          all: false,
+          detail: "full",
+          maxBytes: structuredMaxBytes(opts.maxBytes, { all: false, detail: "full" }),
+          nextArguments: {
+            ...(opts.scope ? { scope: opts.scope as string } : {}),
+            ...(opts.category ? { category: opts.category as string } : {}),
+            ...(agentId ? { agent: agentId } : {}),
+            ...(projectPath ? { project: projectPath } : {}),
+          },
+          includeDetailInNextArguments: false,
+        }));
       } catch (e) {
         handleError(e);
       }
