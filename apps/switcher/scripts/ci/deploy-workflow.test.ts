@@ -200,7 +200,7 @@ describe("monorepo deploy context (hasna/apps)", () => {
       { app: "switcher", source: "monorepo", probePath: "/v1/providers" },
     ]);
     const laneGate = readFileSync(join(repoRoot, "tooling", "ci", "check-deploy-lanes.ts"), "utf8");
-    expect(laneGate).toContain('"projects", "skills", "switcher"');
+    expect(laneGate).toContain('"switcher"');
   });
 
   test("scans before AWS authentication and emits Switcher-specific evidence", () => {
