@@ -30,14 +30,24 @@ import { cloudEnabled, getCloudClient } from "./pg-store.js";
 import { checkHealth } from "../generated/storage-kit/health.js";
 import { CLOUD_MIGRATIONS } from "../db/cloud-migrations.js";
 import type { TypedQueryClient } from "../generated/storage-kit/query.js";
-import { resolveDeploymentIdentity } from "./deployment-identity.js";
+import { productionDeploymentIntended, resolveDeploymentIdentity } from "./deployment-identity.js";
 
 const require = createRequire(import.meta.url);
 const pkg = require("../../package.json") as { version: string };
 
 /** Storage backend reported by /health, /ready, /version. */
-function serviceBackend(): "postgres" | "sqlite" {
-  return cloudEnabled() ? "postgres" : "sqlite";
+function serviceBackend(env: NodeJS.ProcessEnv = process.env): "postgres" | "sqlite" {
+  return productionDeploymentIntended(env) || cloudEnabled(env) ? "postgres" : "sqlite";
+}
+
+export function validateServiceStartup(env: NodeJS.ProcessEnv = process.env): void {
+  const production = productionDeploymentIntended(env) || cloudEnabled(env);
+  if (!production) return;
+  const deployment = resolveDeploymentIdentity(true, env);
+  if (!deployment.ok) throw new Error(`production deployment identity ${deployment.reason}`);
+  if (!cloudEnabled(env)) {
+    throw new Error("production deployment requires PostgreSQL configuration");
+  }
 }
 
 /**
@@ -62,13 +72,16 @@ async function readiness(client: TypedQueryClient): Promise<{ ok: boolean; laten
 export interface ReadinessProbeOptions {
   production?: boolean;
   env?: NodeJS.ProcessEnv;
+  postgresConfigured?: boolean;
   client?: TypedQueryClient;
 }
 
 /** Build the exact `/ready` response; options are a test seam only. */
 export async function handleReadinessProbe(options: ReadinessProbeOptions = {}): Promise<Response> {
-  const production = options.production ?? cloudEnabled();
-  const deployment = resolveDeploymentIdentity(production, options.env);
+  const env = options.env ?? process.env;
+  const postgresConfigured = options.postgresConfigured ?? cloudEnabled(env);
+  const production = options.production ?? (productionDeploymentIntended(env) || postgresConfigured);
+  const deployment = resolveDeploymentIdentity(production, env);
   if (!production) {
     return json({
       status: "ok",
@@ -91,6 +104,15 @@ export async function handleReadinessProbe(options: ReadinessProbeOptions = {}):
     }, 503);
   }
   const identity = deployment.identity;
+  if (!postgresConfigured) {
+    return json({
+      status: "error",
+      version: pkg.version,
+      storage: "postgres",
+      ...identity,
+      error: "production deployment requires PostgreSQL configuration",
+    }, 503);
+  }
   try {
     const ready = await readiness(options.client ?? getCloudClient());
     if (!ready.ok) {

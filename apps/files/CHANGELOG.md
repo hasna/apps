@@ -6,10 +6,13 @@
 
 - Require exact raw deployment source/digest identity on `/ready`: missing,
   malformed, or whitespace-padded values fail with 503 before PostgreSQL is
-  touched. Current-server rollback is now CAS-anchored to the run's exact
-  candidate task definition, so a concurrent newer deployment is preserved and
-  emits metadata-only `RECONCILIATION_REQUIRED` evidence instead of being
-  overwritten.
+  touched. Production intent is now pinned independently by
+  `HASNA_FILES_DEPLOYMENT_ENVIRONMENT=production`; if a deployed task loses its
+  PostgreSQL configuration, readiness returns 503 and `files-serve` exits before
+  binding instead of falling through to SQLite. Current-server rollback is now
+  CAS-anchored to the run's exact candidate task definition, so a concurrent
+  newer deployment is preserved and emits metadata-only
+  `RECONCILIATION_REQUIRED` evidence instead of being overwritten.
 
 ## 0.4.1
 

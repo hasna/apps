@@ -13,6 +13,7 @@ const ENV_KEYS = [
   "OPEN_FILES_REST_HOST",
   "HASNA_FILES_DATABASE_URL",
   "FILES_DATABASE_URL",
+  "HASNA_FILES_DEPLOYMENT_ENVIRONMENT",
   "HASNA_FILES_DEPLOY_SOURCE_COMMIT",
   "HASNA_FILES_DEPLOY_IMAGE_DIGEST",
 ] as const;
@@ -32,6 +33,7 @@ beforeEach(() => {
   delete process.env.OPEN_FILES_REST_HOST;
   delete process.env.HASNA_FILES_DATABASE_URL;
   delete process.env.FILES_DATABASE_URL;
+  delete process.env.HASNA_FILES_DEPLOYMENT_ENVIRONMENT;
   delete process.env.HASNA_FILES_DEPLOY_SOURCE_COMMIT;
   delete process.env.HASNA_FILES_DEPLOY_IMAGE_DIGEST;
 });
@@ -190,6 +192,7 @@ describe("files-serve readiness identity", () => {
     const response = await handleReadinessProbe({
       production: true,
       env: {
+        HASNA_FILES_DEPLOYMENT_ENVIRONMENT: "production",
         HASNA_FILES_DEPLOY_SOURCE_COMMIT: ` ${sourceCommit}`,
         HASNA_FILES_DEPLOY_IMAGE_DIGEST: `${imageDigest} `,
       },
@@ -209,15 +212,44 @@ describe("files-serve readiness identity", () => {
     });
   });
 
+  test("production identity cannot fall through to SQLite when PostgreSQL configuration disappears", async () => {
+    const { handleReadinessProbe } = await import("./serve.js");
+    let storageTouched = false;
+    const response = await handleReadinessProbe({
+      env: {
+        HASNA_FILES_DEPLOYMENT_ENVIRONMENT: "production",
+        HASNA_FILES_DEPLOY_SOURCE_COMMIT: sourceCommit,
+        HASNA_FILES_DEPLOY_IMAGE_DIGEST: imageDigest,
+      },
+      postgresConfigured: false,
+      client: {
+        get: async () => { storageTouched = true; return { ok: 1 }; },
+        many: async () => { storageTouched = true; return []; },
+      } as never,
+    });
+    expect(response.status).toBe(503);
+    expect(storageTouched).toBe(false);
+    expect(await response.json()).toMatchObject({
+      status: "error",
+      storage: "postgres",
+      deployment_environment: "production",
+      source_commit: sourceCommit,
+      image_digest: imageDigest,
+      error: "production deployment requires PostgreSQL configuration",
+    });
+  });
+
   test("serves exact immutable identity only when production storage is ready", async () => {
     const { handleReadinessProbe } = await import("./serve.js");
     const { CLOUD_MIGRATIONS } = await import("../db/cloud-migrations.js");
     const response = await handleReadinessProbe({
       production: true,
       env: {
+        HASNA_FILES_DEPLOYMENT_ENVIRONMENT: "production",
         HASNA_FILES_DEPLOY_SOURCE_COMMIT: sourceCommit,
         HASNA_FILES_DEPLOY_IMAGE_DIGEST: imageDigest,
       },
+      postgresConfigured: true,
       client: {
         get: async () => ({ ok: 1 }),
         many: async () => CLOUD_MIGRATIONS.map(({ id }) => ({ id })),

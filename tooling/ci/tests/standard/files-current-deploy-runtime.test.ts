@@ -20,14 +20,14 @@ async function run(script: string, args: string[], env: Record<string, string>) 
   return { stdout, stderr, code };
 }
 
-const task21 = "arn:aws:ecs:us-east-1:789877399345:task-definition/files-prod:21";
-const task22 = "arn:aws:ecs:us-east-1:789877399345:task-definition/files-prod:22";
-const task23 = "arn:aws:ecs:us-east-1:789877399345:task-definition/files-prod:23";
-const migrate20 = "arn:aws:ecs:us-east-1:789877399345:task-definition/files-prod-migrate:20";
-const taskArn = "arn:aws:ecs:us-east-1:789877399345:task/oss-fleet-prod/0123456789abcdef";
+const task21 = "arn:aws:ecs:us-east-1:123456789012:task-definition/fixture-web:21";
+const task22 = "arn:aws:ecs:us-east-1:123456789012:task-definition/fixture-web:22";
+const task23 = "arn:aws:ecs:us-east-1:123456789012:task-definition/fixture-web:23";
+const migrate20 = "arn:aws:ecs:us-east-1:123456789012:task-definition/fixture-migrate:20";
+const taskArn = "arn:aws:ecs:us-east-1:123456789012:task/fixture-cluster/0123456789abcdef";
 const source = "a".repeat(40);
 const digest = `sha256:${"b".repeat(64)}`;
-const image = `789877399345.dkr.ecr.us-east-1.amazonaws.com/open-files@${digest}`;
+const image = `123456789012.dkr.ecr.us-east-1.amazonaws.com/fixture-repository@${digest}`;
 
 describe("Files deployment runtime guards", () => {
   test("service anchor accepts the captured revision and rejects a concurrent race", async () => {
@@ -41,8 +41,8 @@ fi
 exit 9
 `);
     const env = { PATH: `${dir}:${process.env.PATH}`, FAKE_DRIFT: "0" };
-    expect((await run(anchor, ["oss-fleet-prod", "files-prod", task21], env)).code).toBe(0);
-    const raced = await run(anchor, ["oss-fleet-prod", "files-prod", task21], { ...env, FAKE_DRIFT: "1" });
+    expect((await run(anchor, ["fixture-cluster", "fixture-service", task21], env)).code).toBe(0);
+    const raced = await run(anchor, ["fixture-cluster", "fixture-service", task21], { ...env, FAKE_DRIFT: "1" });
     expect(raced.code).toBe(1);
     expect(raced.stderr).toContain("service anchor changed before mutation");
   });
@@ -60,7 +60,7 @@ exit 9
 `);
     const rollback = join(dir, "rollback.json");
     const reconciliation = join(dir, "reconciliation.json");
-    const result = await run(restore, ["oss-fleet-prod", "files-prod", task22, task21, source, image, "old@sha256:" + "e".repeat(64), rollback, reconciliation], {
+    const result = await run(restore, ["fixture-cluster", "fixture-service", task22, task21, source, image, "old@sha256:" + "e".repeat(64), rollback, reconciliation], {
       PATH: `${dir}:${process.env.PATH}`,
       FAKE_UPDATE_LOG: updateLog,
     });
@@ -96,7 +96,7 @@ exit 9
     const rollback = join(dir, "rollback.json");
     const reconciliation = join(dir, "reconciliation.json");
     const previousImage = "old@sha256:" + "e".repeat(64);
-    const result = await run(restore, ["oss-fleet-prod", "files-prod", task22, task21, source, image, previousImage, rollback, reconciliation], {
+    const result = await run(restore, ["fixture-cluster", "fixture-service", task22, task21, source, image, previousImage, rollback, reconciliation], {
       PATH: `${dir}:${process.env.PATH}`,
       FAKE_STATE: state,
       FAKE_UPDATE_LOG: updateLog,
@@ -176,7 +176,7 @@ esac
 `);
     const receipt = join(dir, "data-plane.json");
     const base = { PATH: `${dir}:${process.env.PATH}`, FAKE_CURL_ARGS: argsLog, FAKE_MODE: "ok" };
-    const args = ["https://api.hasna.com/files", keyFile, "hasna/oss/files/api-key", receipt];
+    const args = ["https://api.hasna.com/files", keyFile, "fixture/files/client-key", receipt];
     const good = await run(dataPlane, args, base);
     expect(good.code).toBe(0);
     expect(JSON.parse(readFileSync(receipt, "utf8"))).toMatchObject({
@@ -187,7 +187,7 @@ esac
       authenticated_manifest: {
         http_status: 200,
         credentials_sent: true,
-        credential_ref: "hasna/oss/files/api-key",
+        credential_ref: "fixture/files/client-key",
         header: "x-api-key",
         redirects_followed: false,
         contract: { filter_contract: "files.knowledge.manifest.v1", item_count: 0, has_more: false, complete: true },
@@ -201,10 +201,10 @@ esac
     expect(calls).not.toContain("fixture-files-key");
     expect(calls).not.toContain("authorization");
     for (const mode of ["double", "missing", "redirect", "route404", "auth401", "authRedirect", "authMalformed"]) {
-      const modeArgs = ["https://api.hasna.com/files", keyFile, "hasna/oss/files/api-key", join(dir, `${mode}.json`)];
+      const modeArgs = ["https://api.hasna.com/files", keyFile, "fixture/files/client-key", join(dir, `${mode}.json`)];
       expect((await run(dataPlane, modeArgs, { ...base, FAKE_MODE: mode })).code).toBe(1);
     }
-    expect((await run(dataPlane, ["https://api.hasna.com/files", keyFile, "wrong/ref", join(dir, "wrong-ref.json")], base)).code).toBe(2);
+    expect((await run(dataPlane, ["https://api.hasna.com/files", keyFile, "invalid ref", join(dir, "wrong-ref.json")], base)).code).toBe(2);
     chmodSync(keyFile, 0o644);
     expect((await run(dataPlane, args, base)).code).toBe(2);
   });
@@ -218,7 +218,7 @@ if [[ "$*" == *"ecs run-task"* ]]; then
 fi
 if [[ "$*" == *"ecs wait tasks-stopped"* ]]; then exit 255; fi
 if [[ "$*" == *"ecs describe-tasks"* ]]; then
-  printf '{"tasks":[{"taskArn":"${taskArn}","taskDefinitionArn":"${migrate20}","lastStatus":"RUNNING","containers":[{"name":"files-migrate","image":"${image}","imageDigest":"${digest}","lastStatus":"RUNNING"}]}]}\\n'
+  printf '{"tasks":[{"taskArn":"${taskArn}","taskDefinitionArn":"${migrate20}","lastStatus":"RUNNING","containers":[{"name":"fixture-migrate-container","image":"${image}","imageDigest":"${digest}","lastStatus":"RUNNING"}]}]}\\n'
   exit 0
 fi
 exit 9
@@ -226,7 +226,7 @@ exit 9
     const launch = join(dir, "launch.json");
     const observed = join(dir, "observed.json");
     const output = join(dir, "github-output");
-    const result = await run(migration, ["oss-fleet-prod", migrate20, "files-migrate", "subnet-a", "sg-a", "ENABLED", image, source, launch, observed], {
+    const result = await run(migration, ["fixture-cluster", migrate20, "fixture-migrate-container", "subnet-a", "sg-a", "ENABLED", image, source, launch, observed], {
       PATH: `${dir}:${process.env.PATH}`,
       GITHUB_OUTPUT: output,
       GITHUB_RUN_ID: "12345",

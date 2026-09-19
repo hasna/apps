@@ -12,7 +12,7 @@ CREDENTIAL_REF="$3"
 OUT="$4"
 [[ "$BASE_URL" == "https://api.hasna.com/files" ]] || { echo "canonical Files base URL mismatch" >&2; exit 2; }
 [[ -f "$API_KEY_FILE" && ! -L "$API_KEY_FILE" ]] || { echo "Files API key file must be a regular non-symlink file" >&2; exit 2; }
-[[ "$CREDENTIAL_REF" == "hasna/oss/files/api-key" ]] || { echo "Files client credential reference mismatch" >&2; exit 2; }
+[[ "$CREDENTIAL_REF" =~ ^[A-Za-z0-9/_+=.@-]+$ ]] || { echo "Files client credential reference is invalid" >&2; exit 2; }
 KEY_MODE="$(stat -c '%a' "$API_KEY_FILE")"
 [[ "$KEY_MODE" == "400" || "$KEY_MODE" == "600" ]] || { echo "Files API key file must be owner-only (0400 or 0600)" >&2; exit 2; }
 KEY_BYTES="$(wc -c < "$API_KEY_FILE" | tr -d '[:space:]')"

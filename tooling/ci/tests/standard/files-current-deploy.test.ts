@@ -35,15 +35,24 @@ describe("Files current-server deployment lane", () => {
     expect(workflow).toContain("--platform linux/arm64");
     expect(workflow).toContain("--target runner");
     expect(workflow).toContain("dist/server/index.js --version");
-    expect(workflow).toContain("role/files-prod-gha-deploy");
+    expect(workflow).toContain("role-to-assume: ${{ secrets.FILES_PROD_GHA_ROLE_ARN }}");
+    expect(workflow).toContain("Validate protected deployment configuration");
+    expect(workflow.indexOf("Validate protected deployment configuration")).toBeLessThan(build);
     expect(workflow).not.toMatch(/npm publish|bun publish/);
   });
 
   test("uses only the Files manifest targets, digest pins both tasks, and proves readiness", () => {
-    expect(workflow).toContain("DEPLOY_MANIFEST: /hasna/deploy/files");
-    expect(workflow).toContain("EXPECTED_SERVICE: files-prod");
-    expect(workflow).toContain("EXPECTED_ECR_REPOSITORY: open-files");
-    expect(workflow).toContain("EXPECTED_MIGRATION_FAMILY: files-prod-migrate");
+    expect(workflow).toContain("DEPLOY_MANIFEST: ${{ vars.FILES_PROD_DEPLOY_MANIFEST }}");
+    expect(workflow).toContain("EXPECTED_CLUSTER: ${{ vars.FILES_PROD_ECS_CLUSTER }}");
+    expect(workflow).toContain("EXPECTED_SERVICE: ${{ vars.FILES_PROD_ECS_SERVICE }}");
+    expect(workflow).toContain("EXPECTED_WEB_FAMILY: ${{ vars.FILES_PROD_WEB_TASK_FAMILY }}");
+    expect(workflow).toContain("EXPECTED_ECR_REPOSITORY: ${{ vars.FILES_PROD_ECR_REPOSITORY }}");
+    expect(workflow).toContain("EXPECTED_MIGRATION_FAMILY: ${{ vars.FILES_PROD_MIGRATION_TASK_FAMILY }}");
+    expect(workflow).not.toMatch(/AWS_ACCOUNT_ID:\s*["']?\d{12}/);
+    expect(workflow).not.toMatch(/role-to-assume:\s*arn:aws/);
+    expect(workflow).toContain("EXPECTED_WEB_CONTAINER: ${{ vars.FILES_PROD_WEB_CONTAINER }}");
+    expect(workflow).toContain("EXPECTED_MIGRATION_CONTAINER: ${{ vars.FILES_PROD_MIGRATION_CONTAINER }}");
+    expect(workflow).toContain("EXPECTED_CPU_ARCHITECTURE: ${{ vars.FILES_PROD_CPU_ARCHITECTURE }}");
     expect(workflow).toContain('digest_image=%s@%s');
     expect(workflow).toContain('deploymentCircuitBreaker={enable=true,rollback=false}');
     expect(workflow).toContain('ready_url="${HEALTH_URL%/health}/ready"');
@@ -72,7 +81,7 @@ describe("Files current-server deployment lane", () => {
     expect(dataPlane).toContain('files.knowledge.manifest.v1');
     expect(dataPlane).toContain('--header "@${HEADER_FILE}"');
     expect(dataPlane).toContain('double_v1_paths:0');
-    expect(workflow).toContain('FILES_CLIENT_KEY_SECRET_ID: hasna/oss/files/api-key');
+    expect(workflow).toContain('FILES_CLIENT_KEY_SECRET_ID: ${{ vars.FILES_PROD_CLIENT_KEY_SECRET_ID }}');
     expect(workflow).toContain('Resolve authenticated receipt credential before mutation');
     expect(workflow).toContain('aws secretsmanager get-secret-value');
     expect(workflow).toContain('Remove authenticated receipt credential');
@@ -81,6 +90,8 @@ describe("Files current-server deployment lane", () => {
     const authorityStep = workflow.indexOf("Configure AWS credentials with GitHub OIDC");
     expect(credentialPreflight).toBeGreaterThan(authorityStep);
     expect(credentialPreflight).toBeLessThan(mutation);
+    expect(workflow).toContain('HASNA_FILES_DEPLOYMENT_ENVIRONMENT');
+    expect(workflow).toContain('deployed_environment');
     expect(workflow).toContain('HASNA_FILES_DEPLOY_SOURCE_COMMIT');
     expect(workflow).toContain('HASNA_FILES_DEPLOY_IMAGE_DIGEST');
     expect(workflow).toContain('deployed_source_commit');

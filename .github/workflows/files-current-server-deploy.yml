@@ -10,12 +10,12 @@ name: files-current-server-deploy
 # `ci` push run for that same commit. Historical or merely ancestor commits are
 # never deployable through this lane.
 #
-# External prerequisite (not changed by this repository): the
-# files-prod-gha-deploy role trust must admit
-# repo:hasna/apps:environment:production. It must also grant bounded
-# logs:GetLogEvents on /ecs/files-prod so ledger receipts can return from the
-# one-shot probe tasks. Until both are updated, OIDC/evidence collection fails
-# before migration or service mutation.
+# External prerequisites (not changed by this repository): the protected
+# environment's configured deploy-role trust must admit
+# repo:hasna/apps:environment:production. The role must also grant bounded
+# logs:GetLogEvents on the manifest-resolved task log group so ledger receipts
+# can return from one-shot probe tasks. Until both are updated, OIDC/evidence
+# collection fails before migration or service mutation.
 
 on:
   workflow_dispatch: {}
@@ -29,15 +29,6 @@ permissions:
   id-token: write
 
 env:
-  AWS_REGION: us-east-1
-  AWS_ACCOUNT_ID: "789877399345"
-  DEPLOY_MANIFEST: /hasna/deploy/files
-  EXPECTED_CLUSTER: oss-fleet-prod
-  EXPECTED_SERVICE: files-prod
-  EXPECTED_ECR_REPOSITORY: open-files
-  EXPECTED_MIGRATION_FAMILY: files-prod-migrate
-  EXPECTED_CPU_ARCHITECTURE: ARM64
-  FILES_CLIENT_KEY_SECRET_ID: hasna/oss/files/api-key
   LOCAL_IMAGE: files-current-server
   # The exact CI workflow name and file used by the manual gate. Both are
   # checked against the Actions API so a same-named unrelated workflow cannot
@@ -113,13 +104,25 @@ jobs:
     name: build + scan + migrate + deploy
     needs: gate
     if: ${{ needs.gate.outputs.proceed == 'true' }}
-    # files-prod and files-prod-migrate are ARM64 Fargate task
+    # The protected environment pins ARM64 service and migration task
     # definitions. Build and execute the candidate on a native ARM64 runner so
     # the image platform is proven before AWS authentication. This binding is
     # enforced again against both live task-definition families below.
     runs-on: ubuntu-24.04-arm
     environment: production
     timeout-minutes: 60
+    env:
+      AWS_REGION: ${{ vars.FILES_PROD_AWS_REGION }}
+      DEPLOY_MANIFEST: ${{ vars.FILES_PROD_DEPLOY_MANIFEST }}
+      EXPECTED_CLUSTER: ${{ vars.FILES_PROD_ECS_CLUSTER }}
+      EXPECTED_SERVICE: ${{ vars.FILES_PROD_ECS_SERVICE }}
+      EXPECTED_WEB_FAMILY: ${{ vars.FILES_PROD_WEB_TASK_FAMILY }}
+      EXPECTED_WEB_CONTAINER: ${{ vars.FILES_PROD_WEB_CONTAINER }}
+      EXPECTED_ECR_REPOSITORY: ${{ vars.FILES_PROD_ECR_REPOSITORY }}
+      EXPECTED_MIGRATION_FAMILY: ${{ vars.FILES_PROD_MIGRATION_TASK_FAMILY }}
+      EXPECTED_MIGRATION_CONTAINER: ${{ vars.FILES_PROD_MIGRATION_CONTAINER }}
+      EXPECTED_CPU_ARCHITECTURE: ${{ vars.FILES_PROD_CPU_ARCHITECTURE }}
+      FILES_CLIENT_KEY_SECRET_ID: ${{ vars.FILES_PROD_CLIENT_KEY_SECRET_ID }}
     defaults:
       run:
         shell: bash
@@ -149,6 +152,25 @@ jobs:
           printf 'SOURCE_SHA=%s\n' "${GATED_SHA}" >> "${GITHUB_ENV}"
           printf 'IMAGE_TAG=deploy-%s-%s-%s\n' "${GATED_SHA}" "${GITHUB_RUN_ID}" "${GITHUB_RUN_ATTEMPT}" >> "${GITHUB_ENV}"
 
+      - name: Validate protected deployment configuration
+        env:
+          EXPECTED_ACCOUNT_ID: ${{ secrets.FILES_PROD_AWS_ACCOUNT_ID }}
+          DEPLOY_ROLE_ARN: ${{ secrets.FILES_PROD_GHA_ROLE_ARN }}
+        run: |
+          set -Eeuo pipefail
+          require_value() { [[ -n "${!1:-}" ]] || { echo "protected deployment configuration is missing $1" >&2; exit 1; }; }
+          for name in EXPECTED_ACCOUNT_ID DEPLOY_ROLE_ARN AWS_REGION DEPLOY_MANIFEST EXPECTED_CLUSTER EXPECTED_SERVICE EXPECTED_WEB_FAMILY EXPECTED_WEB_CONTAINER EXPECTED_ECR_REPOSITORY EXPECTED_MIGRATION_FAMILY EXPECTED_MIGRATION_CONTAINER EXPECTED_CPU_ARCHITECTURE FILES_CLIENT_KEY_SECRET_ID; do
+            require_value "${name}"
+          done
+          [[ "${EXPECTED_ACCOUNT_ID}" =~ ^[0-9]{12}$ ]] || { echo "protected AWS account id is invalid" >&2; exit 1; }
+          [[ "${DEPLOY_ROLE_ARN}" =~ ^arn:aws[a-z-]*:iam::${EXPECTED_ACCOUNT_ID}:role/[A-Za-z0-9+=,.@_/-]+$ ]] || { echo "protected deploy role ARN is invalid" >&2; exit 1; }
+          [[ "${AWS_REGION}" =~ ^[a-z]{2}(-[a-z0-9]+)+-[0-9]+$ ]] || { echo "protected AWS region is invalid" >&2; exit 1; }
+          [[ "${DEPLOY_MANIFEST}" =~ ^/[A-Za-z0-9_./-]+$ ]] || { echo "protected deploy manifest path is invalid" >&2; exit 1; }
+          for value in "${EXPECTED_CLUSTER}" "${EXPECTED_SERVICE}" "${EXPECTED_WEB_FAMILY}" "${EXPECTED_WEB_CONTAINER}" "${EXPECTED_ECR_REPOSITORY}" "${EXPECTED_MIGRATION_FAMILY}" "${EXPECTED_MIGRATION_CONTAINER}"; do
+            [[ "${value}" =~ ^[A-Za-z0-9_-]+$ ]] || { echo "protected deployment identifier is invalid" >&2; exit 1; }
+          done
+          [[ "${EXPECTED_CPU_ARCHITECTURE}" == "ARM64" ]] || { echo "protected CPU architecture must match the native ARM64 runner" >&2; exit 1; }
+          [[ "${FILES_CLIENT_KEY_SECRET_ID}" =~ ^[A-Za-z0-9/_+=.@-]+$ ]] || { echo "protected Files client-key reference is invalid" >&2; exit 1; }
 
       - name: Set up Bun for the exact migration catalog
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
@@ -224,7 +246,7 @@ jobs:
       - name: Configure AWS credentials with GitHub OIDC
         uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
         with:
-          role-to-assume: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/files-prod-gha-deploy
+          role-to-assume: ${{ secrets.FILES_PROD_GHA_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: gha-deploy-files-${{ github.run_id }}
           role-duration-seconds: 3600
@@ -233,11 +255,13 @@ jobs:
 
       - name: Resolve manifest and fail closed on production target mismatch
         id: manifest
+        env:
+          EXPECTED_ACCOUNT_ID: ${{ secrets.FILES_PROD_AWS_ACCOUNT_ID }}
         run: |
           set -Eeuo pipefail
           actual_account="$(aws sts get-caller-identity --query Account --output text)"
-          if [[ "${actual_account}" != "${AWS_ACCOUNT_ID}" ]]; then
-            echo "AWS account mismatch: expected ${AWS_ACCOUNT_ID}, received ${actual_account}" >&2
+          if [[ "${actual_account}" != "${EXPECTED_ACCOUNT_ID}" ]]; then
+            echo "AWS account mismatch for protected Files deployment configuration" >&2
             exit 1
           fi
 
@@ -255,10 +279,13 @@ jobs:
           subnets="$(jq -er '.subnets | arrays | select(length > 0) | join(",")' <<<"${manifest}")"
           security_groups="$(jq -er '.security_groups | arrays | select(length > 0) | join(",")' <<<"${manifest}")"
 
-          expected_ecr_url="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${EXPECTED_ECR_REPOSITORY}"
+          expected_ecr_url="${EXPECTED_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${EXPECTED_ECR_REPOSITORY}"
           [[ "${cluster}" == "${EXPECTED_CLUSTER}" ]] || { echo "manifest cluster mismatch" >&2; exit 1; }
           [[ "${service}" == "${EXPECTED_SERVICE}" ]] || { echo "manifest service mismatch" >&2; exit 1; }
+          [[ "${web_family}" == "${EXPECTED_WEB_FAMILY}" ]] || { echo "manifest web family mismatch" >&2; exit 1; }
+          [[ "${web_container}" == "${EXPECTED_WEB_CONTAINER}" ]] || { echo "manifest web container mismatch" >&2; exit 1; }
           [[ "${migration_family}" == "${EXPECTED_MIGRATION_FAMILY}" ]] || { echo "manifest migration family mismatch" >&2; exit 1; }
+          [[ "${migration_container}" == "${EXPECTED_MIGRATION_CONTAINER}" ]] || { echo "manifest migration container mismatch" >&2; exit 1; }
           [[ "${ecr_url}" == "${expected_ecr_url}" ]] || { echo "manifest ECR repository mismatch" >&2; exit 1; }
           [[ "${web_family}" =~ ^[A-Za-z0-9_-]+$ ]]
           [[ "${web_container}" =~ ^[A-Za-z0-9_-]+$ ]]
@@ -324,7 +351,8 @@ jobs:
       - name: Verify the manifest-pinned ECR repository has no reused deployment tag
         run: |
           set -Eeuo pipefail
-          [[ "${{ steps.manifest.outputs.ecr_url }}" == "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${EXPECTED_ECR_REPOSITORY}" ]]
+          expected_account="${{ secrets.FILES_PROD_AWS_ACCOUNT_ID }}"
+          [[ "${{ steps.manifest.outputs.ecr_url }}" == "${expected_account}.dkr.ecr.${AWS_REGION}.amazonaws.com/${EXPECTED_ECR_REPOSITORY}" ]]
           existing="$(aws ecr batch-get-image \
             --repository-name "${EXPECTED_ECR_REPOSITORY}" \
             --image-ids imageTag="${IMAGE_TAG}" \
@@ -531,6 +559,7 @@ jobs:
             .containerDefinitions |= map(
               if .name == $c then
                 .image = $image
+                | .environment = upsert_env(.environment; "HASNA_FILES_DEPLOYMENT_ENVIRONMENT"; "production")
                 | .environment = upsert_env(.environment; "HASNA_FILES_DEPLOY_SOURCE_COMMIT"; $source)
                 | .environment = upsert_env(.environment; "HASNA_FILES_DEPLOY_IMAGE_DIGEST"; $digest)
               else . end
@@ -585,8 +614,10 @@ jobs:
           deployed_architecture="$(jq -r '.taskDefinition.runtimePlatform.cpuArchitecture // ""' <<<"${deployed_definition}")"
           [[ "${deployed_image}" == "${IMAGE}" ]] || { echo "live task definition image digest mismatch" >&2; exit 1; }
           [[ "${deployed_architecture}" == "${EXPECTED_CPU_ARCHITECTURE}" ]] || { echo "deployed task architecture mismatch" >&2; exit 1; }
+          deployed_environment="$(jq -er --arg c "${WEB_CONTAINER}" '[.taskDefinition.containerDefinitions[] | select(.name == $c) | .environment[]? | select(.name == "HASNA_FILES_DEPLOYMENT_ENVIRONMENT") | .value] | if length == 1 then .[0] else error("deployment environment env missing or duplicated") end' <<<"${deployed_definition}")"
           deployed_source_commit="$(jq -er --arg c "${WEB_CONTAINER}" '[.taskDefinition.containerDefinitions[] | select(.name == $c) | .environment[]? | select(.name == "HASNA_FILES_DEPLOY_SOURCE_COMMIT") | .value] | if length == 1 then .[0] else error("source identity env missing or duplicated") end' <<<"${deployed_definition}")"
           deployed_image_digest="$(jq -er --arg c "${WEB_CONTAINER}" '[.taskDefinition.containerDefinitions[] | select(.name == $c) | .environment[]? | select(.name == "HASNA_FILES_DEPLOY_IMAGE_DIGEST") | .value] | if length == 1 then .[0] else error("image identity env missing or duplicated") end' <<<"${deployed_definition}")"
+          [[ "${deployed_environment}" == "production" ]] || { echo "deployed environment identity mismatch" >&2; exit 1; }
           [[ "${deployed_source_commit}" == "${SOURCE_SHA}" ]] || { echo "deployed source identity mismatch" >&2; exit 1; }
           [[ "${deployed_image_digest}" == "${IMAGE##*@}" ]] || { echo "deployed image identity mismatch" >&2; exit 1; }
           ready_url="${HEALTH_URL%/health}/ready"
