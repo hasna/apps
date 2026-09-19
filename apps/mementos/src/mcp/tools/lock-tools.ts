@@ -15,6 +15,7 @@ import {
 } from "../../db/locks.js";
 import { isApiMode } from "../../db/api-mode.js";
 import { compactPageHint, compactText, positiveLimit } from "./memory-utils.js";
+import { conversationsRequest } from "../../lib/conversations-transport.js";
 
 function formatLockLine(lock: {
   id: string;
@@ -228,17 +229,17 @@ export function registerLockTools(server: McpServer): void {
       const expired = cleanExpiredLocksWithInfo();
       const count = expired.length;
 
-      // Notify agents whose locks expired via conversations API (non-blocking)
+      // Notify agents through the canonical credential-resolved Conversations
+      // /v1 authority. Failure is non-blocking, but never falls back to localhost.
       if (count > 0) {
-        const conversationsUrl = process.env.CONVERSATIONS_API_URL || 'http://localhost:7020';
         for (const lock of expired) {
           const msg = `Your ${lock.lock_type} lock on ${lock.resource_type}/${lock.resource_id} has expired. Another agent may now acquire it.`;
-          fetch(`${conversationsUrl}/api/v1/messages`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ from: 'system', to: lock.agent_id, content: msg }),
+          conversationsRequest("/messages", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ from: "system", to: lock.agent_id, content: msg }),
             signal: AbortSignal.timeout(2000),
-          }).catch(() => {/* non-blocking */});
+          }).catch(() => undefined);
         }
       }
 

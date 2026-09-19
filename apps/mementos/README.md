@@ -84,13 +84,14 @@ Human-readable list and search commands are compact and paginated by default.
 Use `--limit` with `--cursor` or `--offset`, `--verbose` for wider snippets, and
 `mementos show <id>` for a full record.
 
-Historical `--json` and `--format json` collection reads remain compatible:
-they emit full bare arrays and, without `--limit`, traverse the complete result.
-Use explicit `--agent-json` when a token-bounded page receipt is wanted. Agent
-JSON defaults to 20 compact list rows or 10 compact history rows, includes
-`_meta.next_cursor`, and has a 32 KiB byte budget. `--full`, `--all`, and
-`--max-bytes` are receipt-mode controls and require `--agent-json`; exhaustive
-mode fails closed above 5,000 rows or 1 MiB.
+JSON collection output is intentionally envelope-based in this minor release.
+`projects --json`, `agents --json`, `list --json`, and `search --json` no longer
+return bare arrays: each returns a compact collection plus truthful `_meta`
+continuation fields. `--agent-json` remains an alias for the list receipt.
+`--full` changes row detail inside the envelope; `--all` exhausts the query
+inside the envelope (up to 100,000 rows / 64 MiB). Neither flag restores a bare
+array for these four commands. The sole legacy bare-array escape is
+`export --all`, because export is an explicitly bulk-oriented command.
 
 Agent JSON uses offset pagination. Stable ID tie-breakers prevent overlap for
 equal timestamps and importance while the result set is unchanged; writes
@@ -98,12 +99,15 @@ between page requests can shift offsets, so restart traversal when a stable
 snapshot is required.
 
 ```bash
-mementos list --json                         # compatible full bare array
-mementos list --agent-json                   # bounded receipt page
-mementos list --agent-json --cursor 20
-mementos list --agent-json --full --limit 5
-mementos history --agent-json --all
-mementos search "deploy" --verbose
+mementos list --json                         # compact 20-row receipt, <=32 KiB
+mementos list --json --cursor 20
+mementos list --json --full --limit 5        # explicit full detail, still bounded
+mementos list --json --all                   # exhaustive receipt, still an envelope
+mementos projects --json                     # compact continuation receipt
+mementos agents --json                       # compact continuation receipt
+mementos search "deploy" --json              # compact byte-capped search receipt
+mementos export                              # truthful paginated export receipt
+mementos export --all                        # explicit exhaustive legacy array
 mementos storage mode --json
 ```
 
@@ -143,7 +147,10 @@ bounded list/get tools instead.
 
 MCP `tools/list` remains the authoritative schema source. `search_tools` returns
 a bounded names-only page for active-profile tools, and `describe_tools`
-requires one to ten explicit names. See the [MCP reference](docs/MCP.md) for
+requires one to ten explicit names. `memory_context` defaults to ten ranked
+~240-character previews under a 32 KiB ceiling; use `detail="full"` explicitly.
+`memory_inject` defaults to lightweight hints and preserves complete injection
+behind `mode="full"`. `memory_export` is paginated and receipt-bearing. See the [MCP reference](docs/MCP.md) for
 profile membership and compatibility details.
 
 ## REST API

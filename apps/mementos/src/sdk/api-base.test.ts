@@ -126,9 +126,9 @@ describe("resolveMementosApiBase", () => {
     expect(message).not.toContain("sup3rsecret");
   });
 
-  test("an empty or absent base falls back to the on-box default", () => {
-    expect(resolveMementosApiBase(undefined)).toEqual({ baseUrl: "http://localhost:19428", prefix: "/v1" });
-    expect(resolveMementosApiBase("   ")).toEqual({ baseUrl: "http://localhost:19428", prefix: "/v1" });
+  test("an empty or absent explicit base refuses instead of defaulting to localhost", () => {
+    expect(() => resolveMementosApiBase(undefined)).toThrow(/required.*hosted authority/i);
+    expect(() => resolveMementosApiBase("   ")).toThrow(/required.*hosted authority/i);
   });
 });
 
