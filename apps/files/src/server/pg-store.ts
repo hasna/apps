@@ -59,10 +59,10 @@ export function getCloudClient(): TypedQueryClient {
 }
 
 /** True when the service is configured for Postgres (`HASNA_FILES_DATABASE_URL` set). */
-export function cloudEnabled(): boolean {
+export function cloudEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   const token = "FILES";
-  const url = process.env[`HASNA_${token}_DATABASE_URL`] ?? process.env[`${token}_DATABASE_URL`];
-  return Boolean(url);
+  const url = env[`HASNA_${token}_DATABASE_URL`] ?? env[`${token}_DATABASE_URL`];
+  return typeof url === "string" && url.trim().length > 0;
 }
 
 function parseJson<T>(raw: unknown, fallback: T): T {

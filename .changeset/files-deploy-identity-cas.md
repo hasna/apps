@@ -1,0 +1,5 @@
+---
+"@hasna/files": patch
+---
+
+Harden production readiness and recovery identity. `/ready` now rejects whitespace-wrapped deployment source commits and image digests as invalid raw input before touching PostgreSQL. Production intent is carried independently by `HASNA_FILES_DEPLOYMENT_ENVIRONMENT=production`, so a deployed task that loses its PostgreSQL configuration returns 503 and exits before binding instead of falling through to SQLite. The Files current-server recovery lane also restores its captured predecessor only when the live ECS service is still anchored to this run's exact candidate task definition; a concurrent newer deployment produces metadata-only `RECONCILIATION_REQUIRED` evidence and is never overwritten. Successful deployment evidence proves the canonical OpenAPI advertises exactly one `/v1` server, the live `/files/v1/knowledge/manifest` route rejects anonymous access, and an owner-key authenticated bounded read returns the typed manifest contract without exposing response items or the credential.
