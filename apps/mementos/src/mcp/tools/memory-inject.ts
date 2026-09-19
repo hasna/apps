@@ -15,7 +15,7 @@ import type { Memory, MemoryCategory } from "../../types/index.js";
 export function registerMemoryInjectTools(server: McpServer): void {
   server.tool(
     "memory_inject",
-    "Get memory context for system prompt injection. Selects by scope, importance, recency. Use strategy='smart' with a query for embedding-based relevance scoring.",
+    "Get memory context for system prompt injection. Defaults to lightweight hints; set mode='full' explicitly for complete content.",
     {
       agent_id: z.string().optional(),
       project_id: z.string().optional(),
@@ -28,15 +28,16 @@ export function registerMemoryInjectTools(server: McpServer): void {
       strategy: z.enum(["default", "smart"]).optional().describe("Injection strategy: 'default' uses importance+recency, 'smart' uses embedding similarity+importance+recency"),
       query: z.string().optional().describe("Query for smart injection relevance scoring. Required when strategy='smart'."),
       task_context: z.string().optional().describe("What the agent is about to do. When provided, activates intent-based retrieval — matches against when_to_use fields for situationally relevant memories."),
-      mode: z.enum(["full", "hints"]).optional().default("full").describe("'full' = inject complete memory content (default), 'hints' = inject lightweight topic summary with counts, saving 60-70% tokens. Agent uses memory_recall to pull details as needed."),
+      mode: z.enum(["full", "hints"]).optional().default("hints").describe("'hints' = lightweight topic summary (default); 'full' = explicit complete content compatibility."),
       machine_id: z.string().optional().describe("Current machine ID for machine-local memory visibility. Defaults to the current machine."),
     },
     async (args) => {
       try {
+        const mode = args.mode ?? "hints";
         // Smart strategy delegates raw project references to smartInject, which
         // resolves exactly once before profile or memory work.
         // Skip for hints mode — it uses the direct path below.
-        if (args.strategy === "smart" && args.task_context && args.mode !== "hints") {
+        if (args.strategy === "smart" && args.task_context && mode !== "hints") {
           const { smartInject } = await import("../../lib/injector.js");
           const result = await smartInject({
             task_context: args.task_context,
@@ -195,7 +196,7 @@ export function registerMemoryInjectTools(server: McpServer): void {
         }
 
         // Hints mode: return lightweight topic summary instead of full content
-        if (args.mode === "hints") {
+        if (mode === "hints") {
           if (unique.length === 0) {
             return { content: [{ type: "text" as const, text: "No relevant memories found." }] };
           }

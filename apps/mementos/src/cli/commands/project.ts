@@ -36,6 +36,14 @@ import {
   truncateText,
   type GlobalOpts,
 } from "../helpers.js";
+import {
+  STRUCTURED_ALL_MAX_ROWS,
+  compactProject,
+  structuredCollectionOutput,
+  structuredMaxBytes,
+  structuredPageLimit,
+  type StructuredDetail,
+} from "../structured-json.js";
 
 export function registerProjectCommands(program: Command): void {
   const handleError = makeHandleError(program);
@@ -62,6 +70,9 @@ export function registerProjectCommands(program: Command): void {
     .option("--limit <n>", "Max results (compact default: 20)", parseInt)
     .option("--cursor <n>", "Cursor offset for the next page", parseInt)
     .option("--offset <n>", "Offset for pagination", parseInt)
+    .option("--all", `Exhaust all projects in one explicit JSON receipt (hard max: ${STRUCTURED_ALL_MAX_ROWS})`)
+    .option("--full", "Return full project objects instead of compact projections")
+    .option("--max-bytes <n>", "JSON response byte ceiling", parseInt)
     .action((opts) => {
       try {
         const globalOpts = program.opts<GlobalOpts>();
@@ -173,24 +184,50 @@ export function registerProjectCommands(program: Command): void {
           return;
         }
 
-        // List projects
-        const allProjects = listProjects();
-        const limit = positiveIntOrDefault(opts.limit, DEFAULT_COMPACT_LIMIT);
+        // List projects. JSON is an agent-facing bounded receipt by default;
+        // exhaustive/full compatibility requires explicit flags.
+        const jsonMode = Boolean(globalOpts.json);
+        const all = Boolean(opts.all);
+        const detail: StructuredDetail = opts.full ? "full" : "compact";
+        if (!jsonMode && (all || opts.full || opts.maxBytes !== undefined)) {
+          throw new Error("--all, --full, and --max-bytes require --json");
+        }
+        if (all && opts.limit !== undefined) {
+          throw new Error("--all cannot be combined with --limit");
+        }
+        const limit = jsonMode
+          ? structuredPageLimit(opts.limit, DEFAULT_COMPACT_LIMIT)
+          : positiveIntOrDefault(opts.limit, DEFAULT_COMPACT_LIMIT);
         const offset = cursorOrOffset(opts.cursor, opts.offset) ?? 0;
-        const explicitPagination =
-          opts.limit !== undefined ||
-          opts.cursor !== undefined ||
-          opts.offset !== undefined;
-        const projects = globalOpts.json
-          ? (explicitPagination
-            ? allProjects.slice(offset, offset + limit)
-            : allProjects)
-          : allProjects.slice(offset, offset + limit + 1);
-        const hasMore = !globalOpts.json && projects.length > limit;
-        const displayProjects = hasMore ? projects.slice(0, limit) : projects;
+        if (all && offset !== 0) throw new Error("--all requires --cursor/--offset 0");
 
-        if (globalOpts.json) {
-          outputJson(projects);
+        const allProjects = listProjects();
+        if (all && allProjects.length > STRUCTURED_ALL_MAX_ROWS) {
+          throw new Error(
+            `Exhaustive project output exceeds the hard safety limit of ${STRUCTURED_ALL_MAX_ROWS} rows; use paginated JSON output`,
+          );
+        }
+        const page = all
+          ? allProjects
+          : allProjects.slice(offset, offset + limit + 1);
+        const hasMore = !all && page.length > limit;
+        const displayProjects = hasMore ? page.slice(0, limit) : page;
+
+        if (jsonMode) {
+          const items = detail === "full"
+            ? displayProjects.map((project) => ({ ...project }))
+            : displayProjects.map(compactProject);
+          process.stdout.write(structuredCollectionOutput({
+            collection: "projects",
+            receipt: "mementos.projects.page.v1",
+            items,
+            offset,
+            limit,
+            sourceHasMore: hasMore,
+            all,
+            detail,
+            maxBytes: structuredMaxBytes(opts.maxBytes, { all, detail }),
+          }));
           return;
         }
 

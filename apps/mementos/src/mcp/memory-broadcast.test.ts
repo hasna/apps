@@ -62,7 +62,7 @@ describe("broadcastSharedMemory", () => {
       const url = String(input);
       requests.push({ url, body: init?.body as string | undefined });
 
-      if (url.includes("/api/v1/agents")) {
+      if (url.includes("/v1/agents")) {
         return Response.json({
           agents: [
             { id: "agent-a", name: "A" },
@@ -74,11 +74,14 @@ describe("broadcastSharedMemory", () => {
       return new Response("{}", { status: 201 });
     }) as typeof fetch;
 
-    await broadcastSharedMemory(mockMemory(), "agent-a");
+    await broadcastSharedMemory(mockMemory(), "agent-a", {
+      env: { CONVERSATIONS_API_URL: "http://localhost:7020" },
+      fetch: globalThis.fetch,
+    });
 
-    expect(requests.some((r) => r.url.includes("/api/v1/agents"))).toBe(true);
-    expect(requests.some((r) => r.url.includes("/api/v1/messages"))).toBe(true);
-    const messageReq = requests.find((r) => r.url.includes("/api/v1/messages"));
+    expect(requests.some((r) => r.url.includes("/v1/agents"))).toBe(true);
+    expect(requests.some((r) => r.url.includes("/v1/messages"))).toBe(true);
+    const messageReq = requests.find((r) => r.url.includes("/v1/messages"));
     expect(messageReq?.body).toContain("shared-fact");
     expect(messageReq?.body).toContain("agent-b");
     expect(messageReq?.body).not.toContain('"to":"agent-a"');

@@ -13,6 +13,14 @@ import {
   truncateText,
   type GlobalOpts,
 } from "../helpers.js";
+import {
+  STRUCTURED_ALL_MAX_ROWS,
+  compactAgent,
+  structuredCollectionOutput,
+  structuredMaxBytes,
+  structuredPageLimit,
+  type StructuredDetail,
+} from "../structured-json.js";
 
 export function registerAgentCommands(program: Command): void {
   const handleError = makeHandleError(program);
@@ -67,26 +75,50 @@ export function registerAgentCommands(program: Command): void {
     .option("--limit <n>", "Max results (compact default: 20)", parseInt)
     .option("--cursor <n>", "Cursor offset for the next page", parseInt)
     .option("--offset <n>", "Offset for pagination", parseInt)
+    .option("--all", `Exhaust all agents in one explicit JSON receipt (hard max: ${STRUCTURED_ALL_MAX_ROWS})`)
+    .option("--full", "Return full agent objects instead of compact projections")
+    .option("--max-bytes <n>", "JSON response byte ceiling", parseInt)
     .action((opts) => {
       try {
         const globalOpts = program.opts<GlobalOpts>();
-        const limit = positiveIntOrDefault(opts.limit, DEFAULT_COMPACT_LIMIT);
+        const jsonMode = Boolean(globalOpts.json);
+        const all = Boolean(opts.all);
+        const detail: StructuredDetail = opts.full ? "full" : "compact";
+        if (!jsonMode && (all || opts.full || opts.maxBytes !== undefined)) {
+          throw new Error("--all, --full, and --max-bytes require --json");
+        }
+        if (all && opts.limit !== undefined) throw new Error("--all cannot be combined with --limit");
+        const limit = jsonMode
+          ? structuredPageLimit(opts.limit, DEFAULT_COMPACT_LIMIT)
+          : positiveIntOrDefault(opts.limit, DEFAULT_COMPACT_LIMIT);
         const offset = cursorOrOffset(opts.cursor, opts.offset) ?? 0;
-        const explicitPagination =
-          opts.limit !== undefined ||
-          opts.cursor !== undefined ||
-          opts.offset !== undefined;
-        const agents = listAgents({
-          limit: globalOpts.json
-            ? (explicitPagination ? limit : undefined)
-            : limit + 1,
-          offset,
-        });
-        const hasMore = !globalOpts.json && agents.length > limit;
+        if (all && offset !== 0) throw new Error("--all requires --cursor/--offset 0");
+        const agents = all
+          ? listAgents()
+          : listAgents({ limit: limit + 1, offset });
+        if (all && agents.length > STRUCTURED_ALL_MAX_ROWS) {
+          throw new Error(
+            `Exhaustive agent output exceeds the hard safety limit of ${STRUCTURED_ALL_MAX_ROWS} rows; use paginated JSON output`,
+          );
+        }
+        const hasMore = !all && agents.length > limit;
         const displayAgents = hasMore ? agents.slice(0, limit) : agents;
 
-        if (globalOpts.json) {
-          outputJson(agents);
+        if (jsonMode) {
+          const items = detail === "full"
+            ? displayAgents.map((agent) => ({ ...agent }))
+            : displayAgents.map(compactAgent);
+          process.stdout.write(structuredCollectionOutput({
+            collection: "agents",
+            receipt: "mementos.agents.page.v1",
+            items,
+            offset,
+            limit,
+            sourceHasMore: hasMore,
+            all,
+            detail,
+            maxBytes: structuredMaxBytes(opts.maxBytes, { all, detail }),
+          }));
           return;
         }
 
