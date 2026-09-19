@@ -18,6 +18,37 @@ const reviewedIds = reviewed.migrations.map(item => item.id);
 const isLedger = table => table.schema === reviewed.ledger.schema && table.table === reviewed.ledger.table;
 const isNonce = table => table.schema === reviewed.added_table.schema && table.table === reviewed.added_table.name;
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+const backupFailure = Symbol('knowledge.backup-operation-failure');
+const safeS3Names = new Set(['AccessDenied', 'NoSuchBucket', 'InvalidRequest', 'InvalidArgument',
+  'MalformedTrailerError', 'InvalidChunkSizeError', 'SignatureDoesNotMatch', 'BadDigest',
+  'PreconditionFailed', 'RequestTimeout', 'TimeoutError', 'CredentialsProviderError']);
+
+export function databaseFailureMetadata(error) {
+  return error?.[backupFailure] ?? { phase: 'unclassified', code: 'UNCLASSIFIED' };
+}
+
+export async function sendBackupCommand(s3, command, phase) {
+  requireValue(['versioning', 'upload', 'readback', 'receipt'].includes(phase), 'BACKUP_PHASE');
+  try { return await s3.send(command); }
+  catch (cause) {
+    const error = new Error('KNOWLEDGE_BACKUP_OPERATION_REFUSED');
+    const status = cause?.$metadata?.httpStatusCode;
+    error[backupFailure] = { phase, code: safeS3Names.has(cause?.name) ? cause.name : 'UNCLASSIFIED',
+      http_status: Number.isInteger(status) && status >= 100 && status <= 599 ? status : null };
+    throw error;
+  }
+}
+
+export function backupUploadInput(config, dump, hash) {
+  requireValue(Number.isSafeInteger(hash.bytes) && hash.bytes > 0 && /^[0-9a-f]{64}$/.test(hash.sha256), 'BACKUP_HASH');
+  return { Bucket: config.bucket, Key: config.prefix + '/database.dump',
+    Body: createReadStream(dump), ContentLength: hash.bytes, IfNoneMatch: '*',
+    // The hash is already computed from the archive. Sending it as a header
+    // preserves a fixed-length stream and avoids the truncated aws-chunked
+    // path measured with Bun 1.3.14 / S3 SDK 3.1127.0. S3 verifies the SHA256.
+    ChecksumSHA256: Buffer.from(hash.sha256, 'hex').toString('base64'),
+    ServerSideEncryption: 'AES256', Metadata: { sha256: hash.sha256, source: config.source } };
+}
 
 function policy(config) {
   const value = config.migration_policy ?? 'no-pending-migrations';
@@ -286,7 +317,7 @@ async function verifyEvolution(client, pre, post, beforeLedger, afterLedger, pen
 
 export async function runDatabasePhase(config, { database, s3, sourceUrl, runMigration = migration, dumpEnvironment, commands, runtimeRole } ) {
   const migrationPolicy = policy(config);
-  const versioning = await s3.send(new commands.GetBucketVersioningCommand({ Bucket: config.bucket }));
+  const versioning = await sendBackupCommand(s3, new commands.GetBucketVersioningCommand({ Bucket: config.bucket }), 'versioning');
   requireValue(versioning.Status === 'Enabled', 'BACKUP_VERSIONING_REQUIRED');
   const directory = await mkdtemp(join(tmpdir(), 'knowledge-deployment-'));
   await chmod(directory, 0o700);
@@ -315,11 +346,9 @@ export async function runDatabasePhase(config, { database, s3, sourceUrl, runMig
     const hash = await hashStream(createReadStream(dump));
     requireValue(hash.bytes === (await stat(dump)).size && hash.bytes > 0, 'BACKUP_SIZE');
     const key = config.prefix + '/database.dump';
-    const stored = await s3.send(new commands.PutObjectCommand({ Bucket: config.bucket, Key: key,
-      Body: createReadStream(dump), ContentLength: hash.bytes, IfNoneMatch: '*',
-      ServerSideEncryption: 'AES256', Metadata: { sha256: hash.sha256, source: config.source } }));
+    const stored = await sendBackupCommand(s3, new commands.PutObjectCommand(backupUploadInput(config, dump, hash)), 'upload');
     requireValue(Boolean(stored.VersionId) && stored.VersionId !== 'null', 'BACKUP_VERSION_MISSING');
-    const readback = await s3.send(new commands.GetObjectCommand({ Bucket: config.bucket, Key: key, VersionId: stored.VersionId }));
+    const readback = await sendBackupCommand(s3, new commands.GetObjectCommand({ Bucket: config.bucket, Key: key, VersionId: stored.VersionId }), 'readback');
     const verified = await hashStream(readback.Body);
     requireValue(verified.sha256 === hash.sha256 && verified.bytes === hash.bytes, 'BACKUP_READBACK_MISMATCH');
     await client.query('COMMIT');
@@ -347,8 +376,8 @@ export async function runDatabasePhase(config, { database, s3, sourceUrl, runMig
       backup: { bucket: config.bucket, key, version_id: stored.VersionId, ...hash, toc_sha256: digest(toc) },
       migration: { policy: migrationPolicy, reviewed_migrations_sha256: migrationPolicy === 'reviewed-additive-nonce-v1' ? reviewedMigrationsSha256 : null,
         before: plan, executed, after: applied }, integrity: { pre, post, proof }, success: true };
-    await s3.send(new commands.PutObjectCommand({ Bucket: config.bucket, Key: config.prefix + '/receipt.json',
-      Body: JSON.stringify(receipt), ContentType: 'application/json', IfNoneMatch: '*', ServerSideEncryption: 'AES256' }));
+    await sendBackupCommand(s3, new commands.PutObjectCommand({ Bucket: config.bucket, Key: config.prefix + '/receipt.json',
+      Body: JSON.stringify(receipt), ContentType: 'application/json', IfNoneMatch: '*', ServerSideEncryption: 'AES256' }), 'receipt');
     return receipt;
   } finally {
     try { await client.query('ROLLBACK'); } catch {}
@@ -372,4 +401,7 @@ async function main() {
   console.log('KNOWLEDGE_DATABASE_DEPLOY_OK');
 }
 
-if (import.meta.main) main().catch(() => { console.error('KNOWLEDGE_DATABASE_DEPLOY_REFUSED'); process.exitCode = 1; });
+if (import.meta.main) main().catch(error => {
+  console.error('KNOWLEDGE_DATABASE_DEPLOY_REFUSED:' + JSON.stringify(databaseFailureMetadata(error)));
+  process.exitCode = 1;
+});

@@ -109,7 +109,7 @@ test('real PostgreSQL snapshot/archive/ledger: complete integrity, restore, corr
     const ambiguous = new MemoryVersionedS3();
     ambiguous.loseUploadResponse = true;
     await expect(runDatabasePhase(config, { commands, database: createKnowledgeDatabaseClient(env), s3: ambiguous, sourceUrl, dumpEnvironment,
-      runMigration: async (dry: boolean) => { migrations++; return migration(dry); } })).rejects.toThrow('accepted upload but lost response');
+      runMigration: async (dry: boolean) => { migrations++; return migration(dry); } })).rejects.toThrow('KNOWLEDGE_BACKUP_OPERATION_REFUSED');
     expect(migrations).toBe(0);
     expect(ambiguous.objects.has(config.prefix + '/database.dump')).toBe(true);
     expect(ambiguous.objects.has(config.prefix + '/receipt.json')).toBe(false);
