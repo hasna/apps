@@ -2,7 +2,7 @@ import { closeSync, constants, fstatSync, lstatSync, openSync, readSync } from "
 import { createHash } from "node:crypto";
 import { Command } from "commander";
 import { createStore } from "./store.js";
-import type { OperatorScopeEnrollmentInput } from "./types.js";
+import { validOperatorScopeEnrollmentInput, validOperatorScopeList, type OperatorScopeEnrollmentInput } from "./types.js";
 
 type EnrollmentManifest = OperatorScopeEnrollmentInput & {
   operation: "enroll-publish";
@@ -82,24 +82,26 @@ export function registerMaintenance(parent: Command): void {
     .option("--json", "Output a safe JSON receipt", false)
     .action(async (options: { manifest: string; operatorReceipt: string; apply?: boolean; json?: boolean }) => {
       let manifest: EnrollmentManifest;
+      let store: Awaited<ReturnType<typeof createStore>> | undefined;
       try {
         manifest = readManifest(options.manifest, options.operatorReceipt);
+        if (!validOperatorScopeEnrollmentInput(manifest)) throw new Error("maintenance manifest fields are invalid or unbounded");
         const databaseUrl = process.env.HASNA_SKILLS_DATABASE_URL;
         if (!databaseUrl) throw new Error("maintenance requires HASNA_SKILLS_DATABASE_URL");
-        const store = await createStore({ databaseUrl });
+        store = await createStore({ databaseUrl });
         const snapshot = await store.inspectOperatorScopeTarget?.(manifest.keyId, manifest.orgId);
         if (!snapshot) throw new Error("configured store does not support operator maintenance");
         if (snapshot.kind !== "found") throw new Error(`operator target ${snapshot.kind}`);
+        if (!validOperatorScopeList(snapshot.scopes)) throw new Error("store returned invalid scope metadata");
         const base = { status: "dry-run", operationId: manifest.operationId, keyId: manifest.keyId, stationId: manifest.stationId, orgId: manifest.orgId, expectedScopes: manifest.expectedScopes, currentScopes: snapshot.scopes, addScopes: ["skills:publish"] };
         if (!options.apply) {
           console.log(JSON.stringify(base));
-          await store.close?.();
           return;
         }
         const result = await store.enrollPublishScopeByOperator?.(manifest);
         if (!result) throw new Error("configured store does not support operator maintenance");
+        if ("scopes" in result && !validOperatorScopeList(result.scopes)) throw new Error("store returned invalid scope metadata");
         console.log(JSON.stringify({ ...base, status: result.kind, scopes: "scopes" in result ? result.scopes : undefined }));
-        await store.close?.();
         if (result.kind === "updated" || result.kind === "already_applied") return;
         process.exitCode = 1;
       } catch (error) {
@@ -108,6 +110,8 @@ export function registerMaintenance(parent: Command): void {
         if (options.json || !process.stdout.isTTY) console.log(JSON.stringify({ status: "failed", code }));
         else console.error(code);
         process.exitCode = 1;
+      } finally {
+        await store?.close?.();
       }
     });
 }

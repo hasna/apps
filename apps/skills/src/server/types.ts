@@ -134,6 +134,10 @@ export function validOperatorScopeEnrollmentInput(input: OperatorScopeEnrollment
   return bounded(input.keyId) && bounded(input.stationId) && bounded(input.orgId) && bounded(input.operationId) && bounded(input.manifestDigest, 64) && /^[a-f0-9]{64}$/.test(input.manifestDigest) && bounded(input.operatorJobId) && bounded(input.operatorTaskArn, 512) && input.expectedScopes.length > 0 && input.expectedScopes.length <= 32 && input.expectedScopes.every((scope) => bounded(scope, 128) && /^[a-z][a-z0-9_-]*:[a-z][a-z0-9_-]*$/.test(scope));
 }
 
+export function validOperatorScopeList(scopes: unknown): scopes is string[] {
+  return Array.isArray(scopes) && scopes.length <= 32 && scopes.every((scope) => typeof scope === "string" && scope.length > 0 && scope.length <= 128 && /^[a-z][a-z0-9_-]*:[a-z][a-z0-9_-]*$/.test(scope));
+}
+
 export type OperatorScopeEnrollmentResult =
   | { kind: "updated"; scopes: string[] }
   | { kind: "already_applied"; scopes: string[] }
