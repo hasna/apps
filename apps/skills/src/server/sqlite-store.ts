@@ -35,6 +35,7 @@ import type {
   ServerRunRecord,
   ServerSkillBundle,
   ServerSkillVersion,
+  ApiKeyScopeUpdateResult,
   ServerSkillRecord,
   SkillLifecyclePatch,
   SkillsProductStore,
@@ -234,6 +235,33 @@ export class SqliteSkillsStore implements SkillsProductStore {
       role: typeof row.role === "string" ? row.role : "member",
       scopes: parseScopes(row.scopes_json),
     };
+  }
+
+  async updateApiKeyScopes(actor: ApiPrincipal, keyId: string, expectedScopes: string[], addScopes: string[]): Promise<ApiKeyScopeUpdateResult> {
+    const row = this.get("SELECT scopes_json FROM api_keys WHERE id = ? AND org_id = ? AND revoked_at IS NULL LIMIT 1", [keyId, actor.orgId]);
+    if (!row) return { kind: "not_found" };
+    const current = parseScopes(row.scopes_json);
+    if (current.length !== expectedScopes.length || current.some((scope, index) => scope !== expectedScopes[index])) {
+      return { kind: "stale", scopes: current };
+    }
+    const scopes = [...current, ...addScopes.filter((scope) => !current.includes(scope))];
+    const tx = this.db.transaction(() => {
+      const changed = this.db.run(
+        "UPDATE api_keys SET scopes_json = ? WHERE id = ? AND org_id = ? AND revoked_at IS NULL AND scopes_json = ?",
+        [JSON.stringify(scopes), keyId, actor.orgId, JSON.stringify(expectedScopes)],
+      );
+      if (changed.changes !== 1) return false;
+      this.db.run(
+        "INSERT INTO skills_audit_events (org_id, user_id, api_key_id, action, target_type, target_id, metadata_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [actor.orgId, actor.userId, actor.apiKeyId, "api_key_scopes_added", "api_key", keyId, JSON.stringify({ added: addScopes, scopes })],
+      );
+      return true;
+    });
+    if (!tx()) {
+      const latest = this.get("SELECT scopes_json FROM api_keys WHERE id = ? AND org_id = ? AND revoked_at IS NULL LIMIT 1", [keyId, actor.orgId]);
+      return { kind: "stale", scopes: latest ? parseScopes(latest.scopes_json) : current };
+    }
+    return { kind: "updated", scopes };
   }
 
   async createRun(input: CreateRunInput): Promise<ServerRunRecord> {
