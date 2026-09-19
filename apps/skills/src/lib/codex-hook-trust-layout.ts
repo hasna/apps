@@ -3,6 +3,23 @@ import { isDeepStrictEqual } from "node:util";
 const fail = () => new Error("CODEX_HOOK_TRUST_UNSUPPORTED_LAYOUT: preserve and convert hook trust to ordinary [hooks.state.\"<key>\"] tables before enrollment");
 const prune = (value: any) => { if (value.hooks?.state && !Object.keys(value.hooks.state).length) delete value.hooks.state; if (value.hooks && !Object.keys(value.hooks).length) delete value.hooks; return value; };
 
+// Codex's native TOML writer may move complete, unrelated table blocks while
+// inserting hook state. TOML table order is not semantic, so compare those
+// blocks canonically while retaining every byte within each block.
+const canonicalizeTableOrder = (text: string): string => {
+  const headers = [...text.matchAll(/^[ \t]*(\[\[?[^\r\n]+\]\]?)[ \t]*(#[^\r\n]*)?(?:\r?\n|$)/gm)];
+  if (!headers.length) return text;
+  const first = headers[0]!.index!;
+  const prefix = text.slice(0, first);
+  const blocks = headers.map((header, index) => ({
+    key: header[1]!,
+    order: index,
+    text: text.slice(header.index!, headers[index + 1]?.index ?? text.length),
+  }));
+  blocks.sort((a, b) => a.key.localeCompare(b.key) || a.order - b.order);
+  return prefix + blocks.map(block => block.text).join("");
+};
+
 /** Conservative admission and text witness, never a TOML writer. Native Codex
  * performs the versioned write; unrecognized inline/dotted trust shapes refuse. */
 export function codexTrustTextWitness(text: string, keys: string[]): string {
@@ -50,5 +67,5 @@ export function codexTrustTextWitness(text: string, keys: string[]): string {
   for (const span of replacements.reverse()) result = result.slice(0, span.start) + span.comments + result.slice(span.end);
   // Native Codex may insert blank lines around newly explicit parent tables.
   // Every nonblank unrelated line and every comment must survive exactly.
-  return result.split(/\r?\n/).filter(line => line.trim()).join("\n");
+  return canonicalizeTableOrder(result).split(/\r?\n/).filter(line => line.trim()).join("\n");
 }

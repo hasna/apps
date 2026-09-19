@@ -61,6 +61,12 @@ function fixture() {
         expect(params.expectedVersion).toBe(`sha256:${"b".repeat(64)}`); expect(params.filePath).toBe(configPath); expect(params.reloadUserConfig).toBe(true);
         expect(params.edits).toEqual([{ keyPath: "hooks.state", mergeStrategy: "upsert", value: Object.fromEntries(entries.map(h => [h.key, { enabled: true, trusted_hash: hash }])) }]);
         writeFileSync(configPath, readFileSync(configPath, "utf8").replaceAll("enabled = false # preserve managed comment", "enabled = true # preserve managed comment"));
+        if (mode === "reorder") {
+          const text = readFileSync(configPath, "utf8"), bundled = text.indexOf("[skills.bundled]");
+          const block = text.slice(bundled).trim();
+          const without = text.slice(0, bundled).trimEnd();
+          writeFileSync(configPath, without + "\n\n" + block + "\n");
+        }
         for (const entry of entries) entry.enabled = true;
         return { status: "ok", filePath: configPath, version: `sha256:${"d".repeat(64)}` };
       }
@@ -75,6 +81,12 @@ test("native trust dry run identifies disabled exact owned hooks without writing
   const f = fixture(); const result = await enrollCodexNativeHooks(f, f.connect);
   expect(result.applied).toBe(false); expect(result.planned).toHaveLength(3); expect(result.existingSessionsReloaded).toBe(false);
   expect(f.calls.some(c => c.method === "config/batchWrite")).toBe(false); expect(readFileSync(f.configPath, "utf8")).toBe(f.before); expect(f.isClosed()).toBe(true);
+});
+test("native trust accepts Codex table reordering while preserving unrelated config", async () => {
+  const f = fixture(); f.setMode("reorder"); const plan = await enrollCodexNativeHooks(f, f.connect);
+  const result = await enrollCodexNativeHooks({ ...f, apply: true, reviewedPlanDigest: plan.planDigest }, f.connect);
+  expect(result.applied).toBe(true); expect(result.nativeEligible).toBe(true);
+  expect(readFileSync(f.configPath, "utf8")).toContain("preserve unrelated");
 });
 test("native CAS enrollment preserves other trust/comments and becomes idempotent", async () => {
   const f = fixture(); const plan = await enrollCodexNativeHooks(f, f.connect); const result = await enrollCodexNativeHooks({ ...f, apply: true, reviewedPlanDigest: plan.planDigest }, f.connect);
