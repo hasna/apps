@@ -300,7 +300,10 @@ export function buildStationProfileBlock(input: StationProfileBuildInput): strin
   if (machine.user) osParts.push(`user: ${machine.user}`);
   osParts.push(`home: ${machine.homeDir}`);
   lines.push(osParts.join(" · "));
-  if (machine.workspacePath) lines.push(`Workspace: ${machine.workspacePath}`);
+  // workspacePath is retained in the machine contract for backwards
+  // compatibility, but the retired Workspace tree must never be rendered into
+  // a live prompt. Scratch execution belongs to the current session tree.
+  lines.push(`Scratchpad: ${join(machine.homeDir, ".hasna", "scratchpad", "scratch", "<session-id>")}`);
   if (machine.status) {
     const stamp = machine.status.lastSeenAt
       ? ` (seen ${coarseStamp(machine.status.lastSeenAt)})`
