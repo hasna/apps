@@ -117,8 +117,18 @@ downgrading verification. `files-serve` opens that connection lazily on a
 
 `/health` and `/version` report package version and the storage backend
 (`sqlite` or `postgres`). `/ready` is read-only: the SQLite backend returns
-ready immediately; the Postgres backend checks PostgreSQL reachability and
-verifies that the migration ledger has no pending entries.
+ready with `deployment_environment: "non_production"` and null source/image
+identity, so it cannot satisfy production admission. A deployed production task
+carries `HASNA_FILES_DEPLOYMENT_ENVIRONMENT=production` independently of its
+database secret. If that task loses `HASNA_FILES_DATABASE_URL`, `/ready` returns
+503 and `files-serve` exits before binding; it never falls through to the local
+SQLite service path. The Postgres backend also fails closed unless the
+deployment controller supplies canonical `HASNA_FILES_DEPLOY_SOURCE_COMMIT`
+(40 lowercase hex) and `HASNA_FILES_DEPLOY_IMAGE_DIGEST` (`sha256:` plus 64
+lowercase hex), and echoes both as `source_commit` and `image_digest`.
+Whitespace is never trimmed or normalized: padded identity is invalid. It then
+checks PostgreSQL reachability and verifies that the migration ledger has no
+pending entries.
 
 Every `/v1` request requires an API key. Reads require `files:read`; other HTTP
 methods require `files:write`. The built-in API store sends the configured key
