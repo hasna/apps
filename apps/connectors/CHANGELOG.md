@@ -1,5 +1,41 @@
 # Changelog
 
+## 1.5.0
+
+### Minor Changes
+
+- f4f04ad: Make connector discovery bounded and progressively disclosed for agents. `connectors list --json` now returns a minified 20-row compact envelope with truthful totals and continuation metadata across the main, category, installed, and brief catalog views. `--json --verbose` keeps full fields inside a bounded page, while `--json --full` and `--json --all` preserve the legacy exhaustive bare arrays. MCP connector pages now report the applied limit, current cursor, completion state, and catalog version, and bypass optional LLM stripping so continuation receipts cannot be removed.
+- f29aab2: Security: `connectors-serve` now requires a bearer token and binds loopback
+  (fleet alignment 2026-09-11, T1 §3.5 connectors).
+
+  - **Every `/api/*` route and the `/mcp` mount require
+    `Authorization: Bearer <token>`** (or `X-Connectors-Token`). Until now the
+    server answered `GET /api/export` — every configured vendor credential — to
+    anyone who could reach the port, with no authentication, on every interface.
+    `/health` and the two OAuth browser routes (`/oauth/:name/start`,
+    `/oauth/:name/callback`) stay public; CORS preflights pass.
+  - The token is `HASNA_CONNECTORS_SERVE_TOKEN` when set, otherwise the
+    owner-only file `<connectors home>/serve-token` (mode 0600, default
+    `~/.hasna/connectors/serve-token`) the server generates on first start. It is
+    never printed; startup names only its source. There is no anonymous mode.
+  - The server binds `127.0.0.1` by default (`startServer(port, { hostname })`
+    to override deliberately).
+  - The CLI and MCP OAuth flows probe `/health` (public) instead of
+    `/api/connectors` to detect a running server.
+  - **`@hasna/connectors/sdk`**: the split `@hasna/connectors-sdk` package
+    (`apps/connectors/sdk`) is folded into this package as the `./sdk` export
+    subpath — one package per app, never a separate `-sdk` (package-surfaces
+    rule). `LocalConnectorsClient` / `ConnectorsClient` gained a `token` option
+    and read the same two token sources automatically
+    (`resolveLocalServeToken`), so same-user clients need no configuration; the
+    built `dist/sdk/index.js` imports node builtins only. `HostedConnectorsClient`
+    is unchanged. `@hasna/connectors-sdk` on npm is superseded (deprecation is an
+    owner decision, not performed here).
+
+### Patch Changes
+
+- 960d099: Switch @hasna/connectors local path reads/writes through the in-package resolver (XDG/macOS home layout). The legacy `~/.hasna/connectors` default (with the `HASNA_CONNECTORS_DIR` exact-app override) stays the effective data home until the store has actually been migrated to the XDG data home (`connectors.db` present there) or the operator sets the data-kind override `HASNA_DATA_HOME` — an existing live store never becomes invisible on upgrade. The wave-wide resolver dependency (`@hasna/paths@0.1.0`) was deleted 2026-09-03 (hasna/apps#1535); the resolver is now implemented locally in-package.
+
 ## 1.4.5
 
 ### Patch Changes
