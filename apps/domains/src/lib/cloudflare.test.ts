@@ -124,6 +124,44 @@ describe("Cloudflare zone origin TLS", () => {
     expect(methods).toEqual(["GET"]);
   });
 
+  for (const requested of ["full", "strict"] as const) {
+    it(`refuses origin_pull-to-${requested} without a PATCH`, async () => {
+      const methods: string[] = [];
+      globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+        methods.push(init?.method ?? "GET");
+        return Response.json({
+          success: true,
+          result: { id: "ssl", value: "origin_pull" },
+          errors: [],
+        });
+      }) as typeof fetch;
+
+      await expect(ensureZoneOriginTlsMode("zone", requested, {
+        apiToken: "token",
+        accountId: "account",
+      })).resolves.toEqual({ mode: "origin_pull", changed: false, downgradeRefused: true });
+      expect(methods).toEqual(["GET"]);
+    });
+  }
+
+  it("rejects an unknown SSL value before PATCH", async () => {
+    const methods: string[] = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      methods.push(init?.method ?? "GET");
+      return Response.json({
+        success: true,
+        result: { id: "ssl", value: "automatic" },
+        errors: [],
+      });
+    }) as typeof fetch;
+
+    await expect(ensureZoneOriginTlsMode("zone", "full", {
+      apiToken: "token",
+      accountId: "account",
+    })).rejects.toThrow("unsupported zone SSL setting automatic");
+    expect(methods).toEqual(["GET"]);
+  });
+
   it("fails when the provider readback does not match the requested mode", async () => {
     globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => Response.json({
       success: true,

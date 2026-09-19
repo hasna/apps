@@ -503,6 +503,32 @@ describe("DomainProvisioningService", () => {
     expect(dnsWrites).toBe(0);
   });
 
+  test("parks an origin_pull zone without changing TLS or DNS", async () => {
+    const store = new MemoryStore();
+    let dnsWrites = 0;
+    const service = new DomainProvisioningService(store, providers({
+      ensureWebsiteOriginTls: async () => ({
+        mode: "origin_pull",
+        changed: false,
+        downgradeRefused: true,
+      }),
+      configureWebsiteOrigin: async () => {
+        dnsWrites += 1;
+        return [];
+      },
+    }), { now: () => new Date("2026-09-19T10:01:00.000Z") });
+    let job = await service.request(request({
+      target: "website_origin", worker_name: null,
+      origin_hostname: "one.us-east-1.elb.amazonaws.com",
+      origin_tls_mode: "full",
+    }));
+    for (let i = 0; i < 7; i++) job = await service.advance(job.id);
+    expect(job.status).toBe("manual_review");
+    expect(job.error).toContain("origin_pull");
+    expect(job.provider_state.origin_tls_mode_configured).toBe("origin_pull");
+    expect(dnsWrites).toBe(0);
+  });
+
   test("durably reconciles only bounded SES-compatible DNS records with conflict-safe replay", async () => {
     const store = new MemoryStore();
     const applied: unknown[] = [];

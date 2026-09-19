@@ -43,6 +43,12 @@ export interface CloudflareRecord {
 }
 
 export type CloudflareOriginTlsMode = "strict" | "full";
+export type CloudflareObservedOriginTlsMode =
+  | "off"
+  | "flexible"
+  | "full"
+  | "strict"
+  | "origin_pull";
 
 interface CloudflareZoneSetting {
   id: string;
@@ -255,7 +261,7 @@ export async function deleteZone(zoneId: string, config?: CloudflareConfig): Pro
 export async function getZoneOriginTlsMode(
   zoneId: string,
   config?: CloudflareConfig,
-): Promise<string> {
+): Promise<CloudflareObservedOriginTlsMode> {
   const setting = await cfFetch<CloudflareZoneSetting>(
     `/zones/${encodeURIComponent(zoneId)}/settings/ssl`,
     { config },
@@ -263,21 +269,30 @@ export async function getZoneOriginTlsMode(
   if (setting.id !== "ssl" || typeof setting.value !== "string" || !setting.value.trim()) {
     throw new Error("Cloudflare returned an invalid zone SSL setting");
   }
-  return setting.value.trim().toLowerCase();
+  const mode = setting.value.trim().toLowerCase();
+  if (!["off", "flexible", "full", "strict", "origin_pull"].includes(mode)) {
+    throw new Error(`Cloudflare returned unsupported zone SSL setting ${mode}`);
+  }
+  return mode as CloudflareObservedOriginTlsMode;
 }
 
 /**
  * Apply one explicit zone TLS intent and read it back. A zone already using
- * strict mode is never silently weakened to full mode.
+ * strict or origin-pull mode is never silently weakened. Automatic SSL/TLS is
+ * a separate Cloudflare setting and is deliberately not changed here.
  */
 export async function ensureZoneOriginTlsMode(
   zoneId: string,
   requested: CloudflareOriginTlsMode,
   config?: CloudflareConfig,
-): Promise<{ mode: CloudflareOriginTlsMode; changed: boolean; downgradeRefused: boolean }> {
+): Promise<{
+  mode: CloudflareOriginTlsMode | "origin_pull";
+  changed: boolean;
+  downgradeRefused: boolean;
+}> {
   const current = await getZoneOriginTlsMode(zoneId, config);
-  if (current === "strict" && requested === "full") {
-    return { mode: "strict", changed: false, downgradeRefused: true };
+  if (current === "origin_pull" || (current === "strict" && requested === "full")) {
+    return { mode: current, changed: false, downgradeRefused: true };
   }
   let changed = false;
   if (current !== requested) {

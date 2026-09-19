@@ -372,7 +372,7 @@ export function buildOpenApiSpec(version: string): OpenApiDoc {
             route53_hosted_zone_cleaned: { type: "boolean" },
             worker_domain_bound: { type: "boolean" },
             website_origin_configured: { type: "boolean" },
-            origin_tls_mode_configured: { type: "string", enum: ["strict", "full"] },
+            origin_tls_mode_configured: { type: "string", enum: ["strict", "full", "origin_pull"] },
             origin_tls_mode_checked_at: { type: "string" },
             web_records: { type: "array", items: ref("ProvisionedWebRecord") },
             target_checked_at: { type: "string" },

@@ -98,7 +98,7 @@ export interface DomainProvisioningProviderState {
   route53_hosted_zone_cleaned?: boolean;
   worker_domain_bound?: boolean;
   website_origin_configured?: boolean;
-  origin_tls_mode_configured?: OriginTlsMode;
+  origin_tls_mode_configured?: OriginTlsMode | "origin_pull";
   origin_tls_mode_checked_at?: string;
   web_records?: ProvisionedWebRecord[];
   target_checked_at?: string;
@@ -202,7 +202,11 @@ export interface DomainProvisioningProviders {
   ensureWebsiteOriginTls(input: {
     zoneId: string;
     requestedMode: OriginTlsMode;
-  }): Promise<{ mode: OriginTlsMode; changed: boolean; downgradeRefused: boolean }>;
+  }): Promise<{
+    mode: OriginTlsMode | "origin_pull";
+    changed: boolean;
+    downgradeRefused: boolean;
+  }>;
   websiteOriginReady(input: {
     hostname: string;
     zoneId: string;
@@ -770,7 +774,19 @@ export class DomainProvisioningService {
           if (tls.downgradeRefused) {
             return update({
               status: "manual_review",
-              error: "refused to weaken existing Cloudflare strict origin TLS mode to full",
+              error: `refused to weaken existing Cloudflare ${tls.mode} origin TLS mode to ${job.origin_tls_mode}`,
+              provider_state: {
+                ...job.provider_state,
+                origin_tls_mode_configured: tls.mode,
+                origin_tls_mode_checked_at: this.now().toISOString(),
+              },
+              ...clearLease,
+            });
+          }
+          if (tls.mode !== job.origin_tls_mode) {
+            return update({
+              status: "manual_review",
+              error: `Cloudflare origin TLS readback is ${tls.mode}, expected ${job.origin_tls_mode}`,
               provider_state: {
                 ...job.provider_state,
                 origin_tls_mode_configured: tls.mode,
@@ -786,7 +802,7 @@ export class DomainProvisioningService {
           });
           targetState = {
             website_origin_configured: true,
-            origin_tls_mode_configured: tls.mode,
+            origin_tls_mode_configured: job.origin_tls_mode,
             origin_tls_mode_checked_at: this.now().toISOString(),
             web_records: webRecords,
           };
@@ -975,7 +991,7 @@ export function publicProvisioningJob(job: DomainProvisioningJob): PublicDomainP
           zone_ref: `zone:${createHash("sha256").update(zoneRef).digest("hex").slice(0, 24)}`,
           nameservers: [...nameservers],
           web_records: job.target === "website_origin" ? [...(webRecords ?? [])] : [],
-          origin_tls_mode: job.target === "website_origin" ? configuredTlsMode! : null,
+          origin_tls_mode: job.target === "website_origin" ? job.origin_tls_mode : null,
           checked_at: checkedAt,
         }
       : null;
