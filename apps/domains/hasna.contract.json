@@ -1,10 +1,10 @@
 {
   "schema": "hasna.service_contract.v1",
   "name": "domains",
-  "class": "cli-with-store",
+  "class": "service",
   "contractVersion": "v1",
   "kitVersion": "1.0.2",
-  "description": "Domain portfolio, registrar, marketplace, and DNS management for AI agents. Four surfaces: CLI (domains), MCP (domains-mcp), HTTP API (domains-serve), and a generated SDK (@hasna/domains/sdk). The client resolves its authority and credential through the @hasna/contracts 1.0.2 resolver (HASNA_DOMAINS_API_URL/_API_KEY env, the macOS Keychain, or ~/.hasna/domains/config/credentials; default fleet gateway https://api.hasna.com/domains), or uses local SQLite at ~/.hasna/domains/domains.db when explicitly opted in with a local path variable and nothing else is configured; domains-serve reads and writes PostgreSQL directly (HASNA_DOMAINS_DATABASE_URL), no cache or sync in the service.",
+  "description": "Domain portfolio, registrar, marketplace, DNS and hosted provisioning for AI agents. CLI, MCP and SDK clients resolve the owner credential and unversioned authority through @hasna/contracts, use https://api.hasna.com/domains with exactly one client-appended /v1, and fail closed when authentication is unavailable. Client SQLite/path selectors are retired and rejected. domains-serve and owner migrations use PostgreSQL selected by HASNA_DOMAINS_DATABASE_URL.",
   "bins": [
     "domains",
     "domains-mcp",
@@ -12,16 +12,14 @@
   ],
   "storage": {
     "engines": [
-      "sqlite",
       "postgresql"
     ],
     "envPrefix": "HASNA_DOMAINS_",
     "aliasEnvPrefix": "DOMAINS_",
-    "backend": "sqlite",
-    "sqlitePath": "~/.hasna/domains/domains.db",
+    "backend": "postgresql",
     "pgTestGate": {
       "envVar": "HASNA_DOMAINS_TEST_DATABASE_URL",
-      "command": "HASNA_DOMAINS_DATABASE_URL=\"${HASNA_DOMAINS_TEST_DATABASE_URL:?point it at a throwaway Postgres; the live-PG gate must not pass without one}\" bun test src/server"
+      "command": "bun run test:postgres"
     }
   },
   "metadata": {
@@ -110,14 +108,14 @@
       "kind": "mcp",
       "status": "supported",
       "mcpBin": "domains-mcp",
-      "authMode": "local-only"
+      "authMode": "api-key"
     },
     {
       "name": "domains-cli",
       "kind": "cli",
       "status": "supported",
       "bin": "domains",
-      "authMode": "local-only"
+      "authMode": "api-key"
     }
   ]
 }
