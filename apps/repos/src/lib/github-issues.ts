@@ -16,12 +16,11 @@
  * That is survivable because every PR run re-enumerates the complete open set
  * and individually re-queries anything missing (the reconciliation net).
  *
- * Issue detection has no such net. It stores an `updated_at` high-water mark
- * and asks GitHub only for issues updated since then. An issue whose node was
- * nulled or whose page admitted an error would be silently absent; the
- * watermark would advance past it; and no later run could ever see it again.
- * A run that reads a "complete" page would then report `0 new` in a healthy
- * tone while content was lost. The rules below exist to make that impossible:
+ * Issue detection has no such net. It publishes only a complete `state=all`
+ * snapshot, and multi-page snapshots are read twice before any local row is
+ * changed. A node nulled by an error, a cursor shifted by insertion/deletion,
+ * or a filtered state query would otherwise let a stale open row survive while
+ * the run reports success. The rules below exist to make that impossible:
  *
  *   E — any non-empty `errors[]` fails the page, even when every node is
  *       present (`graphqlStrict` is used because `graphql()` erases errors).
@@ -29,16 +28,19 @@
  *       (`nodes_dropped`), never silently filtered.
  *   C — the run-local cursor advances only from a sealed page; a traversal
  *       truncated by a local limit seals nothing.
- *   W — the durable watermark advances only after a traversal complete by
- *       exhaustion, with an inclusive 1-hour overlap, and never backwards.
+ *   S — total, identity, ordering, and ordered snapshot fingerprints must be
+ *       stable across the complete traversal before it can be published.
+ *   W — the observational high-water receipt advances only after a stable
+ *       complete snapshot and never backwards; it is not a query boundary.
  *   R — "0 new" is only reportable on a sealed, untruncated run.
  *
  * Do not "harmonise" these with the PR path. The divergence is the feature.
  */
+import { createHash } from "node:crypto";
 import { graphqlStrict, isMissingRepoError, parseGithubRemote } from "./github.js";
 import { getIssueSyncState, recordIssueSyncRun } from "./issue-sync-state.js";
 import {
-  bulkInsertIssues,
+  replaceIssueSnapshot,
   getRepo,
   listAllRepos,
   listIssueNumbers,
@@ -68,7 +70,13 @@ export type IssuePageFailureReason =
   | "page_info_invalid"
   | "end_cursor_missing"
   | "nodes_not_array"
-  | "nodes_dropped";
+  | "nodes_dropped"
+  | "total_count_invalid"
+  | "total_count_changed"
+  | "duplicate_identity"
+  | "order_invalid"
+  | "snapshot_count_mismatch"
+  | "snapshot_changed";
 
 /** One raw response page, before any guard has been applied. */
 export interface RawIssuePage {
@@ -146,9 +154,9 @@ export function isUsableIssueNode(node: unknown): node is GraphqlIssue {
   const issue = node as Partial<GraphqlIssue>;
   return typeof issue.number === "number" && Number.isSafeInteger(issue.number) && issue.number > 0
     && typeof issue.title === "string"
-    && typeof issue.createdAt === "string" && issue.createdAt !== ""
+    && typeof issue.createdAt === "string" && Number.isFinite(Date.parse(issue.createdAt))
     && typeof issue.state === "string" && (issue.state === "OPEN" || issue.state === "CLOSED")
-    && typeof issue.updatedAt === "string" && issue.updatedAt !== "";
+    && typeof issue.updatedAt === "string" && Number.isFinite(Date.parse(issue.updatedAt));
 }
 
 function repositoryOf(data: unknown): unknown {
@@ -165,9 +173,10 @@ function repositoryOf(data: unknown): unknown {
  * this pass is acceptable only as partial processing", rule N2), and this
  * slice deliberately takes the stricter branch: the local issue index has no
  * per-run completeness marker, so a reader of `repos issues` could not tell
- * rows written from a failed page apart from verified ones. Only a page whose
- * every guard passed may write rows; `nodes_seen`/`nodes_dropped` still report
- * what the page contained, so nothing is silently filtered.
+ * rows from a failed traversal apart from verified ones. A sealed page may
+ * contribute only to an in-memory candidate; publication waits until the whole
+ * snapshot is exhausted and independently verified. `nodes_seen` and
+ * `nodes_dropped` still report what arrived, so nothing is silently filtered.
  */
 export function adjudicateIssuePage(page: RawIssuePage): IssuePageVerdict {
   const errors = page.errors.map(collapse).filter((message) => message.length > 0);
@@ -239,7 +248,12 @@ export function adjudicateIssuePage(page: RawIssuePage): IssuePageVerdict {
   }
 
   const totalCount = connectionRecord.totalCount;
-  verdict.total_count = typeof totalCount === "number" ? totalCount : null;
+  if (typeof totalCount !== "number" || !Number.isSafeInteger(totalCount) || totalCount < 0) {
+    verdict.failure = "total_count_invalid";
+    verdict.detail = "GitHub GraphQL returned an invalid issue totalCount";
+    return verdict;
+  }
+  verdict.total_count = totalCount;
 
   const pageInfo = connectionRecord.pageInfo;
   if (!pageInfo || typeof pageInfo !== "object") {
@@ -303,6 +317,12 @@ export interface IssueTraversalResult {
   truncated: boolean;
   /** Every page sealed and the last page reported `hasNextPage: false`. */
   sealed: boolean;
+  /** Number of distinct pages accepted after retries. */
+  sealed_pages: number;
+  /** Stable totalCount observed on every accepted page. */
+  total_count: number | null;
+  /** Canonical ordered fingerprint of the complete traversal. */
+  snapshot_fingerprint: string | null;
   failure: IssuePageFailureReason | null;
   detail: string | null;
   errors: string[];
@@ -326,31 +346,75 @@ function maxUpdatedAt(nodes: GraphqlIssue[]): string | null {
   return max;
 }
 
+/** Complete ordered snapshot identity, including every storable field. */
+function issueSnapshotFingerprint(
+  nodes: GraphqlIssue[],
+  totalCount: number,
+): string {
+  const hash = createHash("sha256");
+  hash.update(`issues-snapshot-v1\n${totalCount}\n`);
+  for (const issue of nodes) {
+    hash.update(
+      JSON.stringify([
+        issue.number,
+        issue.title,
+        issue.state,
+        issue.stateReason ?? null,
+        issue.createdAt,
+        issue.updatedAt,
+        issue.closedAt,
+        issue.url,
+        issue.author?.login ?? null,
+      ]),
+    );
+    hash.update("\n");
+  }
+  return hash.digest("hex");
+}
+
 /**
- * Traverse `repository.issues` from an optional `since` boundary.
+ * Traverse one complete GitHub issue connection snapshot.
  *
- * The `since` value is passed verbatim to every page of the run and is never
- * recomputed mid-traversal, so a slow page cannot slide the boundary past
- * content. On any unsealed page the traversal stops for that repository and
- * the run-local cursor is left where it was: no page is ever skipped past.
+ * Besides per-page shape guards, this validates the invariants GitHub must
+ * preserve across the whole traversal: totalCount is stable, issue identities
+ * are unique, UPDATED_AT order never moves forward, and exhaustion yields
+ * exactly totalCount identities. Multi-page callers must still re-read and
+ * compare the complete ordered fingerprint; cursors alone are not a snapshot
+ * lock and can shift when the remote collection mutates.
  */
-export function fetchIssues(ghRepo: string, opts: IssueTraversalOptions = {}): IssueTraversalResult {
+export function fetchIssues(
+  ghRepo: string,
+  opts: IssueTraversalOptions = {},
+): IssueTraversalResult {
   const client = opts.client ?? liveIssueClient;
   const state = opts.state ?? "all";
   const since = opts.since ?? null;
   const pageSize = Math.max(1, Math.min(100, Math.floor(opts.pageSize ?? 100)));
-  const limit = opts.limit && opts.limit > 0 ? Math.floor(opts.limit) : Number.POSITIVE_INFINITY;
-  const attempts = Math.max(1, Math.floor(opts.retryAttempts ?? DEFAULT_PAGE_ATTEMPTS));
-  const backoff = Math.max(0, Math.floor(opts.retryBackoffMs ?? DEFAULT_PAGE_BACKOFF_MS));
+  const limit =
+    opts.limit && opts.limit > 0
+      ? Math.floor(opts.limit)
+      : Number.POSITIVE_INFINITY;
+  const attempts = Math.max(
+    1,
+    Math.floor(opts.retryAttempts ?? DEFAULT_PAGE_ATTEMPTS),
+  );
+  const backoff = Math.max(
+    0,
+    Math.floor(opts.retryBackoffMs ?? DEFAULT_PAGE_BACKOFF_MS),
+  );
   const sleep = opts.sleep ?? sleepSync;
 
   const nodes: GraphqlIssue[] = [];
   const errors: string[] = [];
   const requested_cursors: Array<string | null> = [];
+  const seenNumbers = new Set<number>();
   let after: string | null = null;
   let pages_fetched = 0;
+  let sealed_pages = 0;
   let nodes_seen = 0;
   let nodes_dropped = 0;
+  let total_count: number | null = null;
+  let previousUpdatedAt: string | null = null;
   let sealed = false;
   let truncated = false;
   let failure: IssuePageFailureReason | null = null;
@@ -358,10 +422,11 @@ export function fetchIssues(ghRepo: string, opts: IssueTraversalOptions = {}): I
   let rate_limited = false;
 
   for (;;) {
-    const remaining = limit === Number.POSITIVE_INFINITY ? pageSize : Math.min(pageSize, limit - nodes.length);
+    const remaining =
+      limit === Number.POSITIVE_INFINITY
+        ? pageSize
+        : Math.min(pageSize, limit - nodes.length);
     if (remaining <= 0) {
-      // Rule C3 — the local limit stopped this traversal. It is truncated, so
-      // nothing is sealed and the watermark must not move.
       truncated = true;
       break;
     }
@@ -370,16 +435,18 @@ export function fetchIssues(ghRepo: string, opts: IssueTraversalOptions = {}): I
     let attemptsUsed = 0;
     for (;;) {
       attemptsUsed++;
-      const page = client.fetchIssuePage(ghRepo, { state, since, after, first: remaining });
+      const page = client.fetchIssuePage(ghRepo, {
+        state,
+        since,
+        after,
+        first: remaining,
+      });
       requested_cursors.push(after);
       pages_fetched++;
       verdict = adjudicateIssuePage(page);
       if (verdict.sealed) break;
-      // Repository-gone is not a page fault: the fan-out classifies it as
-      // skipped-and-continued exactly like the PR sync does.
-      if (verdict.failure === "missing_repo") throw new Error("GitHub repository is unavailable");
-      // Rule E3 — rate limiting stops the run; retrying inside a rate limit
-      // only burns the budget the backoff exists to protect.
+      if (verdict.failure === "missing_repo")
+        throw new Error("GitHub repository is unavailable");
       if (verdict.failure === "rate_limited") {
         rate_limited = true;
         break;
@@ -390,25 +457,58 @@ export function fetchIssues(ghRepo: string, opts: IssueTraversalOptions = {}): I
 
     nodes_seen += verdict.nodes_seen;
     nodes_dropped += verdict.nodes_dropped;
-    // Only a sealed page may contribute rows. Nothing is lost by refusing a
-    // failed page's nodes: the watermark has not moved, so the next run
-    // re-reads from the same boundary.
-    nodes.push(...verdict.nodes);
     for (const message of verdict.errors) {
       if (errors.length < MAX_RUN_ERRORS) errors.push(message);
     }
 
     if (!verdict.sealed) {
       failure = verdict.failure;
-      detail = verdict.detail ?? (verdict.failure === "nodes_dropped" ? `${verdict.nodes_dropped} node(s) dropped` : null);
+      detail =
+        verdict.detail ??
+        (verdict.failure === "nodes_dropped"
+          ? `${verdict.nodes_dropped} node(s) dropped`
+          : null);
       break;
     }
 
-    // Rule C1 — the cursor may advance ONLY from this point: errors empty, all
-    // nodes usable, pageInfo valid, and an endCursor present when another page
-    // is promised.
+    if (total_count === null) {
+      total_count = verdict.total_count;
+    } else if (verdict.total_count !== total_count) {
+      failure = "total_count_changed";
+      detail = `issue totalCount changed during traversal (${total_count} -> ${verdict.total_count})`;
+      break;
+    }
+
+    let pageFailure: IssuePageFailureReason | null = null;
+    for (const node of verdict.nodes) {
+      if (seenNumbers.has(node.number)) {
+        pageFailure = "duplicate_identity";
+        detail = `issue #${node.number} appeared more than once during traversal`;
+        break;
+      }
+      if (previousUpdatedAt !== null && node.updatedAt > previousUpdatedAt) {
+        pageFailure = "order_invalid";
+        detail = `issue ordering moved forward at #${node.number} (${node.updatedAt} after ${previousUpdatedAt})`;
+        break;
+      }
+      seenNumbers.add(node.number);
+      previousUpdatedAt = node.updatedAt;
+    }
+    if (pageFailure) {
+      failure = pageFailure;
+      break;
+    }
+
+    nodes.push(...verdict.nodes);
+    sealed_pages++;
+
     if (!verdict.has_next_page) {
-      sealed = true;
+      if (total_count === null || nodes.length !== total_count) {
+        failure = "snapshot_count_mismatch";
+        detail = `exhausted traversal returned ${nodes.length} unique issue(s), expected ${total_count ?? "unknown"}`;
+      } else {
+        sealed = true;
+      }
       break;
     }
     after = verdict.end_cursor;
@@ -421,6 +521,12 @@ export function fetchIssues(ghRepo: string, opts: IssueTraversalOptions = {}): I
     nodes_dropped,
     truncated,
     sealed,
+    sealed_pages,
+    total_count,
+    snapshot_fingerprint:
+      sealed && total_count !== null
+        ? issueSnapshotFingerprint(nodes, total_count)
+        : null,
     failure,
     detail,
     errors,
@@ -428,6 +534,50 @@ export function fetchIssues(ghRepo: string, opts: IssueTraversalOptions = {}): I
     requested_cursors,
     rate_limited,
   };
+}
+
+/**
+ * Read a multi-page connection twice and accept it only when both complete
+ * ordered snapshots are byte-identical. GitHub cursors are positions in a
+ * mutable connection, not snapshot handles; a second complete pass is the
+ * only way this client can prove that insertions, deletions, or reordering did
+ * not shift rows across page boundaries while the first pass was in flight.
+ * Single-page responses are already one atomic GraphQL response and do not
+ * need a second pass.
+ */
+export function fetchStableIssueSnapshot(
+  ghRepo: string,
+  opts: IssueTraversalOptions = {},
+): IssueTraversalResult {
+  const first = fetchIssues(ghRepo, opts);
+  if (!first.sealed || first.truncated || first.failure || first.sealed_pages <= 1) return first;
+
+  const second = fetchIssues(ghRepo, opts);
+  const combined = {
+    ...second,
+    pages_fetched: first.pages_fetched + second.pages_fetched,
+    sealed_pages: first.sealed_pages + second.sealed_pages,
+    nodes_seen: first.nodes_seen + second.nodes_seen,
+    nodes_dropped: first.nodes_dropped + second.nodes_dropped,
+    errors: [...first.errors, ...second.errors].slice(0, MAX_RUN_ERRORS),
+    requested_cursors: [...first.requested_cursors, ...second.requested_cursors],
+    rate_limited: first.rate_limited || second.rate_limited,
+  } satisfies IssueTraversalResult;
+
+  if (!second.sealed || second.truncated || second.failure) return combined;
+  if (
+    first.total_count !== second.total_count
+    || first.snapshot_fingerprint !== second.snapshot_fingerprint
+  ) {
+    return {
+      ...combined,
+      sealed: false,
+      failure: "snapshot_changed",
+      detail: "issue collection changed between complete traversal passes; no rows were committed",
+      snapshot_fingerprint: null,
+    };
+  }
+  return combined;
 }
 
 /** Page size ceiling of the GitHub connection. */
@@ -496,6 +646,8 @@ export interface SyncIssuesResult {
   /** Distinct issues fetched (not rows written across checkouts). */
   synced: number;
   rows_written: number;
+  /** Stale canonical rows removed by a complete state=all snapshot. */
+  rows_deleted: number;
   /** Fetched issues this index had never stored for the remote. */
   new_issues: number;
   pages_fetched: number;
@@ -509,7 +661,7 @@ export interface SyncIssuesResult {
   /** First complete traversal for this remote (W6 baseline). */
   baseline: boolean;
   watermark_advanced: boolean;
-  /** The `since` boundary the next run will use. */
+  /** Observed high-water receipt; canonical syncs still re-read state=all fully. */
   watermark: string | null;
   max_updated_at: string | null;
   rate_limited: boolean;
@@ -534,12 +686,11 @@ function toIssueInput(repoId: number, issue: GraphqlIssue): IssueInput {
 }
 
 /**
- * Rule W3: `max(updatedAt) − overlap`, as the next run's inclusive `since`.
+ * Observational high-water receipt: `max(updatedAt) − overlap`.
  *
  * Normalized back to GitHub's second-granularity shape (`...:00Z`, not
- * `...:00.000Z`): the stored value is compared and fed back as a GraphQL
- * `DateTime`, and mixing shapes would make a lexicographic comparison
- * disagree with the instant comparison.
+ * `...:00.000Z`) so comparisons remain stable. Canonical syncs intentionally
+ * do not feed this value back as `since`; they re-read full state=all.
  */
 export function watermarkCandidate(maxUpdatedAt: string, overlapMs: number): string | null {
   const parsed = Date.parse(maxUpdatedAt);
@@ -559,32 +710,56 @@ export function syncRemoteIssues(
   opts: SyncIssuesOptions = {},
 ): SyncIssuesResult {
   const [ghOwner, ghRepoName] = ghRepo.split("/");
-  if (!ghOwner || !ghRepoName) throw new Error("Cannot parse GitHub repository identity");
+  if (!ghOwner || !ghRepoName)
+    throw new Error("Cannot parse GitHub repository identity");
+
+  const requestedState = opts.state ?? "all";
+  if (requestedState !== "all") {
+    throw new Error(
+      "canonical issue sync requires state=all; filtered syncs cannot reconcile closures or removals safely",
+    );
+  }
 
   const overlapMs = Math.max(0, opts.overlapMs ?? DEFAULT_WATERMARK_OVERLAP_MS);
   const checkouts = listReposByRemote(remoteUrl);
   const prior = getIssueSyncState(remoteUrl);
 
-  // W1 — `since` comes from the stored GitHub watermark, never the local clock.
-  const since = prior?.watermark_updated_at ?? null;
-  const traversal = fetchIssues(ghRepo, { ...opts, since });
+  // Canonical storage is always rebuilt from a complete state=all snapshot.
+  // The stored watermark remains an observational high-water receipt, but is
+  // deliberately not used as `since`: a filtered/incremental result cannot
+  // prove that an absent formerly-open issue was closed or removed.
+  const traversal = fetchStableIssueSnapshot(ghRepo, {
+    ...opts,
+    state: "all",
+    since: null,
+  });
+  const completed =
+    traversal.sealed && !traversal.truncated && traversal.failure === null;
 
-  const byNumber = new Map<number, GraphqlIssue>();
-  for (const issue of traversal.nodes) byNumber.set(issue.number, issue);
-  const fetched = [...byNumber.values()];
+  const fetched = completed ? traversal.nodes : [];
+  let newIssues = 0;
+  let rowsWritten = 0;
+  let rowsDeleted = 0;
 
-  // New-issue count is computed BEFORE the write: an issue is new when this
-  // index had never stored that number for this remote.
-  const known = new Set<number>();
-  for (const checkout of checkouts) {
-    for (const number of listIssueNumbers(checkout.id)) known.add(number);
+  if (completed) {
+    // New-issue count is computed before the atomic snapshot replacement.
+    const known = new Set<number>();
+    for (const checkout of checkouts) {
+      for (const number of listIssueNumbers(checkout.id)) known.add(number);
+    }
+    newIssues = fetched.filter((issue) => !known.has(issue.number)).length;
+
+    const inputs = checkouts.flatMap((checkout) =>
+      fetched.map((issue) => toIssueInput(checkout.id, issue)),
+    );
+    const published = replaceIssueSnapshot(
+      checkouts.map((checkout) => checkout.id),
+      inputs,
+    );
+    rowsWritten = published.rows_written;
+    rowsDeleted = published.rows_deleted;
   }
-  const newIssues = fetched.filter((issue) => !known.has(issue.number)).length;
 
-  const inputs = checkouts.flatMap((checkout) => fetched.map((issue) => toIssueInput(checkout.id, issue)));
-  const rowsWritten = bulkInsertIssues(inputs);
-
-  const completed = traversal.sealed && !traversal.truncated && traversal.failure === null;
   const anomalies: string[] = [];
   let watermarkAdvanced = false;
   let watermark = prior?.watermark_updated_at ?? null;
@@ -592,10 +767,11 @@ export function syncRemoteIssues(
 
   if (completed) {
     baseline = !prior?.first_complete_at;
-    const candidate = traversal.max_updated_at ? watermarkCandidate(traversal.max_updated_at, overlapMs) : null;
+    const candidate = traversal.max_updated_at
+      ? watermarkCandidate(traversal.max_updated_at, overlapMs)
+      : null;
     if (candidate) {
       if (watermark && candidate < watermark) {
-        // W7 — a re-created repo or edited timestamps must not lower the mark.
         anomalies.push(
           `observed max updatedAt ${traversal.max_updated_at} maps below the stored watermark; watermark not lowered`,
         );
@@ -613,32 +789,38 @@ export function syncRemoteIssues(
       incompleteReason: null,
     });
   } else {
-    const reason = traversal.truncated && traversal.failure === null
-      ? "truncated by local limit"
-      : (traversal.failure ?? "page failed");
-    // W2/W5 — the watermark is left exactly where it was (null passes through
-    // COALESCE), and the repo is named in the run's incomplete[] list.
+    const reason =
+      traversal.truncated && traversal.failure === null
+        ? "truncated by local limit"
+        : (traversal.failure ?? "page failed");
     recordIssueSyncRun({
       remoteUrl,
       ghOwner,
       ghRepo: ghRepoName,
       watermarkUpdatedAt: null,
-      outcome: traversal.truncated && traversal.failure === null ? "truncated" : "incomplete",
+      outcome:
+        traversal.truncated && traversal.failure === null
+          ? "truncated"
+          : "incomplete",
       incompleteReason: reason,
     });
   }
 
   const incomplete: IssueIncompleteEntry[] = completed
     ? []
-    : [{
-        repo: ghRepo,
-        reason: traversal.truncated && traversal.failure === null
-          ? "truncated"
-          : (traversal.failure ?? "page_failed"),
-        detail: traversal.truncated && traversal.failure === null
-          ? `local limit ${opts.limit} reached before exhaustion`
-          : traversal.detail,
-      }];
+    : [
+        {
+          repo: ghRepo,
+          reason:
+            traversal.truncated && traversal.failure === null
+              ? "truncated"
+              : (traversal.failure ?? "page_failed"),
+          detail:
+            traversal.truncated && traversal.failure === null
+              ? `local limit ${opts.limit} reached before exhaustion`
+              : traversal.detail,
+        },
+      ];
 
   return {
     repo_name: ghRepo,
@@ -646,6 +828,7 @@ export function syncRemoteIssues(
     checkouts: checkouts.length,
     synced: fetched.length,
     rows_written: rowsWritten,
+    rows_deleted: rowsDeleted,
     new_issues: newIssues,
     pages_fetched: traversal.pages_fetched,
     nodes_seen: traversal.nodes_seen,
@@ -678,6 +861,7 @@ export function syncGithubIssues(repoIdOrName: string | number, opts: SyncIssues
 export interface SyncAllIssuesResult {
   total_synced: number;
   total_rows_written: number;
+  total_rows_deleted: number;
   total_new_issues: number;
   total_pages_fetched: number;
   total_nodes_seen: number;
@@ -759,6 +943,7 @@ export function syncAllGithubIssues(
   return {
     total_synced: results.reduce((sum, result) => sum + result.synced, 0),
     total_rows_written: results.reduce((sum, result) => sum + result.rows_written, 0),
+    total_rows_deleted: results.reduce((sum, result) => sum + result.rows_deleted, 0),
     total_new_issues: results.reduce((sum, result) => sum + result.new_issues, 0),
     total_pages_fetched: results.reduce((sum, result) => sum + result.pages_fetched, 0),
     total_nodes_seen: results.reduce((sum, result) => sum + result.nodes_seen, 0),
