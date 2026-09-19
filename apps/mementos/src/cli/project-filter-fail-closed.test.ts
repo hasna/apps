@@ -56,7 +56,7 @@ describe("memory list project filter", () => {
       "/tmp/known-project",
     );
     expect(result.exitCode).toBe(0);
-    const memories = JSON.parse(result.stdout) as unknown[];
+    const memories = (JSON.parse(result.stdout) as { memories: unknown[] }).memories;
     expect(Array.isArray(memories)).toBe(true);
   });
 

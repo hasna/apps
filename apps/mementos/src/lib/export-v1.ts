@@ -4,11 +4,10 @@
  */
 
 import type { Memory, MemoryFilter } from "../types/index.js";
-import { listMemories } from "../db/memories.js";
+import { listMemoriesBounded } from "../db/memories.js";
 import { getEntityMemoryLinks } from "../db/entity-memories.js";
 import { getEntity } from "../db/entities.js";
 import { SqliteAdapter as Database } from "../storage.js";
-import { getDatabase } from "../db/database.js";
 
 export interface ExportV1Entry {
   _format: "mementos-export-v1";
@@ -29,17 +28,23 @@ export function exportV1(
   filter?: MemoryFilter,
   db?: Database
 ): ExportV1Entry[] {
-  const d = db || getDatabase();
-  const memories = listMemories(filter, d);
+  const memories = listMemoriesBounded(filter ?? {}, undefined, db).rows;
+  return exportV1Entries(memories, db);
+}
+
+/** Build portable v1 entries for an already bounded memory page. */
+export function exportV1Entries(
+  memories: Memory[],
+  db?: Database,
+): ExportV1Entry[] {
   const exportedAt = new Date().toISOString();
 
   return memories.map((memory) => {
-    // Get entity links for this memory
     let entityLinks: ExportV1Entry["entity_links"] = [];
     try {
-      const links = getEntityMemoryLinks(undefined, memory.id, d);
+      const links = getEntityMemoryLinks(undefined, memory.id, db);
       entityLinks = links.map((link) => {
-        const entity = getEntity(link.entity_id, d);
+        const entity = getEntity(link.entity_id, db);
         return {
           entity_name: entity?.name ?? "unknown",
           entity_type: entity?.type ?? "unknown",
@@ -47,7 +52,7 @@ export function exportV1(
         };
       });
     } catch {
-      // Entity tables may not exist
+      // Entity tables/routes may not exist on older stores.
     }
 
     return {

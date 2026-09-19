@@ -4,7 +4,7 @@ import {
   cleanExpiredMemories,
 } from "../../db/memories.js";
 import { getAgent } from "../../db/agents.js";
-import { listMemories, touchMemory, getMemoryBriefing } from "../../db/memories.js";
+import { listMemoriesBounded, touchMemory, getMemoryBriefing } from "../../db/memories.js";
 import { synthesizeProfile } from "../../lib/profile-synthesizer.js";
 import {
   isMemoryVisibleToMachine,
@@ -14,7 +14,8 @@ import type {
   MemoryFilter,
 } from "../../types/index.js";
 
-import { ensureAutoProject, formatError } from "./memory-utils.js";
+import { compactText, ensureAutoProject, formatError, positiveLimit } from "./memory-utils.js";
+import { boundedMcpOutput, mcpMaxBytes } from "./bounded-output.js";
 import { ToolRegistry } from "./tool-registry.js";
 
 // Tool schemas for this module's tools
@@ -45,7 +46,10 @@ const UTILITY_TOOL_SCHEMAS = {
       agent_id: { type: "string", description: "Agent UUID filter" },
       project_id: { type: "string", description: "Project UUID filter" },
       scope: { type: "string", description: "Scope filter", enum: ["global", "shared", "private", "working"] },
-      limit: { type: "number", description: "Max results (default: 30)" },
+      limit: { type: "number", description: "Max results (default: 10, maximum: 50)" },
+      offset: { type: "number", description: "Continuation offset in the ranked result set" },
+      detail: { type: "string", description: "compact previews (default) or explicit full memory objects", enum: ["compact", "full"] },
+      max_bytes: { type: "number", description: "Response byte ceiling (compact default: 32768; full default: 65536)" },
       decay_halflife_days: { type: "number", description: "Importance half-life in days (default: 90). Lower = more weight on recent memories." },
       no_decay: { type: "boolean", description: "Set true to disable decay and sort purely by importance." },
       task_context: { type: "string", description: "What the agent is about to do. When provided, activates intent-based retrieval — matches against when_to_use fields." },
@@ -187,21 +191,24 @@ export function registerUtilityTools(server: McpServer, registry: ToolRegistry):
 
   server.tool(
     "memory_context",
-    "Get memories relevant to current context. Uses time-weighted scoring: score = importance × decay(age). Pinned memories are exempt. Returns effective_score on each memory.",
+    "Get a ranked, byte-bounded memory-context page. Compact detail is the default; set detail='full' explicitly for complete memory fields.",
     {
       agent_id: z.string().optional(),
       project_id: z.string().optional(),
       scope: z.enum(["global", "shared", "private", "working"]).optional(),
-      limit: z.coerce.number().optional(),
+      limit: z.coerce.number().optional().describe("Max results (default: 10, maximum: 50)"),
+      offset: z.coerce.number().int().min(0).optional().describe("Continuation offset in the ranked result set"),
+      detail: z.enum(["compact", "full"]).optional().default("compact").describe("compact returns ~240-character previews; full returns complete memory objects"),
+      max_bytes: z.coerce.number().int().min(1024).max(1024 * 1024).optional().describe("Response ceiling (compact default: 32768; full default: 65536)"),
       decay_halflife_days: z.coerce.number().optional().describe("Importance half-life in days (default: 90). Lower = more weight on recent memories."),
       no_decay: z.coerce.boolean().optional().describe("Set true to disable decay and sort purely by importance."),
-      task_context: z.string().optional().describe("What the agent is about to do. When provided, activates intent-based retrieval — matches against when_to_use fields for situationally relevant memories."),
-      strategy: z.enum(["default", "smart"]).optional().default("default").describe("Injection strategy: 'default' = decay-scored, 'smart' = activation-matched + layered + tool-aware (requires task_context)"),
+      task_context: z.string().optional().describe("What the agent is about to do. When provided, activates intent-based retrieval — matches against when_to_use fields."),
+      strategy: z.enum(["default", "smart"]).optional().default("default").describe("'default' = ranked bounded page, 'smart' = activation-matched pipeline when task_context is provided"),
       machine_id: z.string().optional().describe("Current machine ID for machine-local memory visibility. Defaults to the current machine."),
     },
     async (args) => {
       try {
-        // Smart strategy: delegate to full smartInject pipeline
+        // The explicit smart pipeline retains its existing token-budgeted format.
         if (args.strategy === "smart" && args.task_context) {
           const { smartInject } = await import("../../lib/injector.js");
           const result = await smartInject({
@@ -214,6 +221,9 @@ export function registerUtilityTools(server: McpServer, registry: ToolRegistry):
           return { content: [{ type: "text" as const, text: result.output }] };
         }
 
+        const limit = positiveLimit(args.limit, 10);
+        const offset = args.offset ?? 0;
+        const detail = args.detail ?? "compact";
         const visibleMachineId = resolveVisibleMachineId(args.machine_id);
         const filter: MemoryFilter = {
           scope: args.scope,
@@ -221,12 +231,11 @@ export function registerUtilityTools(server: McpServer, registry: ToolRegistry):
           project_id: args.project_id,
           status: "active",
           visible_to_machine_id: visibleMachineId,
-          limit: (args.limit || 30) * 2, // fetch 2x, then rerank by effective score
         };
-        const memories = listMemories(filter);
+        // Ranking must be truthful across pages: rank the complete eligible
+        // population, not an arbitrary 2x candidate prefix.
+        const memories = listMemoriesBounded(filter, undefined).rows;
 
-        // task_context activation: semantic search against when_to_use embeddings
-        // Activation-matched memories get a +3 importance boost for scoring
         const activationBoostedIds = new Set<string>();
         if (args.task_context) {
           try {
@@ -238,57 +247,88 @@ export function registerUtilityTools(server: McpServer, registry: ToolRegistry):
               agent_id: args.agent_id,
               project_id: args.project_id,
             });
-            const seenIds = new Set(memories.map((m) => m.id));
-            for (const r of activationResults) {
-              if (!isMemoryVisibleToMachine(r.memory, visibleMachineId)) continue;
-              activationBoostedIds.add(r.memory.id);
-              // Merge activation-matched memories not already in the list
-              if (!seenIds.has(r.memory.id)) {
-                seenIds.add(r.memory.id);
-                memories.push(r.memory);
+            const seenIds = new Set(memories.map((memory) => memory.id));
+            for (const result of activationResults) {
+              if (!isMemoryVisibleToMachine(result.memory, visibleMachineId)) continue;
+              activationBoostedIds.add(result.memory.id);
+              if (!seenIds.has(result.memory.id)) {
+                seenIds.add(result.memory.id);
+                memories.push(result.memory);
               }
             }
-          } catch { /* Non-critical: proceed without activation matching if semantic search fails */ }
-        }
-
-        if (memories.length === 0) {
-          return { content: [{ type: "text" as const, text: "No memories in current context." }] };
+          } catch {
+            // Activation matching is an optional ranking boost.
+          }
         }
 
         const halflifeDays = args.decay_halflife_days ?? 90;
         const now = Date.now();
-
-        // Compute effective score with optional time-decay
-        // Flagged memories get a bonus to always surface near top
-        // Activation-matched memories get +3 importance boost
-        const scored = memories.map((m) => {
-          const activationBoost = activationBoostedIds.has(m.id) ? 3 : 0;
-          let effectiveScore = m.importance + activationBoost;
-          if (!args.no_decay && !m.pinned) {
-            const ageMs = now - new Date(m.updated_at).getTime();
-            const ageDays = ageMs / (1000 * 60 * 60 * 24);
-            const decayFactor = Math.pow(0.5, ageDays / halflifeDays);
-            effectiveScore = (m.importance + activationBoost) * decayFactor;
+        const scored = memories.map((memory) => {
+          const activationBoost = activationBoostedIds.has(memory.id) ? 3 : 0;
+          let effectiveScore = memory.importance + activationBoost;
+          if (!args.no_decay && !memory.pinned) {
+            const ageDays = (now - new Date(memory.updated_at).getTime()) / (1000 * 60 * 60 * 24);
+            effectiveScore *= Math.pow(0.5, ageDays / halflifeDays);
           }
-          // Flagged memories always surface (boost to 11 equivalent — above max importance 10)
-          if (m.flag) effectiveScore = Math.max(effectiveScore, 11);
-          return { ...m, effective_score: Math.round(effectiveScore * 100) / 100 };
+          if (memory.flag) effectiveScore = Math.max(effectiveScore, 11);
+          return {
+            ...memory,
+            effective_score: Math.round(effectiveScore * 100) / 100,
+            activation_matched: activationBoostedIds.has(memory.id),
+          };
         });
-
-        // Sort by effective_score descending, take top N
-        const limit = args.limit || 30;
-        scored.sort((a, b) => b.effective_score - a.effective_score);
-        const top = scored.slice(0, limit);
-
-        // Increment access_count for returned memories
-        for (const m of top) {
-          touchMemory(m.id);
-        }
-
-        const lines = top.map((m) =>
-          `[${m.scope}/${m.category}] ${m.key}: ${m.value} (score: ${m.effective_score}, raw: ${m.importance}${m.pinned ? ", pinned" : ""}${m.flag ? `, flag: ${m.flag}` : ""})`
+        scored.sort((a, b) =>
+          b.effective_score - a.effective_score
+          || b.importance - a.importance
+          || new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
+          || b.id.localeCompare(a.id)
         );
-        return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+
+        const page = scored.slice(offset, offset + limit + 1);
+        const hasMore = page.length > limit;
+        const visible = hasMore ? page.slice(0, limit) : page;
+        const items: unknown[] = detail === "full"
+          ? visible
+          : visible.map((memory) => ({
+              id: memory.id,
+              key: memory.key,
+              preview: compactText(memory.summary || memory.value, 240),
+              scope: memory.scope,
+              category: memory.category,
+              importance: memory.importance,
+              effective_score: memory.effective_score,
+              pinned: memory.pinned,
+              ...(memory.flag ? { flag: memory.flag } : {}),
+              ...(memory.activation_matched ? { activation_matched: true } : {}),
+              updated_at: memory.updated_at,
+            }));
+        const output = boundedMcpOutput({
+          collection: "memories",
+          receipt: "mementos.context.page.v1",
+          items,
+          offset,
+          limit,
+          sourceHasMore: hasMore,
+          detail,
+          maxBytes: mcpMaxBytes(args.max_bytes, detail),
+          metadata: {
+            total_ranked: scored.length,
+            ranking: {
+              order: "effective_score_desc,importance_desc,updated_at_desc,id_desc",
+              decay_halflife_days: halflifeDays,
+              decay_enabled: !args.no_decay,
+              activation_boost: 3,
+              flagged_score_floor: 11,
+            },
+          },
+          nextArguments: {
+            ...(args.scope ? { scope: args.scope } : {}),
+            ...(args.agent_id ? { agent_id: args.agent_id } : {}),
+            ...(args.project_id ? { project_id: args.project_id } : {}),
+          },
+        });
+        for (const memory of visible.slice(0, output.selectedCount)) touchMemory(memory.id);
+        return { content: [{ type: "text" as const, text: output.text }] };
       } catch (e) {
         return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
       }
