@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { registerEventsCommands } from "@hasna/events/commander";
 import { execSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { program } from "commander";
 import { getCliVersion } from "./version.js";
@@ -16,8 +17,7 @@ import {
   listTags,
   listPullRequests,
   countPullRequests,
-  listIssues,
-  countIssues,
+  listAllIssues,
   countRepos,
   getRepoByRemote,
   searchAll,
@@ -402,6 +402,10 @@ function aggregateWindow<T>(items: readonly T[], opts: AggregateCliOptions): {
 
 function repoReference(repoId: number | string, org: string | null | undefined, name: string): string {
   return compactText(org ? `${org}/${name}` : `#${repoId}:${name}`, 180);
+}
+
+function stableCompactIdentity(kind: string, value: string): string {
+  return `${kind}:${createHash("sha256").update(value).digest("hex").slice(0, 24)}`;
 }
 
 function printAggregateJson<T, U, L = T>(
@@ -1814,19 +1818,18 @@ program
   .option("--state <state>", "Filter: open, closed")
   .option("--author <author>", "Filter by author")
   .option("--duplicates", "Emit one row per local checkout instead of one row per issue")
-  .option("-n, --limit <n>", "Max results (default: 20 human, 50 JSON)")
-  .option("-o, --offset <n>", "Skip first N results", "0")
-  .option("--cursor <n>", "Pagination cursor from a previous page")
+  .option("-n, --limit <n>", "Max rows per compact page", "20")
+  .option("--cursor <cursor>", "Opaque continuation cursor from next_cursor")
+  .option("--full", "Return the exhaustive legacy JSON array")
+  .option("--all", "Alias for --full")
   .option("--verbose", "Show author, dates, and URL")
-  .option("--json", "Output as JSON")
+  .option("--json", "Output bounded compact JSON")
   .action((opts) => {
     let repo_id: number | undefined;
     if (opts.repo) {
       const repo = requireRepo(opts.repo);
       repo_id = repo.id;
     }
-    const limit = resolveLimit(opts, COMPACT_LIMIT, 50);
-    const offset = resolveOffset(opts);
     const filter = {
       repo_id,
       state: opts.state,
@@ -1835,31 +1838,62 @@ program
       repo_name: opts.repoName,
       duplicates: Boolean(opts.duplicates),
     };
-    const issues = listIssues({ ...filter, limit, offset });
-    const total = countIssues(filter);
+    const issues = listAllIssues(filter);
+    const total = issues.length;
     if (opts.json) {
-      printJson(issues);
-      warnIfTruncated({ shown: issues.length, total, limit, offset, noun: "issue(s)" });
-    } else {
-      for (const issue of issues) {
-        const stateColor = issue.state === "open" ? chalk.green : chalk.red;
-        const slug = issue.org && issue.repo ? `${issue.org}/${issue.repo}` : "";
-        console.log(`  ${stateColor(`[${issue.state}]`)} ${slug}#${issue.number} ${compactText(issue.title, opts.verbose ? 160 : 100)}`);
-        if (opts.verbose) {
-          const reason = issue.state_reason ? ` reason ${issue.state_reason}` : "";
-          console.log(chalk.dim(`    by ${issue.author} created ${day(issue.created_at)} updated ${day(issue.updated_at)}${reason}${issue.url ? ` ${issue.url}` : ""}`));
-        }
-      }
-      printCompactHint({
-        count: issues.length,
-        noun: "issue(s)",
-        limit,
-        offset,
-        pageable: true,
-        verbose: opts.verbose,
-        detail: `${total} match this filter. Filter with --org, --repo, --repo-name, --state, or --author`,
+      printAggregateJson(issues, opts, {
+        collection: "issues",
+        command: "issues",
+        filters: {
+          repo_id: repo_id ?? null,
+          state: opts.state ?? null,
+          author: opts.author ?? null,
+          org: opts.org ?? null,
+          repo_name: opts.repoName ?? null,
+          duplicates: Boolean(opts.duplicates),
+        },
+        ordering: "created_at-desc,id-desc",
+        project: (issue) => {
+          const issueRef = issue.org && issue.repo
+            ? `${issue.org}/${issue.repo}#${issue.number}`
+            : `repo:${issue.repo_id}#${issue.number}`;
+          return {
+            issue_id: issue.id,
+            issue_key: stableCompactIdentity("issue", issue.url || issueRef),
+            issue_ref: compactText(issueRef, 180),
+            repo_id: issue.repo_id,
+            org: issue.org ? compactText(issue.org, 80) : null,
+            repo: issue.repo ? compactText(issue.repo, 120) : null,
+            number: issue.number,
+            state: issue.state,
+            state_reason: issue.state_reason,
+            title: compactText(issue.title, 140),
+            author: compactText(issue.author, 80),
+            created_at: issue.created_at,
+            updated_at: issue.updated_at,
+          };
+        },
       });
+      return;
     }
+
+    const { shown, limit } = aggregateWindow(issues, opts);
+    for (const issue of shown) {
+      const stateColor = issue.state === "open" ? chalk.green : chalk.red;
+      const slug = issue.org && issue.repo ? `${issue.org}/${issue.repo}` : "";
+      console.log(`  ${stateColor(`[${issue.state}]`)} ${slug}#${issue.number} ${compactText(issue.title, opts.verbose ? 160 : 100)}`);
+      if (opts.verbose) {
+        const reason = issue.state_reason ? ` reason ${issue.state_reason}` : "";
+        console.log(chalk.dim(`    by ${issue.author} created ${day(issue.created_at)} updated ${day(issue.updated_at)}${reason}${issue.url ? ` ${issue.url}` : ""}`));
+      }
+    }
+    printCompactHint({
+      count: shown.length,
+      noun: `of ${total} issue(s)`,
+      limit,
+      verbose: opts.verbose,
+      detail: "Filter with --org, --repo, --repo-name, --state, or --author; use --json for opaque continuation",
+    });
   });
 
 program

@@ -55,7 +55,7 @@ print unusable registry rows but exit non-zero unless
 | `repos branches` | Filter with `--repo`, `--remote`, or `--local`; pagination, `--verbose`, `--json` |
 | `repos tags` | `--repo`, pagination, `--verbose`, `--json` |
 | `repos prs` | `--repo`, `--org`, `--repo-name`, `--state`, `--author`, `--mine`, `--review`, `--duplicates`, pagination, `--verbose`, `--json` |
-| `repos issues` | `--repo`, `--org`, `--repo-name`, `--state` (open/closed), `--author`, `--duplicates`, pagination, `--verbose`, `--json` |
+| `repos issues` | `--repo`, `--org`, `--repo-name`, `--state` (open/closed), `--author`, `--duplicates`, `-n/--limit`, opaque `--cursor`, `--verbose`, `--json`; defaults to a compact minified page under 32 KiB with stable `issue_key`/`issue_ref` and mutation refusal, exhaustive legacy arrays require `--full`/`--all` |
 | `repos pr-monitor` | PR monitor: syncs GitHub PR metadata first (default), classifies every open PR into NEW, CI_FAILING, REVIEW_NEEDED, NO_GO_OPEN, READY_TO_MERGE, BASE_MOVED, STALE_WORKTREE, or NEW_COMMENT, and emits only changed state; `--org <org>`, `--repo <repo>`, `-n/--limit <n>` (default 500), `--sync` (default), `--no-sync`, `--baseline`, `--verbose`, `--json` |
 | `repos search <query>` | Unified repo/commit/PR search; `-n/--limit`, `--verbose`, `--json` |
 | `repos stats` | Global totals and activity summaries; `--json` |
