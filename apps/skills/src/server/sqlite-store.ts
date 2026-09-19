@@ -36,6 +36,9 @@ import type {
   ServerSkillBundle,
   ServerSkillVersion,
   ApiKeyScopeUpdateResult,
+  OperatorScopeEnrollmentInput,
+  OperatorScopeEnrollmentResult,
+  OperatorScopeTargetSnapshot,
   ServerSkillRecord,
   SkillLifecyclePatch,
   SkillsProductStore,
@@ -262,6 +265,38 @@ export class SqliteSkillsStore implements SkillsProductStore {
       return { kind: "stale", scopes: latest ? parseScopes(latest.scopes_json) : current };
     }
     return { kind: "updated", scopes };
+  }
+
+  async enrollPublishScopeByOperator(input: OperatorScopeEnrollmentInput): Promise<OperatorScopeEnrollmentResult> {
+    if (input.expectedScopes.includes("skills:publish")) return { kind: "stale", scopes: input.expectedScopes };
+    const row = this.get("SELECT id, org_id, name, scopes_json FROM api_keys WHERE id = ? AND revoked_at IS NULL LIMIT 1", [input.keyId]);
+    if (!row) return { kind: "not_found" };
+    if (String(row.org_id) !== input.orgId) return { kind: "target_mismatch" };
+    const current = parseScopes(row.scopes_json);
+    const prior = this.get("SELECT metadata_json FROM skills_audit_events WHERE action = ? AND target_type = ? AND target_id = ? AND json_extract(metadata_json, '$.operator_operation_id') = ? LIMIT 1", ["api_key_scopes_added", "api_key", input.keyId, input.operationId]);
+    if (prior) {
+      return current.includes("skills:publish") ? { kind: "already_applied", scopes: current } : { kind: "stale", scopes: current };
+    }
+    if (current.length !== input.expectedScopes.length || current.some((scope, index) => scope !== input.expectedScopes[index])) return { kind: "stale", scopes: current };
+    const scopes = [...current, "skills:publish"];
+    const tx = this.db.transaction(() => {
+      const changed = this.db.run("UPDATE api_keys SET scopes_json = ? WHERE id = ? AND org_id = ? AND revoked_at IS NULL AND scopes_json = ?", [JSON.stringify(scopes), input.keyId, input.orgId, JSON.stringify(input.expectedScopes)]);
+      if (changed.changes !== 1) return false;
+      this.db.run("INSERT INTO skills_audit_events (org_id, user_id, api_key_id, action, target_type, target_id, metadata_json) VALUES (?, NULL, NULL, ?, ?, ?, ?)", [input.orgId, "api_key_scopes_added", "api_key", input.keyId, JSON.stringify({ added: ["skills:publish"], scopes, operator_operation_id: input.operationId, operator_job_id: input.operatorJobId, operator_task_arn: input.operatorTaskArn, target_manifest_digest: input.manifestDigest, station_id: input.stationId })]);
+      return true;
+    });
+    if (!tx()) {
+      const latest = this.get("SELECT scopes_json FROM api_keys WHERE id = ? AND org_id = ? AND revoked_at IS NULL LIMIT 1", [input.keyId, input.orgId]);
+      return { kind: "stale", scopes: latest ? parseScopes(latest.scopes_json) : current };
+    }
+    return { kind: "updated", scopes };
+  }
+
+  async inspectOperatorScopeTarget(keyId: string, orgId: string): Promise<OperatorScopeTargetSnapshot> {
+    const row = this.get("SELECT org_id, scopes_json FROM api_keys WHERE id = ? AND revoked_at IS NULL LIMIT 1", [keyId]);
+    if (!row) return { kind: "not_found" };
+    if (String(row.org_id) !== orgId) return { kind: "target_mismatch" };
+    return { kind: "found", scopes: parseScopes(row.scopes_json) };
   }
 
   async createRun(input: CreateRunInput): Promise<ServerRunRecord> {

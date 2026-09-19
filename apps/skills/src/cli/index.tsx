@@ -136,6 +136,8 @@ registerPrivatePublications(program);
 
 const { registerAuth } = await import("./commands/auth.js");
 registerAuth(program);
+const { registerMaintenance } = await import("./commands/maintenance.js");
+registerMaintenance(program);
 const { registerCustomerProfileCommands } = await import("./commands/customer-profile.js");
 registerCustomerProfileCommands(program);
 

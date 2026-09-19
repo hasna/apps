@@ -113,6 +113,34 @@ export type ApiKeyScopeUpdateResult =
   | { kind: "not_found" }
   | { kind: "stale"; scopes: string[] };
 
+/**
+ * A maintenance task's provenance is deliberately separate from ApiPrincipal.
+ * An ECS task is not a user and must never be represented by impersonating an
+ * API key, user id, or role in the audit row.
+ */
+export interface OperatorScopeEnrollmentInput {
+  keyId: string;
+  stationId: string;
+  orgId: string;
+  expectedScopes: string[];
+  operationId: string;
+  manifestDigest: string;
+  operatorJobId: string;
+  operatorTaskArn: string;
+}
+
+export type OperatorScopeEnrollmentResult =
+  | { kind: "updated"; scopes: string[] }
+  | { kind: "already_applied"; scopes: string[] }
+  | { kind: "not_found" }
+  | { kind: "target_mismatch" }
+  | { kind: "stale"; scopes: string[] };
+
+export type OperatorScopeTargetSnapshot =
+  | { kind: "not_found" }
+  | { kind: "target_mismatch" }
+  | { kind: "found"; scopes: string[] };
+
 export interface ServerRunRecord {
   id: string;
   orgId: string;
@@ -404,6 +432,11 @@ export interface SkillsProductStore {
     expectedScopes: string[],
     addScopes: string[],
   ): Promise<ApiKeyScopeUpdateResult>;
+  /** Add only skills:publish to an existing key from a protected maintenance task. */
+  enrollPublishScopeByOperator?(
+    input: OperatorScopeEnrollmentInput,
+  ): Promise<OperatorScopeEnrollmentResult>;
+  inspectOperatorScopeTarget?(keyId: string, orgId: string): Promise<OperatorScopeTargetSnapshot>;
   ensureBootstrapApiKey?(token: string, principal?: Partial<ApiPrincipal>): Promise<void>;
   createRun(input: CreateRunInput): Promise<ServerRunRecord>;
   listRuns(principal: ApiPrincipal, limit: number): Promise<ServerRunRecord[]>;
