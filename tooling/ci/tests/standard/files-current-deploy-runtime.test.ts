@@ -77,6 +77,41 @@ exit 9
     });
   });
 
+  test("rollback replaces only the observed candidate with the captured predecessor", async () => {
+    const dir = temp();
+    const state = join(dir, "describe-count");
+    const updateLog = join(dir, "update-args");
+    executable(join(dir, "aws"), `#!/usr/bin/env bash
+if [[ "$*" == *"ecs describe-services"* ]]; then
+  count=0; [[ -f "$FAKE_STATE" ]] && count="$(cat "$FAKE_STATE")"
+  count=$((count + 1)); printf '%s' "$count" > "$FAKE_STATE"
+  td="${task22}"; [[ "$count" -gt 1 ]] && td="${task21}"
+  printf '{"failures":[],"services":[{"status":"ACTIVE","taskDefinition":"%s","deployments":[{"status":"PRIMARY","rolloutState":"COMPLETED","taskDefinition":"%s","desiredCount":1,"runningCount":1,"pendingCount":0}]}]}\n' "$td" "$td"
+  exit 0
+fi
+if [[ "$*" == *"ecs update-service"* ]]; then printf '%s\n' "$*" > "$FAKE_UPDATE_LOG"; exit 0; fi
+if [[ "$*" == *"ecs wait services-stable"* ]]; then exit 0; fi
+exit 9
+`);
+    const rollback = join(dir, "rollback.json");
+    const reconciliation = join(dir, "reconciliation.json");
+    const previousImage = "old@sha256:" + "e".repeat(64);
+    const result = await run(restore, ["oss-fleet-prod", "files-prod", task22, task21, source, image, previousImage, rollback, reconciliation], {
+      PATH: `${dir}:${process.env.PATH}`,
+      FAKE_STATE: state,
+      FAKE_UPDATE_LOG: updateLog,
+    });
+    expect(result.code).toBe(0);
+    expect(readFileSync(updateLog, "utf8")).toContain(`--task-definition ${task21}`);
+    expect(existsSync(reconciliation)).toBe(false);
+    expect(JSON.parse(readFileSync(rollback, "utf8"))).toMatchObject({
+      candidate: { task_definition: task22, image },
+      restored: { task_definition: task21, image: previousImage },
+      automatic_rollback_performed: true,
+      cas_anchor_verified: true,
+    });
+  });
+
   test("canonical readiness rejects redirects, identityless, stale, and misrouted bodies", async () => {
     const dir = temp();
     const argsLog = join(dir, "curl-args");
@@ -104,11 +139,14 @@ esac
     expect((await run(readiness, args, { ...base, FAKE_CURL_MODE: "multi" })).code).toBe(1);
   });
 
-  test("canonical data-plane proof requires one /v1 server, the manifest route, and its auth boundary", async () => {
+  test("canonical data-plane proof requires one /v1 server plus anonymous and authenticated manifest receipts", async () => {
     const dir = temp();
     const argsLog = join(dir, "curl-args");
+    const keyFile = join(dir, "files-api-key");
+    writeFileSync(keyFile, "fixture-files-key");
+    chmodSync(keyFile, 0o600);
     executable(join(dir, "curl"), `#!/usr/bin/env bash
-printf '%s\n' "$*" >> "$FAKE_CURL_ARGS"
+printf '<%s>\n' "$@" >> "$FAKE_CURL_ARGS"
 if [[ "$*" == *"/openapi.json"* ]]; then
   case "$FAKE_MODE" in
     double) printf '{"openapi":"3.0.3","servers":[{"url":"/v1"}],"paths":{"/v1/knowledge/manifest":{"get":{}}}}\n200' ;;
@@ -116,28 +154,59 @@ if [[ "$*" == *"/openapi.json"* ]]; then
     redirect) printf '{}\n302' ;;
     *) printf '{"openapi":"3.0.3","servers":[{"url":"/v1"}],"paths":{"/knowledge/manifest":{"get":{}}}}\n200' ;;
   esac
-else
-  [[ "$FAKE_MODE" == "route404" ]] && printf '{"error":"not found"}\n404' || printf '{"error":"missing credential"}\n401'
+  exit 0
 fi
+header_file=""
+previous=""
+for argument in "$@"; do
+  if [[ "$previous" == "--header" ]]; then header_file="\${argument#@}"; fi
+  previous="$argument"
+done
+if [[ -z "$header_file" ]]; then
+  [[ "$FAKE_MODE" == "route404" ]] && printf '{"error":"not found"}\n404' || printf '{"error":"missing credential"}\n401'
+  exit 0
+fi
+grep -qx 'x-api-key: fixture-files-key' "$header_file" || { printf '{"error":"bad fixture header"}\n401'; exit 0; }
+case "$FAKE_MODE" in
+  auth401) printf '{"error":"rejected"}\n401' ;;
+  authRedirect) printf '{}\n302' ;;
+  authMalformed) printf '{}\n200' ;;
+  *) printf '{"filter_contract":"files.knowledge.manifest.v1","cursor_contract":"files.knowledge.manifest.change.v1","manifest_id":"manifest-fixture","generated_at":"2026-09-19T00:00:00.000Z","format":"json","filters":{},"item_count":0,"has_more":false,"complete":true,"delta":false,"high_watermark":"0","delta_cursor":"signed-fixture","tombstone_count":0,"items":[]}\n200' ;;
+esac
 `);
     const receipt = join(dir, "data-plane.json");
     const base = { PATH: `${dir}:${process.env.PATH}`, FAKE_CURL_ARGS: argsLog, FAKE_MODE: "ok" };
-    const good = await run(dataPlane, ["https://api.hasna.com/files", receipt], base);
+    const args = ["https://api.hasna.com/files", keyFile, "hasna/oss/files/api-key", receipt];
+    const good = await run(dataPlane, args, base);
     expect(good.code).toBe(0);
     expect(JSON.parse(readFileSync(receipt, "utf8"))).toMatchObject({
       schema: "hasna.files.canonical_data_plane.v1",
       base_url: "https://api.hasna.com/files",
       openapi: { server: "/v1", route: "/knowledge/manifest", double_v1_paths: 0 },
-      probe: { http_status: 401, credentials_sent: false, redirects_followed: false },
+      anonymous_boundary: { http_status: 401, credentials_sent: false, redirects_followed: false },
+      authenticated_manifest: {
+        http_status: 200,
+        credentials_sent: true,
+        credential_ref: "hasna/oss/files/api-key",
+        header: "x-api-key",
+        redirects_followed: false,
+        contract: { filter_contract: "files.knowledge.manifest.v1", item_count: 0, has_more: false, complete: true },
+      },
       single_v1: true,
     });
     const calls = readFileSync(argsLog, "utf8");
     expect(calls).toContain("https://api.hasna.com/files/openapi.json");
     expect(calls).toContain("https://api.hasna.com/files/v1/knowledge/manifest?limit=1");
+    expect(calls).toContain("--header");
+    expect(calls).not.toContain("fixture-files-key");
     expect(calls).not.toContain("authorization");
-    for (const mode of ["double", "missing", "redirect", "route404"]) {
-      expect((await run(dataPlane, ["https://api.hasna.com/files", join(dir, `${mode}.json`)], { ...base, FAKE_MODE: mode })).code).toBe(1);
+    for (const mode of ["double", "missing", "redirect", "route404", "auth401", "authRedirect", "authMalformed"]) {
+      const modeArgs = ["https://api.hasna.com/files", keyFile, "hasna/oss/files/api-key", join(dir, `${mode}.json`)];
+      expect((await run(dataPlane, modeArgs, { ...base, FAKE_MODE: mode })).code).toBe(1);
     }
+    expect((await run(dataPlane, ["https://api.hasna.com/files", keyFile, "wrong/ref", join(dir, "wrong-ref.json")], base)).code).toBe(2);
+    chmodSync(keyFile, 0o644);
+    expect((await run(dataPlane, args, base)).code).toBe(2);
   });
 
   test("a waiter failure retains launch identity and best-effort partial state", async () => {

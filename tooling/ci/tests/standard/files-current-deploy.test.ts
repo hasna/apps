@@ -67,7 +67,14 @@ describe("Files current-server deployment lane", () => {
     expect(readiness).not.toContain('has("source_commit") | not');
     expect(dataPlane).toContain('/v1/knowledge/manifest?limit=1');
     expect(dataPlane).toContain('credentials_sent:false');
+    expect(dataPlane).toContain('credentials_sent:true');
+    expect(dataPlane).toContain('authenticated_manifest');
+    expect(dataPlane).toContain('files.knowledge.manifest.v1');
+    expect(dataPlane).toContain('--header "@${HEADER_FILE}"');
     expect(dataPlane).toContain('double_v1_paths:0');
+    expect(workflow).toContain('FILES_CLIENT_KEY_SECRET_ID: hasna/oss/files/api-key');
+    expect(workflow).toContain('aws secretsmanager get-secret-value');
+    expect(workflow).toContain('apps/files/data-plane-canonical.json');
     expect(workflow).toContain('HASNA_FILES_DEPLOY_SOURCE_COMMIT');
     expect(workflow).toContain('HASNA_FILES_DEPLOY_IMAGE_DIGEST');
     expect(workflow).toContain('deployed_source_commit');
