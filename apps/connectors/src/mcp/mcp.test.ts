@@ -219,8 +219,17 @@ describe("MCP Server", () => {
       expect(Array.isArray(data.connectors)).toBe(true);
       expect(data.connectors.length).toBeLessThanOrEqual(20);
       expect(data.total).toBeGreaterThan(50);
+      expect(data.count).toBe(data.connectors.length);
+      expect(data.limit).toBe(20);
+      expect(data.cursor).toBe("0");
       expect(data.nextCursor).toBeTruthy();
+      expect(data.hasMore).toBe(true);
+      expect(data.compact).toBe(true);
+      expect(data.catalogVersion).toMatch(/^\d+\.\d+\.\d+$/);
       expect(data.hint).toContain("verbose");
+      const text = res.result?.content?.[0]?.text ?? "";
+      expect(text).not.toContain("\n");
+      expect(Buffer.byteLength(text, "utf8")).toBeLessThan(12 * 1024);
     });
 
     test("filters by category", async () => {
@@ -379,10 +388,14 @@ describe("MCP Server", () => {
     test("supports compact pagination cursor", async () => {
       const first = parseContent(await callMcp("list_connectors", { limit: 2 }));
       expect(first.connectors).toHaveLength(2);
+      expect(first.limit).toBe(2);
+      expect(first.cursor).toBe("0");
       expect(first.nextCursor).toBe("2");
+      expect(first.hasMore).toBe(true);
 
       const second = parseContent(await callMcp("list_connectors", { limit: 2, cursor: first.nextCursor }));
       expect(second.connectors).toHaveLength(2);
+      expect(second.cursor).toBe("2");
       expect(second.connectors[0].name).not.toBe(first.connectors[0].name);
     });
 
@@ -390,6 +403,7 @@ describe("MCP Server", () => {
       const res = await callMcp("list_connectors", { limit: 1, verbose: true });
       const data = parseContent(res);
       expect(data.connectors[0]).toHaveProperty("tags");
+      expect(data.compact).toBe(false);
     });
   });
 
