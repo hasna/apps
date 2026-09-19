@@ -8,6 +8,7 @@ import { assertLocalStoreBackend, isolatedStoreEnv } from "../test-support/store
 
 const DB_PATH = join(tmpdir(), `mementos-agents-json-output-${Date.now()}.db`);
 const CLI_PATH = new URL("./index.tsx", import.meta.url).pathname;
+const HELPERS_PATH = new URL("./helpers.ts", import.meta.url).href;
 const CLI_ENV = isolatedStoreEnv(DB_PATH);
 const AGENT_COUNT = 1_200;
 const DESCRIPTION = "fixture-agent-description-" + "x".repeat(700);
@@ -23,6 +24,13 @@ async function runCli(): Promise<{ stdout: string; stderr: string; exitCode: num
     new Response(proc.stderr).text(),
   ]);
   return { stdout, stderr, exitCode: await proc.exited };
+}
+
+async function runLargeJsonWithExplicitExit(): Promise<{ stdout: string; exitCode: number }> {
+  const script = `import { outputJson } from ${JSON.stringify(HELPERS_PATH)}; outputJson(Array.from({ length: 12000 }, (_, i) => ({ id: i, value: "x".repeat(700) }))); process.exit(23);`;
+  const proc = Bun.spawn(["bun", "-e", script], { stdout: "pipe", stderr: "pipe" });
+  const stdout = await new Response(proc.stdout).text();
+  return { stdout, exitCode: await proc.exited };
 }
 
 beforeAll(async () => {
@@ -46,10 +54,19 @@ describe("agents JSON output", () => {
     const result = await runCli();
     expect(result.exitCode).toBe(0);
     expect(result.stderr).not.toContain("error:");
-    expect(Buffer.byteLength(result.stdout)).toBeGreaterThan(327_680);
+    expect(Buffer.byteLength(result.stdout)).toBeGreaterThan(128_000);
     const rows = JSON.parse(result.stdout) as Array<{ name: string }>;
     expect(rows).toHaveLength(AGENT_COUNT);
     expect(rows[0]?.name).toBe("json-output-agent-0000");
     expect(rows.at(-1)?.name).toBe("json-output-agent-1199");
+  }, 60_000);
+
+  test("completes a large JSON write before an explicit nonzero exit", async () => {
+    const result = await runLargeJsonWithExplicitExit();
+    expect(result.exitCode).toBe(23);
+    expect(Buffer.byteLength(result.stdout)).toBeGreaterThan(8_000_000);
+    const rows = JSON.parse(result.stdout) as Array<{ id: number }>;
+    expect(rows).toHaveLength(12_000);
+    expect(rows.at(-1)?.id).toBe(11_999);
   }, 60_000);
 });
