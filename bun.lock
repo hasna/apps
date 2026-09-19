@@ -144,7 +144,7 @@
     },
     "apps/connectors": {
       "name": "@hasna/connectors",
-      "version": "1.4.5",
+      "version": "1.5.0",
       "bin": {
         "connectors": "./bin/index.js",
         "connectors-mcp": "./bin/mcp.js",
