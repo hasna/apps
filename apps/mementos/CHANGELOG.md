@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.17.0
+
+### Minor Changes
+
+- Consume the bounded-output and hosted-transport changeset: compact continuation envelopes, bounded context/injection/export output with explicit exhaustive escapes, truthful credential-file reporting, fail-closed SDK behavior, and canonical credential-resolved Conversations routing.
+- Ensure large `mementos --json agents` listings finish writing before exit so callers receive complete parseable JSON.
+
 ## 0.16.0
 
 ### Minor Changes
