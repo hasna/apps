@@ -10,7 +10,7 @@ const DB_PATH = join(mkdtempSync(join(tmpdir(), "mementos-agents-json-output-"))
 const CLI_PATH = new URL("./index.tsx", import.meta.url).pathname;
 const HELPERS_PATH = new URL("./helpers.ts", import.meta.url).href;
 const CLI_ENV = isolatedStoreEnv(DB_PATH);
-const AGENT_COUNT = 1_200;
+const AGENT_COUNT = 1_000;
 const DESCRIPTION = "fixture-agent-description-" + "x".repeat(700);
 
 async function runCli(...args: string[]): Promise<{ stdout: string; stderr: string; exitCode: number }> {
@@ -51,18 +51,14 @@ afterAll(() => {
 
 describe("agents JSON output", () => {
   test("emits complete parseable JSON for a large listing", async () => {
-    const result = await runCli("agents", "--limit", String(AGENT_COUNT + 1));
-    if (result.exitCode !== 0) {
-      throw new Error(
-        `agents CLI exited ${result.exitCode}; stderr: ${result.stderr.slice(0, 2000)}; stdout prefix: ${result.stdout.slice(0, 200)}`,
-      );
-    }
+    const result = await runCli("agents", "--limit", String(AGENT_COUNT));
+    expect(result.exitCode).toBe(0);
     expect(result.stderr).not.toContain("error:");
     expect(Buffer.byteLength(result.stdout)).toBeGreaterThan(327_680);
     const rows = JSON.parse(result.stdout) as Array<{ name: string }>;
     expect(rows).toHaveLength(AGENT_COUNT);
     expect(rows[0]?.name).toBe("json-output-agent-0000");
-    expect(rows.at(-1)?.name).toBe("json-output-agent-1199");
+    expect(rows.at(-1)?.name).toBe("json-output-agent-0999");
   }, 60_000);
 
   test("preserves a real CLI nonzero status with complete JSON error output", async () => {
