@@ -37,7 +37,7 @@ beforeAll(async () => {
   await assertLocalStoreBackend(CLI_PATH, CLI_ENV, DB_PATH);
   const db = getDatabase(DB_PATH);
   for (let i = 0; i < AGENT_COUNT; i += 1) {
-    registerAgent(`json-output-agent-${String(i).padStart(4, "0")}`, undefined, DESCRIPTION, "fixture", undefined, db);
+    registerAgent(`json-output-agent-${String(i).padStart(4, "0")}`, undefined, DESCRIPTION, DESCRIPTION, undefined, db);
   }
 });
 
