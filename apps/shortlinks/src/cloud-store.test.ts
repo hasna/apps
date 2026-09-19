@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { CloudShortlinksStore } from "./cloud-store.js";
 
 const CLOUD_ENV = {
-  HASNA_SHORTLINKS_API_URL: "https://shortlinks.hasna.xyz",
+  HASNA_SHORTLINKS_API_URL: "https://api.hasna.com/shortlinks",
   HASNA_SHORTLINKS_API_KEY: "hasna_shortlinks_test_key",
 } as const;
 
@@ -47,7 +47,7 @@ describe("CloudShortlinksStore.fromEnv client selection", () => {
     // An API_URL with no resolvable credential must fail loudly, never fall
     // back silently to the local store.
     expect(() =>
-      CloudShortlinksStore.fromEnv({ HASNA_SHORTLINKS_API_URL: "https://shortlinks.hasna.xyz" }),
+      CloudShortlinksStore.fromEnv({ HASNA_SHORTLINKS_API_URL: "https://api.hasna.com/shortlinks" }),
     ).toThrow(/no API key could be resolved/);
     // A declared-but-blank variable is refused loudly too.
     expect(() =>
@@ -67,7 +67,7 @@ describe("CloudShortlinksStore.fromEnv client selection", () => {
   test("returns a hosted-API store when fully configured", () => {
     const s = CloudShortlinksStore.fromEnv(CLOUD_ENV);
     expect(s).not.toBeNull();
-    expect(s!.baseUrl).toBe("https://shortlinks.hasna.xyz/v1");
+    expect(s!.baseUrl).toBe("https://api.hasna.com/shortlinks/v1");
   });
 });
 
@@ -121,10 +121,37 @@ describe("CloudShortlinksStore routes to /v1 with bearer key", () => {
     expect(calls[0].url).toContain("/v1/stats");
   });
 
-  test("addDomain -> POST /v1/domains mapping default/originUrl", async () => {
-    const { s, calls } = store((c) => ({ status: 201, json: { id: "dom_1", hostname: (c.body as any).hostname } }));
-    await s.addDomain({ hostname: "has.na", defaultDomain: true, originUrl: "https://o" });
-    expect(calls[0].body).toMatchObject({ hostname: "has.na", default: true, origin_url: "https://o" });
+  test("addDomain only ensures the built-in domain and sends no provider implementation", async () => {
+    const { s, calls } = store((c) => ({
+      status: 201,
+      json: { domain: { id: "dom_1", hostname: (c.body as any).hostname }, provisioning: null },
+    }));
+    const domain = await s.addDomain({ hostname: "has.na", defaultDomain: true });
+    expect(domain.hostname).toBe("has.na");
+    expect(calls[0].body).toEqual({ hostname: "has.na", default: true });
+  });
+
+  test("provisionDomain sends only business intent to Shortlinks", async () => {
+    const { s, calls } = store((c) => ({
+      status: 202,
+      json: { domain: { id: "dom_2", hostname: (c.body as any).hostname }, provisioning: { status: "requested" } },
+    }));
+    await s.provisionDomain({
+      hostname: "proof.example",
+      maxPriceUsd: 5,
+      years: 1,
+      autoRenew: false,
+      defaultDomain: false,
+      idempotencyKey: "shortlinks-domain:proof.example",
+    });
+    expect(calls[0].body).toEqual({
+      hostname: "proof.example",
+      max_price_usd: 5,
+      years: 1,
+      auto_renew: false,
+      default: false,
+    });
+    expect(JSON.stringify(calls[0].body)).not.toMatch(/cloudflare|route53|registrar|worker_name|dns_provider/);
   });
 
   test("deleteDomain resolves the domain then DELETEs /v1/domains/:hostname", async () => {

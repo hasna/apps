@@ -2,7 +2,7 @@
 
 Shortlink management for custom domains — CLI, MCP server, REST API, and a generated SDK.
 
-`shortlinks` creates Bitly-style short URLs, supports multiple domains, records click analytics, can run a tiny redirect server, and includes helper commands for Cloudflare DNS/Workers and `@hasna/domains`. The client resolves one store through the `@hasna/contracts` 1.0.2 client resolver: the hosted `/v1` API when a shortlinks credential resolves (the macOS Keychain, `~/.hasna/shortlinks/config/credentials`, or `HASNA_SHORTLINKS_API_KEY` — the URL defaults to the fleet gateway `https://api.hasna.com/shortlinks` and never needs configuring), or the on-box SQLite database (`~/.hasna/shortlinks/shortlinks.db`) when the local backend is explicitly opted into with `HASNA_SHORTLINKS_LOCAL=1` (alias `SHORTLINKS_LOCAL=1`), which is announced on stderr as `shortlinks: LOCAL mode — …`. That environment opt-in is the only door into local storage: `--db <path>` chooses the database file for such a run and, on its own, is refused. With neither, store-backed commands fail closed — the CLI never falls back to local storage on its own. The `shortlinks-serve` service reads/writes an app-owned PostgreSQL database when `HASNA_SHORTLINKS_DATABASE_URL` is configured.
+`shortlinks` creates Bitly-style short URLs, supports multiple domains, records click analytics, and runs a redirect server. Custom-domain availability and purchase intent go through `@hasna/domains`; registrar, DNS, nameserver, certificate, and router-binding implementation stays exclusively in the Domains service. The client resolves one store through the `@hasna/contracts` 1.0.2 client resolver: the hosted `/v1` API when a shortlinks credential resolves (the macOS Keychain, `~/.hasna/shortlinks/config/credentials`, or `HASNA_SHORTLINKS_API_KEY` — the URL defaults to the fleet gateway `https://api.hasna.com/shortlinks` and never needs configuring), or the on-box SQLite database (`~/.hasna/shortlinks/shortlinks.db`) when the local backend is explicitly opted into with `HASNA_SHORTLINKS_LOCAL=1` (alias `SHORTLINKS_LOCAL=1`), which is announced on stderr as `shortlinks: LOCAL mode — …`. That environment opt-in is the only door into local storage: `--db <path>` chooses the database file for such a run and, on its own, is refused. With neither, store-backed commands fail closed — the CLI never falls back to local storage on its own. The `shortlinks-serve` service reads/writes an app-owned PostgreSQL database when `HASNA_SHORTLINKS_DATABASE_URL` is configured.
 
 ## Surfaces
 
@@ -22,6 +22,8 @@ Four surfaces share one core library:
 ```bash
 HASNA_SHORTLINKS_DATABASE_URL=$DATABASE_URL \
 HASNA_SHORTLINKS_API_SIGNING_KEY=... \
+HASNA_DOMAINS_API_KEY=... \
+HASNA_DOMAINS_API_URL=https://domains.example.net \
 shortlinks-serve            # migrate (idempotent) then serve on :8080
 shortlinks-serve migrate    # one-shot migration task
 ```
@@ -128,7 +130,7 @@ shortlinks link list --limit 50
 shortlinks link get home --verbose
 shortlinks stats home --verbose
 shortlinks doctor --verbose
-shortlinks domain check has.na --verbose
+shortlinks domain setup example.test --max-price 5 --auto-renew false --dry-run
 shortlinks events list --limit 50
 shortlinks webhooks list --limit 50
 shortlinks --json link get home
@@ -155,10 +157,8 @@ by default.
 
 ```bash
 shortlinks init --domain has.na
-shortlinks domain add has.na --default
-shortlinks domain setup go.example.com --cloudflare --target shortlinks.example.com --dry-run
-shortlinks domain check example.ai
-shortlinks domain buy example.ai --dry-run
+shortlinks domain setup go.example.com --max-price 5 --auto-renew false --years 1 --dry-run
+shortlinks domain setup go.example.com --max-price 5 --auto-renew false --years 1 --wait
 
 shortlinks create https://example.com --slug home
 shortlinks link create https://example.com/docs --domain has.na --title Docs
@@ -183,57 +183,50 @@ shortlinks local plan has.na --port 8787
 
 The command emits the `/etc/hosts` line, a Caddy reverse-proxy snippet, and certificate paths. Writing `/etc/hosts` still requires sudo on macOS.
 
-## Custom Domains
+## Custom Domains through the Domains API
 
-Add as many domains as you need:
+Shortlinks never talks directly to a registrar, DNS provider, or Cloudflare. It
+accepts only business intent and delegates it across the API boundary:
 
-```bash
-shortlinks domain add has.na --default
-shortlinks domain add go.example.com --provider cloudflare
+```text
+client -> Shortlinks /v1 -> Domains /v1 -> registrar + DNS + delegation + router binding
 ```
 
-Generated links use the default domain unless `--domain` is passed.
-
-Remove a domain (this also deletes all of its links and clicks):
-
-```bash
-shortlinks domain remove go.example.com
-```
-
-## Cloudflare
-
-Create a dry-run plan:
+Every purchase requires an explicit total price cap, renewal decision, and
+stable idempotency key. The CLI derives `shortlinks-domain:<hostname>` unless a
+key is supplied:
 
 ```bash
-shortlinks cloudflare plan has.na \
-  --target shortlinks.example.com \
-  --origin https://shortlinks.example.com
+shortlinks domain setup go.example.com \
+  --max-price 5 \
+  --auto-renew false \
+  --years 1 \
+  --wait
 ```
 
-Write a Cloudflare Worker that forwards requests to the redirect server while preserving the original host:
+`--dry-run` prints only the business request and performs no write. Shortlinks
+rejects registrar, DNS-provider, Cloudflare account/zone, Worker, origin, and
+provider-state fields. A pending domain is non-routable and cannot become the
+default; reconciliation activates it only after Domains reports `ready`.
+
+`has.na` is the built-in managed default. Creating it locally does not trigger a
+purchase. Managed custom-domain projections cannot be locally deleted until a
+Domains decommission workflow exists, preventing an orphaned edge binding.
+
+### Self-hosted infrastructure
+
+The API boundary is not a Hasna-cloud lock-in. Run `domains-serve` and
+`shortlinks-serve` in your own infrastructure, keep registrar and DNS-provider
+credentials only on Domains, and configure Shortlinks with:
 
 ```bash
-shortlinks cloudflare worker \
-  --worker shortlinks \
-  --origin https://shortlinks.example.com
+export HASNA_DOMAINS_API_KEY=... # domains:read + domains:purchase
+export HASNA_DOMAINS_API_URL=https://domains.example.net
 ```
 
-Upsert DNS when `CLOUDFLARE_API_TOKEN` is available. Global API key auth is also supported with `CLOUDFLARE_API_KEY` plus `CLOUDFLARE_EMAIL`.
-
-```bash
-shortlinks cloudflare dns has.na --target shortlinks.example.com
-```
-
-## Buying Domains
-
-Domain purchasing goes through the `domains` CLI from `@hasna/domains`:
-
-```bash
-shortlinks domain check new-short-domain.ai
-shortlinks domain buy new-short-domain.ai --dry-run
-```
-
-This package does not install or call any removed `connect-*` packages.
+`HASNA_DOMAINS_API_URL` accepts an HTTP(S) service root with or without `/v1`.
+When unset, it defaults to `https://api.hasna.com/domains`, and the Domains SDK
+appends `/v1` exactly once.
 
 ## Storage selection
 

@@ -3,9 +3,6 @@ export interface Domain {
   hostname: string;
   provider: string;
   default_domain: boolean;
-  cloudflare_zone_id: string | null;
-  cloudflare_account_id: string | null;
-  cloudflare_worker_name: string | null;
   origin_url: string | null;
   notes: string | null;
   metadata: Record<string, unknown>;
@@ -16,9 +13,11 @@ export interface Domain {
 }
 
 export interface Link {
+  /** Stable opaque database identity. This is not the public short code. */
   id: string;
   domain_id: string;
   hostname: string;
+  /** Public root-path code or friendly alias, for example `aZ3` or `friendly-link`. */
   slug: string;
   destination_url: string;
   title: string | null;
@@ -65,19 +64,33 @@ export interface CreateLinkInput {
   title?: string;
   expiresAt?: string;
   metadata?: Record<string, unknown>;
+  /** Minimum generated-code length. Values below 3 are clamped to 3. */
   slugLength?: number;
 }
 
+/** Internal domain-row write. Custom hostnames must be Domains API projections. */
 export interface AddDomainInput {
   hostname: string;
   provider?: string;
   defaultDomain?: boolean;
-  cloudflareZoneId?: string;
-  cloudflareAccountId?: string;
-  cloudflareWorkerName?: string;
   originUrl?: string;
   notes?: string;
   metadata?: Record<string, unknown>;
+}
+
+/** Business intent sent to Shortlinks; provider implementation stays in Domains. */
+export interface ProvisionDomainInput {
+  hostname: string;
+  maxPriceUsd: number;
+  years: number;
+  autoRenew: boolean;
+  defaultDomain?: boolean;
+  idempotencyKey: string;
+}
+
+export interface DomainReconciliationResult {
+  domain: Domain;
+  provisioning?: Record<string, unknown>;
 }
 
 export interface ClickInput {

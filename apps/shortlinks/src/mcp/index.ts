@@ -130,18 +130,20 @@ const TOOLS = [
     },
   },
   {
-    name: "add_domain",
-    description: "Add or update a shortlink domain.",
+    name: "provision_domain",
+    description: "Purchase and activate a custom shortlink domain through the hosted Domains API.",
     inputSchema: {
       type: "object",
       properties: {
         hostname: { type: "string" },
-        provider: { type: "string" },
+        max_price_usd: { type: "number" },
+        years: { type: "number", minimum: 1, maximum: 10 },
+        auto_renew: { type: "boolean" },
         default: { type: "boolean" },
-        origin_url: { type: "string" },
-        notes: { type: "string" },
+        idempotency_key: { type: "string" },
       },
-      required: ["hostname"],
+      required: ["hostname", "max_price_usd", "auto_renew", "idempotency_key"],
+      additionalProperties: false,
     },
   },
   {
@@ -188,15 +190,16 @@ async function dispatch(name: string, args: Record<string, any>): Promise<unknow
     case "link_stats":
       return withStore((s) => (args.domain ? s.getStats(args.domain, args.slug) : s.getStats(args.slug)));
     case "list_domains":
-      return withStore(async (s) => (await s.listDomains()).slice(0, listLimit(args.limit)));
-    case "add_domain":
+      return withStore((s) => s.listDomains());
+    case "provision_domain":
       return withStore((s) =>
-        s.addDomain({
+        s.provisionDomain({
           hostname: args.hostname,
-          provider: args.provider,
+          maxPriceUsd: args.max_price_usd,
+          years: args.years ?? 1,
+          autoRenew: args.auto_renew,
           defaultDomain: args.default,
-          originUrl: args.origin_url,
-          notes: args.notes,
+          idempotencyKey: args.idempotency_key,
         }),
       );
     case "delete_domain":

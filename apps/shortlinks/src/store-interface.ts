@@ -27,6 +27,8 @@ import type {
   ClickInput,
   CreateLinkInput,
   Domain,
+  DomainReconciliationResult,
+  ProvisionDomainInput,
   Link,
   LinkStats,
 } from "./types.js";
@@ -64,6 +66,10 @@ export interface Store {
    * links and clicks. Returns the deleted domain. Throws when not found.
    */
   deleteDomain(hostnameOrId: string): Promise<Domain>;
+  /** Submit purchase intent to Shortlinks, which delegates exclusively to Domains. */
+  provisionDomain(input: ProvisionDomainInput): Promise<DomainReconciliationResult>;
+  /** Refresh a custom-domain projection from the hosted Domains API. */
+  reconcileDomain(hostname: string): Promise<DomainReconciliationResult>;
 
   // ── Links ──────────────────────────────────────────────────────────────────
   createLink(input: CreateLinkInput): Promise<Link>;

@@ -7,6 +7,25 @@ import { ShortlinksStore } from "./store.js";
 let tempHome = "";
 let dbPath = "";
 
+function applyDomainsProjection(
+  store: ShortlinksStore,
+  hostname: string,
+  options: { defaultDomain?: boolean; status?: "pending" | "active" | "failed" } = {},
+) {
+  return store.addDomain({
+    hostname,
+    provider: "domains-api",
+    defaultDomain: options.defaultDomain,
+    metadata: {
+      provisioning: {
+        mode: "domains-api",
+        domains_job_id: `job-${hostname}`,
+        status: options.status ?? "active",
+      },
+    },
+  });
+}
+
 beforeEach(() => {
   tempHome = mkdtempSync(join(tmpdir(), "shortlinks-store-"));
   dbPath = join(tempHome, "shortlinks.db");
@@ -37,9 +56,16 @@ describe("ShortlinksStore", () => {
     store.close();
   });
 
+  test("refuses custom-domain rows that are not Domains API projections", () => {
+    const store = new ShortlinksStore(dbPath);
+    expect(() => store.addDomain({ hostname: "bypass.example", defaultDomain: true }))
+      .toThrow(/only be applied as projections/);
+    store.close();
+  });
+
   test("generates Bitly-style random slugs and prevents duplicates per domain", () => {
     const store = new ShortlinksStore(dbPath);
-    store.addDomain({ hostname: "go.example.com", defaultDomain: true });
+    applyDomainsProjection(store, "go.example.com", { defaultDomain: true });
     const first = store.createLink({ destinationUrl: "https://example.com/a", slugLength: 8 });
 
     expect(first.slug).toMatch(/^[0-9a-zA-Z]{8}$/);
@@ -132,7 +158,7 @@ describe("ShortlinksStore", () => {
   test("deleteDomain removes the domain and cascades its links and clicks", () => {
     const store = new ShortlinksStore(dbPath);
     store.addDomain({ hostname: "has.na", defaultDomain: true });
-    const link = store.createLink({ destinationUrl: "https://example.com/a", slug: "a" });
+    const link = store.createLink({ destinationUrl: "https://example.com/cascade", slug: "cascade" });
     store.recordClick(link, { ip: "203.0.113.10" });
 
     expect(store.totalStats()).toEqual({ domains: 1, links: 1, clicks: 1 });
@@ -147,6 +173,101 @@ describe("ShortlinksStore", () => {
     // Deleting a missing domain throws.
     expect(() => store.deleteDomain("nope.example")).toThrow("Domain not found.");
 
+    store.close();
+  });
+});
+
+describe("default domain and adaptive public codes", () => {
+  test("automatically provisions has.na when no domain is supplied", () => {
+    const store = new ShortlinksStore(dbPath);
+    const link = store.createLink({ destinationUrl: "https://example.com/auto" });
+
+    expect(link.hostname).toBe("has.na");
+    expect(link.short_url).toBe(`https://has.na/${link.slug}`);
+    expect(link.slug).toMatch(/^[0-9a-zA-Z]{3}$/);
+    expect(store.getDefaultDomain()?.hostname).toBe("has.na");
+    expect(store.listDomains()).toHaveLength(1);
+    store.close();
+  });
+
+  test("uses has.na instead of an unmarked custom domain, but honors an explicit default", () => {
+    const store = new ShortlinksStore(dbPath);
+    applyDomainsProjection(store, "go.example.com");
+    const automatic = store.createLink({ destinationUrl: "https://example.com/automatic", slug: "automatic" });
+    expect(automatic.hostname).toBe("has.na");
+
+    applyDomainsProjection(store, "links.example.com", { defaultDomain: true });
+    const explicit = store.createLink({ destinationUrl: "https://example.com/explicit", slug: "explicit" });
+    expect(explicit.hostname).toBe("links.example.com");
+    store.close();
+  });
+
+  test("grows generated codes after repeated atomic collisions", () => {
+    const requestedLengths: number[] = [];
+    const store = new ShortlinksStore(dbPath, process.env, {
+      tokenFactory(length) {
+        requestedLengths.push(length);
+        return "a".repeat(length);
+      },
+    });
+    store.addDomain({ hostname: "has.na", defaultDomain: true });
+    store.createLink({ destinationUrl: "https://example.com/existing", slug: "aaa" });
+
+    const generated = store.createLink({ destinationUrl: "https://example.com/generated" });
+    expect(generated.slug).toBe("aaaa");
+    expect(requestedLengths).toEqual([3, 3, 3, 3, 3, 3, 3, 3, 4]);
+    store.close();
+  });
+
+  test("keeps case-sensitive friendly aliases and opaque stable database ids", () => {
+    const store = new ShortlinksStore(dbPath);
+    store.addDomain({ hostname: "has.na", defaultDomain: true });
+    const upper = store.createLink({ destinationUrl: "https://example.com/upper", slug: "Friendly-Link" });
+    const lower = store.createLink({ destinationUrl: "https://example.com/lower", slug: "friendly-link" });
+
+    expect(upper.id).toMatch(/^lnk_[0-9a-f]{24}$/);
+    expect(upper.id).not.toBe(upper.slug);
+    expect(lower.id).not.toBe(upper.id);
+    expect(store.setLinkActive("has.na", upper.slug, false).id).toBe(upper.id);
+    store.close();
+  });
+
+
+  test("rejects system and reserved public slugs", () => {
+    const store = new ShortlinksStore(dbPath);
+    for (const slug of ["a", "A", "v1", "health", "ready", "version", "healthz"]) {
+      expect(() => store.createLink({ destinationUrl: "https://example.com", slug })).toThrow(/Reserved/);
+    }
+    store.close();
+  });
+
+
+  test("pending and failed domains cannot route or become implicit defaults", () => {
+    const store = new ShortlinksStore(dbPath);
+    applyDomainsProjection(store, "go.example.com", { status: "pending" });
+    const link = store.createLink({
+      domain: "go.example.com",
+      destinationUrl: "https://example.com/pending",
+      slug: "pending-link",
+    });
+    expect(store.resolve("go.example.com", link.slug)).toBeNull();
+
+    applyDomainsProjection(store, "go.example.com", { status: "active" });
+    expect(store.resolve("go.example.com", link.slug)?.id).toBe(link.id);
+
+    store.addDomain({
+      hostname: "has.na",
+      defaultDomain: false,
+      metadata: { provisioning: { status: "failed" } },
+    });
+    expect(() => store.createLink({ destinationUrl: "https://example.com/default" })).toThrow(/not active/);
+    store.close();
+  });
+
+  test("does not fall back to has.na for an unknown request hostname", () => {
+    const store = new ShortlinksStore(dbPath);
+    store.createLink({ destinationUrl: "https://example.com", slug: "friendly" });
+    expect(store.resolve("unknown.example", "friendly")).toBeNull();
     store.close();
   });
 });

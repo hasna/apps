@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Delegate custom-domain availability, capped purchase intent, registrar/DNS setup, nameserver delegation, and router readiness exclusively to the configured Domains API. Shortlinks rejects provider implementation fields, keeps pending domains non-routable, activates only `ready` projections, supports self-hosted Domains authorities through `HASNA_DOMAINS_API_URL`, and removes its direct Cloudflare/registrar implementation and packaged Worker assets.
+
 ## 0.3.1
 
 ### Patch Changes

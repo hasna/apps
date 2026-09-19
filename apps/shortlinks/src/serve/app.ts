@@ -15,6 +15,17 @@ import { checkHealth, checkReady } from "../generated/storage-kit/health.js";
 import { PgShortlinksStore } from "../pg-store.js";
 import { SHORTLINKS_MIGRATIONS } from "../db/migrations.js";
 import { buildOpenApiDocument } from "./openapi.js";
+import { createShortlinksHandler } from "../server.js";
+import { DEFAULT_DOMAIN_HOSTNAME } from "../slug.js";
+import { normalizeHostname } from "../config.js";
+import {
+  domainProvisioningMetadata,
+  projectDomainProvisioning,
+  readShortlinksDomainProvisioning,
+  reconcileShortlinksDomain,
+  requestShortlinksDomain,
+  type DomainsProvisioningClient,
+} from "../domains-provisioning.js";
 
 const APP_SLUG = "shortlinks";
 
@@ -28,6 +39,12 @@ export interface ServeAppDeps {
   /** Lifecycle lookup for presented API keys (wire `store.keyStatus`). */
   keyStatus?: ShortlinksKeyStatusResolver;
   audit?: (event: unknown) => void;
+  /** Trust X-Forwarded-Host only behind a separately authenticated proxy. */
+  trustForwardedHost?: boolean;
+  /** Shared secret required before x-hasna-public-* routing hints are trusted. */
+  linkRouterSecret?: string;
+  /** The only authority allowed to buy or configure custom domains. */
+  domains?: DomainsProvisioningClient;
 }
 
 const SECURITY_HEADERS: Record<string, string> = {
@@ -74,6 +91,19 @@ export function createServeApp(deps: ServeAppDeps): Hono {
     return c.json({ error: message }, notFound ? 404 : 400);
   }
 
+  function handleDomainsError(c: Context, error: unknown): Response {
+    const status = typeof error === "object" && error !== null && "status" in error
+      ? Number((error as { status?: unknown }).status)
+      : NaN;
+    if (status === 401 || status === 403) {
+      return c.json({ error: "Domains API authorization failed." }, 503);
+    }
+    if (status === 429 || status >= 500) {
+      return c.json({ error: "Domains API is temporarily unavailable." }, 502);
+    }
+    return handleError(c, error);
+  }
+
   // ── Health / ready / version ────────────────────────────────────────────
   app.get("/health", async (c) => {
     const health = await checkHealth(client);
@@ -114,32 +144,110 @@ export function createServeApp(deps: ServeAppDeps): Hono {
     return c.json(await store.listDomains());
   });
 
+  app.post("/v1/domains/availability", async (c) => {
+    const denied = await requireScopes(c, [`${APP_SLUG}:read`]);
+    if (denied) return denied;
+    const body = await c.req.json().catch(() => null) as { hostname?: string } | null;
+    if (!body?.hostname) return c.json({ error: "hostname is required" }, 400);
+    if (!deps.domains) return c.json({ error: "Domains API integration is not configured." }, 503);
+    try {
+      return c.json(await deps.domains.checkDomainAvailability({ name: normalizeHostname(body.hostname) }));
+    } catch (error) {
+      return handleDomainsError(c, error);
+    }
+  });
+
   app.post("/v1/domains", async (c) => {
     const denied = await requireScopes(c, [`${APP_SLUG}:write`]);
     if (denied) return denied;
-    const body = (await c.req.json().catch(() => null)) as
-      | {
-          hostname?: string;
-          provider?: string;
-          default?: boolean;
-          origin_url?: string;
-          notes?: string;
-          metadata?: Record<string, unknown>;
-        }
-      | null;
-    if (!body?.hostname) return c.json({ error: "hostname is required" }, 400);
+    const body = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
+    if (!body || typeof body.hostname !== "string") return c.json({ error: "hostname is required" }, 400);
     try {
-      const domain = await store.addDomain({
-        hostname: body.hostname,
-        ...(body.provider !== undefined ? { provider: body.provider } : {}),
-        ...(body.default !== undefined ? { defaultDomain: body.default } : {}),
-        ...(body.origin_url !== undefined ? { originUrl: body.origin_url } : {}),
-        ...(body.notes !== undefined ? { notes: body.notes } : {}),
-        ...(body.metadata !== undefined ? { metadata: body.metadata } : {}),
+      const allowedFields = new Set([
+        "hostname",
+        "default",
+        "max_price_usd",
+        "years",
+        "auto_renew",
+        "idempotency_key",
+      ]);
+      const forbidden = Object.keys(body).filter((key) => !allowedFields.has(key));
+      if (forbidden.length) {
+        return c.json({
+          error: `Provider implementation and unknown fields are forbidden (${forbidden.join(", ")}); custom domains are provisioned only through the Domains API target profile.`,
+        }, 400);
+      }
+
+      const hostname = normalizeHostname(body.hostname);
+      if (hostname === DEFAULT_DOMAIN_HOSTNAME) {
+        const domain = await store.addDomain({
+          hostname,
+          provider: "managed",
+          defaultDomain: typeof body.default === "boolean" ? body.default : true,
+          notes: "Automatic default shortlink domain.",
+        });
+        return c.json({ domain, provisioning: null }, 201);
+      }
+
+      const maxPriceUsd = Number(body.max_price_usd);
+      if (!Number.isFinite(maxPriceUsd) || maxPriceUsd <= 0) {
+        return c.json({ error: "max_price_usd is required for custom domain provisioning" }, 400);
+      }
+      if (typeof body.auto_renew !== "boolean") {
+        return c.json({ error: "auto_renew must be explicitly true or false" }, 400);
+      }
+      const years = body.years === undefined ? 1 : Number(body.years);
+      if (!Number.isInteger(years) || years < 1 || years > 10) {
+        return c.json({ error: "years must be an integer from 1 to 10" }, 400);
+      }
+      const idempotencyKey = c.req.header("idempotency-key")?.trim()
+        || (typeof body.idempotency_key === "string" ? body.idempotency_key.trim() : "");
+      if (!idempotencyKey) return c.json({ error: "idempotency-key header is required" }, 400);
+      if (!deps.domains) return c.json({ error: "Domains API integration is not configured." }, 503);
+      const job = await requestShortlinksDomain(deps.domains, {
+        hostname,
+        maxPriceUsd,
+        years,
+        autoRenew: body.auto_renew,
+        idempotencyKey,
       });
-      return c.json(domain, 201);
+      const active = job.status === "ready";
+      const domain = await store.addDomain({
+        hostname,
+        provider: "domains-api",
+        defaultDomain: active && body.default === true,
+        notes: "Provisioned exclusively by the configured Domains API.",
+        metadata: domainProvisioningMetadata(job, body.default === true),
+      });
+      return c.json({ domain, provisioning: projectDomainProvisioning(job) }, active ? 201 : 202);
     } catch (error) {
-      return handleError(c, error);
+      return handleDomainsError(c, error);
+    }
+  });
+
+  app.get("/v1/domains/:hostname/provisioning", async (c) => {
+    const denied = await requireScopes(c, [`${APP_SLUG}:read`]);
+    if (denied) return denied;
+    const domain = await store.getDomain(c.req.param("hostname"));
+    if (!domain) return c.json({ error: "Domain not found." }, 404);
+    if (!deps.domains) return c.json({ error: "Domains API integration is not configured." }, 503);
+    try {
+      return c.json(await readShortlinksDomainProvisioning(deps.domains, domain));
+    } catch (error) {
+      return handleDomainsError(c, error);
+    }
+  });
+
+  app.post("/v1/domains/:hostname/reconcile", async (c) => {
+    const denied = await requireScopes(c, [`${APP_SLUG}:write`]);
+    if (denied) return denied;
+    const domain = await store.getDomain(c.req.param("hostname"));
+    if (!domain) return c.json({ error: "Domain not found." }, 404);
+    if (!deps.domains) return c.json({ error: "Domains API integration is not configured." }, 503);
+    try {
+      return c.json(await reconcileShortlinksDomain(store, deps.domains, domain));
+    } catch (error) {
+      return handleDomainsError(c, error);
     }
   });
 
@@ -148,6 +256,13 @@ export function createServeApp(deps: ServeAppDeps): Hono {
     if (denied) return denied;
     const hostname = c.req.param("hostname");
     try {
+      const existing = await store.getDomain(hostname);
+      if (!existing) return c.json({ error: "Domain not found." }, 404);
+      if (existing.provider === "domains-api" || existing.hostname === DEFAULT_DOMAIN_HOSTNAME) {
+        return c.json({
+          error: "Managed domains cannot be detached from Shortlinks without a Domains API decommission workflow.",
+        }, 409);
+      }
       const domain = await store.deleteDomain(hostname);
       return c.json({ deleted: true, hostname: domain.hostname });
     } catch (error) {
@@ -271,6 +386,28 @@ export function createServeApp(deps: ServeAppDeps): Hono {
     if (!link) return c.json({ error: "Link not found." }, 404);
     return c.json(link);
   });
+
+  // Keep the complete /v1 namespace behind API-key authentication, including
+  // unknown paths. No /v1 request may fall through into the public redirect
+  // plane and accidentally resolve a link named "v1".
+  const unknownV1 = async (c: Context): Promise<Response> => {
+    const denied = await requireScopes(c, [`${APP_SLUG}:read`]);
+    if (denied) return denied;
+    return c.json({ error: "Not found." }, 404);
+  };
+  app.all("/v1", unknownV1);
+  app.all("/v1/*", unknownV1);
+
+  // Public redirect plane: intentionally outside /v1 auth. Routing hints from
+  // the has.na/custom-domain edge are accepted only when its shared secret is
+  // verified; direct Host routing remains available without trusting headers.
+  const redirect = createShortlinksHandler({
+    store,
+    defaultHost: DEFAULT_DOMAIN_HOSTNAME,
+    trustForwardedHost: deps.trustForwardedHost ?? false,
+    linkRouterSecret: deps.linkRouterSecret,
+  });
+  app.all("*", (c) => redirect(c.req.raw));
 
   return app;
 }

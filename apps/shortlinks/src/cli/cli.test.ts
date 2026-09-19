@@ -268,7 +268,7 @@ describe("CLI JSON workflow", () => {
     expect(doctorText).toContain("Use `shortlinks doctor --verbose` or `--json` for paths and full readiness data.");
   });
 
-  test("summarizes supporting config, domain, cloudflare, and local commands", () => {
+  test("summarizes supporting config, domain, Domains API preview, and local commands", () => {
     expect(runCli(["init", "--domain", "has.na"]).exitCode).toBe(0);
 
     const config = runCli(["config", "show"], { json: false });
@@ -278,17 +278,19 @@ describe("CLI JSON workflow", () => {
 
     const domain = runCli(["domain", "get", "has.na"], { json: false });
     expect(domain.exitCode).toBe(0);
-    expect(domain.stdout.toString()).toContain("* has.na manual default=yes");
+    expect(domain.stdout.toString()).toContain("* has.na managed default=yes");
     expect(domain.stdout.toString()).toContain("Use `shortlinks domain get <hostname> --verbose` or `--json` for full details.");
 
-    const setupVerbose = runCli(["domain", "setup", "go.has.na", "--verbose"], { json: false });
-    expect(setupVerbose.exitCode).toBe(0);
-    expect(JSON.parse(setupVerbose.stdout.toString()).domain.hostname).toBe("go.has.na");
-
-    const cloudflare = runCli(["cloudflare", "plan", "has.na", "--target", "shortlinks.example.com", "--origin", "https://shortlinks.example.com"], { json: false });
-    expect(cloudflare.exitCode).toBe(0);
-    expect(cloudflare.stdout.toString()).toContain("Cloudflare plan for has.na");
-    expect(cloudflare.stdout.toString()).toContain("Use `--verbose` or `--json` for the full DNS payload.");
+    const setupPreview = runCli([
+      "domain", "setup", "proof.example",
+      "--max-price", "5",
+      "--auto-renew", "false",
+      "--dry-run",
+    ]);
+    expect(setupPreview.exitCode).toBe(0);
+    const preview = JSON.parse(setupPreview.stdout.toString());
+    expect(preview.authority).toBe("https://api.hasna.com/domains/v1");
+    expect(preview.request.hostname).toBe("proof.example");
 
     const local = runCli(["local", "plan", "has.na"], { json: false });
     expect(local.exitCode).toBe(0);
@@ -296,33 +298,15 @@ describe("CLI JSON workflow", () => {
     expect(local.stdout.toString()).toContain("Use `--verbose` or `--json` for the full Caddy snippet.");
   });
 
-  test("bounds external domains command output unless verbose or JSON is requested", () => {
-    const binDir = join(tempHome, "bin");
-    mkdirSync(binDir, { recursive: true });
-    const longLine = "x".repeat(180);
-    const domainsBin = join(binDir, "domains");
-    writeFileSync(domainsBin, `#!/usr/bin/env bash\nfor i in $(seq 1 25); do printf "line-%02d ${longLine}\\n" "$i"; done\n`);
-    chmodSync(domainsBin, 0o755);
-    const env = { PATH: `${binDir}:${process.env.PATH || ""}` };
-
-    const compact = runCli(["domain", "check", "has.na"], { env, json: false });
-    expect(compact.exitCode).toBe(0);
-    const compactText = compact.stdout.toString();
-    expect(compactText).toContain("line-20");
-    expect(compactText).not.toContain("line-21");
-    expect(compactText).not.toContain(longLine);
-    expect(compactText).toContain("Use --verbose or --json for full domains check command output.");
-
-    const verbose = runCli(["domain", "check", "has.na", "--verbose"], { env, json: false });
-    expect(verbose.exitCode).toBe(0);
-    expect(verbose.stdout.toString()).toContain("line-25");
-    expect(verbose.stdout.toString()).toContain(longLine);
-
-    const json = runCli(["domain", "check", "has.na"], { env });
-    expect(json.exitCode).toBe(0);
-    const parsed = JSON.parse(json.stdout.toString());
-    expect(parsed.stdout).toContain("line-25");
-    expect(parsed.stdout).toContain(longLine);
+  test("custom-domain setup fails closed in local mode", () => {
+    const result = runCli([
+      "domain", "setup", "proof.example",
+      "--max-price", "5",
+      "--auto-renew", "false",
+    ]);
+    expect(result.exitCode).toBe(1);
+    expect(JSON.parse(result.stdout.toString()).error).toContain("hosted Shortlinks API");
+    expect(JSON.parse(runCli(["domain", "list"]).stdout.toString())).toEqual([]);
   });
 
   test("caps registered event and webhook list output by default", () => {
@@ -446,5 +430,48 @@ describe("CLI projects capability-bearing destination URLs (incident 716957)", (
 
     const human = runCli(["resolve", "plain"], { json: false });
     expect(human.stdout.toString().trim()).toBe(plainUrl);
+  });
+});
+
+describe("hosted Domains API onboarding", () => {
+  test("dry-run contains only business intent and never mutates local Shortlinks", () => {
+    const preview = runCli([
+      "domain", "setup", "go.example.com",
+      "--max-price", "5",
+      "--auto-renew", "false",
+      "--years", "1",
+      "--dry-run",
+    ]);
+    expect(preview.exitCode).toBe(0);
+    const body = JSON.parse(preview.stdout.toString());
+    expect(body).toMatchObject({
+      ok: true,
+      dry_run: true,
+      authority: "https://api.hasna.com/domains/v1",
+      request: {
+        hostname: "go.example.com",
+        max_price_usd: 5,
+        years: 1,
+        auto_renew: false,
+        idempotency_key: "shortlinks-domain:go.example.com",
+      },
+    });
+    expect(JSON.stringify(body.request)).not.toMatch(/cloudflare|route53|registrar|worker_name|dns_provider/);
+    expect(JSON.parse(runCli(["domain", "list"]).stdout.toString())).toEqual([]);
+  });
+
+  test("requires an explicit price cap and auto-renew decision", () => {
+    expect(runCli(["domain", "setup", "go.example.com"]).exitCode).toBe(1);
+    expect(runCli([
+      "domain", "setup", "go.example.com",
+      "--max-price", "5",
+      "--auto-renew", "maybe",
+    ]).exitCode).toBe(1);
+  });
+
+  test("init refuses custom-domain bypasses", () => {
+    const result = runCli(["init", "--domain", "go.example.com"]);
+    expect(result.exitCode).toBe(1);
+    expect(JSON.parse(result.stdout.toString()).error).toContain("domain setup");
   });
 });

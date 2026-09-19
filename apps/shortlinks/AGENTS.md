@@ -41,9 +41,9 @@ This repo is the OSS package `@hasna/shortlinks`.
 
 ## Integrations
 
-- Cloudflare helpers live under `shortlinks cloudflare`.
+- Registrar, DNS-provider, Cloudflare zone, delegation, and router-binding logic must never live in Shortlinks; custom-domain business intent crosses only the Domains API seam.
 - PostgreSQL runtime helpers live under `shortlinks postgres`.
-- Domain purchasing/checking goes through the `domains` CLI from `@hasna/domains`.
+- Hosted Shortlinks depends on exact `@hasna/domains` SDK APIs and accepts a self-hosted authority through `HASNA_DOMAINS_API_URL` (default `https://api.hasna.com/domains`).
 - Local host/proxy setup helpers live under `shortlinks local`.
 - Do not reference, install, or run removed `connect-*` packages.
 

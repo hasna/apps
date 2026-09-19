@@ -4,7 +4,7 @@
   "class": "cli-with-store",
   "contractVersion": "v1",
   "kitVersion": "1.0.2",
-  "description": "Open-source shortlink manager for custom domains, click tracking, and Cloudflare/Postgres runtime support, with a CLI, MCP server, REST API (shortlinks-serve), and a generated SDK. shortlinks-serve is PostgreSQL-only and fails closed without HASNA_SHORTLINKS_DATABASE_URL. Clients resolve their authority and credential through the @hasna/contracts 1.0.2 client chain (Keychain, ~/.hasna/shortlinks/config/credentials, HASNA_SHORTLINKS_* env, default fleet gateway app base) and append /v1 exactly once, or use the on-box SQLite store only under the explicit HASNA_SHORTLINKS_LOCAL=1 opt-in. Public redirect-server helpers require an injected store or that same explicit local opt-in.",
+  "description": "Open-source shortlink manager for custom domains and click tracking, with CLI, MCP, REST API (shortlinks-serve), redirect origin, and generated SDK. shortlinks-serve is PostgreSQL-only and fails closed without HASNA_SHORTLINKS_DATABASE_URL. Clients resolve Shortlinks authority and credentials through the @hasna/contracts 1.0.2 chain or explicitly opt into on-box SQLite with HASNA_SHORTLINKS_LOCAL=1. Custom-domain availability and capped purchase intent are delegated exclusively to a Domains API (default https://api.hasna.com/domains/v1; self-hostable with HASNA_DOMAINS_API_URL); registrar, DNS, delegation, and router binding implementation never lives in Shortlinks. Pending domains are non-routable and only Domains-ready projections activate.",
   "bins": [
     "shortlinks",
     "shortlinks-mcp",
