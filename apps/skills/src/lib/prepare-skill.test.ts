@@ -245,4 +245,17 @@ describe("prepare local skill drafts", () => {
       expect(existsSync(join(home, ".hasna/skills/installed"))).toBe(false);
     } finally { rmSync(home, { recursive: true, force: true }); }
   });
+
+  test("rejects a Bun runtime declaration for a Python entrypoint", () => fixture((root, path) => {
+    rmSync(join(path, "src"), { recursive: true });
+    mkdirSync(join(path, "src"), { recursive: true });
+    writeFileSync(join(path, "src", "main.py"), "print('synthetic')\n");
+    const before = editManifest(path, manifest => {
+      manifest.runtime.runtime = "bun";
+      manifest.runtime.entrypoint = "src/main.py";
+      manifest.commands[0].entry = "src/main.py";
+    });
+    expect(() => prepareSkill("prepare-example", { rootDir: root, version: "0.2.0" })).toThrow("requires runtime python3");
+    expect(readFileSync(join(path, "skill.json"), "utf8")).toBe(before);
+  }));
 });

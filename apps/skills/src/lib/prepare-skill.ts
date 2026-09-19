@@ -154,6 +154,7 @@ function validateRawCandidate(candidate: Record<string, unknown>): void {
   if (candidate.tags !== undefined && (!Array.isArray(candidate.tags) || candidate.tags.some(tag => typeof tag !== "string" || !tag.trim()))) throw new Error("Invalid skill.json tags.");
   const issues = validatePortableManifestContract(candidate as unknown as PortableSkillManifest, { strict: true });
   if (issues.length) throw new Error(`Invalid skill.json: ${issues.map(issue => issue.code).join(", ")}`);
+  validateRuntimeEntrypointCompatibility(candidate);
   for (const field of ["inputs", "commands"] as const) {
     const items = candidate[field];
     if (items === undefined) continue;
@@ -168,6 +169,17 @@ function validateRawCandidate(candidate: Record<string, unknown>): void {
         if (item.args !== undefined && (!Array.isArray(item.args) || item.args.some(arg => typeof arg !== "string"))) throw new Error("Invalid skill.json command args.");
       }
     }
+  }
+}
+
+function validateRuntimeEntrypointCompatibility(candidate: Record<string, unknown>): void {
+  if (candidate.kind !== "executable" || !isRecord(candidate.runtime)) return;
+  const runtime = candidate.runtime.runtime;
+  const entrypoint = candidate.runtime.entrypoint;
+  if (typeof runtime !== "string" || typeof entrypoint !== "string") return;
+  const extension = entrypoint.toLowerCase().split(".").pop();
+  if (extension === "py" && runtime !== "python3") {
+    throw new Error("Invalid skill.json: runtime.entrypoint with .py extension requires runtime python3.");
   }
 }
 
