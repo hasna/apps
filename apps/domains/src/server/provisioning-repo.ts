@@ -1,13 +1,15 @@
 import type { TypedQueryClient } from "../generated/storage-kit/index.js";
-import type {
-  DomainProvisioningJob,
-  DomainDnsReconciliation,
-  DomainProvisioningProviderState,
-  DomainProvisioningRequest,
-  DomainProvisioningStore,
-  ProvisioningStatus,
-  RegisteredDomainDetail,
-  HostedDnsRecord,
+import {
+  provisioningRequestHash,
+  provisioningRequestHashMatches,
+  type DomainProvisioningJob,
+  type DomainDnsReconciliation,
+  type DomainProvisioningProviderState,
+  type DomainProvisioningRequest,
+  type DomainProvisioningStore,
+  type ProvisioningStatus,
+  type RegisteredDomainDetail,
+  type HostedDnsRecord,
 } from "../lib/provisioning.js";
 import { DomainsRepo, HttpError } from "./repo.js";
 
@@ -109,13 +111,47 @@ export class DomainsProvisioningRepo implements DomainProvisioningStore {
     this.domains = new DomainsRepo(db);
   }
 
+  private assertCanonicalRequestHash(request: DomainProvisioningRequest, requestHash: string): void {
+    if (requestHash !== provisioningRequestHash(request)) {
+      throw new HttpError(409, "provisioning request hash is not canonical");
+    }
+  }
+
+  private async resolveUniqueReservationConflict(
+    request: DomainProvisioningRequest,
+    requestHash: string,
+    messages: { key: string; domain: string; crossed: string; missing: string },
+  ): Promise<DomainProvisioningJob> {
+    const byKey = await this.db.get<ProvisioningRow>(
+      "SELECT * FROM domain_provisioning_jobs WHERE idempotency_key = $1",
+      [request.idempotency_key],
+    );
+    if (byKey && !provisioningRequestHashMatches(byKey.request_hash, requestHash, request)) {
+      throw new HttpError(409, messages.key);
+    }
+    const byDomain = await this.db.get<ProvisioningRow>(
+      "SELECT * FROM domain_provisioning_jobs WHERE domain_name = $1",
+      [request.name],
+    );
+    if (byDomain && !provisioningRequestHashMatches(byDomain.request_hash, requestHash, request)) {
+      throw new HttpError(409, messages.domain);
+    }
+    if (byKey && byDomain && byKey.id !== byDomain.id) {
+      throw new HttpError(409, messages.crossed);
+    }
+    const existing = byKey ?? byDomain;
+    if (!existing) throw new HttpError(409, messages.missing);
+    return rowToJob(existing);
+  }
+
   async reserve(request: DomainProvisioningRequest, requestHash: string): Promise<DomainProvisioningJob> {
+    this.assertCanonicalRequestHash(request, requestHash);
     const byKey = await this.db.get<ProvisioningRow>(
       "SELECT * FROM domain_provisioning_jobs WHERE idempotency_key = $1",
       [request.idempotency_key],
     );
     if (byKey) {
-      if (byKey.request_hash !== requestHash) throw new HttpError(409, "idempotency key already used for a different provisioning request");
+      if (!provisioningRequestHashMatches(byKey.request_hash, requestHash, request)) throw new HttpError(409, "idempotency key already used for a different provisioning request");
       return rowToJob(byKey);
     }
 
@@ -124,7 +160,7 @@ export class DomainsProvisioningRepo implements DomainProvisioningStore {
       [request.name],
     );
     if (byDomain) {
-      if (byDomain.request_hash !== requestHash) throw new HttpError(409, `domain '${request.name}' already has a different provisioning request`);
+      if (!provisioningRequestHashMatches(byDomain.request_hash, requestHash, request)) throw new HttpError(409, `domain '${request.name}' already has a different provisioning request`);
       return rowToJob(byDomain);
     }
 
@@ -181,14 +217,12 @@ export class DomainsProvisioningRepo implements DomainProvisioningStore {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (!/duplicate key|unique constraint/i.test(message)) throw error;
-      const existing = await this.db.get<ProvisioningRow>(
-        "SELECT * FROM domain_provisioning_jobs WHERE idempotency_key = $1 OR domain_name = $2 ORDER BY created_at LIMIT 1",
-        [request.idempotency_key, request.name],
-      );
-      if (!existing || existing.request_hash !== requestHash) {
-        throw new HttpError(409, "conflicting provisioning request");
-      }
-      return rowToJob(existing);
+      return this.resolveUniqueReservationConflict(request, requestHash, {
+        key: "idempotency key already used for a different provisioning request",
+        domain: `domain '${request.name}' already has a different provisioning request`,
+        crossed: "idempotency key and domain were claimed by different provisioning requests",
+        missing: "conflicting provisioning request",
+      });
     }
   }
 
@@ -197,12 +231,13 @@ export class DomainsProvisioningRepo implements DomainProvisioningStore {
     requestHash: string,
     detail: RegisteredDomainDetail,
   ): Promise<DomainProvisioningJob> {
+    this.assertCanonicalRequestHash(request, requestHash);
     const byKey = await this.db.get<ProvisioningRow>(
       "SELECT * FROM domain_provisioning_jobs WHERE idempotency_key=$1",
       [request.idempotency_key],
     );
     if (byKey) {
-      if (byKey.request_hash !== requestHash) throw new HttpError(409, "idempotency key already used for a different adoption request");
+      if (!provisioningRequestHashMatches(byKey.request_hash, requestHash, request)) throw new HttpError(409, "idempotency key already used for a different adoption request");
       return rowToJob(byKey);
     }
     const byDomain = await this.db.get<ProvisioningRow>(
@@ -210,7 +245,7 @@ export class DomainsProvisioningRepo implements DomainProvisioningStore {
       [request.name],
     );
     if (byDomain) {
-      if (byDomain.request_hash !== requestHash) throw new HttpError(409, `domain '${request.name}' already has different provisioning intent`);
+      if (!provisioningRequestHashMatches(byDomain.request_hash, requestHash, request)) throw new HttpError(409, `domain '${request.name}' already has different provisioning intent`);
       return rowToJob(byDomain);
     }
     const domain = await this.domains.getDomainByName(request.name);
@@ -239,14 +274,12 @@ export class DomainsProvisioningRepo implements DomainProvisioningStore {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (!/duplicate key|unique constraint/i.test(message)) throw error;
-      const raced = await this.db.get<ProvisioningRow>(
-        "SELECT * FROM domain_provisioning_jobs WHERE idempotency_key = $1 OR domain_name = $2 ORDER BY created_at LIMIT 1",
-        [request.idempotency_key, request.name],
-      );
-      if (!raced || raced.request_hash !== requestHash) {
-        throw new HttpError(409, "conflicting domain adoption request");
-      }
-      return rowToJob(raced);
+      return this.resolveUniqueReservationConflict(request, requestHash, {
+        key: "idempotency key already used for a different adoption request",
+        domain: `domain '${request.name}' already has different provisioning intent`,
+        crossed: "idempotency key and domain were claimed by different adoption requests",
+        missing: "conflicting domain adoption request",
+      });
     }
   }
 
