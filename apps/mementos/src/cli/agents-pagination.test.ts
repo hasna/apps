@@ -49,26 +49,28 @@ afterAll(() => {
 });
 
 describe("agents pagination", () => {
-  test("JSON output honors limit, cursor, offset, and an empty terminal page", async () => {
+  test("JSON output is compact, byte-bounded, and continuation-bearing", async () => {
     const first = await runCli("--json", "agents", "--limit", "500", "--cursor", "0");
-    const second = await runCli("--json", "agents", "--limit", "500", "--cursor", "500");
-    const offset = await runCli("--json", "agents", "--limit", "500", "--offset", "500");
-    const terminal = await runCli("--json", "agents", "--limit", "500", "--cursor", "501");
+    expect(first.exitCode).toBe(0);
+    const firstPage = JSON.parse(first.stdout) as { agents: Array<{ id: string; metadata?: unknown }>; _meta: { count: number; next_cursor: number; has_more: boolean; truncation_reason: string; max_bytes: number } };
+    expect(firstPage.agents.length).toBeGreaterThan(0);
+    expect(firstPage.agents.length).toBeLessThan(500);
+    expect(firstPage.agents.every((agent) => agent.metadata === undefined)).toBe(true);
+    expect(firstPage._meta).toMatchObject({ has_more: true, truncation_reason: "max_bytes", max_bytes: 32768 });
+    expect(Buffer.byteLength(`${first.stdout}
+`)).toBeLessThanOrEqual(firstPage._meta.max_bytes);
 
-    for (const result of [first, second, offset, terminal]) {
-      expect(result.exitCode).toBe(0);
-      expect(result.stderr).not.toContain("error:");
-    }
+    const second = await runCli("--json", "agents", "--limit", "500", "--cursor", String(firstPage._meta.next_cursor));
+    expect(second.exitCode).toBe(0);
+    const secondPage = JSON.parse(second.stdout) as typeof firstPage;
+    const firstIds = new Set(firstPage.agents.map((agent) => agent.id));
+    expect(secondPage.agents.some((agent) => firstIds.has(agent.id))).toBe(false);
 
-    const firstPage = JSON.parse(first.stdout) as Array<{ id: string }>;
-    const secondPage = JSON.parse(second.stdout) as Array<{ id: string }>;
-    const offsetPage = JSON.parse(offset.stdout) as Array<{ id: string }>;
-    const terminalPage = JSON.parse(terminal.stdout) as Array<{ id: string }>;
-
-    expect(firstPage).toHaveLength(500);
-    expect(secondPage).toHaveLength(1);
-    expect(offsetPage.map((agent) => agent.id)).toEqual(secondPage.map((agent) => agent.id));
-    expect(firstPage.some((agent) => agent.id === secondPage[0]!.id)).toBe(false);
-    expect(terminalPage).toEqual([]);
+    const exhaustive = await runCli("--json", "agents", "--all", "--full");
+    expect(exhaustive.exitCode).toBe(0);
+    const allPage = JSON.parse(exhaustive.stdout) as { agents: Array<{ metadata: unknown }>; _meta: Record<string, unknown> };
+    expect(allPage.agents).toHaveLength(501);
+    expect(allPage.agents[0]?.metadata).toBeDefined();
+    expect(allPage._meta).toMatchObject({ all: true, complete: true, detail: "full" });
   });
 });

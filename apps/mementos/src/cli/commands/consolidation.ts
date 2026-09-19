@@ -6,7 +6,7 @@ import { getProject } from "../../db/projects.js";
 import { runConsolidation } from "../../lib/consolidation.js";
 import { reflectOnTrajectory, type ReflectionTarget } from "../../lib/reflection.js";
 import type { MemoryScope } from "../../types/index.js";
-import { getOutputFormat, outputJson, type GlobalOpts } from "../helpers.js";
+import { getOutputFormat, outputJson, outputJsonAndExit, type GlobalOpts } from "../helpers.js";
 
 function parseNumber(value: string): number {
   const parsed = Number(value);
@@ -68,11 +68,12 @@ export function registerConsolidationCommands(program: Command): void {
         }
       } catch (error) {
         if (program.opts<GlobalOpts>().json) {
-          outputJson({ error: error instanceof Error ? error.message : String(error) });
+          await outputJsonAndExit({ error: error instanceof Error ? error.message : String(error) }, 1);
         } else {
           console.error(chalk.red(error instanceof Error ? error.message : String(error)));
         }
-        process.exit(1);
+        if (!program.opts<GlobalOpts>().json) process.exit(1);
+        return;
       }
     });
 
@@ -130,11 +131,12 @@ export function registerConsolidationCommands(program: Command): void {
         }
       } catch (error) {
         if (program.opts<GlobalOpts>().json) {
-          outputJson({ error: error instanceof Error ? error.message : String(error) });
+          await outputJsonAndExit({ error: error instanceof Error ? error.message : String(error) }, 1);
         } else {
           console.error(chalk.red(error instanceof Error ? error.message : String(error)));
         }
-        process.exit(1);
+        if (!program.opts<GlobalOpts>().json) process.exit(1);
+        return;
       }
     });
 }

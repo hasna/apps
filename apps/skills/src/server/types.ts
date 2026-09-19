@@ -90,6 +90,13 @@ export class SkillVersionExistsError extends Error {
   }
 }
 
+export class SkillLifecycleConflictError extends Error {
+  constructor(readonly slug: string, readonly profiles: string[]) {
+    super(`cannot archive '${slug}' while active profiles reference it: ${profiles.join(", ")}`);
+    this.name = "SkillLifecycleConflictError";
+  }
+}
+
 export interface ApiPrincipal {
   apiKeyId: string;
   orgId: string;
@@ -100,6 +107,11 @@ export interface ApiPrincipal {
   role: string;
   scopes: string[];
 }
+
+export type ApiKeyScopeUpdateResult =
+  | { kind: "updated"; scopes: string[] }
+  | { kind: "not_found" }
+  | { kind: "stale"; scopes: string[] };
 
 export interface ServerRunRecord {
   id: string;
@@ -212,6 +224,17 @@ export interface ServerSkillRecord {
    */
   tombstonedAt?: string;
   tombstonePurgeAfter?: string;
+  /** Catalog lifecycle state. Archived rows retain versions and bundles for explicit reads. */
+  lifecycle: "active" | "archived";
+  archivedAt?: string;
+  archiveReason?: string;
+  replacementSlug?: string;
+}
+
+export interface SkillLifecyclePatch {
+  lifecycle: "active" | "archived";
+  reason?: string;
+  replacementSlug?: string;
 }
 
 /**
@@ -374,6 +397,13 @@ export interface SkillsProductStore {
    */
   verifyConnectivity?(): Promise<void>;
   authenticateApiKeyHash(hash: string): Promise<ApiPrincipal | null>;
+  /** Guarded metadata-only scope admission for an existing key. */
+  updateApiKeyScopes?(
+    actor: ApiPrincipal,
+    keyId: string,
+    expectedScopes: string[],
+    addScopes: string[],
+  ): Promise<ApiKeyScopeUpdateResult>;
   ensureBootstrapApiKey?(token: string, principal?: Partial<ApiPrincipal>): Promise<void>;
   createRun(input: CreateRunInput): Promise<ServerRunRecord>;
   listRuns(principal: ApiPrincipal, limit: number): Promise<ServerRunRecord[]>;
@@ -421,6 +451,7 @@ export interface SkillsProductStore {
    * when the org has no skill by that slug, or when the row is tombstoned.
    */
   updateSkill(principal: ApiPrincipal, slug: string, patch: UpdateSkillPatch, expectedRevisionId?: string): Promise<ServerSkillRecord | null>;
+  setSkillLifecycle(principal: ApiPrincipal, slug: string, patch: SkillLifecyclePatch, expectedRevisionId?: string): Promise<ServerSkillRecord | null>;
   /**
    * Tombstone a skill instead of hard-deleting it (todos d061fcda): the row is stamped
    * tombstoned_at + tombstone_purge_after (now + tombstoneWindowMs) and kept, so reads

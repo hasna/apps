@@ -1,3 +1,17 @@
+## 0.7.7
+
+### Patch Changes
+
+- Add an opt-in, version-checked Claude project import of a shared managed AGENTS.md. Require explicit provider bindings and identical canonical source identity, content and activation, and manage both files through the existing preview, preimage, snapshot, refresh and rollback transaction.
+
+## 0.7.6
+
+### Patch Changes
+
+- Render the station Scratchpad workspace from the current home directory instead of a legacy machine workspace path. Preserve the machine workspace field for compatibility while generated instructions use the supported session scratch directory.
+
+  Isolate test processes and CLI regression fixtures from inherited owner credentials, configuration homes, and hosted API routing.
+
 ## 0.7.5
 
 ### Patch Changes

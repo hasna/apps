@@ -313,8 +313,8 @@ describe("CLI", () => {
     expect(parsed.actions.some((action: { type: string }) => action.type === "merge_duplicate")).toBe(true);
 
     const { stdout: listOut } = await runCli("--json", "list", "--scope", "shared");
-    const memories = JSON.parse(listOut);
-    const activeKeys = memories.map((memory: { key: string }) => memory.key);
+    const memories = (JSON.parse(listOut) as { memories: Array<{ key: string }> }).memories;
+    const activeKeys = memories.map((memory) => memory.key);
     expect(activeKeys).toContain("consolidate-a");
     expect(activeKeys).toContain("consolidate-b");
   });
@@ -503,10 +503,10 @@ describe("cli memory commands (continued)", () => {
     expect(stdout).toContain("mementos show <id>");
     expect(stdout).not.toContain("UNTRUNCATED_SENTINEL");
 
-    const { stdout: jsonOut } = await runCli("list", "--tags", tag, "--json");
-    const parsed = JSON.parse(jsonOut);
-    expect(Array.isArray(parsed)).toBe(true);
-    expect(parsed[0].value).toContain("UNTRUNCATED_SENTINEL");
+    const { stdout: jsonOut } = await runCli("list", "--tags", tag, "--json", "--full", "--limit", "20");
+    const parsed = JSON.parse(jsonOut) as { memories: Array<{ value: string }>; _meta: { detail: string } };
+    expect(parsed._meta.detail).toBe("full");
+    expect(parsed.memories[0]!.value).toContain("UNTRUNCATED_SENTINEL");
     // 27 sequential CLI subprocess spawns (25 saves + 2 reads). Measured 19.00s
     // in isolation on station01, so the suite-wide --timeout=10000 is undersized
     // by construction, not flakily: this test cannot pass at that budget here.
@@ -516,9 +516,8 @@ describe("cli memory commands (continued)", () => {
 
   test("list --json outputs parseable JSON", async () => {
     const { stdout } = await runCli("list", "--json");
-    const parsed = JSON.parse(stdout);
-    expect(Array.isArray(parsed)).toBe(true);
-    expect(parsed.length).toBeGreaterThan(0);
+    const parsed = JSON.parse(stdout) as { memories: unknown[] };
+    expect(parsed.memories.length).toBeGreaterThan(0);
   });
 
   test("warns on startup when no primary machine is configured", async () => {
@@ -529,15 +528,15 @@ describe("cli memory commands (continued)", () => {
   test("-j short alias outputs parseable JSON", async () => {
     const { stdout, exitCode } = await runCli("-j", "list");
     expect(exitCode).toBe(0);
-    const parsed = JSON.parse(stdout);
-    expect(Array.isArray(parsed)).toBe(true);
+    const parsed = JSON.parse(stdout) as { memories: unknown[] };
+    expect(Array.isArray(parsed.memories)).toBe(true);
   });
 
   test("-f short alias sets JSON output format", async () => {
     const { stdout, exitCode } = await runCli("-f", "json", "list");
     expect(exitCode).toBe(0);
-    const parsed = JSON.parse(stdout);
-    expect(Array.isArray(parsed)).toBe(true);
+    const parsed = JSON.parse(stdout) as { memories: unknown[] };
+    expect(Array.isArray(parsed.memories)).toBe(true);
   });
 
   test("search finds matching memories", async () => {
@@ -584,9 +583,8 @@ describe("cli memory commands (continued)", () => {
 
   test("export outputs JSON", async () => {
     const { stdout } = await runCli("export");
-    const parsed = JSON.parse(stdout);
-    expect(Array.isArray(parsed)).toBe(true);
-    expect(parsed.length).toBeGreaterThan(0);
+    const parsed = JSON.parse(stdout) as { memories: unknown[] };
+    expect(parsed.memories.length).toBeGreaterThan(0);
   });
 
   test("clean runs without error", async () => {
@@ -676,14 +674,14 @@ describe("cli memory commands (continued)", () => {
       receipt: null,
       project: { id: created.id, name: newName, path: newPath },
     });
-    const afterPreview = JSON.parse((
+    const afterPreview = (JSON.parse((
       await runCliWithEnv(
         UNCONFIGURED_PROJECT_AUTHORITY_ENV,
         "--json",
         "projects",
       )
-    ).stdout);
-    expect(afterPreview).toContainEqual(created);
+    ).stdout) as { projects: unknown[] }).projects;
+    expect(afterPreview).toContainEqual(expect.objectContaining({ id: created.id, name: created.name, path: created.path }));
 
     const updatedResult = await runGuardedProjectCli(
       "--json",
@@ -739,7 +737,7 @@ describe("cli memory commands (continued)", () => {
     expect(inconsistentRetry.exitCode).toBe(1);
     expect(inconsistentRetry.stderr).toMatch(/idempotency key.*different request/i);
 
-    const projectBeforeRollbackPreview = JSON.parse(
+    const projectBeforeRollbackPreview = (JSON.parse(
       (
         await runCliWithEnv(
           UNCONFIGURED_PROJECT_AUTHORITY_ENV,
@@ -747,7 +745,7 @@ describe("cli memory commands (continued)", () => {
           "projects",
         )
       ).stdout,
-    ).find((project: { id: string }) => project.id === created.id);
+    ) as { projects: Array<{ id: string }> }).projects.find((project) => project.id === created.id);
     const { Database } = await import("bun:sqlite");
     const receiptDbBeforeRollbackPreview = new Database(DB_PATH, { readonly: true });
     const receiptCountBeforeRollbackPreview = receiptDbBeforeRollbackPreview
@@ -771,7 +769,7 @@ describe("cli memory commands (continued)", () => {
     expect(rollbackPreviewResult.exitCode).toBe(1);
     expect(rollbackPreviewResult.stderr).toMatch(/dry-run.*rollback.*not supported/i);
 
-    const projectAfterRollbackPreview = JSON.parse(
+    const projectAfterRollbackPreview = (JSON.parse(
       (
         await runCliWithEnv(
           UNCONFIGURED_PROJECT_AUTHORITY_ENV,
@@ -779,7 +777,7 @@ describe("cli memory commands (continued)", () => {
           "projects",
         )
       ).stdout,
-    ).find((project: { id: string }) => project.id === created.id);
+    ) as { projects: Array<{ id: string }> }).projects.find((project) => project.id === created.id);
     const receiptDbAfterRollbackPreview = new Database(DB_PATH, { readonly: true });
     const receiptCountAfterRollbackPreview = receiptDbAfterRollbackPreview
       .query("SELECT COUNT(*) AS count FROM mementos_project_update_receipts")
@@ -875,8 +873,8 @@ describe("cli memory commands (continued)", () => {
   test("search --json returns parseable JSON", async () => {
     const { stdout, exitCode } = await runCli("--json", "search", "cli-test");
     expect(exitCode).toBe(0);
-    const parsed = JSON.parse(stdout);
-    expect(Array.isArray(parsed)).toBe(true);
+    const parsed = JSON.parse(stdout) as { results: unknown[] };
+    expect(Array.isArray(parsed.results)).toBe(true);
   });
 
   test("register-agent --json returns agent JSON", async () => {
@@ -887,12 +885,12 @@ describe("cli memory commands (continued)", () => {
     expect(parsed.id).toBeDefined();
   });
 
-  test("agents --json returns array", async () => {
+  test("agents --json returns a bounded receipt", async () => {
     const { stdout, exitCode } = await runCli("--json", "agents");
     expect(exitCode).toBe(0);
-    const parsed = JSON.parse(stdout);
-    expect(Array.isArray(parsed)).toBe(true);
-    expect(parsed.length).toBeGreaterThan(0);
+    const parsed = JSON.parse(stdout) as { agents: unknown[]; _meta: { receipt: string } };
+    expect(parsed.agents.length).toBeGreaterThan(0);
+    expect(parsed._meta.receipt).toBe("mementos.agents.page.v1");
   });
 
   test("forget --json returns deleted id", async () => {
@@ -901,6 +899,17 @@ describe("cli memory commands (continued)", () => {
     expect(exitCode).toBe(0);
     const parsed = JSON.parse(stdout);
     expect(parsed.deleted).toBeDefined();
+  });
+
+  test("forget --json preserves the nonzero ambiguous-key error", async () => {
+    await runCli("save", "ambiguous-json-key", "first", "--scope", "private", "--dedupe", "create");
+    await runCli("save", "ambiguous-json-key", "second", "--scope", "shared", "--dedupe", "create");
+    const { stdout, stderr, exitCode } = await runCli("--json", "forget", "ambiguous-json-key");
+    expect(exitCode).toBe(1);
+    expect(stderr).not.toContain("error:");
+    const parsed = JSON.parse(stdout);
+    expect(parsed.error).toContain("Ambiguous key");
+    expect(parsed.matches).toHaveLength(2);
   });
 
   test("save with summary", async () => {

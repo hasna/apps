@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.9.2
+
+### Patch Changes
+
+- Add a reviewed target manifest for exact native skill migration. The manifest binds agent and project scope to a normalized path and complete directory digest, fails closed on drift or ambiguity, and records its digest in archive receipts.
+
+## 0.9.1
+
+### Patch Changes
+
+- c8cf9c2: Fail closed on hosted skill lifecycle HTTP errors with typed, safe error output.
+- 0f85a86: Preserve remote skill revision and lifecycle metadata in `skills info --remote --json`, including catalogue-only records.
+- 5c2edc0: Add guarded owner/admin admission of `skills:publish` onto an existing API key with tenant and scope CAS checks.
+
+## 0.9.0
+
+### Minor Changes
+
+- 7d10c3c: Add an owner-guarded hosted skill archive lifecycle. Archived catalog rows leave ordinary discovery, profile selection and cloud execution while immutable version metadata and bundle reads remain available; lifecycle writes use exact revision CAS and refuse active profile references.
+- 13cc764: Add a tenant-bound, reviewed pure cloud execution contract with metadata eligibility through the API, CLI, MCP and SDK. Freeze adapter and entrypoint identity, validate bounded input/output, and enforce credential-free Linux execution with inherited-descriptor closure and owned descendant cleanup. Preserve existing PDF admissions.
+
+### Patch Changes
+
+- f624fbf: Preserve Python runtime metadata when importing legacy executable skills and reject mismatched `.py` runtime declarations during preparation.
+
 ## 0.8.12
 
 ### Patch Changes

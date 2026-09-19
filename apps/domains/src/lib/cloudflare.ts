@@ -42,6 +42,19 @@ export interface CloudflareRecord {
   proxied?: boolean;
 }
 
+export type CloudflareOriginTlsMode = "strict" | "full";
+export type CloudflareObservedOriginTlsMode =
+  | "off"
+  | "flexible"
+  | "full"
+  | "strict"
+  | "origin_pull";
+
+interface CloudflareZoneSetting {
+  id: string;
+  value: string;
+}
+
 // ─── Config ──────────────────────────────────────────────────────────────────
 
 export function getConfig(): CloudflareConfig {
@@ -56,6 +69,59 @@ function checkCredentials(cfg: CloudflareConfig): void {
 // ─── API Client ──────────────────────────────────────────────────────────────
 
 const CF_BASE = "https://api.cloudflare.com/client/v4";
+const DEFAULT_CF_TIMEOUT_MS = 30_000;
+const MAX_CF_TIMEOUT_MS = 120_000;
+const DEFAULT_CF_MAX_RESPONSE_BYTES = 1_048_576;
+const MAX_CF_RESPONSE_BYTES = 4_194_304;
+
+function positiveBoundedEnv(name: string, fallback: number, maximum: number): number {
+  const raw = process.env[name]?.trim();
+  if (!raw) return fallback;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 1 || value > maximum) {
+    throw new Error(`${name} must be an integer between 1 and ${maximum}`);
+  }
+  return value;
+}
+
+export async function boundedResponseText(
+  response: Response,
+  maxBytes: number,
+  signal: AbortSignal,
+): Promise<string> {
+  const contentLength = Number(response.headers.get("content-length"));
+  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+    throw new Error(`Cloudflare API response exceeds ${maxBytes} bytes`);
+  }
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const abort = () => void reader.cancel("Cloudflare API request aborted");
+  if (signal.aborted) abort();
+  signal.addEventListener("abort", abort, { once: true });
+  const chunks: Uint8Array[] = [];
+  let length = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      length += value.byteLength;
+      if (length > maxBytes) {
+        await reader.cancel("Cloudflare API response exceeds bounded size");
+        throw new Error(`Cloudflare API response exceeds ${maxBytes} bytes`);
+      }
+      chunks.push(value);
+    }
+  } finally {
+    signal.removeEventListener("abort", abort);
+  }
+  const bytes = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(bytes);
+}
 
 async function cfFetch<T>(
   path: string,
@@ -63,19 +129,55 @@ async function cfFetch<T>(
 ): Promise<T> {
   const cfg = opts.config ?? getConfig();
   checkCredentials(cfg);
-
-  const res = await fetch(`${CF_BASE}${path}`, {
-    method: opts.method ?? "GET",
-    headers: {
-      ...cloudflareAuthHeaders(cfg),
-      "Content-Type": "application/json",
-    },
-    body: opts.body ? JSON.stringify(opts.body) : undefined,
+  const timeoutMs = positiveBoundedEnv(
+    "DOMAINS_PROVIDER_HTTP_TIMEOUT_MS",
+    DEFAULT_CF_TIMEOUT_MS,
+    MAX_CF_TIMEOUT_MS,
+  );
+  const maxResponseBytes = positiveBoundedEnv(
+    "DOMAINS_PROVIDER_MAX_RESPONSE_BYTES",
+    DEFAULT_CF_MAX_RESPONSE_BYTES,
+    MAX_CF_RESPONSE_BYTES,
+  );
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      reject(new Error(`Cloudflare API request exceeded ${timeoutMs}ms`));
+    }, timeoutMs);
   });
-
-  const json = await res.json() as { success: boolean; result: T; errors: { message: string }[] };
+  let json: { success: boolean; result: T; errors: { message: string }[] };
+  let status = 0;
+  try {
+    ({ json, status } = await Promise.race([
+      (async () => {
+        const response = await fetch(`${CF_BASE}${path}`, {
+          method: opts.method ?? "GET",
+          headers: {
+            ...cloudflareAuthHeaders(cfg),
+            "Content-Type": "application/json",
+          },
+          body: opts.body ? JSON.stringify(opts.body) : undefined,
+          signal: controller.signal,
+        });
+        const text = await boundedResponseText(response, maxResponseBytes, controller.signal);
+        try {
+          return {
+            status: response.status,
+            json: JSON.parse(text) as { success: boolean; result: T; errors: { message: string }[] },
+          };
+        } catch {
+          throw new Error(`Cloudflare API returned invalid JSON (${response.status})`);
+        }
+      })(),
+      timeout,
+    ]));
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
   if (!json.success) {
-    const msg = json.errors?.[0]?.message ?? `Cloudflare API error (${res.status})`;
+    const msg = json.errors?.[0]?.message ?? `Cloudflare API error (${status})`;
     throw new Error(msg);
   }
   return json.result;
@@ -153,6 +255,58 @@ export async function ensureZone(
 
 export async function deleteZone(zoneId: string, config?: CloudflareConfig): Promise<void> {
   await cfFetch(`/zones/${zoneId}`, { method: "DELETE", config });
+}
+
+/** Read the zone's current edge-to-origin TLS mode. */
+export async function getZoneOriginTlsMode(
+  zoneId: string,
+  config?: CloudflareConfig,
+): Promise<CloudflareObservedOriginTlsMode> {
+  const setting = await cfFetch<CloudflareZoneSetting>(
+    `/zones/${encodeURIComponent(zoneId)}/settings/ssl`,
+    { config },
+  );
+  if (setting.id !== "ssl" || typeof setting.value !== "string" || !setting.value.trim()) {
+    throw new Error("Cloudflare returned an invalid zone SSL setting");
+  }
+  const mode = setting.value.trim().toLowerCase();
+  if (!["off", "flexible", "full", "strict", "origin_pull"].includes(mode)) {
+    throw new Error(`Cloudflare returned unsupported zone SSL setting ${mode}`);
+  }
+  return mode as CloudflareObservedOriginTlsMode;
+}
+
+/**
+ * Apply one explicit zone TLS intent and read it back. A zone already using
+ * strict or origin-pull mode is never silently weakened. Automatic SSL/TLS is
+ * a separate Cloudflare setting and is deliberately not changed here.
+ */
+export async function ensureZoneOriginTlsMode(
+  zoneId: string,
+  requested: CloudflareOriginTlsMode,
+  config?: CloudflareConfig,
+): Promise<{
+  mode: CloudflareOriginTlsMode | "origin_pull";
+  changed: boolean;
+  downgradeRefused: boolean;
+}> {
+  const current = await getZoneOriginTlsMode(zoneId, config);
+  if (current === "origin_pull" || (current === "strict" && requested === "full")) {
+    return { mode: current, changed: false, downgradeRefused: true };
+  }
+  let changed = false;
+  if (current !== requested) {
+    await cfFetch<CloudflareZoneSetting>(
+      `/zones/${encodeURIComponent(zoneId)}/settings/ssl`,
+      { method: "PATCH", body: { value: requested }, config },
+    );
+    changed = true;
+  }
+  const readback = await getZoneOriginTlsMode(zoneId, config);
+  if (readback !== requested) {
+    throw new Error(`Cloudflare zone SSL setting readback is ${readback}, expected ${requested}`);
+  }
+  return { mode: requested, changed, downgradeRefused: false };
 }
 
 // ─── DNS Records ─────────────────────────────────────────────────────────────
@@ -310,6 +464,29 @@ async function replaceRecordsByNameType(
   }
 }
 
+/** Reconcile only the explicitly named DNS record groups, leaving every other group untouched. */
+export async function reconcileRecords(
+  zoneId: string,
+  records: CloudflareRecord[],
+  config?: CloudflareConfig,
+): Promise<void> {
+  const grouped = new Map<string, CloudflareRecord[]>();
+  for (const record of records) {
+    const key = `${record.type}|${record.name}`;
+    const group = grouped.get(key) ?? [];
+    group.push(record);
+    grouped.set(key, group);
+  }
+  const replacements: CloudflareRecordReplacement[] = [];
+  for (const group of grouped.values()) {
+    const replacement = await prepareRecordsByNameType(zoneId, group, config);
+    if (replacement) replacements.push(replacement);
+  }
+  for (const replacement of replacements) {
+    await replaceRecordsByNameType(zoneId, replacement, config);
+  }
+}
+
 export async function deleteRecord(zoneId: string, recordId: string, config?: CloudflareConfig): Promise<void> {
   await cfFetch(`/zones/${zoneId}/dns_records/${recordId}`, { method: "DELETE", config });
 }
@@ -418,28 +595,14 @@ export function createCloudflareProvider(config?: CloudflareConfig): DnsProvider
     async setDnsRecords(domain: string, records: ProviderDnsRecord[]): Promise<boolean> {
       const zone = await getZone(domain, cfg);
       if (!zone) throw new Error(`No Cloudflare zone found for ${domain}`);
-      const grouped = new Map<string, CloudflareRecord[]>();
-      for (const r of records) {
-        const key = `${r.type}|${r.name}`;
-        const existing = grouped.get(key) ?? [];
-        existing.push({
+      await reconcileRecords(zone.id, records.map((r) => ({
           type: r.type,
           name: r.name,
           content: r.value,
           ttl: r.ttl || 1,
           priority: r.priority,
           ...(r.proxied === undefined ? {} : { proxied: r.proxied }),
-        });
-        grouped.set(key, existing);
-      }
-      const replacements: CloudflareRecordReplacement[] = [];
-      for (const group of grouped.values()) {
-        const replacement = await prepareRecordsByNameType(zone.id, group, cfg);
-        if (replacement) replacements.push(replacement);
-      }
-      for (const replacement of replacements) {
-        await replaceRecordsByNameType(zone.id, replacement, cfg);
-      }
+        })), cfg);
       return true;
     },
 

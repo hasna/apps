@@ -36,9 +36,10 @@ import {
   deletePublishedSkill,
   publishedPayload,
   skillSummary,
+  skillLifecyclePatch,
 } from "./skills-api.js";
 import { createStore, type MemorySkillsStore } from "./store.js";
-import { SkillRevisionConflictError, SkillVersionExistsError, StaleLeaseGenerationError, type ApiPrincipal, type ServerRunRecord, type SkillsProductStore } from "./types.js";
+import { SkillLifecycleConflictError, SkillRevisionConflictError, SkillVersionExistsError, StaleLeaseGenerationError, type ApiPrincipal, type ServerRunRecord, type SkillsProductStore } from "./types.js";
 
 export interface SkillsServerOptions {
   /** Overrides the artifact storage (tests inject an in-memory S3 stand-in). */
@@ -191,6 +192,9 @@ export async function createSkillsFetchHandler(options: SkillsServerOptions = {}
           { status: 409 },
         );
       }
+      if (error instanceof SkillLifecycleConflictError) {
+        return json({ error: error.message, code: "SKILL_ARCHIVE_PROFILE_CONFLICT", profiles: error.profiles }, { status: 409 });
+      }
       if (error instanceof SkillRevisionConflictError) {
         return json(
           {
@@ -265,6 +269,33 @@ async function handleApiV1(
     return json({ error: "invalid path segment", code: "INVALID_PATH" }, { status: 400 });
   }
 
+  // Existing-key publication admission is deliberately separate from ordinary
+  // skill writes. It changes only metadata on one tenant's existing key; it never
+  // accepts a token, signing material, or a replacement scope set.
+  if (parts.length === 4 && resource === "admin" && id === "keys" && subresource && childId === "scopes" && request.method === "PATCH") {
+    const adminScope = principal.scopes.includes("*") || principal.scopes.includes("skills:keys.admin");
+    if (!adminScope || !["owner", "admin"].includes(principal.role)) {
+      return json({ error: "Key scope administration requires an owner/admin key with skills:keys.admin", code: "KEY_ADMIN_REQUIRED" }, { status: 403 });
+    }
+    if (!/^[A-Za-z0-9_-]+$/.test(subresource)) {
+      return json({ error: "Key id must be url-safe (letters, digits, '_' or '-')", code: "INVALID_KEY_ID" }, { status: 400 });
+    }
+    const body = await readJson(request, config.requestBodyLimitBytes);
+    const expected = body.expected_scopes;
+    const additions = body.add_scopes;
+    if (!Array.isArray(expected) || !expected.every((scope) => typeof scope === "string") || !Array.isArray(additions) || !additions.every((scope) => typeof scope === "string")) {
+      return json({ error: "expected_scopes and add_scopes must be arrays of scope strings", code: "INVALID_KEY_SCOPE_UPDATE" }, { status: 400 });
+    }
+    if (additions.length !== 1 || additions[0] !== "skills:publish") {
+      return json({ error: "Only adding skills:publish to an existing Skills key is supported", code: "INVALID_KEY_SCOPE_UPDATE" }, { status: 400 });
+    }
+    const update = await store.updateApiKeyScopes?.(principal, subresource, expected, additions);
+    if (!update) return json({ error: "Key scope administration is unavailable", code: "KEY_SCOPE_UPDATE_UNAVAILABLE" }, { status: 501 });
+    if (update.kind === "not_found") return json({ error: "API key not found", code: "API_KEY_NOT_FOUND" }, { status: 404 });
+    if (update.kind === "stale") return json({ error: "API key scopes changed; re-read and retry with expected_scopes", code: "API_KEY_SCOPE_CONFLICT", keyId: subresource, scopes: update.scopes }, { status: 409 });
+    return json({ keyId: subresource, orgId: principal.orgId, scopes: update.scopes, updated: true });
+  }
+
   if (!permitsSkillsRoute(principal, request.method, resource ?? "")) {
     return json({error:"The API key does not allow this operation",code:"INSUFFICIENT_SCOPE"}, {status:403});
   }
@@ -306,6 +337,15 @@ async function handleApiV1(
 
     if (request.method === "GET" && id && subresource === "versions" && !childId) {
       return json(await listSkillVersionsPayload(store, principal, id));
+    }
+
+    if (request.method === "PATCH" && id && subresource === "lifecycle" && !childId) {
+      if (!["owner", "admin"].includes(principal.role)) return json({ error: "Only organization owners or admins may change skill lifecycle", code: "LIFECYCLE_ROLE_REQUIRED" }, { status: 403 });
+      const expectedRevisionId = parseIfMatch(request.headers.get("if-match"));
+      const updated = await store.setSkillLifecycle(principal, id, skillLifecyclePatch(await readJson(request, config.requestBodyLimitBytes)), expectedRevisionId);
+      return updated
+        ? json(publishedPayload(updated), { headers: { ETag: revisionEtag(updated.revisionId) } })
+        : json({ error: "published skill not found", code: "SKILL_NOT_FOUND" }, { status: 404 });
     }
     if (request.method === "GET" && id && subresource === "versions" && childId && !parts[4]) {
       const version = await readSkillVersion(store, principal, id, childId);
@@ -510,8 +550,11 @@ async function handleApiV1(
 }
 
 function identityPayload(principal: ApiPrincipal): Record<string, unknown> {
+  const safeKeyId = /^[A-Za-z0-9_-]{1,256}$/.test(principal.apiKeyId) ? principal.apiKeyId : undefined;
+  const safeScopes = principal.scopes.length <= 32 && principal.scopes.every((scope) => scope.length <= 128 && /^(?:\*|[a-z][a-z0-9_-]*:(?:\*|[a-z][a-z0-9_-]*))$/.test(scope)) ? [...new Set(principal.scopes)] : undefined;
   return {
     user: { id: principal.userId, email: principal.email, role: principal.role },
+    ...(safeKeyId && safeScopes ? { apiKey: { id: safeKeyId, scopes: safeScopes } } : {}),
     organization: { id: principal.orgId, slug: principal.orgSlug, name: principal.orgName },
   };
 }

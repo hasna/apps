@@ -5,37 +5,19 @@ name: deploy-domains
 # AWS authentication, then resolves and verifies every production target from
 # the package-owned SSM manifest before it can push, migrate, or update ECS.
 #
-# TRIGGERING — deployment never races the repository gates. A push to main does
-# NOT start this lane directly; the `ci` workflow does, and only after it has
-# already concluded successfully for that exact commit. `workflow_run` carries
-# `head_sha`, so the deployed source is bound to the commit CI actually
-# verified rather than to whatever main happens to point at when the deploy
-# starts. `workflow_run` does not accept a `paths:` filter, so the
-# member-scoping that `paths: [apps/domains/**]` used to provide is enforced in
-# the gate job below against DEPLOY_PATH_SCOPE — a push touching another member
-# resolves proceed=false and the deploy job is skipped, never run and failed.
+# TRIGGERING — manual only. A dispatch is accepted only on the main branch,
+# resolves the exact current origin/main tip, and requires a completed successful
+# `ci` push run for that same commit. Historical or merely ancestor commits are
+# never deployable through this lane.
 #
-# The manual route is retained and is deliberately narrower than the automatic
-# one: workflow_dispatch must be invoked on the main branch ref and always
-# resolves to the exact current origin/main tip. A historical SHA cannot be
-# deployed by hand, which is what the previous ancestor-of-main check allowed.
-# Resolving to the tip is necessary and was not sufficient — the tip itself may
-# never have passed ci, so a hand dispatch during or after red CI could deploy
-# an unverified commit. The gate therefore asks the Actions API, with the
-# workflow's own contents+actions read token, for a COMPLETED SUCCESSFUL ci PUSH
-# run on main whose head_sha equals that freshly resolved tip, and refuses on
-# zero or unreadable matches. Both routes now deploy only ci-passed commits.
-#
-# External prerequisite (not changed by this repository): the
-# domains-prod-gha-deploy role trust must admit
-# repo:hasna/apps:environment:production. Until that trust is updated, OIDC
-# fails before any AWS target read or mutation.
+# External prerequisites (not changed by this repository): the protected
+# environment's configured deploy-role trust must admit
+# repo:hasna/apps:environment:production. The role must also grant bounded
+# logs:GetLogEvents on the manifest-resolved task log group so ledger receipts
+# can return from one-shot probe tasks. Until both are updated, OIDC/evidence
+# collection fails before migration or service mutation.
 
 on:
-  workflow_run:
-    workflows: [ci]
-    types: [completed]
-    branches: [main]
   workflow_dispatch: {}
 
 concurrency:
@@ -47,28 +29,17 @@ permissions:
   id-token: write
 
 env:
-  AWS_REGION: us-east-1
-  AWS_ACCOUNT_ID: "789877399345"
-  DEPLOY_MANIFEST: /hasna/deploy/domains
-  EXPECTED_CLUSTER: oss-fleet-prod
-  EXPECTED_SERVICE: domains-prod
-  EXPECTED_WEB_FAMILY: domains-prod
-  EXPECTED_ECR_REPOSITORY: domains
-  EXPECTED_MIGRATION_FAMILY: domains-prod-migrate
-  EXPECTED_CPU_ARCHITECTURE: ARM64
   LOCAL_IMAGE: domains-deploy-candidate
-  # The workflow whose successful conclusion is the ONLY automatic entry point
-  # into this lane. Must equal the `name:` of .github/workflows/ci.yml and the
-  # single entry of on.workflow_run.workflows; the deploy gate cross-checks all
-  # three so renaming ci.yml cannot silently detach the binding.
+  # The exact CI workflow name and file used by the manual gate. Both are
+  # checked against the Actions API so a same-named unrelated workflow cannot
+  # satisfy the deployment prerequisite.
   REQUIRED_CI_WORKFLOW: ci
   # The ci workflow's file, used to address it exactly on the Actions API when
   # the manual route has to prove a ci success itself. Selecting by file path is
   # unambiguous where a name lookup is not; the run's own `name` and `path` are
   # then both re-checked against this pin and REQUIRED_CI_WORKFLOW.
   CI_WORKFLOW_FILE: ci.yml
-  # Member scoping for this lane. Used as a real git pathspec by the gate job
-  # because workflow_run cannot carry a paths: filter.
+  # Member path token retained for the deploy-lane gate; this lane is manual-only.
   DEPLOY_PATH_SCOPE: "apps/domains/**"
 
 jobs:
@@ -84,10 +55,8 @@ jobs:
     permissions:
       contents: read
       actions: read
-    # A failed, cancelled, non-push or non-main ci run must not open this lane.
-    # Expressed as a job condition so an unrelated ci outcome SKIPS the lane
-    # instead of reporting a red deployment for a deployment that never began.
-    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main') }}
+    # Only a manual dispatch on main may enter the gate.
+    if: ${{ github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' }}
     outputs:
       proceed: ${{ steps.resolve.outputs.proceed }}
       source_sha: ${{ steps.resolve.outputs.source_sha }}
@@ -97,7 +66,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-          ref: main
+          ref: ${{ github.sha }}
 
       - name: Resolve the deployable commit
         id: resolve
@@ -106,11 +75,6 @@ jobs:
           # The workflow's own short-lived repository token, scoped by the job
           # permissions above to contents+actions read. No PAT, no secret.
           GH_TOKEN: ${{ github.token }}
-          RUN_NAME: ${{ github.event.workflow_run.name }}
-          RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
-          RUN_EVENT: ${{ github.event.workflow_run.event }}
-          RUN_BRANCH: ${{ github.event.workflow_run.head_branch }}
-          RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -Eeuo pipefail
           git fetch --no-tags --prune origin +refs/heads/main:refs/remotes/origin/main
@@ -118,55 +82,19 @@ jobs:
           proceed=false
           source_sha=""
 
-          case "${GITHUB_EVENT_NAME}" in
-            workflow_run)
-              [[ "${RUN_NAME}" == "${REQUIRED_CI_WORKFLOW}" ]] || { echo "upstream workflow is ${RUN_NAME}, not ${REQUIRED_CI_WORKFLOW}" >&2; exit 1; }
-              [[ "${RUN_CONCLUSION}" == "success" ]] || { echo "upstream ci concluded ${RUN_CONCLUSION}, not success" >&2; exit 1; }
-              [[ "${RUN_EVENT}" == "push" ]] || { echo "upstream ci ran for ${RUN_EVENT}, not push" >&2; exit 1; }
-              [[ "${RUN_BRANCH}" == "main" ]] || { echo "upstream ci ran on ${RUN_BRANCH}, not main" >&2; exit 1; }
-              [[ "${RUN_HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]] || { echo "upstream ci head sha is not a full commit id" >&2; exit 1; }
-              source_sha="${RUN_HEAD_SHA}"
-              git merge-base --is-ancestor "${source_sha}^{commit}" refs/remotes/origin/main || { echo "ci commit ${source_sha} is no longer contained in origin/main" >&2; exit 1; }
-              superseded="$(git rev-list -n 1 "${source_sha}..refs/remotes/origin/main" -- "${DEPLOY_PATH_SCOPE}")"
-              parent="$(git rev-parse --verify --quiet "${source_sha}^1" || true)"
-              if [[ -n "${superseded}" ]]; then
-                echo "superseded: origin/main already carries a newer commit touching ${DEPLOY_PATH_SCOPE}; that commit's own ci run owns the deployment"
-              elif [[ -z "${parent}" ]]; then
-                proceed=true
-              elif [[ -n "$(git diff --name-only "${parent}" "${source_sha}" -- "${DEPLOY_PATH_SCOPE}")" ]]; then
-                proceed=true
-              else
-                echo "no change under ${DEPLOY_PATH_SCOPE} in ${source_sha}; this lane has nothing to deploy"
-              fi
-              ;;
-            workflow_dispatch)
-              [[ "${GITHUB_REF}" == "refs/heads/main" ]] || { echo "manual deploy is restricted to the main branch ref, received ${GITHUB_REF}" >&2; exit 1; }
-              source_sha="${main_tip}"
-              # A manual dispatch must not become a route around the repository
-              # gates. The workflow_run arm above inherits a head_sha that ci
-              # itself verified; workflow_dispatch inherits nothing, so the same
-              # binding is PROVED here against the Actions API: the exact tip we
-              # are about to deploy must already own a COMPLETED, SUCCESSFUL ci
-              # PUSH run on main. A dispatch during red, in-flight, or absent ci
-              # is refused rather than deployed.
-              #
-              # Fails closed on every path: a missing token, an HTTP or 404
-              # failure (set -e), a body jq cannot reduce to a number, and a zero
-              # count all exit non-zero. Nothing here can resolve proceed=true by
-              # default.
-              [[ -n "${GH_TOKEN:-}" ]] || { echo "manual deploy cannot verify ${REQUIRED_CI_WORKFLOW} without a repository token" >&2; exit 1; }
-              gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${CI_WORKFLOW_FILE}/runs?branch=main&event=push&status=completed&head_sha=${source_sha}&per_page=100" > "${RUNNER_TEMP}/ci-runs.json"
-              ci_success_count="$(jq --arg sha "${source_sha}" --arg name "${REQUIRED_CI_WORKFLOW}" --arg path ".github/workflows/${CI_WORKFLOW_FILE}" '[.workflow_runs[]? | select(.name == $name and .path == $path and .head_sha == $sha and .head_branch == "main" and .event == "push" and .status == "completed" and .conclusion == "success")] | length' "${RUNNER_TEMP}/ci-runs.json")"
-              [[ "${ci_success_count}" =~ ^[0-9]+$ ]] || { echo "the ${REQUIRED_CI_WORKFLOW} run query for ${source_sha} returned a body with no readable count" >&2; exit 1; }
-              [[ "${ci_success_count}" -ge 1 ]] || { echo "manual deploy refused: no completed successful ${REQUIRED_CI_WORKFLOW} push run on main for the exact origin/main tip ${source_sha}" >&2; exit 1; }
-              echo "manual deploy: ${ci_success_count} completed successful ${REQUIRED_CI_WORKFLOW} push run(s) bind ${source_sha}"
-              proceed=true
-              ;;
-            *)
-              echo "unsupported trigger ${GITHUB_EVENT_NAME}" >&2
-              exit 1
-              ;;
-          esac
+          [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]] || { echo "unsupported trigger ${GITHUB_EVENT_NAME}" >&2; exit 1; }
+          [[ "${GITHUB_REF}" == "refs/heads/main" ]] || { echo "manual deploy is restricted to the main branch ref, received ${GITHUB_REF}" >&2; exit 1; }
+          [[ "${GITHUB_SHA}" =~ ^[0-9a-f]{40}$ ]] || { echo "dispatch SHA is not a full commit id" >&2; exit 1; }
+          [[ "$(git rev-parse HEAD)" == "${GITHUB_SHA}" ]] || { echo "workflow checkout is not the dispatch SHA" >&2; exit 1; }
+          [[ "${GITHUB_SHA}" == "${main_tip}" ]] || { echo "main advanced after dispatch: dispatch=${GITHUB_SHA} current=${main_tip}" >&2; exit 1; }
+          source_sha="${GITHUB_SHA}"
+          [[ -n "${GH_TOKEN:-}" ]] || { echo "manual deploy cannot verify ${REQUIRED_CI_WORKFLOW} without a repository token" >&2; exit 1; }
+          gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${CI_WORKFLOW_FILE}/runs?branch=main&event=push&status=completed&head_sha=${source_sha}&per_page=100" > "${RUNNER_TEMP}/ci-runs.json"
+          ci_success_count="$(jq --arg sha "${source_sha}" --arg name "${REQUIRED_CI_WORKFLOW}" --arg path ".github/workflows/${CI_WORKFLOW_FILE}" '[.workflow_runs[]? | select(.name == $name and .path == $path and .head_sha == $sha and .head_branch == "main" and .event == "push" and .status == "completed" and .conclusion == "success")] | length' "${RUNNER_TEMP}/ci-runs.json")"
+          [[ "${ci_success_count}" =~ ^[0-9]+$ ]] || { echo "the ${REQUIRED_CI_WORKFLOW} run query for ${source_sha} returned no readable count" >&2; exit 1; }
+          [[ "${ci_success_count}" -ge 1 ]] || { echo "manual deploy refused: no completed successful ${REQUIRED_CI_WORKFLOW} push run for exact origin/main ${source_sha}" >&2; exit 1; }
+          echo "manual deploy: ${ci_success_count} completed successful ${REQUIRED_CI_WORKFLOW} push run(s) bind ${source_sha}"
+          proceed=true
 
           [[ "${source_sha}" =~ ^[0-9a-f]{40}$ ]] || { echo "gate did not resolve a full source commit" >&2; exit 1; }
           {
@@ -178,13 +106,25 @@ jobs:
     name: build + scan + migrate + deploy
     needs: gate
     if: ${{ needs.gate.outputs.proceed == 'true' }}
-    # domains-prod and domains-prod-migrate are ARM64 Fargate task
+    # The protected environment pins ARM64 service and migration task
     # definitions. Build and execute the candidate on a native ARM64 runner so
     # the image platform is proven before AWS authentication. This binding is
     # enforced again against both live task-definition families below.
     runs-on: ubuntu-24.04-arm
     environment: production
     timeout-minutes: 60
+    env:
+      AWS_REGION: ${{ vars.DOMAINS_PROD_AWS_REGION }}
+      DEPLOY_MANIFEST: ${{ vars.DOMAINS_PROD_DEPLOY_MANIFEST }}
+      EXPECTED_CLUSTER: ${{ vars.DOMAINS_PROD_ECS_CLUSTER }}
+      EXPECTED_SERVICE: ${{ vars.DOMAINS_PROD_ECS_SERVICE }}
+      EXPECTED_WEB_FAMILY: ${{ vars.DOMAINS_PROD_WEB_TASK_FAMILY }}
+      EXPECTED_WEB_CONTAINER: ${{ vars.DOMAINS_PROD_WEB_CONTAINER }}
+      EXPECTED_ECR_REPOSITORY: ${{ vars.DOMAINS_PROD_ECR_REPOSITORY }}
+      EXPECTED_MIGRATION_FAMILY: ${{ vars.DOMAINS_PROD_MIGRATION_TASK_FAMILY }}
+      EXPECTED_MIGRATION_CONTAINER: ${{ vars.DOMAINS_PROD_MIGRATION_CONTAINER }}
+      EXPECTED_CPU_ARCHITECTURE: ${{ vars.DOMAINS_PROD_CPU_ARCHITECTURE }}
+      DOMAINS_CLIENT_KEY_SECRET_ID: ${{ vars.DOMAINS_PROD_CLIENT_KEY_SECRET_ID }}
     defaults:
       run:
         shell: bash
@@ -214,6 +154,39 @@ jobs:
           printf 'SOURCE_SHA=%s\n' "${GATED_SHA}" >> "${GITHUB_ENV}"
           printf 'IMAGE_TAG=deploy-%s-%s-%s\n' "${GATED_SHA}" "${GITHUB_RUN_ID}" "${GITHUB_RUN_ATTEMPT}" >> "${GITHUB_ENV}"
 
+      - name: Validate protected deployment configuration
+        env:
+          EXPECTED_ACCOUNT_ID: ${{ secrets.DOMAINS_PROD_AWS_ACCOUNT_ID }}
+          DEPLOY_ROLE_ARN: ${{ secrets.DOMAINS_PROD_GHA_ROLE_ARN }}
+        run: |
+          set -Eeuo pipefail
+          require_value() { [[ -n "${!1:-}" ]] || { echo "protected deployment configuration is missing $1" >&2; exit 1; }; }
+          for name in EXPECTED_ACCOUNT_ID DEPLOY_ROLE_ARN AWS_REGION DEPLOY_MANIFEST EXPECTED_CLUSTER EXPECTED_SERVICE EXPECTED_WEB_FAMILY EXPECTED_WEB_CONTAINER EXPECTED_ECR_REPOSITORY EXPECTED_MIGRATION_FAMILY EXPECTED_MIGRATION_CONTAINER EXPECTED_CPU_ARCHITECTURE DOMAINS_CLIENT_KEY_SECRET_ID; do
+            require_value "${name}"
+          done
+          [[ "${EXPECTED_ACCOUNT_ID}" =~ ^[0-9]{12}$ ]] || { echo "protected AWS account id is invalid" >&2; exit 1; }
+          [[ "${DEPLOY_ROLE_ARN}" =~ ^arn:aws[a-z-]*:iam::${EXPECTED_ACCOUNT_ID}:role/[A-Za-z0-9+=,.@_/-]+$ ]] || { echo "protected deploy role ARN is invalid" >&2; exit 1; }
+          [[ "${AWS_REGION}" =~ ^[a-z]{2}(-[a-z0-9]+)+-[0-9]+$ ]] || { echo "protected AWS region is invalid" >&2; exit 1; }
+          [[ "${DEPLOY_MANIFEST}" =~ ^/[A-Za-z0-9_./-]+$ ]] || { echo "protected deploy manifest path is invalid" >&2; exit 1; }
+          for value in "${EXPECTED_CLUSTER}" "${EXPECTED_SERVICE}" "${EXPECTED_WEB_FAMILY}" "${EXPECTED_WEB_CONTAINER}" "${EXPECTED_ECR_REPOSITORY}" "${EXPECTED_MIGRATION_FAMILY}" "${EXPECTED_MIGRATION_CONTAINER}"; do
+            [[ "${value}" =~ ^[A-Za-z0-9_-]+$ ]] || { echo "protected deployment identifier is invalid" >&2; exit 1; }
+          done
+          [[ "${EXPECTED_CPU_ARCHITECTURE}" == "ARM64" ]] || { echo "protected CPU architecture must match the native ARM64 runner" >&2; exit 1; }
+          [[ "${DOMAINS_CLIENT_KEY_SECRET_ID}" =~ ^[A-Za-z0-9/_+=.@-]+$ ]] || { echo "protected Domains client-key reference is invalid" >&2; exit 1; }
+
+      - name: Set up Bun for the exact migration catalog
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.3.14
+
+      - name: Build exact migration ID and checksum catalog before AWS credentials
+        run: |
+          set -Eeuo pipefail
+          bun install --frozen-lockfile --ignore-scripts
+          bun -e 'import { buildMigrationCatalog } from "./src/server/migration-catalog.ts"; console.log(JSON.stringify(buildMigrationCatalog(process.env.SOURCE_SHA ?? "")));' > migration-catalog.json
+          jq -e --arg source "${SOURCE_SHA}" '.schema == "hasna.domains.migration_catalog.v1" and .source_sha == $source and (.migrations | length > 0) and ([.migrations[].id] | length == (unique | length)) and (.acknowledged_legacy_ids | type == "array") and (([.migrations[].id] + .acknowledged_legacy_ids) | length == (unique | length))' migration-catalog.json >/dev/null
+          chmod 600 migration-catalog.json
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
@@ -241,6 +214,8 @@ jobs:
           expected_bun="$(grep -oP '(?<=oven/bun:)[0-9]+\.[0-9]+\.[0-9]+' Dockerfile | head -1)"
           expected_version="$(node -p 'require("./package.json").version')"
           test -n "${expected_bun}"
+          [[ "${expected_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]
+          printf 'EXPECTED_VERSION=%s\n' "${expected_version}" >> "${GITHUB_ENV}"
           test "$(docker run --rm --entrypoint bun "${LOCAL_IMAGE}:${SOURCE_SHA}" --version)" = "${expected_bun}"
           test "$(docker run --rm --entrypoint bun "${LOCAL_IMAGE}:${SOURCE_SHA}" dist/server/index.js --version)" = "${expected_version}"
 
@@ -273,7 +248,7 @@ jobs:
       - name: Configure AWS credentials with GitHub OIDC
         uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
         with:
-          role-to-assume: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/domains-prod-gha-deploy
+          role-to-assume: ${{ secrets.DOMAINS_PROD_GHA_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: gha-deploy-domains-${{ github.run_id }}
           role-duration-seconds: 3600
@@ -282,11 +257,13 @@ jobs:
 
       - name: Resolve manifest and fail closed on production target mismatch
         id: manifest
+        env:
+          EXPECTED_ACCOUNT_ID: ${{ secrets.DOMAINS_PROD_AWS_ACCOUNT_ID }}
         run: |
           set -Eeuo pipefail
           actual_account="$(aws sts get-caller-identity --query Account --output text)"
-          if [[ "${actual_account}" != "${AWS_ACCOUNT_ID}" ]]; then
-            echo "AWS account mismatch: expected ${AWS_ACCOUNT_ID}, received ${actual_account}" >&2
+          if [[ "${actual_account}" != "${EXPECTED_ACCOUNT_ID}" ]]; then
+            echo "AWS account mismatch for protected Domains deployment configuration" >&2
             exit 1
           fi
 
@@ -303,12 +280,44 @@ jobs:
           health_url="$(get_string '.health_url')"
           subnets="$(jq -er '.subnets | arrays | select(length > 0) | join(",")' <<<"${manifest}")"
           security_groups="$(jq -er '.security_groups | arrays | select(length > 0) | join(",")' <<<"${manifest}")"
+          web_secrets="$(jq -ce --arg region "${AWS_REGION}" --arg account "${EXPECTED_ACCOUNT_ID}" '
+            .web_secrets
+            | objects
+            | select(has("CLOUDFLARE_API_TOKEN"))
+            | select(length > 0)
+            | select(all(to_entries[];
+                (.key | test("^[A-Z][A-Z0-9_]{0,127}$")) and
+                (.value | test("^arn:aws:secretsmanager:" + $region + ":" + $account + ":secret:[A-Za-z0-9/_+=.@-]+$"))
+              ))
+          ' <<<"${manifest}")"
+          web_environment="$(jq -ce '
+            .web_environment
+            | objects
+            | select(has("CLOUDFLARE_ACCOUNT_ID"))
+            | select(has("DOMAINS_REGISTRANT_SOURCE_DOMAIN"))
+            | select(has("DOMAINS_PROVISIONING_INTERVAL_MS"))
+            | select(has("DOMAINS_PROVISIONING_MAX_ATTEMPTS"))
+            | select(length > 0)
+            | select(all(to_entries[];
+                (.key | test("^[A-Z][A-Z0-9_]{0,127}$")) and
+                (.value | type == "string" and length > 0 and length <= 4096 and (test("[\n\r]") | not))
+              ))
+            | select(.CLOUDFLARE_ACCOUNT_ID | test("^[0-9a-fA-F]{32}$"))
+            | select(.DOMAINS_REGISTRANT_SOURCE_DOMAIN | test("^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$"))
+            | select(.DOMAINS_PROVISIONING_INTERVAL_MS | test("^[0-9]+$"))
+            | select(.DOMAINS_PROVISIONING_MAX_ATTEMPTS | test("^[0-9]+$"))
+          ' <<<"${manifest}")"
+          interval_ms="$(jq -er '.DOMAINS_PROVISIONING_INTERVAL_MS | tonumber | select(. >= 1000 and . <= 300000)' <<<"${web_environment}")"
+          max_attempts="$(jq -er '.DOMAINS_PROVISIONING_MAX_ATTEMPTS | tonumber | select(. >= 240 and . <= 1000000)' <<<"${web_environment}")"
+          [[ "${interval_ms}" =~ ^[0-9]+$ && "${max_attempts}" =~ ^[0-9]+$ ]]
 
-          expected_ecr_url="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${EXPECTED_ECR_REPOSITORY}"
+          expected_ecr_url="${EXPECTED_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${EXPECTED_ECR_REPOSITORY}"
           [[ "${cluster}" == "${EXPECTED_CLUSTER}" ]] || { echo "manifest cluster mismatch" >&2; exit 1; }
           [[ "${service}" == "${EXPECTED_SERVICE}" ]] || { echo "manifest service mismatch" >&2; exit 1; }
-          [[ "${web_family}" == "${EXPECTED_WEB_FAMILY}" ]] || { echo "manifest web task family mismatch" >&2; exit 1; }
+          [[ "${web_family}" == "${EXPECTED_WEB_FAMILY}" ]] || { echo "manifest web family mismatch" >&2; exit 1; }
+          [[ "${web_container}" == "${EXPECTED_WEB_CONTAINER}" ]] || { echo "manifest web container mismatch" >&2; exit 1; }
           [[ "${migration_family}" == "${EXPECTED_MIGRATION_FAMILY}" ]] || { echo "manifest migration family mismatch" >&2; exit 1; }
+          [[ "${migration_container}" == "${EXPECTED_MIGRATION_CONTAINER}" ]] || { echo "manifest migration container mismatch" >&2; exit 1; }
           [[ "${ecr_url}" == "${expected_ecr_url}" ]] || { echo "manifest ECR repository mismatch" >&2; exit 1; }
           [[ "${web_family}" =~ ^[A-Za-z0-9_-]+$ ]]
           [[ "${web_container}" =~ ^[A-Za-z0-9_-]+$ ]]
@@ -331,7 +340,22 @@ jobs:
             printf 'subnets=%s\n' "${subnets}"
             printf 'security_groups=%s\n' "${security_groups}"
             printf 'health_url=%s\n' "${health_url}"
+            printf 'web_secrets=%s\n' "${web_secrets}"
+            printf 'web_environment=%s\n' "${web_environment}"
           } >> "${GITHUB_OUTPUT}"
+
+      - name: Resolve authenticated receipt credential before mutation
+        run: |
+          set -Eeuo pipefail
+          client_key="$(aws secretsmanager get-secret-value \
+            --secret-id "${DOMAINS_CLIENT_KEY_SECRET_ID}" \
+            --query SecretString --output text)"
+          [[ -n "${client_key}" && "${client_key}" != "None" ]] || { echo "Domains client key is unavailable" >&2; exit 1; }
+          echo "::add-mask::${client_key}"
+          key_file="${RUNNER_TEMP}/domains-client-api-key"
+          (umask 077; printf '%s' "${client_key}" > "${key_file}")
+          unset client_key
+          [[ "$(stat -c '%a' "${key_file}")" == "600" ]] || { echo "Domains client key file is not owner-only" >&2; exit 1; }
 
       - name: Capture rollback anchor and verify live service authority
         id: before
@@ -348,6 +372,12 @@ jobs:
           jq -e '.services[0].status == "ACTIVE" and .services[0].desiredCount > 0' <<<"${service_json}" >/dev/null
           previous_task_definition="$(jq -er '.services[0].taskDefinition' <<<"${service_json}")"
           [[ "${previous_task_definition}" == *":task-definition/${WEB_FAMILY}:"* ]]
+          completed_deployments="$(jq --arg td "${previous_task_definition}" '[.services[0].deployments[]? | select(.taskDefinition == $td and .rolloutState == "COMPLETED")] | length' <<<"${service_json}")"
+          failed_primary="$(jq '[.services[0].deployments[]? | select(.status == "PRIMARY" and .rolloutState == "FAILED")] | length' <<<"${service_json}")"
+          [[ "${completed_deployments}" == "1" && "${failed_primary}" == "0" ]] || {
+            echo "Domains service requires reconciliation before deployment: taskDefinition=${previous_task_definition} completedMatches=${completed_deployments} failedPrimary=${failed_primary}" >&2
+            exit 1
+          }
 
           task_json="$(aws ecs describe-task-definition --task-definition "${previous_task_definition}" --output json)"
           [[ "$(jq --arg c "${WEB_CONTAINER}" '[.taskDefinition.containerDefinitions[] | select(.name == $c)] | length' <<<"${task_json}")" == "1" ]]
@@ -358,19 +388,16 @@ jobs:
             printf 'previous_image=%s\n' "${previous_image}"
           } >> "${GITHUB_OUTPUT}"
 
-      - name: Verify immutable scan-on-push ECR repository
+      - name: Verify the manifest-pinned ECR repository has no reused deployment tag
         run: |
           set -Eeuo pipefail
-          repository="$(aws ecr describe-repositories --repository-names "${EXPECTED_ECR_REPOSITORY}" --output json)"
-          [[ "$(jq -r '.repositories[0].repositoryName' <<<"${repository}")" == "${EXPECTED_ECR_REPOSITORY}" ]]
-          [[ "$(jq -r '.repositories[0].repositoryUri' <<<"${repository}")" == "${{ steps.manifest.outputs.ecr_url }}" ]]
-          [[ "$(jq -r '.repositories[0].imageTagMutability' <<<"${repository}")" == "IMMUTABLE" ]]
-          [[ "$(jq -r '.repositories[0].imageScanningConfiguration.scanOnPush' <<<"${repository}")" == "true" ]]
+          expected_account="${{ secrets.DOMAINS_PROD_AWS_ACCOUNT_ID }}"
+          [[ "${{ steps.manifest.outputs.ecr_url }}" == "${expected_account}.dkr.ecr.${AWS_REGION}.amazonaws.com/${EXPECTED_ECR_REPOSITORY}" ]]
           existing="$(aws ecr batch-get-image \
             --repository-name "${EXPECTED_ECR_REPOSITORY}" \
             --image-ids imageTag="${IMAGE_TAG}" \
             --query 'length(images)' --output text)"
-          [[ "${existing}" == "0" ]] || { echo "immutable deployment tag already exists" >&2; exit 1; }
+          [[ "${existing}" == "0" ]] || { echo "deployment tag already exists" >&2; exit 1; }
 
       - name: Login to Amazon ECR
         id: ecr-login
@@ -402,58 +429,17 @@ jobs:
           printf 'digest=%s\n' "${remote_digest}" >> "${GITHUB_OUTPUT}"
           printf 'digest_image=%s@%s\n' "${ECR_URL}" "${remote_digest}" >> "${GITHUB_OUTPUT}"
 
-      - name: Wait for ECR scan and enforce vulnerability gate
-        id: ecr-scan
-        env:
-          DIGEST: ${{ steps.image.outputs.digest }}
-        run: |
-          set -Eeuo pipefail
-          scan_complete=false
-          findings=''
-          error_file="${RUNNER_TEMP}/domains-ecr-scan-error.txt"
-          for _ in {1..60}; do
-            if response="$(aws ecr describe-image-scan-findings \
-              --repository-name "${EXPECTED_ECR_REPOSITORY}" \
-              --image-id imageDigest="${DIGEST}" \
-              --query '{status:imageScanStatus.status,counts:imageScanFindings.findingSeverityCounts}' \
-              --output json 2>"${error_file}")"; then
-              status="$(jq -er '.status | strings | select(length > 0)' <<<"${response}")"
-              case "${status}" in
-                COMPLETE)
-                  findings="$(jq -ce '.counts | if type == "object" then . else error("invalid counts") end' <<<"${response}")"
-                  scan_complete=true
-                  break
-                  ;;
-                IN_PROGRESS) ;;
-                *) echo "ECR scan entered terminal status ${status}" >&2; exit 1 ;;
-              esac
-            else
-              error_text="$(<"${error_file}")"
-              [[ "${error_text}" == *ScanNotFoundException* ]] || { echo "ECR scan query failed" >&2; exit 1; }
-            fi
-            sleep 15
-          done
-          rm -f "${error_file}"
-          [[ "${scan_complete}" == "true" ]] || { echo "ECR scan did not complete" >&2; exit 1; }
-          critical="$(jq -er '(if has("CRITICAL") then .CRITICAL else 0 end) | numbers | select(. >= 0 and floor == .)' <<<"${findings}")"
-          high="$(jq -er '(if has("HIGH") then .HIGH else 0 end) | numbers | select(. >= 0 and floor == .)' <<<"${findings}")"
-          printf 'critical=%s\n' "${critical}" >> "${GITHUB_OUTPUT}"
-          printf 'high=%s\n' "${high}" >> "${GITHUB_OUTPUT}"
-          if (( critical > 0 || high > 0 )); then
-            echo "ECR scan rejected the candidate: critical=${critical}, high=${high}" >&2
-            exit 1
-          fi
+      # The existing Domains deploy role has no ECR scan-findings read grant.
+      # The credential-free local Trivy gate above is therefore the vulnerability
+      # acceptance boundary; AWS receives only that exact image and ECS is pinned
+      # to the immutable digest resolved after push.
 
-      - name: Run one-shot migration task on the digest
-        id: migration
+      - name: Register the digest-pinned migration task definition
+        id: migration-def
         env:
           IMAGE: ${{ steps.image.outputs.digest_image }}
-          CLUSTER: ${{ steps.manifest.outputs.cluster }}
           MIGRATION_FAMILY: ${{ steps.manifest.outputs.migration_family }}
           MIGRATION_CONTAINER: ${{ steps.manifest.outputs.migration_container }}
-          SUBNETS: ${{ steps.manifest.outputs.subnets }}
-          SECURITY_GROUPS: ${{ steps.manifest.outputs.security_groups }}
-          ASSIGN_PUBLIC_IP: ${{ steps.manifest.outputs.assign_public_ip }}
         run: |
           set -Eeuo pipefail
           task_definition="$(aws ecs describe-task-definition --task-definition "${MIGRATION_FAMILY}" --query taskDefinition --output json)"
@@ -465,71 +451,131 @@ jobs:
           ' <<<"${task_definition}")"
           migration_task_definition="$(aws ecs register-task-definition --cli-input-json "${replacement}" --query taskDefinition.taskDefinitionArn --output text)"
           [[ "${migration_task_definition}" == *":task-definition/${MIGRATION_FAMILY}:"* ]]
+          printf 'task_definition=%s\n' "${migration_task_definition}" >> "${GITHUB_OUTPUT}"
 
-          run_result="$(aws ecs run-task \
-            --cluster "${CLUSTER}" \
-            --task-definition "${migration_task_definition}" \
-            --launch-type FARGATE \
-            --count 1 \
-            --started-by "gha-domains-migrate-${GITHUB_RUN_ID}" \
-            --network-configuration "awsvpcConfiguration={subnets=[${SUBNETS}],securityGroups=[${SECURITY_GROUPS}],assignPublicIp=${ASSIGN_PUBLIC_IP}}" \
-            --output json)"
-          jq -e '.failures | length == 0' <<<"${run_result}" >/dev/null
-          migration_task="$(jq -er '.tasks[0].taskArn' <<<"${run_result}")"
-          aws ecs wait tasks-stopped --cluster "${CLUSTER}" --tasks "${migration_task}"
-          stopped="$(aws ecs describe-tasks --cluster "${CLUSTER}" --tasks "${migration_task}" --output json)"
-          [[ "$(jq --arg c "${MIGRATION_CONTAINER}" '[.tasks[0].containers[] | select(.name == $c)] | length' <<<"${stopped}")" == "1" ]]
-          exit_code="$(jq -r --arg c "${MIGRATION_CONTAINER}" '.tasks[0].containers[] | select(.name == $c) | .exitCode // "null"' <<<"${stopped}")"
-          container_reason="$(jq -r --arg c "${MIGRATION_CONTAINER}" '.tasks[0].containers[] | select(.name == $c) | .reason // ""' <<<"${stopped}")"
-          task_definition_arn="$(jq -r '.tasks[0].taskDefinitionArn // ""' <<<"${stopped}")"
-          stop_code="$(jq -r '.tasks[0].stopCode // ""' <<<"${stopped}")"
-          stopped_reason="$(jq -r '.tasks[0].stoppedReason // ""' <<<"${stopped}")"
-          echo "migration taskArn=${migration_task} taskDefinition=${task_definition_arn} stopCode=${stop_code}"
-          echo "migration container=${MIGRATION_CONTAINER} exitCode=${exit_code} containerReason=${container_reason:-none} stoppedReason=${stopped_reason:-none}"
-          if [[ "${exit_code}" != "0" ]]; then
-            log_group=""
-            log_region=""
-            log_stream=""
-            if [[ -n "${task_definition_arn}" ]]; then
-              stopped_task_definition="$(aws ecs describe-task-definition --task-definition "${task_definition_arn}" --query taskDefinition --output json)"
-              log_driver="$(jq -r --arg c "${MIGRATION_CONTAINER}" '.containerDefinitions[] | select(.name == $c) | .logConfiguration.logDriver // ""' <<<"${stopped_task_definition}")"
-              log_group="$(jq -r --arg c "${MIGRATION_CONTAINER}" '.containerDefinitions[] | select(.name == $c) | .logConfiguration.options["awslogs-group"] // ""' <<<"${stopped_task_definition}")"
-              log_region="$(jq -r --arg c "${MIGRATION_CONTAINER}" '.containerDefinitions[] | select(.name == $c) | .logConfiguration.options["awslogs-region"] // ""' <<<"${stopped_task_definition}")"
-              log_prefix="$(jq -r --arg c "${MIGRATION_CONTAINER}" '.containerDefinitions[] | select(.name == $c) | .logConfiguration.options["awslogs-stream-prefix"] // ""' <<<"${stopped_task_definition}")"
-              task_id="${migration_task##*/}"
-              if [[ "${log_driver}" == "awslogs" && -n "${log_prefix}" ]]; then
-                log_stream="${log_prefix}/${MIGRATION_CONTAINER}/${task_id}"
-              fi
-            fi
-            {
-              echo "### Migration task failed"
-              echo
-              echo "- Task ARN: \`${migration_task}\`"
-              echo "- Task definition: \`${task_definition_arn:-unknown}\`"
-              echo "- Stop code: \`${stop_code:-unknown}\`"
-              echo "- Container: \`${MIGRATION_CONTAINER}\`"
-              echo "- Exit code: \`${exit_code}\`"
-              echo "- Container reason: \`${container_reason:-none}\`"
-              echo "- Stopped reason: \`${stopped_reason:-none}\`"
-              echo "- Log group: \`${log_group:-unknown}\`"
-              echo "- Log region: \`${log_region:-unknown}\`"
-              echo "- Log stream: \`${log_stream:-unknown}\`"
-              if [[ -n "${log_group}" && -n "${log_region}" && -n "${log_stream}" ]]; then
-                echo
-                echo "Retrieve the migration container evidence with an AWS identity allowed to read this log group:"
-                echo
-                echo "\`aws logs get-log-events --region ${log_region} --log-group-name ${log_group} --log-stream-name ${log_stream} --limit 100 --start-from-head --query 'events[].message' --output text | node scripts/ci/redact-log-lines.mjs\`"
-              fi
-            } >> "${GITHUB_STEP_SUMMARY}"
-            echo "migration logGroup=${log_group:-unknown} logRegion=${log_region:-unknown} logStream=${log_stream:-unknown}"
-            echo "::error::migration task did not exit 0 (exit=${exit_code}, containerReason=${container_reason:-none}, stoppedReason=${stopped_reason:-none}, logStream=${log_stream:-unknown})"
-            exit 1
+      - name: Capture exact pre-migration ledger receipt
+        id: ledger-before
+        env:
+          CLUSTER: ${{ steps.manifest.outputs.cluster }}
+          MIGRATION_TASK_DEFINITION: ${{ steps.migration-def.outputs.task_definition }}
+          MIGRATION_CONTAINER: ${{ steps.manifest.outputs.migration_container }}
+          SUBNETS: ${{ steps.manifest.outputs.subnets }}
+          SECURITY_GROUPS: ${{ steps.manifest.outputs.security_groups }}
+          ASSIGN_PUBLIC_IP: ${{ steps.manifest.outputs.assign_public_ip }}
+        run: |
+          set -Eeuo pipefail
+          bash ../../tooling/deploy/domains/ledger-probe.sh \
+            before "${CLUSTER}" "${MIGRATION_TASK_DEFINITION}" "${MIGRATION_CONTAINER}" \
+            "${SUBNETS}" "${SECURITY_GROUPS}" "${ASSIGN_PUBLIC_IP}" \
+            migration-catalog.json "${SOURCE_SHA}" ledger-before.json
+          printf 'ledger_digest=%s\n' "$(jq -er '.ledger_digest' ledger-before.json)" >> "${GITHUB_OUTPUT}"
+          printf 'pending_count=%s\n' "$(jq -er '.pending | length' ledger-before.json)" >> "${GITHUB_OUTPUT}"
+
+      - name: Run one-shot migration task on the exact digest
+        id: migration
+        continue-on-error: true
+        env:
+          CLUSTER: ${{ steps.manifest.outputs.cluster }}
+          MIGRATION_TASK_DEFINITION: ${{ steps.migration-def.outputs.task_definition }}
+          MIGRATION_CONTAINER: ${{ steps.manifest.outputs.migration_container }}
+          SUBNETS: ${{ steps.manifest.outputs.subnets }}
+          SECURITY_GROUPS: ${{ steps.manifest.outputs.security_groups }}
+          ASSIGN_PUBLIC_IP: ${{ steps.manifest.outputs.assign_public_ip }}
+          CANDIDATE_IMAGE: ${{ steps.image.outputs.digest_image }}
+        run: |
+          set -Eeuo pipefail
+          bash ../../tooling/deploy/domains/run-migration.sh \
+            "${CLUSTER}" "${MIGRATION_TASK_DEFINITION}" "${MIGRATION_CONTAINER}" \
+            "${SUBNETS}" "${SECURITY_GROUPS}" "${ASSIGN_PUBLIC_IP}" \
+            "${CANDIDATE_IMAGE}" "${SOURCE_SHA}" \
+            migration-launch.json migration-observed.json
+
+      - name: Capture exact post-migration ledger receipt
+        id: ledger-after
+        if: ${{ always() && steps.ledger-before.outcome == 'success' && steps.migration-def.outputs.task_definition != '' }}
+        continue-on-error: true
+        env:
+          CLUSTER: ${{ steps.manifest.outputs.cluster }}
+          MIGRATION_TASK_DEFINITION: ${{ steps.migration-def.outputs.task_definition }}
+          MIGRATION_CONTAINER: ${{ steps.manifest.outputs.migration_container }}
+          SUBNETS: ${{ steps.manifest.outputs.subnets }}
+          SECURITY_GROUPS: ${{ steps.manifest.outputs.security_groups }}
+          ASSIGN_PUBLIC_IP: ${{ steps.manifest.outputs.assign_public_ip }}
+        run: |
+          set -Eeuo pipefail
+          bash ../../tooling/deploy/domains/ledger-probe.sh \
+            after "${CLUSTER}" "${MIGRATION_TASK_DEFINITION}" "${MIGRATION_CONTAINER}" \
+            "${SUBNETS}" "${SECURITY_GROUPS}" "${ASSIGN_PUBLIC_IP}" \
+            migration-catalog.json "${SOURCE_SHA}" ledger-after.json
+
+      - name: Classify migration result and refuse uncertain state
+        id: ledger-classify
+        if: ${{ always() && steps.ledger-before.outcome == 'success' }}
+        env:
+          MIGRATION_OUTCOME: ${{ steps.migration.outcome }}
+          POST_LEDGER_OUTCOME: ${{ steps.ledger-after.outcome }}
+          MIGRATION_TASK: ${{ steps.migration.outputs.task }}
+          MIGRATION_TASK_DEFINITION: ${{ steps.migration.outputs.task_definition }}
+          MIGRATION_IMAGE: ${{ steps.migration.outputs.image }}
+          MIGRATION_IMAGE_DIGEST: ${{ steps.migration.outputs.image_digest }}
+          MIGRATION_EXIT_CODE: ${{ steps.migration.outputs.exit_code }}
+        run: |
+          set -Eeuo pipefail
+          pre_digest="$(jq -er '.ledger_digest' ledger-before.json)"
+          schema_advanced=unknown
+          post_digest=""
+          post_pending=-1
+          if [[ "${POST_LEDGER_OUTCOME}" == "success" && -f ledger-after.json ]]; then
+            post_digest="$(jq -er '.ledger_digest' ledger-after.json)"
+            post_pending="$(jq -er '.pending | length' ledger-after.json)"
+            if [[ "${pre_digest}" == "${post_digest}" ]]; then schema_advanced=false; else schema_advanced=true; fi
           fi
-          {
-            printf 'task_definition=%s\n' "${migration_task_definition}"
-            printf 'task=%s\n' "${migration_task}"
-            printf 'exit_code=%s\n' "${exit_code}"
-          } >> "${GITHUB_OUTPUT}"
+          printf 'schema_advanced=%s\n' "${schema_advanced}" >> "${GITHUB_OUTPUT}"
+          printf 'pre_ledger_digest=%s\n' "${pre_digest}" >> "${GITHUB_OUTPUT}"
+          printf 'post_ledger_digest=%s\n' "${post_digest}" >> "${GITHUB_OUTPUT}"
+
+          if [[ "${MIGRATION_OUTCOME}" == "success" && "${MIGRATION_EXIT_CODE}" == "0" && "${POST_LEDGER_OUTCOME}" == "success" && "${post_pending}" == "0" ]]; then
+            exit 0
+          fi
+
+          launch="$(if [[ -f migration-launch.json ]]; then jq -c . migration-launch.json; else printf 'null'; fi)"
+          observed="$(if [[ -f migration-observed.json ]]; then jq -c . migration-observed.json; else printf 'null'; fi)"
+          if [[ "${POST_LEDGER_OUTCOME}" == "success" && -f ledger-after.json ]]; then
+            jq -n \
+              --slurpfile before ledger-before.json \
+              --slurpfile after ledger-after.json \
+              --argjson launch "${launch}" \
+              --argjson observed "${observed}" \
+              --arg source_sha "${SOURCE_SHA}" \
+              --arg migration_outcome "${MIGRATION_OUTCOME}" \
+              --arg schema_advanced "${schema_advanced}" \
+              --arg task "${MIGRATION_TASK}" \
+              --arg task_definition "${MIGRATION_TASK_DEFINITION}" \
+              --arg image "${MIGRATION_IMAGE}" \
+              --arg image_digest "${MIGRATION_IMAGE_DIGEST}" \
+              --arg exit_code "${MIGRATION_EXIT_CODE}" \
+              '{schema:"hasna.domains.migration_uncertain_state.v1",status:"RECONCILIATION_REQUIRED",source_sha:$source_sha,migration:{outcome:$migration_outcome,task:$task,task_definition:$task_definition,image:$image,image_digest:$image_digest,exit_code:$exit_code,launch:$launch,observed:$observed},schema_advanced:(if $schema_advanced == "true" then true elif $schema_advanced == "false" then false else null end),pre_ledger:$before[0],post_ledger:$after[0]}' \
+              > uncertain-state.json
+          else
+            jq -n \
+              --slurpfile before ledger-before.json \
+              --argjson launch "${launch}" \
+              --argjson observed "${observed}" \
+              --arg source_sha "${SOURCE_SHA}" \
+              --arg migration_outcome "${MIGRATION_OUTCOME}" \
+              --arg schema_advanced "${schema_advanced}" \
+              --arg task "${MIGRATION_TASK}" \
+              --arg task_definition "${MIGRATION_TASK_DEFINITION}" \
+              --arg image "${MIGRATION_IMAGE}" \
+              --arg image_digest "${MIGRATION_IMAGE_DIGEST}" \
+              --arg exit_code "${MIGRATION_EXIT_CODE}" \
+              --arg post_ledger_outcome "${POST_LEDGER_OUTCOME}" \
+              '{schema:"hasna.domains.migration_uncertain_state.v1",status:"RECONCILIATION_REQUIRED",source_sha:$source_sha,migration:{outcome:$migration_outcome,task:$task,task_definition:$task_definition,image:$image,image_digest:$image_digest,exit_code:$exit_code,launch:$launch,observed:$observed},schema_advanced:(if $schema_advanced == "true" then true elif $schema_advanced == "false" then false else null end),pre_ledger:$before[0],post_ledger:{outcome:$post_ledger_outcome,ledger_state:"unavailable"}}' \
+              > uncertain-state.json
+          fi
+          chmod 600 uncertain-state.json
+          echo "::error title=Domains migration state requires reconciliation::No service update was attempted; inspect the metadata-only uncertain-state receipt."
+          exit 1
 
       - name: Register digest-pinned task definition and update service
         id: deploy
@@ -539,24 +585,58 @@ jobs:
           SERVICE: ${{ steps.manifest.outputs.service }}
           WEB_FAMILY: ${{ steps.manifest.outputs.web_family }}
           WEB_CONTAINER: ${{ steps.manifest.outputs.web_container }}
+          PREVIOUS_TASK_DEFINITION: ${{ steps.before.outputs.previous_task_definition }}
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+          MANIFEST_WEB_SECRETS: ${{ steps.manifest.outputs.web_secrets }}
+          MANIFEST_WEB_ENVIRONMENT: ${{ steps.manifest.outputs.web_environment }}
         run: |
           set -Eeuo pipefail
-          task_definition="$(aws ecs describe-task-definition --task-definition "${WEB_FAMILY}" --query taskDefinition --output json)"
+          task_definition="$(aws ecs describe-task-definition --task-definition "${PREVIOUS_TASK_DEFINITION}" --query taskDefinition --output json)"
+          [[ "$(jq -r '.taskDefinitionArn' <<<"${task_definition}")" == "${PREVIOUS_TASK_DEFINITION}" ]]
+          [[ "$(jq -r '.family' <<<"${task_definition}")" == "${WEB_FAMILY}" ]]
           [[ "$(jq --arg c "${WEB_CONTAINER}" '[.containerDefinitions[] | select(.name == $c)] | length' <<<"${task_definition}")" == "1" ]]
-          replacement="$(jq --arg image "${IMAGE}" --arg c "${WEB_CONTAINER}" '
-            .containerDefinitions |= map(if .name == $c then .image = $image else . end)
+          jq -e 'type == "object" and has("CLOUDFLARE_API_TOKEN")' <<<"${MANIFEST_WEB_SECRETS}" >/dev/null
+          jq -e 'type == "object" and has("CLOUDFLARE_ACCOUNT_ID") and has("DOMAINS_REGISTRANT_SOURCE_DOMAIN") and has("DOMAINS_PROVISIONING_INTERVAL_MS") and has("DOMAINS_PROVISIONING_MAX_ATTEMPTS")' <<<"${MANIFEST_WEB_ENVIRONMENT}" >/dev/null
+          replacement="$(jq --arg image "${IMAGE}" --arg c "${WEB_CONTAINER}" --argjson required_secrets "${MANIFEST_WEB_SECRETS}" --argjson required_environment "${MANIFEST_WEB_ENVIRONMENT}" '
+            .containerDefinitions |= map(
+              if .name == $c then
+                .image = $image
+                | .secrets = (
+                    ((.secrets // []) | map(select(.name as $name | ($required_secrets | has($name) | not))))
+                    + ($required_secrets | to_entries | map({name:.key,valueFrom:.value}))
+                    | sort_by(.name)
+                  )
+                | .environment = (
+                    ((.environment // []) | map(select(.name as $name | ($required_environment | has($name) | not))))
+                    + ($required_environment | to_entries | map({name:.key,value:.value}))
+                    | sort_by(.name)
+                  )
+              else . end
+            )
             | del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy,.deregisteredAt)
           ' <<<"${task_definition}")"
+          jq -e --arg c "${WEB_CONTAINER}" --argjson required_secrets "${MANIFEST_WEB_SECRETS}" --argjson required_environment "${MANIFEST_WEB_ENVIRONMENT}" '
+            .containerDefinitions[] | select(.name == $c)
+            | (.secrets // []) as $actual_secrets
+            | (.environment // []) as $actual_environment
+            | all($required_secrets | to_entries[]; . as $entry | any($actual_secrets[]; .name == $entry.key and .valueFrom == $entry.value))
+            and all($required_environment | to_entries[]; . as $entry | any($actual_environment[]; .name == $entry.key and .value == $entry.value))
+          ' <<<"${replacement}" >/dev/null
           deployed_task_definition="$(aws ecs register-task-definition --cli-input-json "${replacement}" --query taskDefinition.taskDefinitionArn --output text)"
           [[ "${deployed_task_definition}" == *":task-definition/${WEB_FAMILY}:"* ]]
           printf 'deployed_task_definition=%s\n' "${deployed_task_definition}" >> "${GITHUB_OUTPUT}"
+          # Last possible read before mutation: a concurrent deploy invalidates
+          # this run rather than letting a mutable family tip become its base.
+          bash ../../tooling/deploy/domains/assert-service-anchor.sh \
+            "${CLUSTER}" "${SERVICE}" "${PREVIOUS_TASK_DEFINITION}"
           printf 'service_mutated=true\n' >> "${GITHUB_OUTPUT}"
           aws ecs update-service \
             --cluster "${CLUSTER}" \
             --service "${SERVICE}" \
-            --task-definition "${deployed_task_definition}" >/dev/null
+            --task-definition "${deployed_task_definition}" \
+            --deployment-configuration 'deploymentCircuitBreaker={enable=true,rollback=false}' >/dev/null
           aws ecs wait services-stable --cluster "${CLUSTER}" --services "${SERVICE}"
-          bash scripts/ci/verify-ecs-rollout.sh "${CLUSTER}" "${SERVICE}" "${deployed_task_definition}"
+          bash ../../tooling/deploy/domains/verify-ecs-rollout.sh "${CLUSTER}" "${SERVICE}" "${deployed_task_definition}"
 
       - name: Verify exact live task definition, digest, and health
         id: verify
@@ -590,7 +670,14 @@ jobs:
           deployed_architecture="$(jq -r '.taskDefinition.runtimePlatform.cpuArchitecture // ""' <<<"${deployed_definition}")"
           [[ "${deployed_image}" == "${IMAGE}" ]] || { echo "live task definition image digest mismatch" >&2; exit 1; }
           [[ "${deployed_architecture}" == "${EXPECTED_CPU_ARCHITECTURE}" ]] || { echo "deployed task architecture mismatch" >&2; exit 1; }
-          curl --fail --silent --show-error --retry 5 --retry-all-errors --max-time 15 "${HEALTH_URL}" >/dev/null
+          ready_url="${HEALTH_URL%/health}/ready"
+          bash ../../tooling/deploy/domains/verify-readiness.sh \
+            "${ready_url}" "${EXPECTED_VERSION}" readiness-direct.json
+          bash ../../tooling/deploy/domains/verify-readiness.sh \
+            "https://api.hasna.com/domains/ready" "${EXPECTED_VERSION}" readiness-canonical.json
+          key_file="${RUNNER_TEMP}/domains-client-api-key"
+          bash ../../tooling/deploy/domains/verify-canonical-data-plane.sh \
+            "https://api.hasna.com/domains" "${key_file}" "${DOMAINS_CLIENT_KEY_SECRET_ID}" data-plane-canonical.json
 
           jq -n \
             --arg source_sha "${SOURCE_SHA}" \
@@ -604,29 +691,83 @@ jobs:
             --arg previous_image "${{ steps.before.outputs.previous_image }}" \
             --arg migration_task_definition "${{ steps.migration.outputs.task_definition }}" \
             --arg migration_task "${{ steps.migration.outputs.task }}" \
+            --arg migration_image "${{ steps.migration.outputs.image }}" \
+            --arg migration_image_digest "${{ steps.migration.outputs.image_digest }}" \
+            --arg schema_advanced "${{ steps.ledger-classify.outputs.schema_advanced }}" \
+            --slurpfile ledger_before ledger-before.json \
+            --slurpfile ledger_after ledger-after.json \
+            --slurpfile migration_launch migration-launch.json \
+            --slurpfile migration_observed migration-observed.json \
+            --slurpfile readiness_direct readiness-direct.json \
+            --slurpfile readiness_canonical readiness-canonical.json \
+            --slurpfile data_plane_canonical data-plane-canonical.json \
             --arg deployed_task_definition "${DEPLOYED_TASK_DEFINITION}" \
             --arg deployed_image "${deployed_image}" \
             --arg health_url "${HEALTH_URL}" \
             --arg run_id "${GITHUB_RUN_ID}" \
             --arg architecture "${EXPECTED_CPU_ARCHITECTURE}" \
-            '{schema:"hasna.domains.production_deploy.v1",source_sha:$source_sha,image_tag:$image_tag,image_digest:$image_digest,image:$image,architecture:$architecture,account:$account,cluster:$cluster,service:$service,rollback:{task_definition:$previous_task_definition,image:$previous_image},migration:{task_definition:$migration_task_definition,task:$migration_task,exit_code:0},deployed:{task_definition:$deployed_task_definition,image:$deployed_image,architecture:$architecture,health_url:$health_url},github_run_id:$run_id}' \
+            '{schema:"hasna.domains.production_deploy.v1",source_sha:$source_sha,image_tag:$image_tag,image_digest:$image_digest,image:$image,architecture:$architecture,account:$account,cluster:$cluster,service:$service,rollback:{task_definition:$previous_task_definition,image:$previous_image},migration:{task_definition:$migration_task_definition,task:$migration_task,image:$migration_image,image_digest:$migration_image_digest,exit_code:0,schema_advanced:($schema_advanced == "true"),ledger_before:$ledger_before[0],ledger_after:$ledger_after[0],launch:$migration_launch[0],observed:$migration_observed[0]},deployed:{task_definition:$deployed_task_definition,image:$deployed_image,architecture:$architecture,health_url:$health_url,readiness:{direct:$readiness_direct[0],canonical:$readiness_canonical[0]},canonical_data_plane:$data_plane_canonical[0]},github_run_id:$run_id}' \
             > deploy-evidence.json
 
-      - name: Restore rollback anchor after a failed service rollout
-        if: ${{ failure() && steps.deploy.outputs.service_mutated == 'true' }}
+      - name: Emit RECONCILIATION_REQUIRED after a post-migration deployment failure
+        if: ${{ failure() && steps.deploy.outputs.service_mutated == 'true' && steps.ledger-classify.outputs.schema_advanced == 'true' }}
         env:
           CLUSTER: ${{ steps.manifest.outputs.cluster }}
           SERVICE: ${{ steps.manifest.outputs.service }}
+          CANDIDATE_TASK_DEFINITION: ${{ steps.deploy.outputs.deployed_task_definition }}
+          CANDIDATE_IMAGE: ${{ steps.image.outputs.digest_image }}
           PREVIOUS_TASK_DEFINITION: ${{ steps.before.outputs.previous_task_definition }}
+          PREVIOUS_IMAGE: ${{ steps.before.outputs.previous_image }}
         run: |
           set -Eeuo pipefail
-          aws ecs update-service \
-            --cluster "${CLUSTER}" \
-            --service "${SERVICE}" \
-            --task-definition "${PREVIOUS_TASK_DEFINITION}" >/dev/null
-          aws ecs wait services-stable --cluster "${CLUSTER}" --services "${SERVICE}"
-          live="$(aws ecs describe-services --cluster "${CLUSTER}" --services "${SERVICE}" --query 'services[0].taskDefinition' --output text)"
-          [[ "${live}" == "${PREVIOUS_TASK_DEFINITION}" ]] || { echo "rollback did not restore the previous task definition" >&2; exit 1; }
+          service_json="$(aws ecs describe-services --cluster "${CLUSTER}" --services "${SERVICE}" --output json)"
+          deployments="$(jq -c '[.services[0].deployments[] | {status,rolloutState:(.rolloutState // "UNKNOWN"),taskDefinition,desiredCount,runningCount,pendingCount}]' <<<"${service_json}")"
+          jq -n \
+            --arg source_sha "${SOURCE_SHA}" \
+            --arg cluster "${CLUSTER}" \
+            --arg service "${SERVICE}" \
+            --arg candidate_task_definition "${CANDIDATE_TASK_DEFINITION}" \
+            --arg candidate_image "${CANDIDATE_IMAGE}" \
+            --arg previous_task_definition "${PREVIOUS_TASK_DEFINITION}" \
+            --arg previous_image "${PREVIOUS_IMAGE}" \
+            --slurpfile ledger_before ledger-before.json \
+            --slurpfile ledger_after ledger-after.json \
+            --slurpfile migration_launch migration-launch.json \
+            --slurpfile migration_observed migration-observed.json \
+            --argjson deployments "${deployments}" \
+            '{schema:"hasna.domains.deployment_reconciliation_required.v1",status:"RECONCILIATION_REQUIRED",reason:"service_failure_after_schema_advance",source_sha:$source_sha,cluster:$cluster,service:$service,candidate:{task_definition:$candidate_task_definition,image:$candidate_image},previous:{task_definition:$previous_task_definition,image:$previous_image,compatibility:"unproven_against_advanced_schema"},ledger_before:$ledger_before[0],ledger_after:$ledger_after[0],migration:{launch:$migration_launch[0],observed:$migration_observed[0]},observed_deployments:$deployments,automatic_rollback_performed:false}' \
+            > reconciliation-required.json
+          chmod 600 reconciliation-required.json
+          echo "::error title=Domains recovery review required::Schema advanced; automatic rollback to the unproven previous binary is forbidden."
+
+      - name: Restore rollback anchor only when the ledger did not advance
+        id: rollback
+        if: ${{ failure() && steps.deploy.outputs.service_mutated == 'true' && steps.ledger-classify.outputs.schema_advanced == 'false' }}
+        env:
+          CLUSTER: ${{ steps.manifest.outputs.cluster }}
+          SERVICE: ${{ steps.manifest.outputs.service }}
+          CANDIDATE_TASK_DEFINITION: ${{ steps.deploy.outputs.deployed_task_definition }}
+          CANDIDATE_IMAGE: ${{ steps.image.outputs.digest_image }}
+          PREVIOUS_TASK_DEFINITION: ${{ steps.before.outputs.previous_task_definition }}
+          PREVIOUS_IMAGE: ${{ steps.before.outputs.previous_image }}
+        run: |
+          set -Eeuo pipefail
+          bash ../../tooling/deploy/domains/restore-service-anchor.sh \
+            "${CLUSTER}" "${SERVICE}" \
+            "${CANDIDATE_TASK_DEFINITION}" "${PREVIOUS_TASK_DEFINITION}" \
+            "${SOURCE_SHA}" "${CANDIDATE_IMAGE}" "${PREVIOUS_IMAGE}" \
+            rollback-receipt.json reconciliation-required.json
+
+      - name: Remove authenticated receipt credential
+        if: ${{ always() }}
+        run: |
+          set -Eeuo pipefail
+          key_file="${RUNNER_TEMP}/domains-client-api-key"
+          if [[ -f "${key_file}" ]]; then
+            chmod 600 "${key_file}"
+            printf '' > "${key_file}"
+            rm -f "${key_file}"
+          fi
 
       - name: Upload deployment evidence
         if: ${{ always() }}
@@ -635,6 +776,17 @@ jobs:
           name: domains-production-deploy-${{ github.run_id }}
           path: |
             apps/domains/trivy-local.json
+            apps/domains/migration-catalog.json
+            apps/domains/ledger-before.json
+            apps/domains/ledger-after.json
+            apps/domains/migration-launch.json
+            apps/domains/migration-observed.json
+            apps/domains/readiness-direct.json
+            apps/domains/readiness-canonical.json
+            apps/domains/data-plane-canonical.json
+            apps/domains/uncertain-state.json
+            apps/domains/reconciliation-required.json
+            apps/domains/rollback-receipt.json
             apps/domains/deploy-evidence.json
           if-no-files-found: warn
           retention-days: 30
@@ -651,25 +803,14 @@ jobs:
             echo "- immutable tag: \`${IMAGE_TAG:-not-created}\`"
             echo "- image digest: \`${{ steps.image.outputs.digest || 'not-pushed' }}\`"
             echo "- local critical/high: \`${{ steps.local-scan.outputs.critical || 'not-run' }}/${{ steps.local-scan.outputs.high || 'not-run' }}\`"
-            echo "- ECR critical/high: \`${{ steps.ecr-scan.outputs.critical || 'not-run' }}/${{ steps.ecr-scan.outputs.high || 'not-run' }}\`"
             echo "- previous task definition: \`${{ steps.before.outputs.previous_task_definition || 'not-read' }}\`"
+            echo "- migration task: \`${{ steps.migration.outputs.task || 'not-run' }}\`"
+            echo "- pre/post ledger digest: \`${{ steps.ledger-classify.outputs.pre_ledger_digest || 'not-read' }}\` / \`${{ steps.ledger-classify.outputs.post_ledger_digest || 'not-read' }}\`"
+            echo "- schema advanced: \`${{ steps.ledger-classify.outputs.schema_advanced || 'unknown' }}\`"
             echo "- deployed task definition: \`${{ steps.deploy.outputs.deployed_task_definition || 'not-deployed' }}\`"
+            echo "- reconciliation receipt: \`${{ steps.ledger-classify.outcome == 'failure' && 'uncertain-state.json' || (steps.deploy.outcome == 'failure' && steps.ledger-classify.outputs.schema_advanced == 'true' && 'reconciliation-required.json' || (steps.rollback.outcome == 'failure' && 'reconciliation-required.json' || 'not-required')) }}\`"
           } >> "${GITHUB_STEP_SUMMARY}"
 
-  # Provision-or-verify the CLIENT API key for this app (hasna/apps#1595).
-  #
-  # A deploy that leaves a running, routed service nobody can call is not a
-  # finished deploy -- that is exactly what happened to messages-prod, and
-  # domains/knowledge shipped keys the origin had already revoked while
-  # Secrets Manager still held the dead value. This job reads
-  # hasna/oss/domains/api-key, proves it still authenticates against the freshly
-  # deployed origin with a two-sided probe, and mints one when it is absent or
-  # refused.
-  #
-  # Deliberately a job AFTER `deploy`, not a step inside it: the rollout is
-  # already complete and healthy when this runs, so a key that cannot be minted
-  # reports as its own failure instead of as a failed deployment, and never
-  # executes while the deploy job is mutating the production service.
   provision_key:
     name: provision or verify the fleet client API key
     needs: [gate, deploy]

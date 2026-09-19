@@ -8,6 +8,7 @@ import { bulkUpsertMemories } from "../../db/memories.js";
 import { getDataRoot } from "../../lib/paths.js";
 import {
   outputJson,
+  outputJsonAndExit,
   makeHandleError,
   type GlobalOpts,
 } from "../helpers.js";
@@ -99,7 +100,7 @@ export function registerRestoreCommand(program: Command): void {
     .description("Restore the database from a backup file")
     .option("--latest", "Restore the most recent backup from the mementos backups dir")
     .option("--force", "Skip confirmation and perform the restore")
-    .action((filePath: string | undefined, opts) => {
+    .action(async (filePath: string | undefined, opts) => {
       try {
         const globalOpts = program.opts<GlobalOpts>();
         const backupsDir = join(getDataRoot(), "backups");
@@ -183,7 +184,7 @@ export function registerRestoreCommand(program: Command): void {
           if (result.rejected > 0) {
             const msg = `${result.rejected} of ${result.total} memories were rejected and did not persist. See errors.`;
             if (globalOpts.json) {
-              outputJson({
+              await outputJsonAndExit({
                 action: "restore",
                 status: "failed",
                 source,
@@ -193,11 +194,11 @@ export function registerRestoreCommand(program: Command): void {
                 rejected: result.rejected,
                 total: result.total,
                 error: msg,
-              });
+              }, 1);
             } else {
               console.error(chalk.red(msg));
             }
-            process.exit(1);
+            if (!globalOpts.json) process.exit(1);
           }
 
           if (globalOpts.json) {

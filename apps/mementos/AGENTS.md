@@ -59,8 +59,13 @@ The CLI and MCP tools are compact by default to keep agent context small.
 - Use `--verbose` when a command supports it to show wider snippets or match
   highlights.
 - Use `mementos show <id>` or targeted recall/get tools for full detail.
-- Use `--json` for stable CLI object output; MCP tools that can dump complete
-  objects expose `full=true` or `format="json"`.
+- `projects --json`, `agents --json`, `list --json`, and `search --json` return
+  compact, byte-bounded continuation receipts. `--full` changes row detail and
+  `--all` exhausts the query, but both retain the envelope; only `export --all`
+  emits a legacy bare array.
+- MCP `memory_context` defaults to ten compact previews under 32 KiB;
+  `memory_inject` defaults to hints. Request `detail="full"` / `mode="full"`
+  only when complete content is required.
 
 ## Session End Protocol
 

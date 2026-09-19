@@ -26,6 +26,53 @@ not escape it through absolute paths or symlinks.
 Empty sources and an entirely empty render fail unless
 `--allow-empty-sources` is explicit.
 
+## Shared project instructions for Sumi and Claude
+
+A Sumi project render can own both the canonical `AGENTS.md` and an optional
+`CLAUDE.md` containing only a managed relative `@./AGENTS.md` import. This is
+opt-in and currently supports the verified Claude Code **2.1.278** capability.
+Other Claude versions fail closed until their capability is verified.
+
+```bash
+instructions session plan --tool sumi --profile shared-project \
+  --compile-profile <profile-id> --provider-version 0.2.22 \
+  --project-root <project-directory> --claude-project-import 2.1.278 \
+  --no-station-profile --json
+```
+
+Each selected binding must explicitly include both `sumi` and `claude` providers.
+The compiler checks the same ordered immutable config IDs, versions, bodies and
+activation semantics for both consumers, then checks provider filtering and
+composition again. Divergent selections, conditional policy that cannot be
+preserved, raw source inputs and unbound extra sources are refused. A binding
+restricted to one provider is never broadened by adding the companion.
+Native `@` imports inside the canonical policy are refused, including references
+to files that do not exist yet. Write literal package/path references in
+Markdown code (for example, `` `@hasna/emails` ``); ordinary email addresses and
+closed code spans or fences remain literal. Malformed or ambiguous `@` text
+fails closed so Claude cannot silently load unmanaged additional sources.
+
+Use `session apply` with the same options after reviewing the plan. Both files
+belong to the same project manifest and snapshot. Existing managed targets also
+require `--expected-manifest-sha256 <reviewed-sha256>`; `--force` is refused.
+An existing unmanaged `CLAUDE.md` is a conflict, including an import created by
+hand. A reviewed existing `AGENTS.md` can use the normal exact-hash `--adopt-file`
+operation. Foreign manifest owners and symlink paths are refused. Global native
+homes, settings and credentials remain outside this project transaction.
+
+Hosted `session refresh` retains the companion capability and recompiles both
+provider selections from current hosted sources. Snapshots restore both files,
+including removing the newly created companion when rolling back an adoption
+or a new project. Automatically dropping the companion from a later plan is
+unsupported and refused; consumer retirement requires a separate reviewed
+migration. No independent Claude project apply should compete for this manifest.
+
+This capability establishes a shared managed entry point, not adoption by an
+existing session or the absence of unrelated ancestor, global or local rules.
+Verify fresh project, sibling and control sessions with the installed consumers
+before claiming project scope. Native Claude strips HTML comments when loading
+memory files, as described in its [memory documentation](https://code.claude.com/docs/en/memory#import-additional-files).
+
 ## Station profile injector
 
 Every render also carries a compact station-profile block when a cache exists
@@ -317,3 +364,63 @@ Keep superseded records as history with `retired-instruction-source` (or
 these retirement markers rather than restoring embedded defaults. Generated
 files must be refreshed from the authoritative selected profile; modifying a
 local projection does not update that source.
+
+### Retire reviewed legacy prompt carriers
+
+`session apply --retire-legacy-files <review.json>` removes explicitly reviewed
+native Markdown carriers that are absent from both the new plan and the previous
+managed-file list. This is separate from `--retire-file`, which still requires
+previous managed ownership. The SDK option is `retireLegacyFiles` on
+`applySessionRender`.
+
+Before invoking it, review every clause of each old file against the canonical
+hosted replacements. Save that review as an immutable artifact and use its SHA-256
+in `coverageReviewSha256`. The digest records the operator's review; the renderer
+cannot establish semantic equivalence. Do not retire a carrier with incomplete
+coverage or unresolved provider/role/project scope. The replacement plan must
+come from a compiled hosted profile. Each replacement pin must match a selected,
+actually emitted source's ID, config ID, config version and rendered payload
+digest. An excluded source or a historical version does not satisfy this check.
+
+The review file is a JSON array:
+
+```json
+[
+  {
+    "relativePath": "rules/legacy.md",
+    "sha256": "<64 lowercase hex characters: reviewed file bytes>",
+    "coverageReviewSha256": "<64 lowercase hex characters: reviewed coverage artifact>",
+    "replacementSources": [
+      {
+        "id": "canonical-rule",
+        "configId": "immutable-config-id",
+        "configVersion": 3,
+        "renderedPayloadSha256": "<64 lowercase hex characters: selected rendered payload>"
+      }
+    ]
+  }
+]
+```
+
+Pass `--expected-manifest-sha256` with the exact previous manifest digest, preview
+with `--dry-run`, and apply the same reviewed inputs. `--force` is prohibited.
+Allowed carriers are Markdown files beneath the adapter's instruction-fragment
+directory, Claude `rules/` Markdown files, and Claude session-home `AGENTS.md`.
+The existing Claude authority guard still requires a registered matching source
+before planning or applying a migration of `AGENTS.md`; this option does not
+waive it. Entrypoints retained by the new plan use adoption/reconciliation instead.
+
+The operation refuses aliases, traversal, symlinks, nonregular files, hard links,
+other-owner files, special mode bits and non-UTF-8 bytes. It writes an owner-only
+snapshot containing each removed file's exact bytes and permissions, checks all
+file and manifest preimages before the first payload write, and uses the existing
+coordinated removal path. Unrequested files remain untouched. The manifest and
+snapshot retain `legacyRetirements` provenance, including replacement API authority
+and profile identity, without claiming the old files
+were previously managed. Ordinary refresh preserves this history.
+
+Use `session restore <snapshot> --dry-run` and then `session restore <snapshot>`
+for rollback. Restore refuses intervening file changes, including a newly created
+file at a retired path. An interrupted apply can leave partial changes; inspect its
+snapshot and actual paths before attempting recovery. Never treat a failed apply
+or a snapshot alone as successful retirement.

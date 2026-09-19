@@ -14,11 +14,12 @@ import type {
   ServerSkillBundle,
   ServerSkillRecord,
   ServerSkillVersion,
+  ApiKeyScopeUpdateResult,
   SkillsProductStore,
   StoreBackendInfo,
   UpdateSkillPatch,
 } from "./types.js";
-import { SkillRevisionConflictError, SkillVersionExistsError, StaleLeaseGenerationError } from "./types.js";
+import { SkillLifecycleConflictError, SkillRevisionConflictError, SkillVersionExistsError, StaleLeaseGenerationError, type SkillLifecyclePatch } from "./types.js";
 import { hashApiKey, publicPrincipal } from "./auth.js";
 import { resolveDatabaseTarget, type DatabaseTarget } from "./database-url.js";
 import { artifactId, nowIso, normalizeLimit, rowToArtifact, rowToLog, rowToPin, rowToRun, rowToSkill, rowToSkillBundle, rowToSkillVersion, parseJsonArray, runId } from "./rows.js";
@@ -151,6 +152,20 @@ export class MemorySkillsStore implements SkillsProductStore {
 
   async authenticateApiKeyHash(hash: string): Promise<ApiPrincipal | null> {
     return this.apiKeys.get(hash) ?? null;
+  }
+
+  async updateApiKeyScopes(actor: ApiPrincipal, keyId: string, expectedScopes: string[], addScopes: string[]): Promise<ApiKeyScopeUpdateResult> {
+    for (const [hash, target] of this.apiKeys) {
+      if (target.apiKeyId !== keyId || target.orgId !== actor.orgId) continue;
+      if (target.scopes.length !== expectedScopes.length || target.scopes.some((scope, index) => scope !== expectedScopes[index])) {
+        return { kind: "stale", scopes: [...target.scopes] };
+      }
+      const scopes = [...target.scopes, ...addScopes.filter((scope) => !target.scopes.includes(scope))];
+      const updated = { ...target, scopes };
+      this.apiKeys.set(hash, updated);
+      return { kind: "updated", scopes };
+    }
+    return { kind: "not_found" };
   }
 
   async createRun(input: CreateRunInput): Promise<ServerRunRecord> {
@@ -332,6 +347,10 @@ export class MemorySkillsStore implements SkillsProductStore {
       updatedAt: now,
       revisionId: revisionIdOfRecord(recordFieldsOf(input, carriedBundle, carriedSkillMd)),
       revisionNumber: (previous?.revisionNumber ?? 0) + 1,
+      lifecycle: previous?.lifecycle ?? "active",
+      ...(previous?.archivedAt ? { archivedAt: previous.archivedAt } : {}),
+      ...(previous?.archiveReason ? { archiveReason: previous.archiveReason } : {}),
+      ...(previous?.replacementSlug ? { replacementSlug: previous.replacementSlug } : {}),
     };
     this.skills.set(key, record);
     if (input.version && versionSha && !this.versions.has(versionKey(input.principal.orgId, input.slug, input.version))) {
@@ -374,6 +393,27 @@ export class MemorySkillsStore implements SkillsProductStore {
   async getSkill(principal: ApiPrincipal, slug: string): Promise<ServerSkillRecord | null> {
     const skill = this.skills.get(skillKey(principal.orgId, slug));
     return skill && skill.orgId === principal.orgId ? skill : null;
+  }
+
+  async setSkillLifecycle(principal: ApiPrincipal, slug: string, patch: SkillLifecyclePatch, expectedRevisionId?: string) {
+    const current = await this.getSkill(principal, slug);
+    if (!current || current.tombstonedAt) return null;
+    if (expectedRevisionId !== current.revisionId) throw new SkillRevisionConflictError(slug, expectedRevisionId, current.revisionId);
+    if (patch.lifecycle === "archived" && current.lifecycle !== "archived") {
+      const profiles = await this.selectionStore.profilesReferencingSkill(principal, slug);
+      if (profiles.length) throw new SkillLifecycleConflictError(slug, profiles);
+    }
+    const next: ServerSkillRecord = {
+      ...current,
+      lifecycle: patch.lifecycle,
+      updatedAt: nowIso(),
+      revisionId: revisionIdOfRecord({ ...current, lifecycle: patch.lifecycle, archiveReason: patch.reason, replacementSlug: patch.replacementSlug }),
+      revisionNumber: current.revisionNumber + 1,
+      ...(patch.lifecycle === "archived" ? { archivedAt: current.archivedAt ?? nowIso(), ...(patch.reason ? { archiveReason: patch.reason } : {}), ...(patch.replacementSlug ? { replacementSlug: patch.replacementSlug } : {}) } : {}),
+    };
+    if (patch.lifecycle === "active") { delete next.archivedAt; delete next.archiveReason; delete next.replacementSlug; }
+    this.skills.set(skillKey(principal.orgId, slug), next);
+    return next;
   }
 
   async updateSkill(principal: ApiPrincipal, slug: string, patch: UpdateSkillPatch, expectedRevisionId?: string): Promise<ServerSkillRecord | null> {
@@ -458,7 +498,7 @@ export class MemorySkillsStore implements SkillsProductStore {
     await this.purgeExpiredTombstones(principal);
     const tags = new Set<string>();
     for (const skill of this.skills.values()) {
-      if (skill.orgId !== principal.orgId) continue;
+      if (skill.orgId !== principal.orgId || skill.lifecycle !== "active") continue;
       for (const tag of skill.tags) {
         if (tag.trim()) tags.add(tag);
       }
@@ -469,7 +509,7 @@ export class MemorySkillsStore implements SkillsProductStore {
   async listSkillsByTag(principal: ApiPrincipal, tag: string): Promise<ServerSkillRecord[]> {
     await this.purgeExpiredTombstones(principal);
     return Array.from(this.skills.values())
-      .filter((skill) => skill.orgId === principal.orgId && !skill.tombstonedAt && skill.tags.includes(tag))
+      .filter((skill) => skill.orgId === principal.orgId && !skill.tombstonedAt && skill.lifecycle === "active" && skill.tags.includes(tag))
       .sort((a, b) => a.slug.localeCompare(b.slug));
   }
 
@@ -480,7 +520,7 @@ export class MemorySkillsStore implements SkillsProductStore {
     await this.purgeExpiredTombstones(principal);
     const taggedSlugs = new Set<string>();
     for (const skill of this.skills.values()) {
-      if (skill.orgId === principal.orgId && !skill.tombstonedAt && skill.tags.includes(tag)) taggedSlugs.add(skill.slug);
+      if (skill.orgId === principal.orgId && !skill.tombstonedAt && skill.lifecycle === "active" && skill.tags.includes(tag)) taggedSlugs.add(skill.slug);
     }
     return Array.from(this.pins.values())
       .filter((pin) => pin.orgId === principal.orgId && pin.principal === principal.apiKeyId && taggedSlugs.has(pin.slug))
@@ -665,6 +705,38 @@ export class PostgresSkillsStore implements SkillsProductStore {
       role: typeof row.role === "string" ? row.role : "member",
       scopes: parseJsonArray(row.scopes_json),
     };
+  }
+
+  async updateApiKeyScopes(actor: ApiPrincipal, keyId: string, expectedScopes: string[], addScopes: string[]): Promise<ApiKeyScopeUpdateResult> {
+    return this.sql.begin(async (tx) => {
+      const rows = await tx`
+        SELECT scopes_json FROM api_keys
+        WHERE id = ${keyId} AND org_id = ${actor.orgId} AND revoked_at IS NULL
+        LIMIT 1
+      `;
+      const row = rows[0];
+      if (!row) return { kind: "not_found" };
+      const current = parseJsonArray(row.scopes_json);
+      if (current.length !== expectedScopes.length || current.some((scope, index) => scope !== expectedScopes[index])) {
+        return { kind: "stale", scopes: current };
+      }
+      const scopes = [...current, ...addScopes.filter((scope) => !current.includes(scope))];
+      const updated = await tx`
+        UPDATE api_keys SET scopes_json = ${JSON.stringify(scopes)}::jsonb
+        WHERE id = ${keyId} AND org_id = ${actor.orgId} AND revoked_at IS NULL
+          AND scopes_json = ${JSON.stringify(expectedScopes)}::jsonb
+        RETURNING scopes_json
+      `;
+      if (!updated[0]) {
+        const latest = await tx`SELECT scopes_json FROM api_keys WHERE id = ${keyId} AND org_id = ${actor.orgId} AND revoked_at IS NULL LIMIT 1`;
+        return { kind: "stale", scopes: latest[0] ? parseJsonArray(latest[0].scopes_json) : current };
+      }
+      await tx`
+        INSERT INTO skills_audit_events (org_id, user_id, api_key_id, action, target_type, target_id, metadata_json)
+        VALUES (${actor.orgId}, ${actor.userId}, ${actor.apiKeyId}, ${"api_key_scopes_added"}, ${"api_key"}, ${keyId}, ${JSON.stringify({ added: addScopes, scopes })}::jsonb)
+      `;
+      return { kind: "updated", scopes };
+    });
   }
 
   /**
@@ -1063,6 +1135,38 @@ export class PostgresSkillsStore implements SkillsProductStore {
     return rows[0] ? rowToSkill(rows[0]) : null;
   }
 
+  async setSkillLifecycle(principal: ApiPrincipal, slug: string, patch: SkillLifecyclePatch, expectedRevisionId?: string) {
+    return this.sql.begin(async (tx) => {
+      // Lock the registry row before reading profiles. Profile writes acquire
+      // this same row lock for every selected skill, forming the lifecycle
+      // fence across both operations.
+      const currentRows = await tx`SELECT * FROM skills_registry WHERE org_id=${principal.orgId} AND slug=${slug} LIMIT 1 FOR UPDATE`;
+      const current = currentRows[0] ? rowToSkill(currentRows[0]) : null;
+      if (!current || current.tombstonedAt) return null;
+      if (expectedRevisionId !== current.revisionId) throw new SkillRevisionConflictError(slug, expectedRevisionId, current.revisionId);
+      if (patch.lifecycle === "archived" && current.lifecycle !== "archived") {
+        const profiles = await tx`SELECT profile_id,selections_json FROM skills_profiles WHERE org_id=${principal.orgId}`;
+        const referencing = profiles.filter((profile) => {
+          const selections = typeof profile.selections_json === "string" ? JSON.parse(profile.selections_json) : profile.selections_json;
+          return Array.isArray(selections) && selections.some((selection) => selection?.slug === slug);
+        }).map((profile) => String(profile.profile_id)).sort();
+        if (referencing.length) throw new SkillLifecycleConflictError(slug, referencing);
+      }
+      const next: ServerSkillRecord = {
+        ...current,
+        lifecycle: patch.lifecycle,
+        updatedAt: nowIso(),
+        revisionId: revisionIdOfRecord({ ...current, lifecycle: patch.lifecycle, archiveReason: patch.reason, replacementSlug: patch.replacementSlug }),
+        revisionNumber: current.revisionNumber + 1,
+        ...(patch.lifecycle === "archived" ? { archivedAt: current.archivedAt ?? nowIso(), ...(patch.reason ? { archiveReason: patch.reason } : {}), ...(patch.replacementSlug ? { replacementSlug: patch.replacementSlug } : {}) } : {}),
+      };
+      if (patch.lifecycle === "active") { delete next.archivedAt; delete next.archiveReason; delete next.replacementSlug; }
+      const rows = await tx`UPDATE skills_registry SET lifecycle=${next.lifecycle}, archived_at=${next.archivedAt ?? null}, archive_reason=${next.archiveReason ?? null}, replacement_slug=${next.replacementSlug ?? null}, revision_id=${next.revisionId}, revision_number=revision_number+1, updated_at=${next.updatedAt} WHERE org_id=${principal.orgId} AND slug=${slug} AND tombstoned_at IS NULL AND revision_id=${current.revisionId} RETURNING *`;
+      if (!rows[0]) throw new SkillRevisionConflictError(slug, expectedRevisionId, (await this.getSkill(principal, slug))?.revisionId ?? null);
+      return rowToSkill(rows[0]);
+    });
+  }
+
   async updateSkill(principal: ApiPrincipal, slug: string, patch: UpdateSkillPatch, expectedRevisionId?: string): Promise<ServerSkillRecord | null> {
     const current = await this.getSkill(principal, slug);
     if (!current || current.tombstonedAt) return null;
@@ -1225,7 +1329,7 @@ export class PostgresSkillsStore implements SkillsProductStore {
     // tombstones are purged first, like every other read path in this store.
     await this.purgeExpiredTombstones(principal);
     const rows = await this.sql`
-      SELECT DISTINCT tag FROM skills_tags WHERE org_id = ${principal.orgId} ORDER BY tag ASC
+      SELECT DISTINCT t.tag FROM skills_tags t JOIN skills_registry s ON s.org_id = t.org_id AND s.slug = t.slug WHERE t.org_id = ${principal.orgId} AND s.lifecycle = 'active' ORDER BY t.tag ASC
     `;
     return rows.map((row) => String(row.tag));
   }
@@ -1238,7 +1342,7 @@ export class PostgresSkillsStore implements SkillsProductStore {
     const rows = await this.sql`
       SELECT s.* FROM skills_registry s
       JOIN skills_tags t ON t.org_id = s.org_id AND t.slug = s.slug
-      WHERE t.org_id = ${principal.orgId} AND t.tag = ${tag} AND s.tombstoned_at IS NULL
+      WHERE t.org_id = ${principal.orgId} AND t.tag = ${tag} AND s.tombstoned_at IS NULL AND s.lifecycle = 'active'
       ORDER BY s.slug ASC
     `;
     return rows.map(rowToSkill);
@@ -1255,7 +1359,7 @@ export class PostgresSkillsStore implements SkillsProductStore {
       JOIN skills_tags t ON t.org_id = p.org_id AND t.slug = p.slug
       JOIN skills_registry s ON s.org_id = p.org_id AND s.slug = p.slug
       WHERE p.org_id = ${principal.orgId} AND p.principal = ${principal.apiKeyId}
-        AND t.tag = ${tag} AND s.tombstoned_at IS NULL
+        AND t.tag = ${tag} AND s.tombstoned_at IS NULL AND s.lifecycle = 'active'
       ORDER BY p.slug ASC
     `;
     return rows.map(rowToPin);

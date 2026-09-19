@@ -100,7 +100,7 @@ beforeAll(async () => {
   // the id used below is the stored one.
   const agents = await runCli("--json", "agents", "--limit", "500");
   expect(agents.exitCode).toBe(0);
-  const rows = JSON.parse(agents.stdout) as Array<{ id: string; name: string }>;
+  const rows = (JSON.parse(agents.stdout) as { agents: Array<{ id: string; name: string }> }).agents;
   idA = rows.find((r) => r.name === AGENT_A)?.id ?? "";
   idB = rows.find((r) => r.name === AGENT_B)?.id ?? "";
   expect(idA).not.toBe("");
@@ -138,7 +138,7 @@ describe("list --agent resolves a registered NAME, not only an id", () => {
     const byName = await runCli("--json", "list", "--agent", AGENT_A);
     expect(byId.exitCode).toBe(0);
     expect(byName.exitCode).toBe(0);
-    const ids = (j: string) => (JSON.parse(j) as Array<{ id: string }>).map((m) => m.id).sort();
+    const ids = (j: string) => (JSON.parse(j) as { memories: Array<{ id: string }> }).memories.map((memory) => memory.id).sort();
     expect(ids(byName.stdout)).toEqual(ids(byId.stdout));
     expect(ids(byName.stdout).length).toBeGreaterThan(0);
   }, TEST_TIMEOUT_MS);
@@ -186,7 +186,7 @@ describe("an unresolvable --agent is announced instead of returning a silent zer
     const r = await runCli("--json", "list", "--agent", BOGUS_AGENT);
     expect(r.exitCode).toBe(0);
     expect(() => JSON.parse(r.stdout)).not.toThrow();
-    expect(JSON.parse(r.stdout)).toEqual([]);
+    expect(JSON.parse(r.stdout)).toMatchObject({ memories: [], _meta: { count: 0, complete: true } });
     expect(r.stderr.toLowerCase()).toContain("no agent named");
   }, TEST_TIMEOUT_MS);
 });
@@ -206,8 +206,8 @@ describe("NEGATIVE CONTROL: resolution must not widen the query", () => {
     const unfiltered = await runCli("--json", "list");
     expect(filtered.exitCode).toBe(0);
     expect(unfiltered.exitCode).toBe(0);
-    const nFiltered = (JSON.parse(filtered.stdout) as unknown[]).length;
-    const nUnfiltered = (JSON.parse(unfiltered.stdout) as unknown[]).length;
+    const nFiltered = (JSON.parse(filtered.stdout) as { memories: unknown[] }).memories.length;
+    const nUnfiltered = (JSON.parse(unfiltered.stdout) as { memories: unknown[] }).memories.length;
     expect(nUnfiltered).toBeGreaterThan(0); // the comparison is meaningful
     expect(nFiltered).toBe(0);
   }, TEST_TIMEOUT_MS);

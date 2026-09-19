@@ -294,7 +294,7 @@
     },
     "apps/domains": {
       "name": "@hasna/domains",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "bin": {
         "domains": "dist/cli/index.js",
         "domains-mcp": "dist/mcp/index.js",
@@ -532,7 +532,7 @@
     },
     "apps/instructions": {
       "name": "@hasna/instructions",
-      "version": "0.7.5",
+      "version": "0.7.7",
       "bin": {
         "instructions": "dist/cli/index.js",
         "configs": "dist/cli/index.js",
@@ -547,6 +547,7 @@
         "commander": "^13.1.0",
         "hono": "4.13.7",
         "ink": "^5.2.0",
+        "marked": "18.0.5",
         "pg": "^8.13.3",
         "react": "^18.3.1",
         "zod": "^3.24.2",
@@ -652,7 +653,7 @@
     },
     "apps/mementos": {
       "name": "@hasna/mementos",
-      "version": "0.16.0",
+      "version": "0.17.0",
       "bin": {
         "mementos": "dist/cli/index.js",
         "mementos-mcp": "dist/mcp/index.js",
@@ -1011,7 +1012,7 @@
     },
     "apps/skills": {
       "name": "@hasna/skills",
-      "version": "0.8.12",
+      "version": "0.9.2",
       "bin": {
         "skills": "bin/index.js",
         "skills-mcp": "bin/mcp.js",

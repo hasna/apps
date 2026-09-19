@@ -83,6 +83,20 @@ Version fields:
 Pinned skill records should pin a version/content hash so later updates are
 explicit.
 
+## Catalog lifecycle
+
+An owner can transition a published catalog row between `active` and `archived` with an
+exact revision guard. Archiving records the timestamp, bounded reason and optional
+successor slug on the registry row; it never changes `skills_versions` or deletes a
+content-addressed bundle. The server refuses archiving while any organization profile
+still selects the skill, so callers must perform a reviewed profile change first.
+
+Archived rows are omitted from ordinary discovery, profile candidate validation and new
+execution/admission, including an explicit old-version run. Explicit authenticated reads
+of the slug, immutable version metadata and retained version bundle remain available for
+history and migration. Re-activation is an explicit guarded lifecycle write and is never
+implied by publish or seed paths.
+
 ## Input Schema
 
 Each executable skill should expose an input contract:

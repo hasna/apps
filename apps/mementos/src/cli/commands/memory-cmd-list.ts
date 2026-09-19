@@ -22,10 +22,10 @@ import {
 } from "../helpers.js";
 
 export const STRUCTURED_PAGE_MAX_ROWS = 1_000;
-export const STRUCTURED_ALL_MAX_ROWS = 5_000;
+export const STRUCTURED_ALL_MAX_ROWS = 100_000;
 export const STRUCTURED_DEFAULT_MAX_BYTES = 32 * 1024;
 export const STRUCTURED_FULL_MAX_BYTES = 64 * 1024;
-export const STRUCTURED_ALL_MAX_BYTES = 1024 * 1024;
+export const STRUCTURED_ALL_MAX_BYTES = 64 * 1024 * 1024;
 const STRUCTURED_MIN_MAX_BYTES = 1024;
 
 export type StructuredMemoryDetail = "compact" | "full";
@@ -234,7 +234,7 @@ function assertReceiptFlags(
   requestedFormat: string | undefined,
 ): void {
   if (!receiptMode && (opts.all || opts.full || opts.maxBytes !== undefined)) {
-    throw new Error("--all, --full, and --max-bytes require --agent-json receipt mode");
+    throw new Error("--all, --full, and --max-bytes require JSON receipt mode (--json, --format json, or --agent-json)");
   }
   if (receiptMode && requestedFormat !== undefined && requestedFormat !== "json") {
     throw new Error("--agent-json cannot be combined with a non-JSON --format");
@@ -273,7 +273,7 @@ export function registerListCommand(program: Command): void {
         const globalOpts = program.opts<GlobalOpts>();
         const requestedFormat = (opts.format as string | undefined) ?? globalOpts.format;
         const fmt = getOutputFormat(program, opts.format as string | undefined);
-        const receiptMode = Boolean(opts.agentJson);
+        const receiptMode = Boolean(opts.agentJson || fmt === "json");
         const isStructured = fmt === "json" || fmt === "csv" || fmt === "yaml";
         assertReceiptFlags(opts as Record<string, unknown>, receiptMode, requestedFormat);
 
@@ -403,7 +403,7 @@ export function registerListCommand(program: Command): void {
           offset,
           hasMore,
           command: "mementos list",
-          detailHint: "use mementos show <id> for full details, --json for the compatible full array, or --agent-json for a bounded receipt",
+          detailHint: "use mementos show <id> for full details; JSON output is a bounded receipt, with --full/--all as explicit compatibility escapes",
         });
       } catch (e) {
         handleError(e);

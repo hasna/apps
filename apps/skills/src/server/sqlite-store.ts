@@ -35,12 +35,14 @@ import type {
   ServerRunRecord,
   ServerSkillBundle,
   ServerSkillVersion,
+  ApiKeyScopeUpdateResult,
   ServerSkillRecord,
+  SkillLifecyclePatch,
   SkillsProductStore,
   StoreBackendInfo,
   UpdateSkillPatch,
 } from "./types.js";
-import { SkillRevisionConflictError, SkillVersionExistsError, StaleLeaseGenerationError } from "./types.js";
+import { SkillLifecycleConflictError, SkillRevisionConflictError, SkillVersionExistsError, StaleLeaseGenerationError } from "./types.js";
 import { revisionIdOfRecord } from "../lib/revision.js";
 
 export interface SqliteStoreOptions {
@@ -233,6 +235,33 @@ export class SqliteSkillsStore implements SkillsProductStore {
       role: typeof row.role === "string" ? row.role : "member",
       scopes: parseScopes(row.scopes_json),
     };
+  }
+
+  async updateApiKeyScopes(actor: ApiPrincipal, keyId: string, expectedScopes: string[], addScopes: string[]): Promise<ApiKeyScopeUpdateResult> {
+    const row = this.get("SELECT scopes_json FROM api_keys WHERE id = ? AND org_id = ? AND revoked_at IS NULL LIMIT 1", [keyId, actor.orgId]);
+    if (!row) return { kind: "not_found" };
+    const current = parseScopes(row.scopes_json);
+    if (current.length !== expectedScopes.length || current.some((scope, index) => scope !== expectedScopes[index])) {
+      return { kind: "stale", scopes: current };
+    }
+    const scopes = [...current, ...addScopes.filter((scope) => !current.includes(scope))];
+    const tx = this.db.transaction(() => {
+      const changed = this.db.run(
+        "UPDATE api_keys SET scopes_json = ? WHERE id = ? AND org_id = ? AND revoked_at IS NULL AND scopes_json = ?",
+        [JSON.stringify(scopes), keyId, actor.orgId, JSON.stringify(expectedScopes)],
+      );
+      if (changed.changes !== 1) return false;
+      this.db.run(
+        "INSERT INTO skills_audit_events (org_id, user_id, api_key_id, action, target_type, target_id, metadata_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [actor.orgId, actor.userId, actor.apiKeyId, "api_key_scopes_added", "api_key", keyId, JSON.stringify({ added: addScopes, scopes })],
+      );
+      return true;
+    });
+    if (!tx()) {
+      const latest = this.get("SELECT scopes_json FROM api_keys WHERE id = ? AND org_id = ? AND revoked_at IS NULL LIMIT 1", [keyId, actor.orgId]);
+      return { kind: "stale", scopes: latest ? parseScopes(latest.scopes_json) : current };
+    }
+    return { kind: "updated", scopes };
   }
 
   async createRun(input: CreateRunInput): Promise<ServerRunRecord> {
@@ -702,6 +731,33 @@ export class SqliteSkillsStore implements SkillsProductStore {
     return row ? rowToSkill(row) : null;
   }
 
+  async setSkillLifecycle(principal: ApiPrincipal, slug: string, patch: SkillLifecyclePatch, expectedRevisionId?: string) {
+    return this.db.transaction(() => {
+      const rowCurrent = this.get("SELECT * FROM skills_registry WHERE org_id=? AND slug=? LIMIT 1", [principal.orgId, slug]);
+      const current = rowCurrent ? rowToSkill(rowCurrent) : null;
+      if (!current || current.tombstonedAt) return null;
+      if (expectedRevisionId !== current.revisionId) throw new SkillRevisionConflictError(slug, expectedRevisionId, current.revisionId);
+      if (patch.lifecycle === "archived" && current.lifecycle !== "archived") {
+        const profiles = this.db.query("SELECT profile_id,selections_json FROM skills_profiles WHERE org_id=?").all(principal.orgId) as Array<{ profile_id: unknown; selections_json: unknown }>;
+        const referencing = profiles.filter((profile) => {
+          const selections = typeof profile.selections_json === "string" ? JSON.parse(profile.selections_json) : profile.selections_json;
+          return Array.isArray(selections) && selections.some((selection) => selection?.slug === slug);
+        }).map((profile) => String(profile.profile_id)).sort();
+        if (referencing.length) throw new SkillLifecycleConflictError(slug, referencing);
+      }
+      const next = { ...current, lifecycle: patch.lifecycle, updatedAt: nowIso(), ...(patch.lifecycle === "archived" ? { archivedAt: current.archivedAt ?? nowIso(), ...(patch.reason ? { archiveReason: patch.reason } : {}), ...(patch.replacementSlug ? { replacementSlug: patch.replacementSlug } : {}) } : {}) };
+      if (patch.lifecycle === "active") { delete next.archivedAt; delete next.archiveReason; delete next.replacementSlug; }
+      const row = this.get("UPDATE skills_registry SET lifecycle=?, archived_at=?, archive_reason=?, replacement_slug=?, revision_id=?, revision_number=revision_number+1, updated_at=? WHERE org_id=? AND slug=? AND tombstoned_at IS NULL AND revision_id=? RETURNING *", [next.lifecycle, next.archivedAt ?? null, next.archiveReason ?? null, next.replacementSlug ?? null, revisionIdOfRecord(next), next.updatedAt, principal.orgId, slug, current.revisionId]);
+      if (!row) throw new SkillRevisionConflictError(slug, expectedRevisionId, this.getSkillSync(principal, slug)?.revisionId ?? null);
+      return rowToSkill(row);
+    }).immediate();
+  }
+
+  private getSkillSync(principal: ApiPrincipal, slug: string): ServerSkillRecord | null {
+    const row = this.get("SELECT * FROM skills_registry WHERE org_id=? AND slug=? LIMIT 1", [principal.orgId, slug]);
+    return row ? rowToSkill(row) : null;
+  }
+
   async updateSkill(principal: ApiPrincipal, slug: string, patch: UpdateSkillPatch, expectedRevisionId?: string): Promise<ServerSkillRecord | null> {
     const current = await this.getSkill(principal, slug);
     if (!current || current.tombstonedAt) return null;
@@ -863,7 +919,7 @@ export class SqliteSkillsStore implements SkillsProductStore {
     // other read path in this store.
     await this.purgeExpiredTombstones(principal);
     return this.all(
-      "SELECT DISTINCT tag FROM skills_tags WHERE org_id = ? ORDER BY tag ASC",
+      "SELECT DISTINCT t.tag FROM skills_tags t JOIN skills_registry s ON s.org_id=t.org_id AND s.slug=t.slug WHERE t.org_id = ? AND s.lifecycle='active' ORDER BY t.tag ASC",
       [principal.orgId],
     ).map((row) => String(row.tag));
   }
@@ -873,7 +929,7 @@ export class SqliteSkillsStore implements SkillsProductStore {
     return this.all(
       `SELECT s.* FROM skills_registry s
        JOIN skills_tags t ON t.org_id = s.org_id AND t.slug = s.slug
-       WHERE t.org_id = ? AND t.tag = ? AND s.tombstoned_at IS NULL
+       WHERE t.org_id = ? AND t.tag = ? AND s.tombstoned_at IS NULL AND s.lifecycle = 'active'
        ORDER BY s.slug ASC`,
       [principal.orgId, tag],
     ).map(rowToSkill);
@@ -888,7 +944,7 @@ export class SqliteSkillsStore implements SkillsProductStore {
       `SELECT p.* FROM skills_pins p
        JOIN skills_tags t ON t.org_id = p.org_id AND t.slug = p.slug
        JOIN skills_registry s ON s.org_id = p.org_id AND s.slug = p.slug
-       WHERE p.org_id = ? AND p.principal = ? AND t.tag = ? AND s.tombstoned_at IS NULL
+       WHERE p.org_id = ? AND p.principal = ? AND t.tag = ? AND s.tombstoned_at IS NULL AND s.lifecycle = 'active'
        ORDER BY p.slug ASC`,
       [principal.orgId, principal.apiKeyId, tag],
     ).map(rowToPin);

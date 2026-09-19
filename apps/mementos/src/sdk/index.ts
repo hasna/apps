@@ -1137,7 +1137,7 @@ function decodeCountReceipt(value: unknown, field: string, operation: string): R
 // Client
 // ============================================================================
 
-/** Default endpoint for a single-operator on-box server. */
+/** Explicit endpoint for the deliberate single-operator local opt-in. Never an SDK default. */
 export const MEMENTOS_DEFAULT_BASE_URL = "http://localhost:19428";
 
 /**
@@ -1161,7 +1161,12 @@ export function resolveMementosApiBase(
   rawBaseUrl: string | undefined,
   explicitPrefix?: string,
 ): { baseUrl: string; prefix: string } {
-  const trimmed = (rawBaseUrl ?? MEMENTOS_DEFAULT_BASE_URL).trim().replace(/\/+$/, "") || MEMENTOS_DEFAULT_BASE_URL;
+  if (rawBaseUrl === undefined || rawBaseUrl.trim() === "") {
+    throw new Error(
+      "mementos base URL is required for this explicit-base helper; ordinary SDK clients must resolve the hosted authority through the credential chain or opt into local mode",
+    );
+  }
+  const trimmed = rawBaseUrl.trim().replace(/\/+$/, "");
   // Validate before splitting. A base carrying userinfo, a query or a fragment
   // would otherwise be concatenated into a malformed request URL such as
   // `https://api.hasna.com/mementos?x=1/v1/memories`; refusing also keeps
@@ -1420,10 +1425,16 @@ export class MementosClient {
   private _pinnedAuthority: string | null = null;
 
   constructor(config: MementosClientConfig = {}) {
-    const resolved = resolveMementosApiBase(config.baseUrl, config.prefix);
+    // With no explicit base, do not invoke the explicit-base helper: the first
+    // request resolves the hosted authority (or deliberate local opt-in)
+    // through resolveMementosSdkTransport. This closes the exported-helper /
+    // constructor path that used to materialize localhost implicitly.
+    const prefix = config.baseUrl !== undefined
+      ? resolveMementosApiBase(config.baseUrl, config.prefix).prefix
+      : (config.prefix?.replace(/\/+$/, "") || "/v1");
     this._fetch = config.fetch ?? globalThis.fetch.bind(globalThis);
     this.apiKey = config.apiKey;
-    this.prefix = resolved.prefix;
+    this.prefix = prefix;
     // The options every request re-resolves through the @hasna/contracts chain
     // against: explicit arguments stay tier 1 (an explicit baseUrl keeps its
     // pinned authority and never attaches the ambient fleet key, hasna/apps#1794),

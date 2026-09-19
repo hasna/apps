@@ -183,6 +183,19 @@ describe("reviewed pure cloud API admission", () => {
     await assertNoAdmission(f);
   });
 
+  test("archived skills refuse read-only eligibility as well as execution", async () => {
+    const f = await fixture();
+    const current = await f.product.getSkill(f.principal, SLUG);
+    await f.product.setSkillLifecycle(f.principal, SLUG, { lifecycle: "archived", reason: "synthetic replacement" }, current!.revisionId);
+    const eligibility = await api(f, get(`executions/${SLUG}/eligibility?version=${VERSION}`), { ...f.principal, scopes: ["skills:read"] });
+    expect(eligibility.status).toBe(410);
+    expect(await eligibility.json()).toMatchObject({ code: "SKILL_ARCHIVED" });
+    const execution = await submit(f);
+    expect(execution.status).toBe(410);
+    expect(await execution.json()).toMatchObject({ code: "SKILL_ARCHIVED" });
+    await assertNoAdmission(f);
+  });
+
   test("published identical bytes in another tenant do not inherit a runtime review", async () => {
     const f = await fixture();
     const foreign = { ...f.principal, orgId: "synthetic-foreign-tenant" };

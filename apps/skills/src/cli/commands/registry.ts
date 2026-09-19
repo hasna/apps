@@ -196,3 +196,26 @@ export function registerVersions(parent: Command) {
       }
     });
 }
+
+export function registerLifecycle(parent: Command) {
+  parent.command("lifecycle")
+    .argument("<name>", "Skill name on the configured instance")
+    .requiredOption("--state <state>", "Lifecycle state: active or archived")
+    .requiredOption("--revision <revision>", "Exact revision id from skills info/get")
+    .option("--reason <reason>", "Bounded archive reason")
+    .option("--replacement <slug>", "Optional successor slug")
+    .option("--json", "Output as JSON", false)
+    .description("Change a hosted skill's active/archive lifecycle with an exact revision guard")
+    .action(async (name: string, options: { state: string; revision: string; reason?: string; replacement?: string; json: boolean }) => {
+      if (options.state !== "active" && options.state !== "archived") throw new Error("--state must be active or archived");
+      const client = await createRemoteSkillsClient();
+      if (!client) throw new Error("No API key configured, so there is no instance to update.");
+      try {
+        const result = await client.setSkillLifecycle(name.trim(), options.state, { expectedRevisionId: options.revision, ...(options.reason ? { reason: options.reason } : {}), ...(options.replacement ? { replacementSlug: options.replacement } : {}) });
+        console.log(options.json ? JSON.stringify(result, null, 2) : `Updated ${name} to ${options.state}.`);
+      } catch (error) {
+        if (options.json) console.log(JSON.stringify({ error: (error as Error).message }, null, 2)); else console.error(chalk.red((error as Error).message));
+        process.exitCode = 1;
+      }
+    });
+}

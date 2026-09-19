@@ -8,6 +8,7 @@ import {
 } from "../../db/memories.js";
 import {
   outputJson,
+  outputJsonAndExit,
   formatMemoryDetail,
   makeHandleError,
   resolveKeyOrId,
@@ -30,7 +31,7 @@ export function registerViewCommands(program: Command): void {
   program
     .command("show <id>")
     .description("Show full detail of a memory by ID (supports partial IDs)")
-    .action((id: string) => {
+    .action(async (id: string) => {
       try {
         const globalOpts = program.opts<GlobalOpts>();
         const resolvedId = resolveMemoryId(id);
@@ -38,11 +39,12 @@ export function registerViewCommands(program: Command): void {
 
         if (!memory) {
           if (globalOpts.json) {
-            outputJson({ error: `Memory not found: ${id}` });
+            await outputJsonAndExit({ error: `Memory not found: ${id}` }, 1);
           } else {
             console.error(chalk.red(`Memory not found: ${id}`));
           }
-          process.exit(1);
+          if (!globalOpts.json) process.exit(1);
+          return;
         }
 
         touchMemory(memory.id);
@@ -74,17 +76,18 @@ export function registerViewCommands(program: Command): void {
     .option("--scope <scope>", "Scope filter for key lookup")
     .option("--agent <name>", "Agent filter for key lookup")
     .option("--project <path>", "Project filter for key lookup")
-    .action((keyOrId: string, opts) => {
+    .action(async (keyOrId: string, opts) => {
       try {
         const globalOpts = program.opts<GlobalOpts>();
         const memory = resolveKeyOrId(keyOrId, opts, globalOpts);
         if (!memory) {
           if (globalOpts.json) {
-            outputJson({ error: `No memory found: ${keyOrId}` });
+            await outputJsonAndExit({ error: `No memory found: ${keyOrId}` }, 1);
           } else {
             console.error(chalk.red(`No memory found: ${keyOrId}`));
           }
-          process.exit(1);
+          if (!globalOpts.json) process.exit(1);
+          return;
         }
 
         const updated = updateMemory(memory.id, {
@@ -116,17 +119,18 @@ export function registerViewCommands(program: Command): void {
     .option("--scope <scope>", "Scope filter for key lookup")
     .option("--agent <name>", "Agent filter for key lookup")
     .option("--project <path>", "Project filter for key lookup")
-    .action((keyOrId: string, opts) => {
+    .action(async (keyOrId: string, opts) => {
       try {
         const globalOpts = program.opts<GlobalOpts>();
         const memory = resolveKeyOrId(keyOrId, opts, globalOpts);
         if (!memory) {
           if (globalOpts.json) {
-            outputJson({ error: `No memory found: ${keyOrId}` });
+            await outputJsonAndExit({ error: `No memory found: ${keyOrId}` }, 1);
           } else {
             console.error(chalk.red(`No memory found: ${keyOrId}`));
           }
-          process.exit(1);
+          if (!globalOpts.json) process.exit(1);
+          return;
         }
 
         const updated = updateMemory(memory.id, {

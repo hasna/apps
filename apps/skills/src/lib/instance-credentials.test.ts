@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { clearAuthConfig, getAuthFilePath, getAuthIdentity, saveApiUrl, saveAuthConfig } from "./auth-store.js";
@@ -58,7 +58,7 @@ describe("Skills instance-bound profile credentials", () => {
     writeFileSync(path, "x".repeat(64 * 1024 + 1), { mode: 0o600 });
     expect(() => readSkillsInstanceMetadata(path)).toThrow("bounded owner-only");
     rmSync(path);
-    writeFileSync(path, "HASNA_SKILLS_API_URL=https://skills.example.test\n", { mode: 0o644 });
+    writeFileSync(path, "HASNA_SKILLS_API_URL=https://skills.example.test\n", { mode: 0o644 }); chmodSync(path, 0o644);
     expect(() => readSkillsInstanceMetadata(path)).toThrow("bounded owner-only");
     rmSync(path);
     if (process.platform !== "win32") {
