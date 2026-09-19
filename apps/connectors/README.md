@@ -51,8 +51,11 @@ catalogs, README sections, credential status tables, or API records.
 
 - `connectors list` shows a compact page. Use `--cursor <n>` or `--offset <n>`
   for the next page, `--limit <n>` to change page size, `--verbose` for wider
-  rows, `--all --verbose` for the full human catalog, or `--json` for the full
-  machine-readable payload.
+  rows, or `--all --verbose` for the full human catalog. `--json` now returns a
+  minified 20-row envelope with truthful `total`, `limit`, `cursor`,
+  `next_cursor`, and `has_more`; use `--json --verbose` for full fields within
+  that bounded page, or `--json --full` / `--json --all` for the legacy bare
+  array. Bounded JSON limits above 100 are refused with full-output guidance.
 - `connectors docs <name>` shows a summary. Use `--verbose` for full parsed
   sections, `--essential` for auth/env vars only, `--raw` for raw markdown, or
   `--json` for structured docs.
@@ -71,8 +74,10 @@ connectors-mcp
 
 MCP tools also use compact defaults. `list_connectors`, `list_jobs`,
 `list_workflows`, and `list_agents` return paged objects with `count`, `total`,
-and `nextCursor`; pass `cursor` to continue, `limit` to change page size, and
-`verbose: true` for full records. `connector_docs` and operation discovery
+`limit`, `cursor`, `nextCursor`, and `hasMore`; pass `cursor` to continue,
+`limit` to change page size, and `verbose: true` for full records.
+`list_connectors` page receipts bypass optional probabilistic output stripping,
+so continuation metadata cannot be removed. `connector_docs` and operation discovery
 return summaries unless `verbose: true` or a specific detail path is requested.
 
 ## HTTP mode
