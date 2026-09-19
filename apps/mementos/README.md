@@ -136,7 +136,7 @@ The default `core` MCP profile exposes a bounded 23-tool agent surface. Select
 additional comma-separated profiles with `--mcp-profile`,
 `HASNA_MEMENTOS_MCP_PROFILE`, or the compatibility alias
 `MEMENTOS_MCP_PROFILE`: `search`, `graph`, `automation`, `admin`, `storage`,
-`hooks`, and `full`. The explicit `full` profile preserves all 123 tools and the
+`hooks`, and `full`. The explicit `full` profile preserves all 124 tools and the
 legacy unpaged `mementos://memories`, `mementos://agents`, and
 `mementos://projects` resources; reduced profiles omit those resources and use
 bounded list/get tools instead.
