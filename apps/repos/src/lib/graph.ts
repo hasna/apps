@@ -313,6 +313,7 @@ export function findPath(
 export function getDeps(repoIdOrName: string, depth = 3): Array<{
   repo_id: string;
   repo_name: string;
+  repo_org: string | null;
   depth: number;
 }> {
   const db = getDb();
@@ -324,7 +325,7 @@ export function getDeps(repoIdOrName: string, depth = 3): Array<{
   if (byName) repoId = String(byName.id);
   else repoId = repoIdOrName;
 
-  const result: Array<{ repo_id: string; repo_name: string; depth: number }> = [];
+  const result: Array<{ repo_id: string; repo_name: string; repo_org: string | null; depth: number }> = [];
   const visited = new Set<string>();
   const queue: Array<{ id: string; depth: number }> = [{ id: repoId, depth: 0 }];
 
@@ -334,10 +335,11 @@ export function getDeps(repoIdOrName: string, depth = 3): Array<{
     visited.add(current.id);
 
     const deps = db.query(`
-      SELECT e.target_id as repo_id, r.name as repo_name
+      SELECT e.target_id as repo_id, r.name as repo_name, r.org as repo_org
       FROM edges e
       JOIN repos r ON r.id = CAST(e.target_id AS INTEGER)
       WHERE e.source_type = 'repo' AND e.source_id = ? AND e.relation = 'depends_on' AND e.target_type = 'repo'
+      ORDER BY CAST(e.target_id AS INTEGER) ASC, e.target_id ASC
     `).all(current.id) as any[];
 
     for (const dep of deps) {
@@ -348,7 +350,11 @@ export function getDeps(repoIdOrName: string, depth = 3): Array<{
     }
   }
 
-  return result;
+  return result.sort((left, right) =>
+    left.depth - right.depth
+    || Number(left.repo_id) - Number(right.repo_id)
+    || left.repo_id.localeCompare(right.repo_id)
+  );
 }
 
 export function getCrossOrgAuthors(): Array<{
@@ -363,7 +369,7 @@ export function getCrossOrgAuthors(): Array<{
     WHERE e.source_type = 'author' AND e.relation = 'works_in'
     GROUP BY e.source_id
     HAVING COUNT(DISTINCT e.target_id) > 1
-    ORDER BY total_commits DESC
+    ORDER BY total_commits DESC, e.source_id ASC
   `).all().map((r: any) => ({
     ...r,
     orgs: r.orgs.split(","),

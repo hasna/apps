@@ -103,8 +103,11 @@ registered by `@hasna/events`.
 Secondary aggregate commands (`stale`, `who`, `diff-stats`, `dirty`,
 `unpushed`, `behind`, `graph deps`, and `graph authors`) return minified,
 20-row JSON pages by default. Pages are capped at 32 KiB and include `total`,
-`next_cursor`, and `has_more`; continue with `--cursor`, or request the
-exhaustive legacy array explicitly with `--full`/`--all`.
+`next_cursor`, and `has_more`. The opaque cursor is bound to the command,
+filters, deterministic ordering, and compact snapshot; a changed population
+fails closed instead of duplicating or skipping rows. Compact repository rows
+carry `repo_id`, `org`, and `repo_ref`; request exhaustive legacy arrays
+explicitly with `--full`/`--all`.
 
 CLI output is compact by default so it stays readable in agent terminals:
 

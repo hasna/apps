@@ -18,9 +18,14 @@ Commander help. `repos --version` and all standalone executables support
 Human list output is compact and usually capped. `--verbose` widens commands
 that offer it. High-volume machine lists and secondary aggregates use minified,
 continuation-bearing JSON pages by default; explicit `--full`/`--all` flags
-retain exhaustive legacy arrays where documented. Paginated commands accept
-`--limit` and `--offset` or `--cursor`; envelopes report `total`, `next_cursor`,
-`has_more`, and whether the page is complete.
+retain exhaustive legacy arrays where documented. Secondary aggregate cursors
+are opaque and bound to the command, filters, deterministic ordering, and the
+complete compact snapshot. Inserts, deletes, reordering, or projected-row
+changes between pages fail closed and require a restart from page one.
+Envelopes report `total`, `next_cursor`, `has_more`, and completeness; compact
+repository rows include `repo_id`, `org`, and a safe `repo_ref`. Other legacy
+paginated list surfaces may still expose `--offset`; secondary aggregates do
+not, because only their opaque `--cursor` is mutation-safe.
 
 Before most commands, the CLI bootstraps an empty or differently configured
 index, installs its marked `post-commit` hook block, and scans configured
@@ -56,7 +61,7 @@ print unusable registry rows but exit non-zero unless
 | `repos status` | Stable metadata-only inventory contract with no names, paths, branches, messages, or remote URLs; `--json` |
 | `repos activity` | `--days`, `-n/--limit`, `--verbose`, `--json` |
 | `repos contributors` | `--repo`, `-n/--limit`, `--verbose`, `--json` |
-| `repos stale` | `--days`, `-n/--limit`, `--cursor`, `--verbose`, `--json`; JSON defaults to a 20-row compact page under 32 KiB, while `--full`/`--all` restores the exhaustive legacy array |
+| `repos stale` | `--days`, `-n/--limit`, `--cursor`, `--verbose`, `--json`; JSON defaults to a 20-row compact page under 32 KiB with an opaque mutation-safe cursor, while `--full`/`--all` restores the exhaustive legacy array |
 | `repos heatmap` | `--repo`, `--json` |
 | `repos gh-info <name>` | Fetch description, language, stars, forks, and topics through `gh`; `--json` |
 | `repos find <file>` | Find a path fragment across indexed repos; `-n/--limit`, `--verbose`, `--json` |
