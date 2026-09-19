@@ -217,3 +217,22 @@ test("viewer selection remains possible while key and support refusals stay serv
   await expect(f.fresh.updateCurrentWorkspace(email, code, { name: "Never" }, f.context)).rejects.toBeInstanceOf(RemoteRequestError);
   expect(f.calls.slice(before).some(c => c.path.endsWith("/workspaces/current"))).toBe(false);
 }));
+
+test("fresh scope admission binds the selected owner workspace and performs one bounded CAS update", async () => fixture(async f => {
+  f.override((_req, c) => c.path.endsWith("/admin/keys/key_target/scopes")
+    ? Response.json({ keyId: "key_target", orgId: f.ob, scopes: ["skills:read", "skills:publish"], updated: true, secret: "MUST_NOT_PRINT" })
+    : undefined);
+  await expect(f.fresh.addSkillPublishScope(email, code, "key_target", ["skills:read"], f.ob, f.context))
+    .resolves.toEqual({ keyId: "key_target", orgId: f.ob, scopes: ["skills:read", "skills:publish"], updated: true });
+  const update = f.calls.find(c => c.path.endsWith("/admin/keys/key_target/scopes"));
+  expect(update?.method).toBe("PATCH");
+  expect(update?.auth).toBe(`Bearer ${f.tokenB}`);
+  expect(update?.body).toEqual({ expected_scopes: ["skills:read"], add_scopes: ["skills:publish"] });
+  expect(JSON.stringify(update?.body)).not.toContain("MUST_NOT_PRINT");
+}));
+
+test("fresh scope admission refuses an unexpected tenant before the CAS update", async () => fixture(async f => {
+  await expect(f.fresh.addSkillPublishScope(email, code, "key_target", ["skills:read"], f.oa, f.context))
+    .rejects.toBeInstanceOf(WorkspaceIdentityMismatchError);
+  expect(f.calls.some(c => c.path.endsWith("/admin/keys/key_target/scopes"))).toBe(false);
+}));

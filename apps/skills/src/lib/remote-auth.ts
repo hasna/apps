@@ -4,7 +4,7 @@ import { invitationInput, type ListRemoteWorkspaceInvitations, type IssueRemoteW
   type ResendRemoteWorkspaceInvitation, type RevokeRemoteWorkspaceInvitation, type AcceptRemoteWorkspaceInvitation } from "./remote-invitations.js";
 import { workspaceLeaveInput, type LeaveRemoteWorkspace } from "./remote-workspace-leave.js";
 import { workspaceContext, workspaceExpectedUserId, parseWorkspaceLogin,
-  type RemoteWorkspaceContext, type RemoteWorkspaceSession, type RemoteAccountWorkspaceDiscovery } from "./remote-workspace-selection.js";
+  type RemoteWorkspaceContext, type RemoteWorkspaceSession, type RemoteAccountWorkspaceDiscovery, WorkspaceIdentityMismatchError } from "./remote-workspace-selection.js";
 import { readBoundedResponse } from "./remote-files.js";
 import { workspaceMembersQuery, type RemoteWorkspaceMembersOptions } from "./remote-workspace.js";
 import { workspaceMemberRoleInput, workspaceMemberRemovalInput, type SetRemoteWorkspaceMemberRole, type RemoveRemoteWorkspaceMember } from "./remote-workspace.js";
@@ -193,6 +193,22 @@ export class RemoteSkillsAuthClient {
   }
   async listApiKeys(email: string, code: string, context?: RemoteWorkspaceContext) { return (await this.sessionClient(email, code, context)).listApiKeys(); }
   async revokeApiKey(email: string, code: string, keyId: string, context?: RemoteWorkspaceContext) { return (await this.sessionClient(email, code, context)).revokeApiKey(keyId); }
+  /** Add only the publication scope through an ephemeral owner/admin workspace session.
+   * The selected workspace is verified before the CAS request; no profile or API key is saved.
+   */
+  async addSkillPublishScope(
+    email: string,
+    code: string,
+    keyId: string,
+    expectedScopes: string[],
+    expectedOrgId: string,
+    context: RemoteWorkspaceContext,
+  ) {
+    const target = workspaceContext(context);
+    const session = await this.switchWorkspace(email, code, target);
+    if (session.organization.id !== expectedOrgId) throw new WorkspaceIdentityMismatchError();
+    return new RemoteSkillsClient(session.token, this.apiOrigin).addSkillPublishScope(keyId, expectedScopes, expectedOrgId);
+  }
   /** Reauthentication is ephemeral: it never replaces a saved key or profile. */
   async updateProfile(email: string, code: string, input: UpdateRemoteProfile, context?: RemoteWorkspaceContext) {
     const body = customerNamePatch(input, "displayName");
