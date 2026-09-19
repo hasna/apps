@@ -94,3 +94,53 @@ describe("hosted session refresh CLI", () => {
     } finally { server.stop(true); rmSync(root, { recursive: true, force: true }); }
   });
 });
+
+describe("reviewed legacy retirement CLI", () => {
+  test("compiles hosted replacements and snapshots exact legacy files through the public option", async () => {
+    const root = makeTempRoot("instructions-legacy-cli-");
+    const targetHome = join(root, "claude-config"); mkdirSync(targetHome);
+    const profile = { id: "legacy-profile", name: "Reviewed", slug: "reviewed", description: null, selectors: {}, variables: {}, created_at: "2026-09-19", updated_at: "2026-09-19" };
+    const config: Config = { id: "replacement-config", name: "Replacement", slug: "replacement", kind: "reference", category: "rules", agent: "global", target_path: null, outputs: [], format: "markdown", content: "HOSTED_CANONICAL_REPLACEMENT", description: null, tags: [], is_template: false, version: 3, created_at: "2026-09-19", updated_at: "2026-09-19", synced_at: null };
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
+      const url = new URL(request.url);
+      if (!request.headers.has("x-api-key")) return Response.json({ error: "unauthorized" }, { status: 403 });
+      if (url.pathname.endsWith("/bindings")) return Response.json({ bindings: [{ profile_id: profile.id, config_id: config.id, sort_order: 0, binding: legacyProfileConfigBinding() }] });
+      if (url.pathname.endsWith("/assets")) return Response.json({ assets: [] });
+      if (url.pathname.endsWith(`/profiles/${profile.id}`)) return Response.json({ profile: { ...profile, configs: [config] } });
+      if (url.pathname.endsWith("/configs")) return Response.json({ items: [], total: 0, limit: 100, cursor: 0, has_more: false, complete: true, truncated: false, next_cursor: null });
+      return Response.json({ error: "not found" }, { status: 404 });
+    } });
+    try {
+      const credentialsDir = join(root, ".hasna/instructions/config"); mkdirSync(credentialsDir, { recursive: true, mode: 0o700 });
+      writeFileSync(join(credentialsDir, "credentials"), `HASNA_INSTRUCTIONS_API_URL=http://127.0.0.1:${server.port}/instructions\nHASNA_INSTRUCTIONS_API_KEY=synthetic-legacy-test\n`, { mode: 0o600 });
+      const args = ["session", "apply", "--tool", "claude", "--profile", "reviewed", "--compile-profile", profile.id, "--provider-version", "2.1.278", "--target-home", targetHome, "--no-station-profile", "--json"];
+      const initial = await cli(root, args); expect({ status: initial.status, stderr: initial.stderr }).toMatchObject({ status: 0 });
+      const manifestPath = join(targetHome, ".hasna/session-render-manifest.json");
+      const manifestBytes = readFileSync(manifestPath, "utf8"), manifest = JSON.parse(manifestBytes);
+      mkdirSync(join(targetHome, "rules"));
+      const path = join(targetHome, "rules/old.md"), body = "Old reviewed rule.\r\n"; writeFileSync(path, body, { mode: 0o600 });
+      const reviewPath = join(root, "review.json");
+      const request = { relativePath: "rules/old.md", sha256: sha256(body), coverageReviewSha256: sha256("Reviewed clause coverage."), replacementSources: [{ id: "replacement", configId: config.id, configVersion: 2, renderedPayloadSha256: manifest.sources[0].renderedPayloadSha256 }] };
+      writeFileSync(reviewPath, JSON.stringify([request]));
+      const retirementArgs = [...args, "--retire-legacy-files", reviewPath, "--expected-manifest-sha256", sha256(manifestBytes)];
+      const stale = await cli(root, retirementArgs); expect(stale.status).toBe(1); expect(stale.stderr).toContain("exact selected rendered source");
+      expect(readFileSync(path, "utf8")).toBe(body);
+      request.replacementSources[0]!.configVersion = 3; writeFileSync(reviewPath, JSON.stringify([request]));
+      const preview = await cli(root, [...retirementArgs, "--dry-run"]); expect({ status: preview.status, stderr: preview.stderr }).toMatchObject({ status: 0 });
+      expect(JSON.parse(preview.stdout).applied).toBe(false); expect(readFileSync(path, "utf8")).toBe(body);
+      const applied = await cli(root, retirementArgs); expect({ status: applied.status, stderr: applied.stderr }).toMatchObject({ status: 0 });
+      const receipt = JSON.parse(applied.stdout); expect(receipt.legacyRetirements).toHaveLength(1);
+      expect(readFileSync(join(targetHome, "CLAUDE.md"), "utf8")).toContain("@./.hasna/instructions/01-replacement.md");
+      expect(readFileSync(join(targetHome, ".hasna/instructions/01-replacement.md"), "utf8")).toContain("HOSTED_CANONICAL_REPLACEMENT");
+      const snapshot = JSON.parse(readFileSync(receipt.snapshotPath, "utf8"));
+      expect(snapshot.files.find((file: { relativePath: string }) => file.relativePath === request.relativePath)).toMatchObject({ content: body, mode: 0o600 });
+      const refreshed = await cli(root, ["session", "refresh", "--target-home", targetHome, "--json"]);
+      expect({ status: refreshed.status, stderr: refreshed.stderr }).toMatchObject({ status: 0 });
+      expect(JSON.parse(refreshed.stdout).status).toBe("unchanged");
+      expect(JSON.parse(readFileSync(manifestPath, "utf8")).legacyRetirements).toHaveLength(1);
+      const restored = await cli(root, ["session", "restore", receipt.snapshotPath, "--json"]);
+      expect({ status: restored.status, stderr: restored.stderr }).toMatchObject({ status: 0 });
+      expect(readFileSync(path, "utf8")).toBe(body); expect(statSync(path).mode & 0o777).toBe(0o600);
+    } finally { server.stop(true); rmSync(root, { recursive: true, force: true }); }
+  });
+});

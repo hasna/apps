@@ -1825,6 +1825,7 @@ sessionCmd.command("apply")
   .option("--force", "overwrite existing unmanaged files")
   .option("--adopt-file <relativepath=sha256>", "adopt one reviewed unmanaged generated target only at its exact observed SHA256; repeatable", collectOption, [])
   .option("--reconcile-file <relativepath=sha256>", "reconcile one reviewed managed drifted target at its exact observed SHA256; requires --expected-manifest-sha256", collectOption, [])
+  .option("--retire-legacy-files <path>", "JSON array of reviewed obsolete native prompt preimages and exact replacement-source coverage pins; requires manifest CAS")
   .option("--retire-file <relativepath=sha256>", "retire one reviewed obsolete managed fragment, rule, or asset at its exact SHA256; requires --expected-manifest-sha256", collectOption, [])
   .option("--expected-manifest-sha256 <sha256>", "require the previously reviewed manifest preimage to match exactly before applying")
   .option("--json", "output apply JSON")
@@ -1874,7 +1875,9 @@ sessionCmd.command("apply")
       const adoptFiles = parsePreimages(opts.adoptFile as string[], "--adopt-file");
       const reconcileFiles = parsePreimages(opts.reconcileFile as string[], "--reconcile-file");
       const retireFiles = parsePreimages(opts.retireFile as string[], "--retire-file");
-      const result = applySessionRender(plan, { dryRun: opts.dryRun, force: opts.force, adoptFiles, reconcileFiles, retireFiles, expectedManifestSha256: opts.expectedManifestSha256, ownedClaudeAuthorities });
+      const retireLegacyFiles = opts.retireLegacyFiles === undefined ? undefined
+        : JSON.parse(readSessionInstructionSourceFile(resolveSessionPath(opts.retireLegacyFiles)));
+      const result = applySessionRender(plan, { dryRun: opts.dryRun, force: opts.force, adoptFiles, reconcileFiles, retireFiles, retireLegacyFiles, expectedManifestSha256: opts.expectedManifestSha256, ownedClaudeAuthorities });
       if (opts.json) {
         printJson({
           ...result,
