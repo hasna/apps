@@ -10,11 +10,18 @@ import { createHash } from "node:crypto";
 import { formatShortUrl, getClickSalt, normalizeHostname } from "./config.js";
 import { makeId, now } from "./database.js";
 import { getMachineId } from "./machine.js";
-import { DEFAULT_SLUG_LENGTH, normalizeSlug, randomToken } from "./slug.js";
+import {
+  adaptiveSlugLength,
+  DEFAULT_DOMAIN_HOSTNAME,
+  normalizeGeneratedSlugLength,
+  normalizeSlug,
+  randomToken,
+  type SlugTokenFactory,
+} from "./slug.js";
 import type { TypedQueryClient } from "./generated/storage-kit/query.js";
 import type { AddDomainInput, Click, ClickInput, CreateLinkInput, Domain, Link, LinkStats } from "./types.js";
 
-type PgAdapterLike = {
+export type PgAdapterLike = {
   get(sql: string, ...params: unknown[]): Promise<any>;
   all(sql: string, ...params: unknown[]): Promise<any[]>;
   run(sql: string, ...params: unknown[]): Promise<unknown>;
@@ -27,7 +34,13 @@ type LinkRow = Omit<Link, "active" | "metadata" | "hostname"> & {
   hostname: string;
 };
 
-type DomainRow = Omit<Domain, "default_domain" | "metadata"> & {
+type LegacyDomainProviderColumns = {
+  cloudflare_zone_id?: string | null;
+  cloudflare_account_id?: string | null;
+  cloudflare_worker_name?: string | null;
+};
+
+type DomainRow = Omit<Domain, "default_domain" | "metadata"> & LegacyDomainProviderColumns & {
   default_domain: number | boolean;
   metadata: string | Record<string, unknown> | null;
 };
@@ -63,8 +76,9 @@ function nullableIso(value: unknown): string | null {
 }
 
 function domainFromRow(row: DomainRow): Domain {
+  const { cloudflare_zone_id: _zone, cloudflare_account_id: _account, cloudflare_worker_name: _worker, ...publicRow } = row;
   return {
-    ...row,
+    ...publicRow,
     default_domain: Boolean(row.default_domain),
     synced_at: nullableIso(row.synced_at),
     created_at: toIsoString(row.created_at),
@@ -84,6 +98,24 @@ function linkFromRow(row: LinkRow): Link {
     metadata: parseJsonObject(row.metadata),
     short_url: formatShortUrl(row.hostname, row.slug),
   };
+}
+
+function domainIsActive(domain: Domain): boolean {
+  const provisioning = domain.metadata["provisioning"];
+  if (!provisioning || typeof provisioning !== "object" || Array.isArray(provisioning)) return true;
+  const status = (provisioning as Record<string, unknown>)["status"];
+  return status === undefined || status === "active";
+}
+
+function assertDomainProjectionWrite(hostname: string, input: AddDomainInput): void {
+  if (hostname === DEFAULT_DOMAIN_HOSTNAME) return;
+  const provisioning = input.metadata?.["provisioning"];
+  const record = provisioning && typeof provisioning === "object" && !Array.isArray(provisioning)
+    ? provisioning as Record<string, unknown>
+    : null;
+  if (input.provider !== "domains-api" || record?.["mode"] !== "domains-api" || typeof record?.["domains_job_id"] !== "string") {
+    throw new Error("Custom domain rows may only be applied as projections of a hosted Domains API job.");
+  }
 }
 
 function validateDestinationUrl(url: string): string {
@@ -137,8 +169,20 @@ export function createKitPgAdapter(client: TypedQueryClient): PgAdapterLike {
   };
 }
 
+export interface PgShortlinksStoreOptions {
+  /** Injectable only for deterministic collision tests; production uses cryptographic randomness. */
+  tokenFactory?: SlugTokenFactory;
+}
+
 export class PgShortlinksStore {
-  constructor(private readonly pg: PgAdapterLike) {}
+  private readonly tokenFactory: SlugTokenFactory;
+
+  constructor(
+    private readonly pg: PgAdapterLike,
+    options: PgShortlinksStoreOptions = {},
+  ) {
+    this.tokenFactory = options.tokenFactory ?? randomToken;
+  }
 
   /**
    * Build a store over a vendored storage-kit query client. This is the ONLY
@@ -147,8 +191,11 @@ export class PgShortlinksStore {
    * DSN-from-env / connection-string path so this store can never be misused to
    * open the raw RDS from a client.
    */
-  static fromQueryClient(client: TypedQueryClient): PgShortlinksStore {
-    return new PgShortlinksStore(createKitPgAdapter(client));
+  static fromQueryClient(
+    client: TypedQueryClient,
+    options: PgShortlinksStoreOptions = {},
+  ): PgShortlinksStore {
+    return new PgShortlinksStore(createKitPgAdapter(client), options);
   }
 
   async close(): Promise<void> {
@@ -157,6 +204,7 @@ export class PgShortlinksStore {
 
   async addDomain(input: AddDomainInput): Promise<Domain> {
     const hostname = normalizeHostname(input.hostname);
+    assertDomainProjectionWrite(hostname, input);
     const timestamp = now();
     const machineId = getMachineId();
     const existing = await this.getDomain(hostname);
@@ -189,9 +237,9 @@ export class PgShortlinksStore {
       hostname,
       input.provider || existing?.provider || "manual",
       (input.defaultDomain ?? existing?.default_domain) ? 1 : 0,
-      input.cloudflareZoneId || existing?.cloudflare_zone_id || null,
-      input.cloudflareAccountId || existing?.cloudflare_account_id || null,
-      input.cloudflareWorkerName || existing?.cloudflare_worker_name || null,
+      null,
+      null,
+      null,
       input.originUrl || existing?.origin_url || null,
       input.notes || existing?.notes || null,
       JSON.stringify(input.metadata || existing?.metadata || {}),
@@ -222,10 +270,26 @@ export class PgShortlinksStore {
   }
 
   async getDefaultDomain(): Promise<Domain | null> {
-    const row = await this.pg.get(`
-      SELECT * FROM domains ORDER BY default_domain DESC, created_at ASC LIMIT 1
-    `) as DomainRow | null;
-    return row ? domainFromRow(row) : null;
+    const domains = (await this.listDomains()).filter(domainIsActive);
+    return domains.find((domain) => domain.default_domain)
+      ?? domains.find((domain) => domain.hostname === DEFAULT_DOMAIN_HOSTNAME)
+      ?? null;
+  }
+
+  private async ensureDefaultDomain(): Promise<Domain> {
+    const selected = await this.getDefaultDomain();
+    if (selected) return selected;
+    const existing = await this.getDomain(DEFAULT_DOMAIN_HOSTNAME);
+    if (existing && !domainIsActive(existing)) {
+      throw new Error("The managed has.na domain is not active yet.");
+    }
+    return this.addDomain({
+      hostname: DEFAULT_DOMAIN_HOSTNAME,
+      provider: "managed",
+      defaultDomain: true,
+      originUrl: `https://${DEFAULT_DOMAIN_HOSTNAME}`,
+      notes: "Automatic default shortlink domain.",
+    });
   }
 
   async deleteDomain(hostnameOrId: string): Promise<Domain> {
@@ -237,46 +301,63 @@ export class PgShortlinksStore {
   }
 
   async createLink(input: CreateLinkInput): Promise<Link> {
-    const domain = input.domain ? await this.getDomain(input.domain) : await this.getDefaultDomain();
-    if (!domain) {
-      throw new Error("No domain configured. Run `shortlinks domain add <domain> --default` first.");
-    }
+    const domain = input.domain ? await this.getDomain(input.domain) : await this.ensureDefaultDomain();
+    if (!domain) throw new Error(`Domain not found: ${input.domain}`);
     const destinationUrl = validateDestinationUrl(input.destinationUrl);
     const timestamp = now();
     const machineId = getMachineId();
     const expiresAt = isoOrNull(input.expiresAt);
-    const slug = input.slug
-      ? normalizeSlug(input.slug)
-      : await this.generateAvailableSlug(domain.id, input.slugLength || DEFAULT_SLUG_LENGTH);
+    const id = makeId("lnk");
+    const params = (slug: string): unknown[] => [
+      id,
+      domain.id,
+      slug,
+      destinationUrl,
+      input.title || null,
+      expiresAt,
+      JSON.stringify(input.metadata || {}),
+      machineId,
+      timestamp,
+      timestamp,
+    ];
 
-    try {
-      await this.pg.run(`
+    if (input.slug) {
+      const slug = normalizeSlug(input.slug);
+      try {
+        await this.pg.run(`
+          INSERT INTO links (
+            id, domain_id, slug, destination_url, title, active, expires_at, metadata,
+            machine_id, synced_at, created_at, updated_at
+          )
+          VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, NULL, ?, ?)
+        `, ...params(slug));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (/unique|duplicate/i.test(message)) {
+          throw new Error(`Slug already exists for ${domain.hostname}: ${slug}`);
+        }
+        throw error;
+      }
+      return (await this.getLink(domain.hostname, slug))!;
+    }
+
+    // Concurrency safety lives in this one statement: every candidate is
+    // claimed by the database unique constraint, never by a check-then-insert.
+    const requestedLength = normalizeGeneratedSlugLength(input.slugLength);
+    for (let attempt = 0; attempt < 256; attempt += 1) {
+      const slug = this.tokenFactory(adaptiveSlugLength(attempt, requestedLength));
+      const inserted = await this.pg.get(`
         INSERT INTO links (
           id, domain_id, slug, destination_url, title, active, expires_at, metadata,
           machine_id, synced_at, created_at, updated_at
         )
         VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, NULL, ?, ?)
-      `,
-        makeId("lnk"),
-        domain.id,
-        slug,
-        destinationUrl,
-        input.title || null,
-        expiresAt,
-        JSON.stringify(input.metadata || {}),
-        machineId,
-        timestamp,
-        timestamp,
-      );
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (message.includes("unique") || message.includes("duplicate")) {
-        throw new Error(`Slug already exists for ${domain.hostname}: ${slug}`);
-      }
-      throw error;
+        ON CONFLICT (domain_id, slug) DO NOTHING
+        RETURNING *
+      `, ...params(slug));
+      if (inserted) return (await this.getLink(domain.hostname, slug))!;
     }
-
-    return (await this.getLink(domain.hostname, slug))!;
+    throw new Error("Could not allocate an unused public short code after 256 atomic attempts.");
   }
 
   async listLinks(options: { domain?: string; activeOnly?: boolean; limit?: number } = {}): Promise<Link[]> {
@@ -300,13 +381,14 @@ export class PgShortlinksStore {
   }
 
   async getLink(domainOrSlug: string, maybeSlug?: string): Promise<Link | null> {
-    const slug = normalizeSlug(maybeSlug || domainOrSlug);
-    const params: string[] = [slug];
-    let domainClause = "";
-    if (maybeSlug) {
-      domainClause = "AND d.hostname = ?";
-      params.push(normalizeHostname(domainOrSlug));
+    if (!maybeSlug) {
+      const domain = await this.getDefaultDomain();
+      return domain ? this.getLink(domain.hostname, domainOrSlug) : null;
     }
+    const slug = normalizeSlug(maybeSlug);
+    const params: string[] = [slug];
+    const domainClause = "AND d.hostname = ?";
+    params.push(normalizeHostname(domainOrSlug));
     const row = await this.pg.get(`
       SELECT l.*, d.hostname
       FROM links l
@@ -331,6 +413,8 @@ export class PgShortlinksStore {
   async resolve(hostname: string, slug: string): Promise<Link | null> {
     const normalizedHost = normalizeHostname(hostname);
     const normalizedSlug = normalizeSlug(slug);
+    const domain = await this.getDomain(normalizedHost);
+    if (!domain || !domainIsActive(domain)) return null;
     const row = await this.pg.get(`
       SELECT l.*, d.hostname
       FROM links l
@@ -338,17 +422,7 @@ export class PgShortlinksStore {
       WHERE d.hostname = ? AND l.slug = ?
       LIMIT 1
     `, normalizedHost, normalizedSlug) as LinkRow | null;
-    if (row) return linkFromRow(row);
-
-    const fallback = await this.pg.get(`
-      SELECT l.*, d.hostname
-      FROM links l
-      JOIN domains d ON d.id = l.domain_id
-      WHERE d.default_domain = 1 AND l.slug = ?
-      ORDER BY d.created_at ASC
-      LIMIT 1
-    `, normalizedSlug) as LinkRow | null;
-    return fallback ? linkFromRow(fallback) : null;
+    return row ? linkFromRow(row) : null;
   }
 
   async setLinkActive(domainOrSlug: string, maybeSlugOrActive: string | boolean, maybeActive?: boolean): Promise<Link> {
@@ -437,14 +511,5 @@ export class PgShortlinksStore {
     return createHash("sha256").update(`${getClickSalt()}:${ip}`).digest("hex");
   }
 
-  private async generateAvailableSlug(domainId: string, length: number): Promise<string> {
-    for (let attempt = 0; attempt < 32; attempt += 1) {
-      const slug = randomToken(length);
-      const exists = await this.pg.get(`
-        SELECT 1 FROM links WHERE domain_id = ? AND slug = ? LIMIT 1
-      `, domainId, slug);
-      if (!exists) return slug;
-    }
-    throw new Error("Could not generate an unused slug after 32 attempts.");
-  }
+
 }

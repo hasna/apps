@@ -9,7 +9,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { createHash, randomUUID } from "node:crypto";
 import pg from "pg";
 import { createPgPool, createQueryClient, type PoolQueryClient } from "../generated/storage-kit/index.js";
-import type { DomainProvisioningRequest } from "../lib/provisioning.js";
+import { provisioningRequestHash, type DomainProvisioningRequest } from "../lib/provisioning.js";
 import { DomainsProvisioningRepo } from "./provisioning-repo.js";
 import { DomainsRepo, HttpError } from "./repo.js";
 import { buildMigrations, runMigrations } from "./migrations.js";
@@ -35,8 +35,17 @@ function request(name: string, key: string): DomainProvisioningRequest {
   };
 }
 
-function hash(value: DomainProvisioningRequest): string {
-  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+function legacyShortlinksPurchaseHash(value: DomainProvisioningRequest): string {
+  return createHash("sha256").update(JSON.stringify({
+    auto_renew: value.auto_renew,
+    dns_provider: value.dns_provider,
+    max_price_usd: value.max_price_usd,
+    name: value.name,
+    registrar: value.registrar,
+    target: value.target,
+    worker_name: value.worker_name,
+    years: value.years,
+  })).digest("hex");
 }
 
 describeLive("Domains provisioning against live PostgreSQL", () => {
@@ -85,7 +94,7 @@ describeLive("Domains provisioning against live PostgreSQL", () => {
     const domain = `pg-${suffix}.example`;
     const idempotencyKey = `domains-pg-${suffix}`;
     const input = request(domain, idempotencyKey);
-    const requestHash = hash(input);
+    const requestHash = provisioningRequestHash(input);
     const left = new DomainsProvisioningRepo(client);
     const right = new DomainsProvisioningRepo(client);
 
@@ -111,6 +120,25 @@ describeLive("Domains provisioning against live PostgreSQL", () => {
       expect(error).toBeInstanceOf(HttpError);
       expect((error as HttpError).status).toBe(409);
     }
+
+    const legacyInput = request(`legacy-${suffix}.example`, `domains-legacy-${suffix}`);
+    const legacyHash = legacyShortlinksPurchaseHash(legacyInput);
+    const canonicalHash = provisioningRequestHash(legacyInput);
+    expect(canonicalHash).not.toBe(legacyHash);
+    await expect(left.reserve(legacyInput, legacyHash)).rejects.toMatchObject({ status: 409 });
+    const legacyJob = await left.reserve(legacyInput, canonicalHash);
+    await client.execute(
+      "UPDATE domain_provisioning_jobs SET request_hash = $2 WHERE id = $1",
+      [legacyJob.id, legacyHash],
+    );
+    const compatibleReplay = await right.reserve(legacyInput, canonicalHash);
+    expect(compatibleReplay.id).toBe(legacyJob.id);
+    expect(compatibleReplay.request_hash).toBe(legacyHash);
+    const changedLegacyIntent = { ...legacyInput, years: legacyInput.years + 1 };
+    await expect(left.reserve(
+      changedLegacyIntent,
+      provisioningRequestHash(changedLegacyIntent),
+    )).rejects.toMatchObject({ status: 409 });
 
     const firstLease = await left.claim(one.id, "lease-one", new Date(Date.now() + 60_000).toISOString());
     expect(firstLease?.lease_token).toBe("lease-one");
@@ -156,7 +184,7 @@ describeLive("Domains provisioning against live PostgreSQL", () => {
       origin_hostname: "origin.us-east-1.elb.amazonaws.com",
       origin_tls_mode: "full",
     };
-    const website = await left.reserve(websiteInput, hash(websiteInput));
+    const website = await left.reserve(websiteInput, provisioningRequestHash(websiteInput));
     expect(website).toMatchObject({
       target: "website_origin",
       worker_name: null,
@@ -169,7 +197,7 @@ describeLive("Domains provisioning against live PostgreSQL", () => {
     );
     expect(persisted).toEqual({ origin_tls_mode: "full" });
     const conflicting = { ...websiteInput, origin_tls_mode: "strict" as const };
-    await expect(left.reserve(conflicting, hash(conflicting))).rejects.toMatchObject({ status: 409 });
+    await expect(left.reserve(conflicting, provisioningRequestHash(conflicting))).rejects.toMatchObject({ status: 409 });
 
     const ownedName = `owned-${suffix}.example`;
     const owned = await portfolio.createDomain({

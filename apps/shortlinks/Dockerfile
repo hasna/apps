@@ -4,7 +4,17 @@
 # The service talks to PostgreSQL directly: a HASNA_SHORTLINKS_DATABASE_URL
 # (provided by the ECS task) selects the postgresql server data backend.
 # ---------------------------------------------------------------------------
-FROM --platform=linux/amd64 oven/bun:1.3.14-alpine AS build
+# Pinned multi-architecture Alpine index plus the exact patched OpenSSL floor
+# used by the fleet's zero-CRITICAL/HIGH deployment lanes. A floating Alpine
+# tag can regress between review and deploy, so both Bun and runtime libraries
+# are asserted in the image build.
+ARG BUN_IMAGE=oven/bun:1.3.14-alpine@sha256:5acc90a93e91ff07bf72aa90a7c9f0fa189765aec90b47bdbf2152d2196383c0
+ARG BUN_VERSION=1.3.14
+ARG OPENSSL_VERSION=3.5.8-r0
+
+FROM --platform=linux/amd64 ${BUN_IMAGE} AS build
+ARG BUN_VERSION
+RUN test "$(bun --version)" = "${BUN_VERSION}"
 WORKDIR /app
 
 # Install dependencies against the committed lockfile. --ignore-scripts because
@@ -22,8 +32,18 @@ RUN bun run build
 RUN rm -rf node_modules && bun install --frozen-lockfile --production --ignore-scripts
 
 # ---------------------------------------------------------------------------
-FROM --platform=linux/amd64 oven/bun:1.3.14-alpine AS runtime
+FROM --platform=linux/amd64 ${BUN_IMAGE} AS runtime
+ARG BUN_VERSION
+ARG OPENSSL_VERSION
 WORKDIR /app
+RUN test "$(bun --version)" = "${BUN_VERSION}" \
+    && apk add --no-cache \
+      "libcrypto3=${OPENSSL_VERSION}" \
+      "libssl3=${OPENSSL_VERSION}" \
+    && apk info -vv | grep -q "^libcrypto3-${OPENSSL_VERSION} - " \
+    && apk info -vv | grep -q "^libssl3-${OPENSSL_VERSION} - " \
+    && ! apk info -e perl \
+    && ! apk info -e util-linux
 # The Amazon RDS certs chain to a PRIVATE "Amazon RDS <region> Root CA" that is
 # not in the public/system trust store. Bundle the RDS global CA and trust it so
 # pg's TLS (sslmode=require is treated as verify-full by pg>=8.20) verifies the

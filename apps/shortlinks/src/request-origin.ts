@@ -1,8 +1,7 @@
 // Absolute-origin resolution for fleet services.
 //
 // Behind the api.hasna.com gateway the origin is reached via Cloudflare egress
-// and the ALB; the public URL a client used (`https://api.hasna.com/<app>/...`)
-// is only recoverable from the forwarding
+// and the ALB; the public URL a client used (`https://api.hasna.com/<app>/...`) is only recoverable from the forwarding
 // headers: `x-forwarded-proto` (https) and `x-forwarded-host` (api.hasna.com
 // for the gateway). Naively splicing raw header values into a URL is how
 // CRLF/header-injection garbage becomes part of served links, so every piece
@@ -64,6 +63,7 @@ export function sanitizeHost(raw: string | null | undefined): string | null {
     }
   }
 
+  value = value.replace(/\.$/, "").toLowerCase();
   const suffix = port === null ? "" : `:${port}`;
   if (IPV4_RE.test(value)) return `${value}${suffix}`;
   if (BRACKETED_V6_WITH_PORT_RE.test(value)) return `${value}${suffix}`;
@@ -77,6 +77,8 @@ export interface RequestOriginInput {
   defaultHost?: string;
   /** Fallback protocol when `x-forwarded-proto` is absent or invalid. */
   defaultProtocol?: "http" | "https";
+  /** Prefer the edge-only x-hasna-public-host for public-link lookup. Never use it for auth. */
+  trustHasnaPublicHost?: boolean;
   /** Also consult `x-forwarded-host` (only when the forwarding hop is trusted to set it). */
   trustForwardedHost?: boolean;
 }
@@ -84,21 +86,35 @@ export interface RequestOriginInput {
 /**
  * Resolve the absolute origin (`https://api.hasna.com`) for a request.
  *
- * Protocol honors `x-forwarded-proto` (http/https whitelist only). Host is the
- * sanitized `x-forwarded-host` when the caller trusts the forwarding hop,
- * else the sanitized `Host` header, else the caller's default. Returns null
- * only when every candidate is missing or malformed.
+ * For public edge requests, valid `x-hasna-public-proto` and
+ * `x-hasna-public-host` win. Otherwise protocol honors `x-forwarded-proto`
+ * (http/https whitelist only), and host uses trusted `x-forwarded-host`, then
+ * `Host`, then the caller default. Returns null only when every host candidate
+ * is missing or malformed.
  */
 export function resolvePublicOrigin(input: RequestOriginInput): string | null {
-  const rawProto = firstHeaderValue(input.headers.get("x-forwarded-proto"));
+  const publicProto = input.trustHasnaPublicHost === true
+    ? firstHeaderValue(input.headers.get("x-hasna-public-proto"))
+    : null;
+  const forwardedProto = firstHeaderValue(input.headers.get("x-forwarded-proto"));
+  const rawProto = publicProto === "https" || publicProto === "http"
+    ? publicProto
+    : forwardedProto;
   const protocol = rawProto === "https" || rawProto === "http"
     ? rawProto
     : (input.defaultProtocol ?? "http");
 
+  // This header is an edge routing hint only. It is deliberately scoped to
+  // public-link origin/hostname resolution and must never feed API auth or
+  // tenant authorization decisions.
+  const hasnaPublicHost = input.trustHasnaPublicHost === true
+    ? sanitizeHost(firstHeaderValue(input.headers.get("x-hasna-public-host")))
+    : null;
   const forwardedHost = input.trustForwardedHost === true
     ? sanitizeHost(firstHeaderValue(input.headers.get("x-forwarded-host")))
     : null;
-  const host = forwardedHost
+  const host = hasnaPublicHost
+    ?? forwardedHost
     ?? sanitizeHost(firstHeaderValue(input.headers.get("host")))
     ?? sanitizeHost(input.defaultHost);
   if (!host) return null;

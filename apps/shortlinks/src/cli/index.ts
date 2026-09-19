@@ -12,17 +12,15 @@ import chalk from "chalk";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { spawnSync } from "node:child_process";
 import { resolveClientTransport } from "@hasna/contracts/client";
 import { shortlinksResolverInputs } from "../client-resolver-inputs.js";
 import { LOCAL_OPT_IN_ENV_KEY, resolveStore, type Store } from "../client-store.js";
 import { projectDestinationUrl, projectForOutput } from "./projection.js";
 import type { TotalStats } from "../store-interface.js";
-import { getConfigPath, getDataDir, getDatabasePath, loadConfig, saveConfig, updateConfig } from "../config.js";
+import { getConfigPath, getDataDir, getDatabasePath, loadConfig, normalizeHostname, saveConfig, updateConfig } from "../config.js";
 import { serveShortlinks } from "../server.js";
-import { createCloudflarePlan, writeWorkerFiles, upsertCloudflareDnsRecord } from "../cloudflare.js";
-import { runDomains } from "../domains-cli.js";
 import { createLocalSetupPlan, registerMachinesDns } from "../local.js";
+import { DEFAULT_DOMAIN_HOSTNAME } from "../slug.js";
 import type { Domain, Link, LinkStats } from "../types.js";
 
 function getPackageVersion(): string {
@@ -79,16 +77,9 @@ async function withRuntimeStore<T>(fn: (store: Store) => T | Promise<T>): Promis
   }
 }
 
-function commandExists(command: string): boolean {
-  const result = spawnSync("which", [command], { encoding: "utf-8" });
-  return result.status === 0;
-}
-
 const DEFAULT_HUMAN_LIMIT = 20;
 const DEFAULT_JSON_LIMIT = 20;
 const TEXT_LIMIT = 88;
-const EXTERNAL_OUTPUT_LIMIT = 20;
-const EXTERNAL_OUTPUT_WIDTH = 120;
 
 function parseLimit(value: string | number | undefined, fallback: number, label = "--limit"): number {
   if (value === undefined || value === null || value === "") return fallback;
@@ -128,38 +119,9 @@ function formatLink(link: Link, maxDestinationLength = 72): string {
   return `${chalk.green(link.short_url || `${link.hostname}/${link.slug}`)} ${chalk.dim("->")} ${truncateText(projectDestinationUrl(link.destination_url), maxDestinationLength)}`;
 }
 
-function printBoundedTextOutput(text: string, stream: "stdout" | "stderr"): boolean {
-  const lines = text.trim().split(/\r?\n/).filter(Boolean);
-  let truncated = lines.length > EXTERNAL_OUTPUT_LIMIT;
-  for (const line of lines.slice(0, EXTERNAL_OUTPUT_LIMIT)) {
-    const output = truncateText(line, EXTERNAL_OUTPUT_WIDTH);
-    if (output !== line) truncated = true;
-    if (stream === "stderr") console.error(output);
-    else console.log(output);
-  }
-  return truncated;
-}
-
-function printExternalCommandResult(
-  result: ReturnType<typeof runDomains>,
-  opts: { verbose?: boolean },
-  label: string,
-): void {
-  if (opts.verbose) {
-    if (result.stdout.trim()) console.log(result.stdout.trim());
-    if (result.stderr.trim()) console.error(result.stderr.trim());
-    return;
-  }
-
-  const stdoutTruncated = result.stdout.trim() ? printBoundedTextOutput(result.stdout, "stdout") : false;
-  const stderrTruncated = result.stderr.trim() ? printBoundedTextOutput(result.stderr, "stderr") : false;
-  if (stdoutTruncated || stderrTruncated) printHint(`Use --verbose or --json for full ${label} command output.`);
-}
-
 function printDomainSummary(domain: Domain): void {
   console.log(`${domain.default_domain ? "*" : " "} ${domain.hostname} ${chalk.dim(domain.provider)} default=${yesNo(domain.default_domain)}`);
   if (domain.origin_url) console.log(`  origin: ${truncateText(domain.origin_url)}`);
-  if (domain.cloudflare_worker_name) console.log(`  worker: ${domain.cloudflare_worker_name}`);
   printHint("Use `shortlinks domain get <hostname> --verbose` or `--json` for full details.");
 }
 
@@ -192,43 +154,12 @@ function printConfigSummary(data: { path: string; config: unknown }): void {
   const config = data.config as {
     defaultDomain?: string;
     publicBaseUrl?: string;
-    cloudflare?: { accountId?: string; workerName?: string; origin?: string };
   };
   console.log("shortlinks config");
   console.log(`  path: ${data.path}`);
   console.log(`  default domain: ${config.defaultDomain || "(unset)"}`);
   console.log(`  public base URL: ${config.publicBaseUrl || "(unset)"}`);
-  if (config.cloudflare) {
-    console.log(`  cloudflare worker: ${config.cloudflare.workerName || "(unset)"}`);
-    console.log(`  cloudflare origin: ${config.cloudflare.origin || "(unset)"}`);
-  }
   printHint("Use `shortlinks config show --verbose` or `--json` for full config.");
-}
-
-function printCloudflarePlanSummary(plan: {
-  hostname: string;
-  target: string;
-  proxied: boolean;
-  workerName: string;
-  origin: string;
-  wranglerCommand: string;
-}): void {
-  console.log(`Cloudflare plan for ${plan.hostname}`);
-  console.log(`  CNAME: ${plan.hostname} -> ${plan.target} proxied=${yesNo(plan.proxied)}`);
-  console.log(`  worker: ${plan.workerName}`);
-  console.log(`  origin: ${truncateText(plan.origin)}`);
-  console.log(`  deploy: ${plan.wranglerCommand}`);
-  printHint("Use `--verbose` or `--json` for the full DNS payload.");
-}
-
-function printCloudflareDnsSummary(result: unknown): void {
-  if (result && typeof result === "object" && "dnsRecord" in result) {
-    printCloudflarePlanSummary(result as unknown as Parameters<typeof printCloudflarePlanSummary>[0]);
-    return;
-  }
-  const value = result as { id?: string; action?: string };
-  console.log(`Cloudflare DNS ${value.action || "updated"} ${value.id || ""}`.trim());
-  printHint("Use `--json` for the full API result.");
 }
 
 function printLocalPlanSummary(plan: {
@@ -256,16 +187,13 @@ function printDoctorSummary(data: {
   db_path: string;
   db_exists: boolean;
   stats: { domains: number; links: number; clicks: number };
-  commands: Record<string, boolean>;
   environment: Record<string, unknown>;
 }): void {
-  const missingCommands = Object.entries(data.commands).filter(([, present]) => !present).map(([name]) => name);
   const presentEnv = Object.entries(data.environment).filter(([, present]) => present).map(([name]) => name);
   console.log(`${data.service} doctor`);
   console.log(`  store: ${data.store}`);
   console.log(`  db: ${data.db_exists ? "found" : "missing"} ${truncateText(data.db_path)}`);
   console.log(`  stats: domains=${data.stats.domains} links=${data.stats.links} clicks=${data.stats.clicks}`);
-  console.log(`  commands: ${missingCommands.length ? `missing ${missingCommands.join(", ")}` : "ok"}`);
   console.log(`  env: ${presentEnv.length ? presentEnv.join(", ") : "no optional env vars detected"}`);
   printHint("Use `shortlinks doctor --verbose` or `--json` for paths and full readiness data.");
 }
@@ -525,7 +453,7 @@ function registerCompactEventsCommands(program: Command): void {
 
 program
   .name("shortlinks")
-  .description("Shortlink manager with custom domains, click tracking, and Cloudflare helpers — hosted /v1 API storage, or on-box SQLite with an explicit local opt-in")
+  .description("Shortlink manager with custom domains and click tracking — hosted /v1 API storage, or on-box SQLite with an explicit local opt-in")
   .version(getPackageVersion())
   .option("--db <path>", `SQLite database file for the on-box store; requires the local opt-in ${LOCAL_OPT_IN_ENV_KEY}=1`)
   .option("-j, --json", "Output JSON for agents and scripts");
@@ -542,9 +470,13 @@ program
         const config = loadConfig();
         if (opts.publicBaseUrl) config.publicBaseUrl = opts.publicBaseUrl;
         if (opts.domain) {
+          const hostname = normalizeHostname(opts.domain);
+          if (hostname !== DEFAULT_DOMAIN_HOSTNAME) {
+            throw new Error(`Custom domains must be purchased through \`shortlinks domain setup <hostname>\`; init accepts only ${DEFAULT_DOMAIN_HOSTNAME}.`);
+          }
           const domain = await store.addDomain({
-            hostname: opts.domain,
-            provider: "manual",
+            hostname,
+            provider: "managed",
             defaultDomain: true,
           });
           config.defaultDomain = domain.hostname;
@@ -588,7 +520,7 @@ configCmd
 
 configCmd
   .command("set <key> <value>")
-  .description("Set config value: default-domain, public-base-url, cloudflare-account-id, cloudflare-worker-name, cloudflare-origin")
+  .description("Set config value: default-domain or public-base-url")
   .option("-j, --json", "Output JSON")
   .action((key, value, opts) => {
     try {
@@ -600,15 +532,6 @@ configCmd
         case "public-base-url":
           config = updateConfig({ publicBaseUrl: value });
           break;
-        case "cloudflare-account-id":
-          config = updateConfig({ cloudflare: { accountId: value } });
-          break;
-        case "cloudflare-worker-name":
-          config = updateConfig({ cloudflare: { workerName: value } });
-          break;
-        case "cloudflare-origin":
-          config = updateConfig({ cloudflare: { origin: value } });
-          break;
         default:
           throw new Error(`Unknown config key: ${key}`);
       }
@@ -619,38 +542,6 @@ configCmd
   });
 
 const domainCmd = program.command("domain").alias("domains").description("Manage custom shortlink domains");
-
-domainCmd
-  .command("add <hostname>")
-  .description("Add or update a custom domain")
-  .option("--provider <provider>", "Provider label", "manual")
-  .option("--default", "Make this the default domain")
-  .option("--cloudflare-zone-id <id>", "Cloudflare zone ID")
-  .option("--cloudflare-account-id <id>", "Cloudflare account ID")
-  .option("--cloudflare-worker-name <name>", "Cloudflare Worker name")
-  .option("--origin <url>", "Origin redirect server URL")
-  .option("--notes <text>", "Notes")
-  .option("-j, --json", "Output JSON")
-  .action(async (hostname, opts) => {
-    try {
-      const domain = await withRuntimeStore((store) => store.addDomain({
-        hostname,
-        provider: opts.provider,
-        defaultDomain: opts.default,
-        cloudflareZoneId: opts.cloudflareZoneId,
-        cloudflareAccountId: opts.cloudflareAccountId,
-        cloudflareWorkerName: opts.cloudflareWorkerName,
-        originUrl: opts.origin,
-        notes: opts.notes,
-      }));
-      print(domain, opts, () => {
-        console.log(chalk.green(`Domain ready: ${domain.hostname}`));
-        if (domain.default_domain) console.log(chalk.dim("Default domain updated."));
-      });
-    } catch (error) {
-      handleError(error);
-    }
-  });
 
 domainCmd
   .command("list")
@@ -719,71 +610,79 @@ domainCmd
 
 domainCmd
   .command("setup <hostname>")
-  .description("Add a domain locally and optionally prepare Cloudflare DNS")
-  .option("--default", "Make this the default domain")
-  .option("--origin <url>", "Origin redirect server URL")
-  .option("--cloudflare", "Upsert Cloudflare CNAME record")
-  .option("--target <hostname>", "CNAME target for Cloudflare DNS")
-  .option("--zone-id <id>", "Cloudflare zone ID")
-  .option("--dry-run", "Show the Cloudflare plan without changing DNS")
-  .option("--verbose", "Show full setup result")
+  .description("Purchase and activate a custom domain through the hosted Domains API")
+  .requiredOption("--max-price <usd>", "Maximum registration price in USD")
+  .requiredOption("--auto-renew <bool>", "Explicit auto-renew choice: true or false")
+  .option("--years <n>", "Registration years", "1")
+  .option("--default", "Make this the default after Domains reports ready")
+  .option("--idempotency-key <key>", "Stable purchase request key (defaults to shortlinks-domain:<hostname>)")
+  .option("--wait", "Poll the Shortlinks API projection until active or failed")
+  .option("--timeout <sec>", "Maximum wait time", "1200")
+  .option("--dry-run", "Preview the Domains API request without buying")
+  .option("--verbose", "Show the full domain object")
   .option("-j, --json", "Output JSON")
   .action(async (hostname, opts) => {
     try {
-      const result = await withRuntimeStore(async (store) => {
-        const domain = await store.addDomain({
-          hostname,
-          provider: opts.cloudflare ? "cloudflare" : "manual",
-          defaultDomain: opts.default,
-          originUrl: opts.origin,
+      const normalized = normalizeHostname(hostname);
+      const maxPrice = Number(opts.maxPrice);
+      const years = Number(opts.years);
+      const timeoutSeconds = Number(opts.timeout);
+      if (!Number.isFinite(maxPrice) || maxPrice <= 0) throw new Error("--max-price must be greater than 0");
+      if (!Number.isInteger(years) || years < 1 || years > 10) throw new Error("--years must be an integer from 1 to 10");
+      if (opts.autoRenew !== "true" && opts.autoRenew !== "false") throw new Error("--auto-renew must be true or false");
+      if (!Number.isInteger(timeoutSeconds) || timeoutSeconds < 1 || timeoutSeconds > 3600) throw new Error("--timeout must be 1-3600 seconds");
+      const idempotencyKey = opts.idempotencyKey || `shortlinks-domain:${normalized}`;
+      const request = {
+        hostname: normalized,
+        max_price_usd: maxPrice,
+        years,
+        auto_renew: opts.autoRenew === "true",
+        default: Boolean(opts.default),
+        idempotency_key: idempotencyKey,
+      };
+      if (opts.dryRun) {
+        const domainsRoot = (process.env.HASNA_DOMAINS_API_URL?.trim() || "https://api.hasna.com/domains")
+          .replace(/\/v1\/?$/, "")
+          .replace(/\/$/, "");
+        print({ ok: true, dry_run: true, authority: `${domainsRoot}/v1`, request }, opts, () => {
+          console.log(chalk.green(`Dry run: ${normalized}`));
+          console.log(chalk.dim("No registrar, DNS, Cloudflare, or Shortlinks writes were made."));
         });
-        const cloudflare = opts.cloudflare
-          ? await upsertCloudflareDnsRecord({
-              hostname,
-              target: opts.target || hostname,
-              zoneId: opts.zoneId,
-              dryRun: opts.dryRun,
-            })
-          : null;
-        return { domain, cloudflare };
+        return;
+      }
+
+      const result = await withRuntimeStore(async (store) => {
+        let result = await store.provisionDomain({
+          hostname: normalized,
+          maxPriceUsd: maxPrice,
+          years,
+          autoRenew: opts.autoRenew === "true",
+          defaultDomain: Boolean(opts.default),
+          idempotencyKey,
+        });
+        let domain = result.domain;
+        if (opts.wait) {
+          const deadline = Date.now() + timeoutSeconds * 1000;
+          while (Date.now() < deadline) {
+            const status = (domain.metadata?.provisioning as Record<string, unknown> | undefined)?.status;
+            if (status === "active" || status === "failed") break;
+            await new Promise((resolve) => setTimeout(resolve, 5_000));
+            result = await store.reconcileDomain(normalized);
+            domain = result.domain;
+          }
+        }
+        return { domain, provisioning: domain.metadata?.provisioning };
       });
       print(result, opts, () => {
         if (printVerbose(result, opts)) return;
-        console.log(chalk.green(`Domain ready: ${result.domain.hostname}`));
-        if (result.cloudflare) printCloudflareDnsSummary(result.cloudflare);
-        if (!result.cloudflare) printHint("Use --cloudflare --dry-run to preview DNS changes.");
+        const status = (result.provisioning as Record<string, unknown> | undefined)?.status;
+        console.log(status === "active" ? chalk.green(`Domain active: ${result.domain.hostname}`) : chalk.yellow(`Domain ${status ?? "pending"}: ${result.domain.hostname}`));
+        printHint("Domains purchasing, registrar, DNS, Cloudflare, and certificate readiness are owned by https://api.hasna.com/domains/v1.");
       });
+      if ((result.provisioning as Record<string, unknown> | undefined)?.status === "failed") process.exitCode = 1;
     } catch (error) {
       handleError(error);
     }
-  });
-
-domainCmd
-  .command("check <hostname>")
-  .description("Check domain availability through @hasna/domains")
-  .option("--dry-run", "Print the command without running it")
-  .option("--verbose", "Show full domains CLI output")
-  .option("-j, --json", "Output JSON")
-  .action((hostname, opts) => {
-    const result = runDomains("check", hostname, { dryRun: opts.dryRun });
-    print(result, opts, () => {
-      printExternalCommandResult(result, opts, "domains check");
-      if (result.status !== 0) process.exit(result.status || 1);
-    });
-  });
-
-domainCmd
-  .command("buy <hostname>")
-  .description("Buy a domain through @hasna/domains / Route 53")
-  .option("--dry-run", "Print the command without running it")
-  .option("--verbose", "Show full domains CLI output")
-  .option("-j, --json", "Output JSON")
-  .action((hostname, opts) => {
-    const result = runDomains("buy", hostname, { dryRun: opts.dryRun });
-    print(result, opts, () => {
-      printExternalCommandResult(result, opts, "domains buy");
-      if (result.status !== 0) process.exit(result.status || 1);
-    });
   });
 
 const linkCmd = program.command("link").alias("links").description("Manage shortlinks");
@@ -811,7 +710,7 @@ linkCmd
   .option("--slug <slug>", "Custom slug")
   .option("--title <title>", "Human title")
   .option("--expires <date>", "Expiration date")
-  .option("--length <n>", "Generated slug length", "7")
+  .option("--length <n>", "Minimum generated code length (3+)", "3")
   .option("-j, --json", "Output JSON")
   .action(createLinkAction);
 
@@ -822,7 +721,7 @@ program
   .option("--slug <slug>", "Custom slug")
   .option("--title <title>", "Human title")
   .option("--expires <date>", "Expiration date")
-  .option("--length <n>", "Generated slug length", "7")
+  .option("--length <n>", "Minimum generated code length (3+)", "3")
   .option("-j, --json", "Output JSON")
   .action(createLinkAction);
 
@@ -986,81 +885,6 @@ program
     }
   });
 
-const cfCmd = program.command("cloudflare").description("Cloudflare DNS and Worker helpers");
-
-cfCmd
-  .command("plan <hostname>")
-  .description("Print the Cloudflare setup plan")
-  .requiredOption("--target <hostname>", "CNAME target")
-  .option("--origin <url>", "Origin redirect server URL", process.env.SHORTLINKS_ORIGIN || "https://shortlinks.example.com")
-  .option("--worker <name>", "Worker name", "shortlinks")
-  .option("--no-proxied", "Create unproxied DNS record")
-  .option("--verbose", "Show full Cloudflare setup plan")
-  .option("-j, --json", "Output JSON")
-  .action((hostname, opts) => {
-    try {
-      const plan = createCloudflarePlan({
-        hostname,
-        target: opts.target,
-        origin: opts.origin,
-        workerName: opts.worker,
-        proxied: opts.proxied,
-      });
-      print(plan, opts, () => {
-        if (printVerbose(plan, opts)) return;
-        printCloudflarePlanSummary(plan);
-      });
-    } catch (error) {
-      handleError(error);
-    }
-  });
-
-cfCmd
-  .command("worker")
-  .description("Write Cloudflare Worker files")
-  .option("--out-dir <dir>", "Output directory", "cloudflare")
-  .option("--worker <name>", "Worker name", "shortlinks")
-  .option("--origin <url>", "Origin redirect server URL", process.env.SHORTLINKS_ORIGIN || "https://shortlinks.example.com")
-  .option("-j, --json", "Output JSON")
-  .action((opts) => {
-    try {
-      const result = writeWorkerFiles({ outDir: opts.outDir, workerName: opts.worker, origin: opts.origin });
-      print(result, opts, () => {
-        console.log(chalk.green(`Wrote ${result.workerPath}`));
-        console.log(chalk.green(`Wrote ${result.wranglerPath}`));
-      });
-    } catch (error) {
-      handleError(error);
-    }
-  });
-
-cfCmd
-  .command("dns <hostname>")
-  .description("Create or update the Cloudflare CNAME record")
-  .requiredOption("--target <hostname>", "CNAME target")
-  .option("--zone-id <id>", "Cloudflare zone ID")
-  .option("--dry-run", "Show plan without changing DNS")
-  .option("--no-proxied", "Create unproxied DNS record")
-  .option("--verbose", "Show full Cloudflare API result or dry-run plan")
-  .option("-j, --json", "Output JSON")
-  .action(async (hostname, opts) => {
-    try {
-      const result = await upsertCloudflareDnsRecord({
-        hostname,
-        target: opts.target,
-        zoneId: opts.zoneId,
-        dryRun: opts.dryRun,
-        proxied: opts.proxied,
-      });
-      print(result, opts, () => {
-        if (printVerbose(result, opts)) return;
-        printCloudflareDnsSummary(result);
-      });
-    } catch (error) {
-      handleError(error);
-    }
-  });
-
 const localCmd = program.command("local").description("Local domain setup helpers");
 
 localCmd
@@ -1153,21 +977,12 @@ program
           db_path: dbPath,
           db_exists: existsSync(dbPath),
           stats: await store.totalStats(),
-          commands: {
-            domains: commandExists("domains"),
-            wrangler: commandExists("wrangler"),
-            secrets: commandExists("secrets"),
-          },
           environment: {
             // Hosted-API client is bearer-key only — never a DB DSN on the client.
             api_url_present: Boolean(hosted?.apiUrlSource),
             api_url_source: hosted?.apiUrlSource ?? null,
             api_key_present: hosted?.apiKeyPresent ?? false,
             api_key_source: hosted?.apiKeySource ?? null,
-            cloudflare_api_token_present: Boolean(process.env.CLOUDFLARE_API_TOKEN),
-            cloudflare_api_key_present: Boolean(process.env.CLOUDFLARE_API_KEY),
-            cloudflare_email_present: Boolean(process.env.CLOUDFLARE_EMAIL),
-            shortlinks_origin_present: Boolean(process.env.SHORTLINKS_ORIGIN),
           },
         };
       });

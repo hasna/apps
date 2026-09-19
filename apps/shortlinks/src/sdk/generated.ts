@@ -18,7 +18,15 @@ export interface TotalStats { "domains": number; "links": number; "clicks": numb
 
 export interface CreateLinkRequest { "url": string; "domain"?: string; "slug"?: string; "title"?: string; "expires_at"?: string; "length"?: number; "metadata"?: Record<string, unknown> }
 
-export interface AddDomainRequest { "hostname": string; "provider"?: string; "default"?: boolean; "origin_url"?: string; "notes"?: string; "metadata"?: Record<string, unknown> }
+export interface AddDomainRequest { "hostname": string; "default"?: boolean; "max_price_usd"?: number; "years"?: number; "auto_renew"?: boolean; "idempotency_key"?: string }
+
+export interface DomainAvailabilityRequest { "hostname": string }
+
+export interface DomainAvailabilityQuote { "name": string; "available": boolean; "price_usd"?: number; "currency"?: string; "is_premium"?: boolean }
+
+export interface DomainProvisioning { "id": string; "name": string; "status": "requested" | "quoted" | "registration_submitting" | "registration_submitted" | "registered" | "zone_ready" | "nameservers_submitted" | "delegated" | "worker_bound" | "ready" | "manual_review" | "failed"; "error": string | null; "created_at": string; "updated_at": string }
+
+export interface DomainProvisioningResponse { "domain": Domain; "provisioning": DomainProvisioning }
 
 export interface DeleteResponse { "deleted": boolean; "slug"?: string }
 
@@ -121,9 +129,18 @@ export class ShortlinksApiClient {
       });
     }
 
-    /** Add or update a domain. */
-    async addDomain(body: AddDomainRequest, init?: RequestInit): Promise<Domain> {
+    /** Ensure has.na or request a custom-domain purchase through the Domains API. */
+    async requestShortlinksDomain(body: AddDomainRequest, init?: RequestInit): Promise<DomainProvisioningResponse> {
       return this.request("POST", `/v1/domains`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Check availability and price through the Domains API. */
+    async checkDomainAvailability(body: DomainAvailabilityRequest, init?: RequestInit): Promise<DomainAvailabilityQuote> {
+      return this.request("POST", `/v1/domains/availability`, {
         body,
         query: undefined,
         init,
@@ -133,6 +150,24 @@ export class ShortlinksApiClient {
     /** Delete a domain and all of its links and clicks. */
     async deleteDomain(hostname: string, init?: RequestInit): Promise<DomainDeleteResponse> {
       return this.request("DELETE", `/v1/domains/${encodeURIComponent(String(hostname))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Read the projected Domains provisioning status without mutating it. */
+    async getDomainProvisioning(hostname: string, init?: RequestInit): Promise<DomainProvisioning> {
+      return this.request("GET", `/v1/domains/${encodeURIComponent(String(hostname))}/provisioning`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Refresh a Shortlinks domain projection from the Domains API. */
+    async reconcileDomainProvisioning(hostname: string, init?: RequestInit): Promise<DomainProvisioningResponse> {
+      return this.request("POST", `/v1/domains/${encodeURIComponent(String(hostname))}/reconcile`, {
         body: undefined,
         query: undefined,
         init,

@@ -1,7 +1,7 @@
 {
   "name": "@hasna/shortlinks",
   "version": "0.3.1",
-  "description": "Shortlink manager for custom domains and click tracking, with local SQLite or hosted /v1 API (bearer key) storage and Cloudflare setup helpers",
+  "description": "Open-source shortlink manager with local SQLite or hosted /v1 storage, custom-domain provisioning through the Domains API, click tracking, CLI, MCP, redirect server, and SDK",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -19,10 +19,6 @@
       "types": "./dist/server.d.ts",
       "import": "./dist/server.js"
     },
-    "./cloudflare": {
-      "types": "./dist/cloudflare.d.ts",
-      "import": "./dist/cloudflare.js"
-    },
     "./postgres": {
       "types": "./dist/pg-store.d.ts",
       "import": "./dist/pg-store.js"
@@ -34,14 +30,13 @@
   },
   "files": [
     "dist",
-    "cloudflare",
     "infra",
     "LICENSE",
     "README.md",
     "SECURITY.md"
   ],
   "scripts": {
-    "build": "rm -rf dist && bun build src/cli/index.ts src/mcp/index.ts src/serve/index.ts src/sdk/index.ts src/index.ts src/server.ts src/cloudflare.ts src/pg-store.ts --root src --outdir dist --target bun --splitting --chunk-naming 'chunks/[name]-[hash].[ext]' --external @modelcontextprotocol/sdk --external pg && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
+    "build": "rm -rf dist && bun build src/cli/index.ts src/mcp/index.ts src/serve/index.ts src/sdk/index.ts src/index.ts src/server.ts src/pg-store.ts --root src --outdir dist --target bun --splitting --chunk-naming 'chunks/[name]-[hash].[ext]' --external @modelcontextprotocol/sdk --external pg && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
     "sdk:generate": "bun run scripts/generate-sdk.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
@@ -59,7 +54,6 @@
     "shortlink",
     "url-shortener",
     "cli",
-    "cloudflare",
     "custom-domains",
     "ai-agents",
     "agentic",
@@ -84,6 +78,7 @@
   "author": "Andrei Hasna <andrei@hasna.com>",
   "license": "Apache-2.0",
   "dependencies": {
+    "@hasna/domains": "0.2.0",
     "@hasna/events": "^0.1.6",
     "@modelcontextprotocol/sdk": "^1.27.1",
     "chalk": "^5.4.1",
@@ -96,5 +91,9 @@
     "@types/pg": "^8.11.11",
     "@types/bun": "1.3.14",
     "typescript": "^5.7.3"
+  },
+  "overrides": {
+    "fast-uri": "3.1.7",
+    "ip-address": "10.7.0"
   }
 }

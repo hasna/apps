@@ -7,7 +7,7 @@ import { normalizeHermesHookInput, assertHermesTool } from "../../lib/agent-herm
 import { parseSkillContextInput, selectedProfileId } from "./context.js";
 import { AGENT_ADAPTERS, INTEGRATION_AGENTS, normalizeAgentHookEvent } from "../../lib/agent-adapters.js";
 import { planAgentIntegration, applyAgentIntegration, inventoryNativeSkills, archiveNativeSkills, assertManagedAgentBridge, hookContextOutput, normalizeAgentHookPrompt, readNativeMigrationTargetManifest, selectNativeMigrationTargets, type IntegrationAgent } from "../../lib/agent-integration.js";
-import { enrollCodexNativeHooks } from "../../lib/agent-codex-trust.js";
+import { enrollCodexNativeHooks, reconcileCodexNativeHooks } from "../../lib/agent-codex-trust.js";
 import { HookDiagnosticError, hookChildError, hookFailureReason } from "../../lib/hook-diagnostics.js";
 import { readSkillSessionSnapshotIfExists, SkillSelectionError } from "../../lib/selection-cache.js";
 
@@ -97,7 +97,7 @@ export function registerAgentIntegration(parent: Command): void {
       } catch (error) { console.error((error as Error).message); process.exitCode = 1; }
     });
 
-  hook.command("trust")
+  const trust = hook.command("trust")
     .requiredOption("--agent <agent>", "Native trust adapter (codex)")
     .option("--codex-command <path>", "Installed Codex executable used for its native configuration API", "codex")
     .option("--apply", "Enable and trust only the exact managed Skills hook identities", false)
@@ -112,6 +112,20 @@ export function registerAgentIntegration(parent: Command): void {
         else await writeCliOutput(result.applied
           ? `Enrolled ${result.planned.length} Skills hook(s) for new Codex processes. Existing sessions were not reloaded; use their native hook controls.`
           : result.planned.length ? `Planned ${result.planned.length} native hook trust change(s). Review the --json plan, then use --apply --plan-digest ${result.planDigest}.` : "The managed Skills hooks are enabled and trusted for new Codex processes. Existing session dispatch was not checked.");
+      } catch (error) { console.error((error as Error).message); process.exitCode = 1; }
+    });
+  trust.command("reconcile")
+    .requiredOption("--agent <agent>", "Native trust adapter (codex)")
+    .requiredOption("--journal <path>", "Private incomplete native trust journal to inspect")
+    .option("--codex-command <path>", "Installed Codex executable used for its native configuration API", "codex")
+    .option("--json", "Output the reconciliation receipt", false)
+    .description("Verify an interrupted Codex native trust write and resolve its private journal")
+    .action(async (options) => {
+      try {
+        if (options.agent !== "codex") throw new Error("Native trust reconciliation currently supports --agent codex only");
+        const result = await reconcileCodexNativeHooks({ journal: options.journal, codexCommand: options.codexCommand });
+        if (options.json) await writeCliOutput(JSON.stringify(result));
+        else await writeCliOutput(`Reconciled native Codex trust journal ${result.journal}. No native configuration was written.`);
       } catch (error) { console.error((error as Error).message); process.exitCode = 1; }
     });
 

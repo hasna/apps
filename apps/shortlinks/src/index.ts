@@ -12,7 +12,6 @@ export { SHORTLINKS_MIGRATIONS } from "./db/migrations.js";
 export { createServeApp } from "./serve/app.js";
 export { buildOpenApiDocument } from "./serve/openapi.js";
 export { createShortlinksHandler, serveShortlinks } from "./server.js";
-export { createCloudflarePlan, generateWorkerScript, writeWorkerFiles, upsertCloudflareDnsRecord } from "./cloudflare.js";
 export { createLocalSetupPlan, registerMachinesDns } from "./local.js";
 export { formatShortUrl, getConfigPath, getDataDir, getDatabasePath, loadConfig, normalizeHostname, saveConfig } from "./config.js";
 export type { ConfigEnv } from "./config.js";

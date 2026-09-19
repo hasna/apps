@@ -27,6 +27,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { runAuditWithRetry, transientAuditStatus } from "../../audit-packed-result.mjs";
 
 const script = join(fileURLToPath(new URL("../../", import.meta.url)), "check-audit-packed.mjs");
 
@@ -70,6 +71,63 @@ function runFixtureMember(extraDeps) {
 // regardless of the probe's actual verdict. An explicit per-test budget keeps
 // the two-sided gate intact.
 const PROBE_TEST_TIMEOUT_MS = 600_000;
+
+test("transient audit service failures retry with bounded backoff", () => {
+  const attempts = [];
+  const waits = [];
+  const result = runAuditWithRetry(
+    () => {
+      attempts.push(attempts.length + 1);
+      return attempts.length < 3
+        ? { status: 1, stdout: "bun audit v1.3.14 (0d9b296a)", stderr: "error: audit request failed (status 503)" }
+        : { status: 0, stdout: "No vulnerabilities found", stderr: "" };
+    },
+    (seconds) => waits.push(seconds),
+  );
+  expect(attempts).toEqual([1, 2, 3]);
+  expect(waits).toEqual([2, 4]);
+  expect(result.status).toBe(0);
+});
+
+test("audit findings and non-transient failures never retry", () => {
+  for (const status of [429, 502, 503, 504]) {
+    expect(transientAuditStatus({ status: 1, stdout: "bun audit v1.3.14 (0d9b296a)", stderr: `error: audit request failed (status ${status})` })).toBe(status);
+  }
+  expect(transientAuditStatus({ status: 1, stdout: "GHSA-3xgq-45jj-v275", stderr: "" })).toBeNull();
+  expect(transientAuditStatus({ status: 1, stdout: "GHSA-3xgq-45jj-v275", stderr: "error: audit request failed (status 503)" })).toBeNull();
+  expect(transientAuditStatus({ status: 1, stdout: "critical: vulnerability found", stderr: "error: audit request failed (status 503)" })).toBeNull();
+  expect(transientAuditStatus({ status: 1, stdout: "severity=critical", stderr: "error: audit request failed (status 503)" })).toBeNull();
+  expect(transientAuditStatus({ status: 1, stdout: "bun audit v1.3.14 (0d9b296a)\nextra diagnostic", stderr: "error: audit request failed (status 503)" })).toBeNull();
+  expect(transientAuditStatus({ status: 1, stdout: "MALICIOUS bun audit v1.3.14 (0d9b296a)", stderr: "error: audit request failed (status 503)" })).toBeNull();
+  expect(transientAuditStatus({ status: 1, stdout: "bun audit vnot-a-version (0d9b296a)", stderr: "error: audit request failed (status 503)" })).toBeNull();
+  expect(transientAuditStatus({ status: 1, stdout: "bun audit v1.3.14 (0d9b296a) trailing", stderr: "error: audit request failed (status 503)" })).toBeNull();
+  expect(transientAuditStatus({ status: 1, stdout: "", stderr: "error: audit request failed (status 500)" })).toBeNull();
+  const attempts = [];
+  const result = runAuditWithRetry(
+    () => {
+      attempts.push(1);
+      return { status: 1, stdout: "GHSA-3xgq-45jj-v275", stderr: "" };
+    },
+    () => { throw new Error("must not wait"); },
+  );
+  expect(attempts).toHaveLength(1);
+  expect(result.status).toBe(1);
+});
+
+test("persistent transient audit outage remains a bounded failure", () => {
+  const attempts = [];
+  const waits = [];
+  const result = runAuditWithRetry(
+    () => {
+      attempts.push(1);
+      return { status: 1, stdout: "bun audit v1.3.14 (0d9b296a)", stderr: "error: audit request failed (status 503)" };
+    },
+    (seconds) => waits.push(seconds),
+  );
+  expect(attempts).toHaveLength(3);
+  expect(waits).toEqual([2, 4]);
+  expect(result.status).toBe(1);
+});
 
 test("positive arm: clean shipped surface passes the packed audit (rc=0, no vulnerabilities)", () => {
   const result = runFixtureMember(undefined);

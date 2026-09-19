@@ -41,6 +41,7 @@ import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
+import { runAuditWithRetry } from "./audit-packed-result.mjs";
 
 const memberRoot = process.cwd();
 const extraDeps = (process.env.AUDIT_PROBE_EXTRA_DEPS ?? "").trim();
@@ -92,7 +93,10 @@ try {
     process.exit(2);
   }
 
-  const audit = run("bun", ["audit"], probe);
+  const audit = runAuditWithRetry(
+    () => run("bun", ["audit"], probe),
+    (seconds) => spawnSync("sleep", [String(seconds)]),
+  );
   process.stdout.write(audit.stdout);
   process.stderr.write(audit.stderr);
   exitCode = audit.status ?? 2;
