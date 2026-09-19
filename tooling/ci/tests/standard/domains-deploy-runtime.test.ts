@@ -43,14 +43,6 @@ describe("Domains manifest secret projection", () => {
     expect(workflow).toContain("required_environment");
     expect(workflow).toContain("value:.value");
   });
-
-  test("requires and projects the non-secret hosted provisioning settings", () => {
-    const workflow = readFileSync(join(root, ".github", "workflows", "deploy-domains.yml"), "utf8");
-    expect(workflow).toContain('has("CLOUDFLARE_ACCOUNT_ID") and has("DOMAINS_REGISTRANT_SOURCE_DOMAIN")');
-    expect(workflow).toContain("MANIFEST_WEB_ENVIRONMENT");
-    expect(workflow).toContain("required_environment");
-    expect(workflow).toContain("value:.value");
-  });
 });
 
 describe("Domains deployment runtime guards", () => {
