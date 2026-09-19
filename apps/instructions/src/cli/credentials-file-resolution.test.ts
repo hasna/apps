@@ -144,7 +144,19 @@ describe("credentials file at ~/.hasna/instructions/config/credentials", () => {
     const result = runCli(["list", "--json"], { HOME: home, USER: "tester" });
 
     expect(result.status).toBe(0);
-    expect(result.stdout.trim()).toBe("[]");
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      configs: [],
+      _meta: {
+        count: 0,
+        total: 0,
+        limit: 20,
+        cursor: 0,
+        next_cursor: null,
+        has_more: false,
+        complete: true,
+        detail: "compact",
+      },
+    });
     // The run must have reached the API named in the FILE, never the local store.
     const requests = readFileSync(stub.logFile, "utf-8")
       .trim()

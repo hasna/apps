@@ -72,7 +72,7 @@ const pkg = createRequire(import.meta.url)("../../package.json") as { version: s
 
 // Blocking, complete write to stdout (fd 1). Fixes the pipe-truncation bug:
 // console.log/process.stdout.write to a pipe is asynchronous in Bun/Node, so a
-// large payload (e.g. `instructions list --json | jq`) that exceeds the 64KB
+// large explicit payload (e.g. `instructions list --full | jq`) that exceeds the 64KB
 // pipe buffer is silently dropped when the process exits before the buffer
 // drains. writeSync loops until every byte is delivered, retrying on EAGAIN
 // (pipe full) and giving up cleanly on EPIPE (consumer closed).
@@ -606,6 +606,8 @@ async function getMachineProfileContext(
   return { machine, profile, resolution, vars: resolveProfileVariables(profile, machine) };
 }
 
+const DEFAULT_CONFIG_LIST_MAX_BYTES = 32 * 1024;
+
 const COMPACT_CONFIG_FIELDS = [
   "id", "slug", "name", "kind", "category", "agent", "format",
   "is_template", "version", "updated_at",
@@ -721,14 +723,15 @@ function configListEnvelope(
   page: { total: number; limit: number | null; cursor: number; next_cursor: number | null; has_more: boolean; complete: boolean; source_bounded: boolean },
   detail: ConfigListDetail,
   fields: readonly string[],
+  truncationReasonOverride?: "max_bytes" | "cursor_and_max_bytes",
 ) {
   const complete = page.cursor === 0 && !page.has_more;
   const truncated = !complete;
-  const truncationReason = page.cursor > 0
+  const truncationReason = truncationReasonOverride ?? (page.cursor > 0
     ? (page.has_more ? "cursor_and_limit" : "cursor")
     : page.has_more
       ? "limit"
-      : null;
+      : null);
   return {
     configs: records,
     _meta: {
@@ -749,6 +752,34 @@ function configListEnvelope(
   };
 }
 
+function boundedConfigListJson(
+  records: Record<string, unknown>[],
+  page: { total: number; limit: number; cursor: number; next_cursor: number | null; has_more: boolean; complete: boolean; source_bounded: boolean },
+  fields: readonly string[],
+  pretty: boolean,
+): string {
+  for (let count = records.length; count >= 0; count -= 1) {
+    const clipped = count < records.length;
+    const nextCursor = clipped ? page.cursor + count : page.next_cursor;
+    const hasMore = clipped || page.has_more;
+    const envelope = configListEnvelope(
+      records.slice(0, count),
+      { ...page, next_cursor: nextCursor, has_more: hasMore },
+      "compact",
+      fields,
+      clipped ? (page.cursor > 0 ? "cursor_and_max_bytes" : "max_bytes") : undefined,
+    );
+    const text = `${JSON.stringify(envelope, null, pretty ? 2 : undefined)}\n`;
+    if (Buffer.byteLength(text, "utf8") <= DEFAULT_CONFIG_LIST_MAX_BYTES) {
+      if (count === 0 && records.length > 0) {
+        throw new Error(`One compact config identity exceeds the ${DEFAULT_CONFIG_LIST_MAX_BYTES}-byte output limit`);
+      }
+      return text;
+    }
+  }
+  throw new Error(`Compact config list metadata exceeds the ${DEFAULT_CONFIG_LIST_MAX_BYTES}-byte output limit`);
+}
+
 // ── list ─────────────────────────────────────────────────────────────────────
 program
   .command("list")
@@ -762,8 +793,9 @@ program
   .option("-f, --format <fmt>", "output format: compact|table|json", "compact")
   .option("--brief", "shorthand for --format compact")
   .option("--verbose", "show expanded metadata for each listed config")
-  .option("--json", "output machine-readable records (legacy default: complete full array)")
-  .option("--detail <level>", "JSON detail: compact|full; enables a bounded metadata envelope")
+  .option("--json", "output a compact, bounded identity page")
+  .option("--full", "output the historical full-record JSON array")
+  .option("--detail <level>", "JSON detail: compact|full; full explicitly includes content")
   .option("--fields <fields>", "comma-separated JSON fields; implies --detail compact")
   .option("--all", "explicitly read every matching row")
   .option("--pretty", "pretty-print modern JSON output (modern JSON is compact by default)")
@@ -771,10 +803,17 @@ program
   .option("--cursor <n>", "zero-based pagination cursor")
   .action(async (opts) => {
     const requestedDetail = parseConfigListDetail(opts.detail);
-    const modernJson = requestedDetail !== undefined || opts.fields !== undefined;
-    const jsonRequested = Boolean(opts.json || opts.format === "json");
-    if (modernJson && !jsonRequested) throw new Error("--detail and --fields require JSON output");
-    if (opts.all && !modernJson) throw new Error("--all requires JSON output with --detail or --fields");
+    const jsonRequested = Boolean(opts.json || opts.format === "json" || opts.full);
+    if ((requestedDetail !== undefined || opts.fields !== undefined) && !jsonRequested) {
+      throw new Error("--detail and --fields require JSON output");
+    }
+    if (opts.full && (requestedDetail !== undefined || opts.fields !== undefined)) {
+      throw new Error("--full cannot be combined with --detail or --fields");
+    }
+    if (opts.all && !jsonRequested) throw new Error("--all requires JSON output");
+    if (opts.all && (opts.cursor !== undefined || opts.limit !== undefined)) {
+      throw new Error("--all cannot be combined with --limit or --cursor");
+    }
     if (opts.pretty && !jsonRequested) throw new Error("--pretty requires JSON output");
     const detail: ConfigListDetail = requestedDetail ?? "compact";
     const fields = parseConfigListFields(opts.fields, detail) ?? (detail === "full"
@@ -789,10 +828,15 @@ program
     };
     const store = resolveConfigStore();
 
-    if (modernJson) {
-      if (opts.all && (opts.cursor !== undefined || opts.limit !== undefined)) {
-        throw new Error("--all cannot be combined with --limit or --cursor");
-      }
+    if (opts.full) {
+      const configs = opts.limit !== undefined || opts.cursor !== undefined
+        ? (await store.listConfigsPage(filter, { limit: opts.limit, cursor: opts.cursor })).items
+        : await store.listConfigs(filter);
+      printJson(configs);
+      return;
+    }
+
+    if (jsonRequested) {
       let page: BoundedReadPage<Config | ConfigIdentity>;
       if (opts.all) {
         if (detail === "full") {
@@ -816,30 +860,33 @@ program
           : await store.listConfigIdentitiesPage(filter, { limit: opts.limit, cursor: opts.cursor });
       }
       const records = page.items.map((item) => projectConfigFields(item as unknown as Record<string, unknown>, fields));
-      printMachineJson(configListEnvelope(records, {
-        total: page.total,
-        limit: opts.all ? null : page.limit,
-        cursor: page.cursor,
-        next_cursor: page.next_cursor,
-        has_more: page.has_more,
-        complete: page.complete,
-        source_bounded: page.source_bounded,
-      }, detail, fields), Boolean(opts.pretty));
+      if (detail === "compact" && !opts.all) {
+        writeStdout(boundedConfigListJson(records, {
+          total: page.total,
+          limit: page.limit,
+          cursor: page.cursor,
+          next_cursor: page.next_cursor,
+          has_more: page.has_more,
+          complete: page.complete,
+          source_bounded: page.source_bounded,
+        }, fields, Boolean(opts.pretty)));
+      } else {
+        printMachineJson(configListEnvelope(records, {
+          total: page.total,
+          limit: opts.all ? null : page.limit,
+          cursor: page.cursor,
+          next_cursor: page.next_cursor,
+          has_more: page.has_more,
+          complete: page.complete,
+          source_bounded: page.source_bounded,
+        }, detail, fields), Boolean(opts.pretty));
+      }
       return;
     }
 
-    const fmt = opts.json ? "json" : opts.verbose ? "table" : opts.brief ? "compact" : opts.format;
-    if (fmt === "json") {
-      const configs = opts.limit !== undefined || opts.cursor !== undefined
-        ? (await store.listConfigsPage(filter, { limit: opts.limit, cursor: opts.cursor })).items
-        : await store.listConfigs(filter);
-      printJson(configs);
-      return;
-    }
+    const fmt = opts.verbose ? "table" : opts.brief ? "compact" : opts.format;
 
-    const page = opts.all
-      ? (() => { throw new Error("--all is only available with --json and --detail"); })()
-      : await store.listConfigSummariesPage(filter, { limit: opts.limit, cursor: opts.cursor });
+    const page = await store.listConfigSummariesPage(filter, { limit: opts.limit, cursor: opts.cursor });
     if (page.total === 0) {
       console.log(chalk.dim("No configs found."));
       return;
@@ -852,7 +899,7 @@ program
         console.log();
       }
     }
-    pageFooter("configs list", page, "Use --verbose for expanded rows, --json --detail compact for metadata, or `configs show <slug>` for content.");
+    pageFooter("configs list", page, "Use --verbose for expanded rows, --json for compact metadata, --full for the legacy array, or `configs show <slug>` for content.");
   });
 
 // ── show ─────────────────────────────────────────────────────────────────────

@@ -28,7 +28,7 @@ function runCli(args: string[], dbPath: string, home?: string) {
   });
 }
 
-function seedConfigs(count: number): { home: string; dbPath: string } {
+function seedConfigs(count: number, contentBytes = 400, nameBytes = 0): { home: string; dbPath: string } {
   const home = makeTempRoot("open-configs-output-cli-");
   tempDirs.push(home);
   const dbPath = join(home, "configs.db");
@@ -37,13 +37,13 @@ function seedConfigs(count: number): { home: string; dbPath: string } {
   const db = getDatabase(dbPath);
   for (let i = 1; i <= count; i++) {
     createConfig({
-      name: `Very Long Agent Config ${String(i).padStart(2, "0")}`,
+      name: nameBytes > 0 ? `Config ${i} ${"n".repeat(nameBytes)}` : `Very Long Agent Config ${String(i).padStart(2, "0")}`,
       category: i % 2 === 0 ? "agent" : "rules",
       agent: i % 3 === 0 ? "codex" : "claude",
       kind: "file",
       target_path: `~/.config/very/deep/path/that/keeps/going/agent-${i}/settings-with-a-long-name.json`,
       format: "json",
-      content: `CONTENT_CANARY_DO_NOT_LEAK_${i}:` + "x".repeat(400),
+      content: `CONTENT_CANARY_DO_NOT_LEAK_${i}:` + "x".repeat(contentBytes),
       description: "This description is intentionally long and repetitive so the default output would be noisy.",
       tags: ["long", "sample", `item-${i}`],
       outputs: [{ agent: "codewith", target_path: `~/.codewith/generated/agent-${i}/CODEWITH.md`, transform: "codex-flat" }],
@@ -83,9 +83,93 @@ describe("configs list output", () => {
     expect(result.stdout).toContain("Showing 1 of 3");
   });
 
-  test("legacy json output remains full matching records", () => {
-    const { dbPath } = seedConfigs(4);
+  test("ordinary json defaults to a minified 20-row identity page with truthful continuation", () => {
+    const { dbPath } = seedConfigs(25);
     const result = runCli(["list", "--json"], dbPath);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim().split("\n")).toHaveLength(1);
+    const payload = JSON.parse(result.stdout) as {
+      configs: Array<Record<string, unknown>>;
+      _meta: Record<string, unknown>;
+    };
+    expect(payload.configs).toHaveLength(20);
+    expect(payload._meta).toMatchObject({
+      count: 20,
+      total: 25,
+      limit: 20,
+      cursor: 0,
+      next_cursor: 20,
+      has_more: true,
+      complete: false,
+      truncated: true,
+      truncation_reason: "limit",
+      detail: "compact",
+      source_bounded: true,
+    });
+    expect(payload.configs.every((config) => !(
+      "content" in config || "target_path" in config || "outputs" in config || "description" in config || "tags" in config
+    ))).toBe(true);
+    expect(result.stdout).not.toContain("CONTENT_CANARY_DO_NOT_LEAK");
+    expect(Buffer.byteLength(result.stdout, "utf8")).toBeLessThanOrEqual(32 * 1024);
+  });
+
+  test("100 configs with 10 KiB content stay deterministic, paged, and below 32 KiB", () => {
+    const { dbPath } = seedConfigs(100, 10 * 1024);
+    const first = runCli(["list", "--json"], dbPath);
+    const repeated = runCli(["list", "--json"], dbPath);
+    const second = runCli(["list", "--json", "--cursor", "20"], dbPath);
+
+    expect(first.status).toBe(0);
+    expect(repeated.status).toBe(0);
+    expect(second.status).toBe(0);
+    expect(repeated.stdout).toBe(first.stdout);
+    expect(Buffer.byteLength(first.stdout, "utf8")).toBeLessThanOrEqual(32 * 1024);
+    expect(Buffer.byteLength(second.stdout, "utf8")).toBeLessThanOrEqual(32 * 1024);
+    expect(first.stdout.trim().split("\n")).toHaveLength(1);
+    expect(first.stdout).not.toContain("CONTENT_CANARY_DO_NOT_LEAK");
+
+    const firstPage = JSON.parse(first.stdout) as { configs: Array<{ id: string }>; _meta: Record<string, unknown> };
+    const secondPage = JSON.parse(second.stdout) as { configs: Array<{ id: string }>; _meta: Record<string, unknown> };
+    expect(firstPage.configs).toHaveLength(20);
+    expect(secondPage.configs).toHaveLength(20);
+    expect(firstPage._meta).toMatchObject({ total: 100, cursor: 0, next_cursor: 20, has_more: true });
+    expect(secondPage._meta).toMatchObject({ total: 100, cursor: 20, next_cursor: 40, has_more: true });
+    expect(new Set([...firstPage.configs, ...secondPage.configs].map((config) => config.id)).size).toBe(40);
+  });
+
+  test("byte clipping advances from the last emitted identity without exceeding 32 KiB", () => {
+    const { dbPath } = seedConfigs(12, 400, 3_000);
+    const first = runCli(["list", "--json"], dbPath);
+
+    expect(first.status).toBe(0);
+    expect(Buffer.byteLength(first.stdout, "utf8")).toBeLessThanOrEqual(32 * 1024);
+    const firstPage = JSON.parse(first.stdout) as { configs: Array<{ id: string }>; _meta: Record<string, unknown> };
+    const nextCursor = Number(firstPage._meta.next_cursor);
+    expect(firstPage.configs.length).toBeGreaterThan(0);
+    expect(firstPage.configs.length).toBeLessThan(12);
+    expect(nextCursor).toBe(firstPage.configs.length);
+    expect(firstPage._meta).toMatchObject({
+      total: 12,
+      cursor: 0,
+      has_more: true,
+      complete: false,
+      truncated: true,
+      truncation_reason: "max_bytes",
+    });
+
+    const second = runCli(["list", "--json", "--cursor", String(nextCursor)], dbPath);
+    expect(second.status).toBe(0);
+    expect(Buffer.byteLength(second.stdout, "utf8")).toBeLessThanOrEqual(32 * 1024);
+    const secondPage = JSON.parse(second.stdout) as { configs: Array<{ id: string }>; _meta: Record<string, unknown> };
+    expect(secondPage._meta.cursor).toBe(nextCursor);
+    expect(new Set([...firstPage.configs, ...secondPage.configs].map((config) => config.id)).size)
+      .toBe(firstPage.configs.length + secondPage.configs.length);
+  });
+
+  test("explicit --full preserves the historical complete full-record array", () => {
+    const { dbPath } = seedConfigs(4);
+    const result = runCli(["list", "--full"], dbPath);
 
     expect(result.status).toBe(0);
     const records = JSON.parse(result.stdout) as Array<{ content: string; outputs: unknown[] }>;
@@ -94,9 +178,9 @@ describe("configs list output", () => {
     expect(records[0]?.outputs).toHaveLength(1);
   });
 
-  test("legacy json output honors explicit limit and cursor", () => {
+  test("explicit --full array honors limit and cursor", () => {
     const { dbPath } = seedConfigs(6);
-    const result = runCli(["list", "--json", "--limit", "2", "--cursor", "1"], dbPath);
+    const result = runCli(["list", "--json", "--full", "--limit", "2", "--cursor", "1"], dbPath);
 
     expect(result.status).toBe(0);
     const records = JSON.parse(result.stdout) as Array<{ content: string }>;

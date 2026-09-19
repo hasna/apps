@@ -10,7 +10,7 @@
 // Measured live 2026-08-04 by t42d493a5-driver (todos 757cefdb comment
 // 47307cda): reproduced three ways on disposable rows, and confirmed the
 // installed fleet store held 20 reference-kind configs with target_path=null
-// on 20/20. Re-confirmed independently here via `instructions list --json`
+// on 20/20. Re-confirmed independently here via `instructions list --json --full`
 // against the same live store before writing this test: 163 total configs,
 // kind counts {file: 143, reference: 20}, and target_path null on all 20
 // reference rows and non-null on all 143 file rows — the same shape, on a
@@ -46,7 +46,7 @@ function isolatedEnv(root: string) {
 }
 
 function referenceRowsNamed(root: string, name: string): Array<{ slug: string; content: string; version: number }> {
-  const listed = runCli(["list", "--json"], isolatedEnv(root));
+  const listed = runCli(["list", "--json", "--full"], isolatedEnv(root));
   expect(listed.status).toBe(0);
   const all = JSON.parse(listed.stdout) as Array<{ slug: string; name: string; kind: string; content: string; version: number }>;
   return all.filter((c) => c.kind === "reference" && c.name === name).map(({ slug, content, version }) => ({ slug, content, version }));
