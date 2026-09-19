@@ -6,12 +6,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { applyAgentIntegration, planAgentIntegration } from "./agent-integration.js";
 import { createHash } from "node:crypto";
-import { enrollCodexNativeHooks } from "./agent-codex-trust.js";
+import { enrollCodexNativeHooks, reconcileCodexNativeHooks } from "./agent-codex-trust.js";
 
 const roots: string[] = [];
 const initialPath = process.env.PATH;
 afterEach(() => { process.env.PATH = initialPath; for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 const hash = `sha256:${"a".repeat(64)}`;
+function intentFor(f: ReturnType<typeof fixture>, plan: any, hooksText: Buffer, policyText: Buffer) {
+  const declarations = f.entries.map((entry: any) => ({ event: entry.eventName, key: entry.key, command: entry.command }));
+  const nativeHooks = f.entries.map((hook: any) => ({ key: hook.key, eventName: hook.eventName, handlerType: hook.handlerType, command: hook.command, matcher: hook.matcher, timeoutSec: hook.timeoutSec, async: hook.async, statusMessage: hook.statusMessage, additionalContextLimit: hook.additionalContextLimit, sourcePath: hook.sourcePath, source: hook.source, pluginId: hook.pluginId, isManaged: hook.isManaged, currentHash: hook.currentHash, enabled: hook.enabled, trustStatus: hook.trustStatus }));
+  return { version: 1, home: f.home, planDigest: plan.planDigest, skillsCli: plan.skillsCli, nativeVersion: "codex-cli 0.154.0", configPath: f.configPath, configSha256: createHash("sha256").update(f.before).digest("hex"), configVersion: `sha256:${"b".repeat(64)}`, hooksSha256: createHash("sha256").update(hooksText).digest("hex"), policySha256: createHash("sha256").update(policyText).digest("hex"), declarations, admitted: plan.planned, hooks: plan.planned, nativeHooks };
+}
 function fixture() {
   const home = mkdtempSync(join(tmpdir(), "skills-native-trust-")); roots.push(home);
   const dataDir = join(home, ".hasna/skills"), root = join(home, ".codex"), command = join(home, "bin/skills");
@@ -39,6 +44,7 @@ function fixture() {
       calls.push({ method, params });
       if (method === "hooks/list") {
         const items = structuredClone(entries);
+        if (mode === "extraNative") items.push({ ...items[0], key: "unmanaged-extra", command: "echo unrelated" });
         if (mode === "modified" && !items[0]!.enabled) items[0]!.trustStatus = "modified";
         if (mode === "missing") items.pop();
         if (mode === "unknownTrust") items[0]!.trustStatus = "new-native-status";
@@ -61,6 +67,14 @@ function fixture() {
         expect(params.expectedVersion).toBe(`sha256:${"b".repeat(64)}`); expect(params.filePath).toBe(configPath); expect(params.reloadUserConfig).toBe(true);
         expect(params.edits).toEqual([{ keyPath: "hooks.state", mergeStrategy: "upsert", value: Object.fromEntries(entries.map(h => [h.key, { enabled: true, trusted_hash: hash }])) }]);
         writeFileSync(configPath, readFileSync(configPath, "utf8").replaceAll("enabled = false # preserve managed comment", "enabled = true # preserve managed comment"));
+        if (mode === "reorder") {
+          const text = readFileSync(configPath, "utf8"), bundled = text.indexOf("[skills.bundled]");
+          const block = text.slice(bundled).trim();
+          const without = text.slice(0, bundled).trimEnd();
+          writeFileSync(configPath, without + "\n\n" + block + "\n");
+        }
+        if (mode === "array") writeFileSync(configPath, readFileSync(configPath, "utf8") + "\n[[fruits]]\nname = \"apple\"\n[[fruits]]\nname = \"pear\"\n");
+        if (mode === "nested") writeFileSync(configPath, readFileSync(configPath, "utf8") + "\n[parent]\nvalue = \"one\"\n[parent.child]\nvalue = \"two\"\n");
         for (const entry of entries) entry.enabled = true;
         return { status: "ok", filePath: configPath, version: `sha256:${"d".repeat(64)}` };
       }
@@ -76,12 +90,22 @@ test("native trust dry run identifies disabled exact owned hooks without writing
   expect(result.applied).toBe(false); expect(result.planned).toHaveLength(3); expect(result.existingSessionsReloaded).toBe(false);
   expect(f.calls.some(c => c.method === "config/batchWrite")).toBe(false); expect(readFileSync(f.configPath, "utf8")).toBe(f.before); expect(f.isClosed()).toBe(true);
 });
+test("native trust accepts Codex table reordering while preserving unrelated config", async () => {
+  const f = fixture(); f.setMode("reorder"); const plan = await enrollCodexNativeHooks(f, f.connect);
+  const result = await enrollCodexNativeHooks({ ...f, apply: true, reviewedPlanDigest: plan.planDigest }, f.connect);
+  expect(result.applied).toBe(true); expect(result.nativeEligible).toBe(true);
+  expect(readFileSync(f.configPath, "utf8")).toContain("preserve unrelated");
+});
 test("native CAS enrollment preserves other trust/comments and becomes idempotent", async () => {
   const f = fixture(); const plan = await enrollCodexNativeHooks(f, f.connect); const result = await enrollCodexNativeHooks({ ...f, apply: true, reviewedPlanDigest: plan.planDigest }, f.connect);
   expect(result.applied).toBe(true); expect(result.nativeEligible).toBe(true); expect(result.existingSessionsReloaded).toBe(false);
   expect(readFileSync(f.configPath, "utf8")).toContain('enabled = false # preserve unrelated');
   expect(readFileSync(f.configPath, "utf8")).toContain('# preserve this comment');
   expect((await enrollCodexNativeHooks(f, f.connect)).planned).toHaveLength(0);
+});
+for (const layout of ["array", "nested"]) test(`native trust fails closed for ${layout} table layouts`, async () => {
+  const f = fixture(); f.setMode(layout); const plan = await enrollCodexNativeHooks(f, f.connect);
+  await expect(enrollCodexNativeHooks({ ...f, apply: true, reviewedPlanDigest: plan.planDigest }, f.connect)).rejects.toThrow("CODEX_HOOK_TRUST");
 });
 for (const [mode, error] of Object.entries({ duplicate: "AMBIGUOUS_IDENTITY", duplicateCommand: "AMBIGUOUS_IDENTITY", changedCommand: "NATIVE_IDENTITY_CHANGED", missing: "AMBIGUOUS_IDENTITY", unknownTrust: "UNKNOWN_TRUST_STATUS", override: "NATIVE_CONFIG_OVERRIDDEN", disabled: "NATIVE_HOOKS_DISABLED" })) test(`refuses ${mode} native identities before write`, async () => {
   const f = fixture(); f.setMode(mode);
@@ -116,6 +140,59 @@ test("native override status stops and leaves an incomplete reconciliation journ
   f.setMode("success");
   await expect(enrollCodexNativeHooks({ ...f, apply: true, reviewedPlanDigest: plan.planDigest }, f.connect)).rejects.toThrow("RECONCILE_REQUIRED");
   expect(readFileSync(f.configPath, "utf8")).toBe(f.before);
+});
+
+test("native reconciliation resolves an effective partial write only after native readback", async () => {
+  const f = fixture(), plan = await enrollCodexNativeHooks(f, f.connect), journal = join(f.dataDir, "native-hook-trust", "11111111-1111-4111-8111-111111111111");
+  mkdirSync(journal, { recursive: true, mode: 0o700 });
+  const policyPath = join(f.dataDir, "agent-policy.json"), hooksText = readFileSync(f.hooksPath), policyText = readFileSync(policyPath);
+  writeFileSync(join(journal, "config.before.toml"), f.before, { mode: 0o600 }); writeFileSync(join(journal, "hooks.before.json"), hooksText, { mode: 0o600 }); writeFileSync(join(journal, "policy.before.json"), policyText, { mode: 0o600 });
+  writeFileSync(join(journal, "stopped.json"), JSON.stringify({ error: "CODEX_HOOK_TRUST_PRESERVATION_FAILED", automaticRollback: false, reconcileBeforeRetry: true }) + "\n", { mode: 0o600 });
+  const configAfter = f.before.replaceAll("enabled = false # preserve managed comment", "enabled = true # preserve managed comment"); writeFileSync(f.configPath, configAfter, { mode: 0o600 }); f.entries.forEach(entry => { entry.enabled = true; });
+  writeFileSync(join(journal, "intent.json"), JSON.stringify({ ...intentFor(f, plan, hooksText, policyText), beforeSha256: createHash("sha256").update(f.before).digest("hex"), expectedVersion: `sha256:${"b".repeat(64)}` }) + "\n", { mode: 0o600 });
+  const receipt = await reconcileCodexNativeHooks({ home: f.home, dataDir: f.dataDir, codexCommand: "codex", journal, reviewedSkillsCli: f.reviewedSkillsCli }, f.connect);
+  expect(receipt.reconciled).toBe(true); const saved = JSON.parse(readFileSync(join(journal, "receipt.json"), "utf8")); expect(saved.nativeStateVerified).toBe(true); expect(saved.nativeExecutionVerified).toBe(false); expect(f.calls.some(call => call.method === "config/batchWrite")).toBe(false);
+});
+
+test("native reconciliation accepts the persisted pre-inventory journal schema honestly", async () => {
+  const f = fixture(), plan = await enrollCodexNativeHooks(f, f.connect), journal = join(f.dataDir, "native-hook-trust", "55555555-5555-4555-8555-555555555555");
+  mkdirSync(journal, { recursive: true, mode: 0o700 }); const policyPath = join(f.dataDir, "agent-policy.json"), hooksText = readFileSync(f.hooksPath), policyText = readFileSync(policyPath);
+  writeFileSync(join(journal, "config.before.toml"), f.before, { mode: 0o600 }); writeFileSync(join(journal, "hooks.before.json"), hooksText, { mode: 0o600 }); writeFileSync(join(journal, "policy.before.json"), policyText, { mode: 0o600 }); writeFileSync(join(journal, "stopped.json"), "{}\n", { mode: 0o600 });
+  writeFileSync(join(journal, "intent.json"), JSON.stringify({ version: 1, planDigest: plan.planDigest, skillsCli: plan.skillsCli, nativeVersion: "codex-cli 0.154.0", configPath: f.configPath, beforeSha256: createHash("sha256").update(f.before).digest("hex"), hooksSha256: createHash("sha256").update(hooksText).digest("hex"), policySha256: createHash("sha256").update(policyText).digest("hex"), expectedVersion: `sha256:${"b".repeat(64)}`, hooks: plan.planned }) + "\n", { mode: 0o600 });
+  writeFileSync(f.configPath, f.before.replaceAll("enabled = false # preserve managed comment", "enabled = true # preserve managed comment"), { mode: 0o600 }); f.entries.forEach(entry => { entry.enabled = true; });
+  const receipt = await reconcileCodexNativeHooks({ home: f.home, dataDir: f.dataDir, journal, reviewedSkillsCli: f.reviewedSkillsCli }, f.connect);
+  expect(receipt.nativeInventoryScope).toBe("declared-managed-hooks-only"); expect(receipt.unrelatedNativeHooksPreserved).toBe(false);
+});
+
+test("native reconciliation refuses unrelated effective configuration drift", async () => {
+  const f = fixture(), plan = await enrollCodexNativeHooks(f, f.connect), journal = join(f.dataDir, "native-hook-trust", "22222222-2222-4222-8222-222222222222");
+  mkdirSync(journal, { recursive: true, mode: 0o700 }); const policyPath = join(f.dataDir, "agent-policy.json"), hooksText = readFileSync(f.hooksPath), policyText = readFileSync(policyPath);
+  writeFileSync(join(journal, "config.before.toml"), f.before, { mode: 0o600 }); writeFileSync(join(journal, "hooks.before.json"), hooksText, { mode: 0o600 }); writeFileSync(join(journal, "policy.before.json"), policyText, { mode: 0o600 }); writeFileSync(join(journal, "stopped.json"), "{}\n", { mode: 0o600 });
+  writeFileSync(join(journal, "intent.json"), JSON.stringify({ ...intentFor(f, plan, hooksText, policyText), beforeSha256: createHash("sha256").update(f.before).digest("hex") }) + "\n", { mode: 0o600 });
+  writeFileSync(f.configPath, f.before + "\nmodel_provider = \"drift\"\n", { mode: 0o600 });
+  await expect(reconcileCodexNativeHooks({ home: f.home, dataDir: f.dataDir, journal, reviewedSkillsCli: f.reviewedSkillsCli }, f.connect)).rejects.toThrow("CODEX_HOOK_TRUST_");
+  expect(readFileSync(join(journal, "receipt.json"), { encoding: "utf8", flag: "a+" })).toBe("");
+});
+
+test("native reconciliation refuses a complete-list change and intent tampering", async () => {
+  const f = fixture(), plan = await enrollCodexNativeHooks(f, f.connect), journal = join(f.dataDir, "native-hook-trust", "33333333-3333-4333-8333-333333333333");
+  mkdirSync(journal, { recursive: true, mode: 0o700 }); const policyPath = join(f.dataDir, "agent-policy.json"), hooksText = readFileSync(f.hooksPath), policyText = readFileSync(policyPath);
+  writeFileSync(join(journal, "config.before.toml"), f.before, { mode: 0o600 }); writeFileSync(join(journal, "hooks.before.json"), hooksText, { mode: 0o600 }); writeFileSync(join(journal, "policy.before.json"), policyText, { mode: 0o600 }); writeFileSync(join(journal, "stopped.json"), "{}\n", { mode: 0o600 });
+  const intent = intentFor(f, plan, hooksText, policyText); writeFileSync(join(journal, "intent.json"), JSON.stringify({ ...intent, beforeSha256: intent.configSha256 }) + "\n", { mode: 0o600 });
+  writeFileSync(f.configPath, f.before.replaceAll("enabled = false # preserve managed comment", "enabled = true # preserve managed comment"), { mode: 0o600 }); f.entries.forEach(entry => { entry.enabled = true; }); f.setMode("extraNative");
+  await expect(reconcileCodexNativeHooks({ home: f.home, dataDir: f.dataDir, journal, reviewedSkillsCli: f.reviewedSkillsCli }, f.connect)).rejects.toThrow("CODEX_HOOK_TRUST_RECONCILE_NATIVE_HOOK_LIST_CHANGED");
+  const tampered = JSON.parse(readFileSync(join(journal, "intent.json"), "utf8")); tampered.admitted[0].command = "skills --tampered"; writeFileSync(join(journal, "intent.json"), JSON.stringify(tampered) + "\n", { mode: 0o600 }); f.setMode("success");
+  await expect(reconcileCodexNativeHooks({ home: f.home, dataDir: f.dataDir, journal, reviewedSkillsCli: f.reviewedSkillsCli }, f.connect)).rejects.toThrow("CODEX_HOOK_TRUST_RECONCILE_PLAN_CHANGED");
+});
+
+test("native reconciliation detects file drift during final native readback", async () => {
+  const f = fixture(), plan = await enrollCodexNativeHooks(f, f.connect), journal = join(f.dataDir, "native-hook-trust", "44444444-4444-4444-8444-444444444444");
+  mkdirSync(journal, { recursive: true, mode: 0o700 }); const policyPath = join(f.dataDir, "agent-policy.json"), hooksText = readFileSync(f.hooksPath), policyText = readFileSync(policyPath);
+  writeFileSync(join(journal, "config.before.toml"), f.before, { mode: 0o600 }); writeFileSync(join(journal, "hooks.before.json"), hooksText, { mode: 0o600 }); writeFileSync(join(journal, "policy.before.json"), policyText, { mode: 0o600 }); writeFileSync(join(journal, "stopped.json"), "{}\n", { mode: 0o600 });
+  writeFileSync(join(journal, "intent.json"), JSON.stringify({ ...intentFor(f, plan, hooksText, policyText), beforeSha256: createHash("sha256").update(f.before).digest("hex") }) + "\n", { mode: 0o600 });
+  writeFileSync(f.configPath, f.before.replaceAll("enabled = false # preserve managed comment", "enabled = true # preserve managed comment"), { mode: 0o600 }); f.entries.forEach(entry => { entry.enabled = true; });
+  let configReads = 0; const connect = async () => { const rpc = await f.connect(); return { ...rpc, async request(method: string, params: any) { const result = await rpc.request(method, params); if (method === "config/read" && ++configReads === 2) writeFileSync(f.configPath, readFileSync(f.configPath, "utf8") + "\n# concurrent drift\n", { mode: 0o600 }); return result; } }; };
+  await expect(reconcileCodexNativeHooks({ home: f.home, dataDir: f.dataDir, journal, reviewedSkillsCli: f.reviewedSkillsCli }, connect)).rejects.toThrow("CODEX_HOOK_TRUST_INPUT_CHANGED");
 });
 
 for (const profile of ["synthetic; true #", "../synthetic", "synthetic\ntrue", ""]) test(`coherent policy and declaration profile tampering refuses ${JSON.stringify(profile)}`, async () => {

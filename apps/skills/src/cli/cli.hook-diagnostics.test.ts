@@ -69,3 +69,9 @@ test("hook diagnostics distinguish malformed successful responses and bounded ch
   expect(timedOut.value.decision).toBe("block");
   expect(timedOut.value.reason).toContain("[SKILLS_HOOK_TIMEOUT]");
 });
+
+test("trust reconciliation command is accepted by the real CLI parser", async () => {
+  const child = Bun.spawn([process.execPath, "--no-env-file", binary, "hook", "trust", "reconcile", "--help"], { cwd: scratch, env: { PATH: `${dirname(process.execPath)}:/usr/bin:/bin`, HOME: scratch, USERPROFILE: scratch, HASNA_HOME: join(scratch, ".hasna"), NO_COLOR: "1" }, stdout: "pipe", stderr: "pipe" });
+  const [stdout, stderr, status] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  expect(status).toBe(0); expect(stderr).toBe(""); expect(stdout).toContain("--journal <path>"); expect(stdout).toContain("--agent <agent>");
+});
