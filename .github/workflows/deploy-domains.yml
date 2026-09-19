@@ -290,6 +290,14 @@ jobs:
                 (.value | test("^arn:aws:secretsmanager:" + $region + ":" + $account + ":secret:[A-Za-z0-9/_+=.@-]+$"))
               ))
           ' <<<"${manifest}")"
+          web_environment="$(jq -ce '
+            .web_environment
+            | objects
+            | select(has("CLOUDFLARE_ACCOUNT_ID") and has("DOMAINS_REGISTRANT_SOURCE_DOMAIN"))
+            | select((.CLOUDFLARE_ACCOUNT_ID | strings | test("^[A-Fa-f0-9]{32}$")))
+            | select((.DOMAINS_REGISTRANT_SOURCE_DOMAIN | strings | ascii_downcase | test("^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$") ))
+            | with_entries(select(.key == "CLOUDFLARE_ACCOUNT_ID" or .key == "DOMAINS_REGISTRANT_SOURCE_DOMAIN"))
+          ' <<<"${manifest}")"
 
           expected_ecr_url="${EXPECTED_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${EXPECTED_ECR_REPOSITORY}"
           [[ "${cluster}" == "${EXPECTED_CLUSTER}" ]] || { echo "manifest cluster mismatch" >&2; exit 1; }
@@ -321,6 +329,7 @@ jobs:
             printf 'security_groups=%s\n' "${security_groups}"
             printf 'health_url=%s\n' "${health_url}"
             printf 'web_secrets=%s\n' "${web_secrets}"
+            printf 'web_environment=%s\n' "${web_environment}"
           } >> "${GITHUB_OUTPUT}"
 
       - name: Resolve authenticated receipt credential before mutation
@@ -567,6 +576,7 @@ jobs:
           PREVIOUS_TASK_DEFINITION: ${{ steps.before.outputs.previous_task_definition }}
           IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
           MANIFEST_WEB_SECRETS: ${{ steps.manifest.outputs.web_secrets }}
+          MANIFEST_WEB_ENVIRONMENT: ${{ steps.manifest.outputs.web_environment }}
         run: |
           set -Eeuo pipefail
           task_definition="$(aws ecs describe-task-definition --task-definition "${PREVIOUS_TASK_DEFINITION}" --query taskDefinition --output json)"
@@ -574,13 +584,19 @@ jobs:
           [[ "$(jq -r '.family' <<<"${task_definition}")" == "${WEB_FAMILY}" ]]
           [[ "$(jq --arg c "${WEB_CONTAINER}" '[.containerDefinitions[] | select(.name == $c)] | length' <<<"${task_definition}")" == "1" ]]
           jq -e 'type == "object" and has("CLOUDFLARE_API_TOKEN")' <<<"${MANIFEST_WEB_SECRETS}" >/dev/null
-          replacement="$(jq --arg image "${IMAGE}" --arg c "${WEB_CONTAINER}" --argjson required_secrets "${MANIFEST_WEB_SECRETS}" '
+          jq -e 'type == "object" and has("CLOUDFLARE_ACCOUNT_ID") and has("DOMAINS_REGISTRANT_SOURCE_DOMAIN")' <<<"${MANIFEST_WEB_ENVIRONMENT}" >/dev/null
+          replacement="$(jq --arg image "${IMAGE}" --arg c "${WEB_CONTAINER}" --argjson required_secrets "${MANIFEST_WEB_SECRETS}" --argjson required_environment "${MANIFEST_WEB_ENVIRONMENT}" '
             .containerDefinitions |= map(
               if .name == $c then
                 .image = $image
                 | .secrets = (
                     ((.secrets // []) | map(select(.name as $name | ($required_secrets | has($name) | not))))
                     + ($required_secrets | to_entries | map({name:.key,valueFrom:.value}))
+                    | sort_by(.name)
+                  )
+                | .environment = (
+                    ((.environment // []) | map(select(.name as $name | ($required_environment | has($name) | not))))
+                    + ($required_environment | to_entries | map({name:.key,value:.value}))
                     | sort_by(.name)
                   )
               else . end
@@ -591,6 +607,11 @@ jobs:
             .containerDefinitions[] | select(.name == $c)
             | (.secrets // []) as $actual
             | all($required | to_entries[]; . as $entry | any($actual[]; .name == $entry.key and .valueFrom == $entry.value))
+          ' <<<"${replacement}" >/dev/null
+          jq -e --arg c "${WEB_CONTAINER}" --argjson required "${MANIFEST_WEB_ENVIRONMENT}" '
+            .containerDefinitions[] | select(.name == $c)
+            | (.environment // []) as $actual
+            | all($required | to_entries[]; . as $entry | any($actual[]; .name == $entry.key and .value == $entry.value))
           ' <<<"${replacement}" >/dev/null
           deployed_task_definition="$(aws ecs register-task-definition --cli-input-json "${replacement}" --query taskDefinition.taskDefinitionArn --output text)"
           [[ "${deployed_task_definition}" == *":task-definition/${WEB_FAMILY}:"* ]]
