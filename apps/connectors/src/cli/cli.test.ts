@@ -112,21 +112,31 @@ describe("CLI", () => {
       expect(stdout).toContain("Unknown category");
     });
 
-    test("--json outputs valid JSON array", async () => {
+    test("--json outputs a bounded compact envelope", async () => {
       const { stdout } = await run("list --json");
       const data = JSON.parse(stdout);
-      expect(Array.isArray(data)).toBe(true);
-      expect(data.length).toBeGreaterThan(50);
-      expect(data[0]).toHaveProperty("name");
-      expect(data[0]).toHaveProperty("version");
-      expect(data[0]).toHaveProperty("category");
+      expect(Array.isArray(data.connectors)).toBe(true);
+      expect(data.connectors).toHaveLength(20);
+      expect(data.total).toBeGreaterThan(50);
+      expect(data.count).toBe(20);
+      expect(data.limit).toBe(20);
+      expect(data.cursor).toBe(0);
+      expect(data.next_cursor).toBe(20);
+      expect(data.has_more).toBe(true);
+      expect(data.compact).toBe(true);
+      expect(data.catalog_version).toMatch(/^\d+\.\d+\.\d+$/);
+      expect(data.connectors[0]).toHaveProperty("name");
+      expect(data.connectors[0]).toHaveProperty("version");
+      expect(data.connectors[0]).toHaveProperty("category");
+      expect(data.connectors[0]).not.toHaveProperty("tags");
+      expect(Buffer.byteLength(stdout, "utf8")).toBeLessThan(12 * 1024);
     });
 
     test("--category --json outputs filtered JSON", async () => {
       const { stdout } = await run(["list", "--category", "AI & ML", "--json"]);
       const data = JSON.parse(stdout);
-      expect(Array.isArray(data)).toBe(true);
-      for (const item of data) {
+      expect(Array.isArray(data.connectors)).toBe(true);
+      for (const item of data.connectors) {
         expect(item.category).toBe("AI & ML");
       }
     });
@@ -143,10 +153,12 @@ describe("CLI", () => {
       expect(stdout).toContain("No connectors installed");
     });
 
-    test("--installed --json outputs empty array initially", async () => {
+    test("--installed --json outputs an empty bounded envelope initially", async () => {
       const { stdout } = await run("list --installed --json");
       const data = JSON.parse(stdout);
-      expect(data).toEqual([]);
+      expect(data.connectors).toEqual([]);
+      expect(data.total).toBe(0);
+      expect(data.has_more).toBe(false);
     });
 
     test("--installed shows installed connectors after install", async () => {
@@ -436,12 +448,12 @@ describe("CLI", () => {
       await run("install anthropic figma");
       const { stdout } = await run("list --installed --json");
       const data = JSON.parse(stdout);
-      expect(Array.isArray(data)).toBe(true);
-      const names = data.map((s: { name: string }) => s.name);
+      expect(Array.isArray(data.connectors)).toBe(true);
+      const names = data.connectors.map((s: { name: string }) => s.name);
       expect(names).toContain("anthropic");
       expect(names).toContain("figma");
       // Each entry should have auth status fields
-      for (const entry of data) {
+      for (const entry of data.connectors) {
         expect(entry).toHaveProperty("name");
         expect(entry).toHaveProperty("category");
         expect(entry).toHaveProperty("authType");
@@ -450,19 +462,20 @@ describe("CLI", () => {
     });
 
     test("list --json supports --limit and --offset pagination", async () => {
-      // Bound the reference read to the exact prefix this assertion needs. The
-      // full connector catalog is intentionally large, and piping it twice in
-      // the same suite can truncate a child-process stream under CI load.
-      const { stdout: fullStdout } = await run("list --json --limit 7");
+      // Bound the legacy-array reference read to the exact prefix this assertion
+      // needs. The full connector catalog is intentionally large, and piping it
+      // twice in the same suite can truncate a child-process stream under CI load.
+      const { stdout: fullStdout } = await run("list --json --full --limit 7");
       const full = JSON.parse(fullStdout);
       expect(full).toHaveLength(7);
 
       const { stdout, exitCode } = await run("list --json --offset 2 --limit 5");
       expect(exitCode).toBe(0);
       const page = JSON.parse(stdout);
-      expect(Array.isArray(page)).toBe(true);
-      expect(page).toHaveLength(5);
-      expect(page.map((c: { name: string }) => c.name)).toEqual(
+      expect(page.connectors).toHaveLength(5);
+      expect(page.cursor).toBe(2);
+      expect(page.next_cursor).toBe(7);
+      expect(page.connectors.map((c: { name: string }) => c.name)).toEqual(
         full.slice(2, 7).map((c: { name: string }) => c.name)
       );
     });
@@ -471,8 +484,33 @@ describe("CLI", () => {
       const { stdout, exitCode } = await run("list --json --limit 0");
       expect(exitCode).toBe(0);
       const page = JSON.parse(stdout);
-      expect(Array.isArray(page)).toBe(true);
-      expect(page).toHaveLength(1);
+      expect(page.connectors).toHaveLength(1);
+    });
+
+    test("list --json --full preserves the legacy bare-array shape within explicit pages", async () => {
+      // Keep the test read bounded: the exhaustive legacy catalog is ~238 KB
+      // and piping it inside the full suite can truncate under CI load.
+      const { stdout, exitCode } = await run("list --json --full --limit 7");
+      expect(exitCode).toBe(0);
+      const data = JSON.parse(stdout);
+      expect(Array.isArray(data)).toBe(true);
+      expect(data).toHaveLength(7);
+      expect(data[0]).toHaveProperty("tags");
+    });
+
+    test("list --json --verbose keeps full fields inside a bounded page", async () => {
+      const { stdout, exitCode } = await run("list --json --verbose");
+      expect(exitCode).toBe(0);
+      const data = JSON.parse(stdout);
+      expect(data.connectors).toHaveLength(20);
+      expect(data.compact).toBe(false);
+      expect(data.connectors[0]).toHaveProperty("tags");
+    });
+
+    test("bounded JSON refuses oversized pages with full-output guidance", async () => {
+      const { stdout, exitCode } = await run("list --json --limit 101");
+      expect(exitCode).toBe(1);
+      expect(JSON.parse(stdout).error).toContain("use --full");
     });
 
     test("list --json returns error for invalid pagination values", async () => {
@@ -567,21 +605,30 @@ describe("CLI", () => {
   // ── --brief flag ──
 
   describe("list --brief", () => {
-    test("outputs only names as JSON array", async () => {
+    test("outputs a bounded names envelope", async () => {
       const { stdout, exitCode } = await run("list --brief --json");
       expect(exitCode).toBe(0);
       const data = JSON.parse(stdout);
-      expect(Array.isArray(data)).toBe(true);
-      expect(data.length).toBeGreaterThan(50);
-      expect(typeof data[0]).toBe("string");
-      expect(data).toContain("stripe");
+      expect(Array.isArray(data.connectors)).toBe(true);
+      expect(data.connectors).toHaveLength(20);
+      expect(data.total).toBeGreaterThan(50);
+      expect(typeof data.connectors[0]).toBe("string");
+      expect(data.next_cursor).toBe(20);
     });
 
-    test("outputs names one per line without --json", async () => {
+    test("outputs a bounded names page without --json", async () => {
       const { stdout, exitCode } = await run("list --brief");
       expect(exitCode).toBe(0);
       const lines = stdout.trim().split("\n");
-      expect(lines.length).toBeGreaterThan(50);
+      expect(lines).toHaveLength(21);
+      expect(lines.at(-1)).toContain("More names: connectors list --brief --cursor 20");
+    });
+
+    test("--all preserves exhaustive human names output", async () => {
+      const { stdout, exitCode } = await run("list --brief --all");
+      expect(exitCode).toBe(0);
+      const lines = stdout.trim().split("\n");
+      expect(lines.length).toBeGreaterThan(1000);
       expect(lines).toContain("stripe");
       expect(lines).toContain("anthropic");
     });
@@ -590,24 +637,25 @@ describe("CLI", () => {
       const { stdout, exitCode } = await run(["list", "--brief", "--json", "--category", "AI & ML"]);
       expect(exitCode).toBe(0);
       const data = JSON.parse(stdout);
-      expect(data).toContain("anthropic");
-      expect(data).toContain("openai");
-      expect(data).not.toContain("stripe");
+      expect(data.connectors).toContain("anthropic");
+      expect(data.connectors).toContain("openai");
+      expect(data.connectors).not.toContain("stripe");
     });
 
     test("works with --installed", async () => {
       const { stdout, exitCode } = await run("list --brief --installed --json");
       expect(exitCode).toBe(0);
       const data = JSON.parse(stdout);
-      expect(Array.isArray(data)).toBe(true);
+      expect(Array.isArray(data.connectors)).toBe(true);
     });
 
     test("supports --limit and --offset", async () => {
       const { stdout, exitCode } = await run("list --brief --json --offset 1 --limit 3");
       expect(exitCode).toBe(0);
       const data = JSON.parse(stdout);
-      expect(Array.isArray(data)).toBe(true);
-      expect(data).toHaveLength(3);
+      expect(data.connectors).toHaveLength(3);
+      expect(data.cursor).toBe(1);
+      expect(data.next_cursor).toBe(4);
     });
   });
 

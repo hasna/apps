@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { CONNECTORS, CATEGORIES, getConnector, getConnectorsByCategory, searchConnectors } from "../../lib/registry.js";
+import pkg from "../../../package.json" with { type: "json" };
 import {
   DEFAULT_MCP_LIMIT,
   compactConnector,
@@ -20,7 +21,7 @@ export function registerDiscoveryTools(server: McpServer, stripped: (text: strin
       description: "Search connectors by name or keyword.",
       inputSchema: {
         query: z.string(),
-        limit: z.number().optional(),
+        limit: z.number().int().min(1).max(100).optional(),
         verbose: z.boolean().optional(),
       },
     },
@@ -109,15 +110,21 @@ export function registerDiscoveryTools(server: McpServer, stripped: (text: strin
             }))
           : page.items.map((c) => compactConnector(c, 120));
 
-      return stripped(JSON.stringify({
+      const compactMode = compact === true || (!verbose && compact !== false);
+      return { content: [{ type: "text" as const, text: JSON.stringify({
         connectors: data,
         total: connectors.length,
         count: data.length,
+        limit: page.limit,
+        cursor: String(page.offset),
         nextCursor: page.nextOffset === null ? null : String(page.nextOffset),
+        hasMore: page.nextOffset !== null,
+        compact: compactMode,
+        catalogVersion: pkg.version,
         hint: page.nextOffset === null
           ? "Use verbose=true or compact=false for full connector metadata."
           : `Call again with cursor="${page.nextOffset}", or use verbose=true / compact=false for full connector metadata.`,
-      }, null, 2));
+      }) }] };
     }
   );
 
