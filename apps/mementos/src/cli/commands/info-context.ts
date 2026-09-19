@@ -43,13 +43,15 @@ export function registerContextCommand(program: Command): void {
           ? (categoriesRaw.split(",").map((c: string) => c.trim()) as MemoryCategory[])
           : undefined;
         const agentId = resolveAgentFilter((opts.agent as string | undefined) || globalOpts.agent);
-        const projectPath = (opts.project as string | undefined) || globalOpts.project;
+        const projectPath = (opts.project as string | undefined) ?? globalOpts.project;
         const visibleMachineId = resolveVisibleMachineId(opts.machine as string | undefined);
 
         let projectId: string | undefined;
-        if (projectPath) {
+        if (projectPath !== undefined) {
+          if (!projectPath.trim()) throw new Error("Project not found: empty project path");
           const project = getProject(resolve(projectPath));
-          if (project) projectId = project.id;
+          if (!project) throw new Error(`Project not found: ${projectPath}`);
+          projectId = project.id;
         }
 
         let memories: import("../../types/index.js").Memory[];
@@ -106,6 +108,7 @@ export function registerContextCommand(program: Command): void {
                   ...baseFilter,
                   scope: "private",
                   agent_id: agentId,
+                  project_id: projectId,
                   ...visibleToMachineFilter(visibleMachineId),
                 })
               );

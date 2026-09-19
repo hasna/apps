@@ -75,7 +75,8 @@ function startLegacyServer(rows: Array<Record<string, unknown>>, port = 0) {
         seen.push(url.search);
         if (url.pathname === "/v1/tasks") {
           const limit = url.searchParams.get("limit");
-          const out = limit ? rows.slice(0, Number(limit)) : rows;
+          const offset = Number(url.searchParams.get("offset") ?? "0");
+          const out = limit ? rows.slice(offset, offset + Number(limit)) : rows.slice(offset);
           return Response.json({ tasks: out, count: out.length, total: rows.length });
         }
         return Response.json({ error: "not found" }, { status: 404 });
@@ -169,33 +170,23 @@ describe("--inbox against a server that ignores the creator filter", () => {
         ["--json", "list", "--inbox", "--limit", "5"],
         root,
         `http://127.0.0.1:${server.port}`,
-        // Pinned rather than left to the built-in ceiling, so the assertion below
-        // names a number this test owns instead of duplicating a constant that
-        // lives in the CLI. It only has to be larger than the 15 fixture rows.
-        { TODOS_AGENT_ID: "cassius", TODOS_LIST_SCAN_LIMIT: "1000" },
+        { TODOS_AGENT_ID: "cassius" },
       );
       expect(result.exitCode, result.stderr).toBe(0);
       const titles = (JSON.parse(result.stdout) as Array<{ title: string }>).map((t) => t.title);
       expect(titles).toEqual(["theirs 11", "theirs 12", "theirs 13", "theirs 14", "theirs 15"]);
-      // The CALLER's limit must not reach the authority: this server honours `limit`,
-      // so `limit=5` would return the caller's own ten filings truncated to five and
-      // the creator filter would then yield nothing.
-      //
-      // It is asserted as a VALUE, not as an absence. Absence was the contract until
-      // the scan was bounded; withholding the limit outright left the request with no
-      // bound at all, so the limit is now REPLACED by the scan ceiling rather than
-      // dropped. The old assertion — no `limit=` anywhere — therefore fails against
-      // the current, deliberate behaviour while the property it was protecting still
-      // holds, which is what the passing `titles` assertion above shows.
+      // The caller's five-row OUTPUT limit must not truncate the compatibility
+      // scan before creator filtering. The bounded total probe reports 15, then
+      // the two scalar status reads each carry that exact finite bound.
       const limitsSent = seen
         .map((search) => new URLSearchParams(search).get("limit"))
         .filter((value): value is string => value !== null);
-      expect(limitsSent).toEqual(["1000", "1000"]);
+      expect(limitsSent).toEqual(["5", "5", "5"]);
       const statusesSent = seen
         .map((search) => new URLSearchParams(search).get("status"))
         .filter((value): value is string => value !== null)
         .sort();
-      expect(statusesSent).toEqual(["in_progress", "pending"]);
+      expect(statusesSent).toEqual(["pending,in_progress", "pending,in_progress", "pending,in_progress"]);
     } finally {
       server.stop(true);
     }
@@ -233,14 +224,10 @@ describe("--inbox against a server that ignores the creator filter", () => {
       );
       expect(result.exitCode, result.stderr).toBe(0);
       expect(JSON.parse(result.stdout)).toHaveLength(3);
-      // Withholding the limit is scoped to client-side filtering and reordering.
-      // One scalar status needs neither, so it must not pull the whole table — and
-      // since the server applies the bound itself, the request carries the caller's
-      // limit PLUS the one-row truncation probe (todos 52b0a207). The probe row
-      // proves the matching set is larger, which is exactly why stderr reports the
-      // bounded read instead of answering with a silent round number.
-      expect(seen.some((q) => q.includes("limit=4"))).toBe(true);
-      expect(result.stderr).toContain("more than --limit 3");
+      // One authoritative three-row page; no separate total/probe request.
+      const limits = seen.map((q) => new URLSearchParams(q).get("limit"));
+      expect(limits).toEqual(["3"]);
+      expect(result.stderr).toContain("Continue with --offset 3");
     } finally {
       server.stop(true);
     }

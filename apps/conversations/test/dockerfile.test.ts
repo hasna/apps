@@ -15,7 +15,7 @@ import { spawnSync } from "node:child_process";
 // runtime's getDataDir() creates on first use anyway. This image runs with no
 // local state at all (Postgres only — see the Dockerfile header), so the
 // install line must skip lifecycle scripts, matching the sibling convention in
-// apps/economy, apps/hooks and the hosted Shortlinks service.
+// apps/economy, apps/hooks and apps/shortlinks.
 //
 // The structural assertions below are the fast, always-on guard. The real
 // proof is the docker build itself: run the suite with RUN_DOCKER_TESTS=1 to

@@ -1,5 +1,146 @@
 # Changelog
 
+## 0.16.0
+
+### Minor Changes
+
+- 4f6d68a: Serve the immutable memory audit log through strict, versioned hosted `/v1` contracts. Audit trails and exports now use stable `created_at` plus `id` cursor ordering, server-authenticated cursors, bounded pages, fixed snapshots, truthful completeness receipts, and exact filter validation; audit statistics are snapshot-consistent. MCP, root-library, and SDK clients validate every entry and envelope and fail closed on malformed successful responses instead of returning empty compliance results from a local store. Adds typed OpenAPI and SDK surfaces while preserving the existing hosted authority, machine registry, lock, profile, and explicit-local boundaries.
+- 2a5dce9: Move the machine registry to authenticated `/v1/machines` routes and make its
+  registration invariants database-enforced.
+
+  - The configured authority remains the app base (`https://api.hasna.com/mementos`)
+    and clients append `/v1` exactly once. Hosted machine operations never fall
+    back to SQLite.
+  - A canonical hostname (trimmed, lowercased, trailing dots removed) is the
+    account-local registration idempotency key, not an authorization boundary.
+    The server-issued machine `id` is the stable registry identity used by
+    mutations and memory attribution. Renaming changes only the display name,
+    and repeat registration cannot take over or rename a row.
+  - Migration 41 transactionally preflights legacy rows and refuses ambiguous
+    canonical-hostname collisions, control-bearing/invalid names, noncanonical
+    platform or hostname data, reversed liveness timestamps, or multiple-primary
+    state for explicit reconciliation. It never deletes a machine or rewrites memory
+    attribution. PostgreSQL migration bodies and their receipts are serialized
+    with an advisory lock and committed atomically.
+  - Registration is one `ON CONFLICT(hostname) DO UPDATE ... RETURNING` statement
+    backed by a unique canonical-hostname index. Concurrent callers converge on
+    one stable row; there is no SELECT-then-INSERT or conflict-lookup race.
+  - Hosted registration, list, read, rename, primary, touch, and delete responses
+    carry versioned contracts. CLI/MCP/SDK clients reject malformed 2xx responses,
+    invalid timestamps, duplicate IDs/hostnames/names, false mutation receipts,
+    wrong returned IDs, and operation postcondition mismatches.
+  - The current-machine cache is bound to authority, a non-exported credential
+    fingerprint, hostname, and platform. Credential changes and identity deletion
+    invalidate/re-register rather than reusing another account's cached ID.
+  - Hosted `memory_save` refuses machine-resolution failures rather than widening
+    machine-local attribution to a machine-null memory. Administrative rename and
+    primary changes no longer falsify `last_seen_at`; only registration/touch do.
+  - PostgreSQL lock expiry predicates now bind one ISO timestamp parameter instead
+    of comparing `timestamptz` columns to translated text. Normal empty
+    `GET /v1/locks` reads return `200 []`; the live PostgreSQL gate exercises the
+    route, acquisition, lookup, and release.
+  - Machine mutation routes require the exact stable machine ID. Display-name
+    addressing remains discovery-only on the explicit local API.
+  - The MCP machine tools remain available only through the `admin` and `full`
+    profiles introduced by the bounded-profile release; the default `core`
+    discovery payload remains unchanged.
+  - The public SDK adds strict `listMachines`, `registerMachine`, `getMachine`,
+    `renameMachine`, `setPrimaryMachine`, `touchMachine`, and `deleteMachine`
+    methods plus public machine input/receipt types.
+
+  After merge, apply migration 41 first and deploy the matching server second.
+  Only then may a separately authorized release publish a client version that
+  depends on these machine contracts.
+
+- c046be9: Default the Mementos MCP server to a bounded 23-tool `core` profile and add
+  additive `search`, `graph`, `automation`, `admin`, `storage`, `hooks`, and
+  `full` profiles. Reduced profiles no longer advertise the legacy unpaged
+  collection resources; `full` preserves the complete 124-tool compatibility
+  surface. Tool discovery is bounded and active-profile aware, and full
+  `memory_list` responses now return redacted, minified, byte-bounded page
+  envelopes with truthful continuation metadata. This intentionally replaces the
+  legacy bare full-list array; callers read records from `items` and continuation
+  from `_meta`.
+- e0fce6a: Route memory locks, expired-lock cleanup, session ingestion/status/listing,
+  queue statistics, and synthesized profiles through the authoritative hosted
+  `/v1` API whenever a Mementos credential resolves. The client no longer opens
+  or consults local SQLite before selecting these hosted operations, while
+  explicit local mode keeps the existing local implementations.
+
+  Hosted session listing now preserves `session_id`, `limit`, and `offset` across
+  the CLI, MCP, SDK, client transport, and server route. A versioned page receipt
+  proves that the server applied the new contract, carries truthful continuation
+  metadata, and refuses older servers that could silently ignore filters. Session
+  ingestion returns the accepted job in its versioned receipt, avoiding an
+  ambiguous follow-up read after the server has already queued the transcript.
+
+  Profile scope now controls cache identity and source-corpus isolation: agent
+  profiles read only that agent, project profiles read only that project, and
+  global profiles use one canonical global cache. Cached profiles are stored as
+  resource records so they neither enter nor invalidate their own fact corpus.
+  Provider failures on the server now refuse instead of being reported as an
+  empty corpus, and both save and update hooks invalidate affected caches.
+
+  Lock, session, queue-statistics, and profile clients validate every field and
+  versioned contract they rely on. A malformed successful response refuses with
+  a stable protocol error instead of being represented as an empty list, zero
+  counters, a missing job, or a successful mutation.
+
+  The reduced MCP catalog keeps session/profile tools in `automation` and
+  memory-lock tools in `admin`; `core` and explicit `full` retain their intended
+  boundaries.
+
+- d1f445d: Add explicit `--agent-json` receipt mode for token-bounded `list` and `history` reads while preserving historical `--json` and `--format json` full bare-array compatibility. Agent JSON defaults to compact 20-row list and 10-row history pages with truthful continuation metadata and exact response-byte accounting.
+
+  Keep `--all`, `--full`, and `--max-bytes` as receipt-only controls. Agent JSON pages refuse limits above 1,000 rows; exhaustive reads start at offset zero and fail closed above 5,000 rows or 1 MiB. Add deterministic `id DESC` tie-breakers to list and history ordering, and declare that offset continuations are non-overlapping only while the result set is unchanged.
+
+  Document the required `HASNA_MEMENTOS_LOCAL=1` opt-in for local SQLite quick-start use. Hosted traversal remains on the canonical Mementos authority with exactly one `/v1` suffix and never falls back locally.
+
+### Patch Changes
+
+- 660a808: Honor explicit project scope across every context and injection path. Accepted project IDs, registered names, and registered paths are resolved once to the stable project ID before any profile, search, filter, hook, touch, pagination, or count operation. Unknown and empty explicit projects fail before memory access. Library and MCP strategies retain unassigned owner-private context without exposing private memories assigned to another project; HTTP/SDK injection and null-or-project list eligibility use the same canonical identity. Comma-separated categories now reach the HTTP injection path without silently dropping configured memory classes.
+
+- e8c2bfd: Fix every command to work in ANY transport (hosted API via the credentials
+  file, or local SQLite) — the storage-mode axis is retired (owner directive
+  2026-08-15). Transport-gated breakage removed:
+
+  - `synthesis run` / `synthesis rollback` crashed in hosted mode with the
+    split-brain guard; they now route to the server (`POST /synthesis/run`,
+    `POST /synthesis/rollback/:run_id`).
+  - `session ingest` crashed in hosted mode; the transcript now ships to the
+    server-side queue (`POST /sessions/ingest`).
+  - `backup` in hosted mode snapshot a stale local island or failed with
+    "Database not found"; it now captures the cloud population through the API
+    into the same portable format `restore` reads, so backup → restore
+    round-trips in both transports (and overwriting an existing destination path
+    behaves like the local arm instead of failing on a UNIQUE conflict).
+  - `mementos-serve` no longer consults the client resolver: `isApiMode()` is
+    false in the server process, so a serve spawned from a shell exporting
+    `HASNA_MEMENTOS_API_URL`/`HASNA_MEMENTOS_API_KEY` keeps serving its own
+    backend instead of crashing or routing writes at the shared cloud.
+  - Credential-hermeticity suites now pin a fixture home/config-home, so they
+    never resolve the operator's real `~/.hasna/mementos/config/credentials`.
+
+- e0746f4: Fail-closed: close the two on-box store bypasses that survived the 0.15 gate
+  (fleet alignment 2026-09-11, T1 §3.5 mementos).
+
+  - `storage push|pull|sync|status` (CLI) and the `storage_*` MCP tools built
+    `new SqliteAdapter(getDbPath())` directly, bypassing `getDatabase()`'s
+    fail-closed gate: on a hosted station they created and read
+    `~/.hasna/mementos/mementos.db`. They now refuse with
+    `REMOTE_COMMAND_UNSUPPORTED` naming the opt-in (`HASNA_MEMENTOS_LOCAL=1` or an
+    explicit `HASNA_MEMENTOS_DB_PATH`) unless the process is the server or the
+    local opt-in is in force. Nothing is created on the hosted route.
+  - The MCP session registry lived at the HOME ROOT (`~/.open-sessions-registry.db`)
+    and was created ungated by every `mementos-mcp` start, hosted or not. It now
+    exists as a file only under the local opt-in / server context, beside the
+    memory store (`<store dir>/sessions-registry.db`, `:memory:` for a `:memory:`
+    store), and is process-local (in-memory, same API) on the hosted route — the
+    auto-inject orchestrator and channel pusher keep working; no file is written.
+  - Tests pin a scratch store + the local opt-in before importing the registry, so
+    the suite never touches a real machine's files; a new hosted-route test proves
+    no `*.db*` appears under HOME for either module.
+
 ## 0.15.2
 
 ### Patch Changes

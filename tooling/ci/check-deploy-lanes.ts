@@ -65,7 +65,9 @@ import { parseYaml, asMap, asArray, asText } from "./yaml.ts";
  * the file alone would create a lane that cannot authenticate. Removing a
  * member from this list is that member's porting lane, not this gate's job.
  */
-const UNPORTED_NESTED_DEPLOY_LANES = new Set<string>();
+const UNPORTED_NESTED_DEPLOY_LANES = new Set([
+  "attachments",
+]);
 
 /**
  * Members whose deploy lane is PORTED: the infra-live OIDC trust for the app

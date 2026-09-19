@@ -31,7 +31,11 @@ addRoute("GET", "/api/memories", (_req: Request, url: URL) => {
   if (q["key"]) filter.key = q["key"];
   if (q["as_of"]) filter.as_of = q["as_of"];
   if (q["scope"]) filter.scope = q["scope"] as MemoryScope;
-  if (q["category"]) filter.category = q["category"] as MemoryCategory;
+  if (q["category"]) {
+    filter.category = q["category"].includes(",")
+      ? q["category"].split(",").map((category) => category.trim()) as MemoryCategory[]
+      : q["category"] as MemoryCategory;
+  }
   if (q["tags"]) filter.tags = q["tags"].split(",");
   if (q["min_importance"])
     filter.min_importance = parseInt(q["min_importance"], 10);
@@ -39,6 +43,7 @@ addRoute("GET", "/api/memories", (_req: Request, url: URL) => {
     filter.pinned = q["pinned"] === "true";
   if (q["agent_id"]) filter.agent_id = q["agent_id"];
   if (q["project_id"]) filter.project_id = q["project_id"];
+  if (q["include_unassigned_project"] === "true") filter.include_unassigned_project = true;
   if (q["session_id"]) filter.session_id = q["session_id"];
   if (q["machine_id"]) filter.machine_id = q["machine_id"];
   if (q["visible_to_machine_id"]) filter.visible_to_machine_id = q["visible_to_machine_id"];

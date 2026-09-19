@@ -5,7 +5,7 @@
  * is a published subpath):
  *
  *  - the TTL grammar `parseExpiry("30d"|"24h"|"never")`
- *    (the hosted Attachments retention policy), used by `trash config set`
+ *    (`apps/attachments/src/core/config.ts:247-278`), used by `trash config set`
  *    and by `trash purge --older-than`;
  *  - "store BOTH the intent (`days`) and a precomputed absolute `expiresAt`
  *    (`null` = never), rejecting negative/non-finite at write time"
