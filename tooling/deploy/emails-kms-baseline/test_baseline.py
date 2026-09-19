@@ -151,7 +151,7 @@ class Baseline(unittest.TestCase):
 class Gate(unittest.TestCase):
     def test_stale_or_wrong_source_plan_refused(self):
         contract = gate.c.contract()
-        plan = {'schema': 'emails.kms-baseline-prepared.v1', 'source': 'a' * 40, 'run': '12',
+        plan = {'schema': 'emails.kms-baseline-prepared.v2', 'source': 'a' * 40, 'sourceAdmission': {'schema': 'emails.kms-source-admission.v1', 'source': 'a' * 40, 'observedMain': 'a' * 40, 'ci': {'run': '10', 'attempt': 1, 'source': 'a' * 40}, 'boundarySha256': 'c' * 64}, 'run': '12',
                 'createdAt': time.time(), 'contract': contract, 'publicVersion': '1.4.10',
                 'services': {t: {'desiredCount': 1, 'configurationSha256': 'b' * 64} for t in ['api', 'worker']}}
         gate.validate(plan, 'a' * 40, '12')
@@ -186,6 +186,109 @@ class Gate(unittest.TestCase):
         for forbidden in ['get-secret-value', 'kms:DescribeKey', 'deregister-task-definition', 'force-new-deployment', 'docker']:
             self.assertNotIn(forbidden, workflow)
 
+
+
+class SourceAdmission(unittest.TestCase):
+    def setUp(self):
+        self.a, self.p, self.s, self.m = ['a'*40, 'b'*40, 'c'*40, 'd'*40]
+        self.entries = {path: {'mode': '040000' if kind == 'tree' else '100644', 'type': kind, 'sha': 'e'*40} for path, kind in c.admission.BOUNDARY}
+        self.run = {'id': 10, 'run_attempt': 1, 'head_sha': self.a, 'name': 'ci', 'path': '.github/workflows/ci.yml',
+            'repository': {'full_name': c.REPO}, 'head_repository': {'full_name': c.REPO},
+            'head_branch': 'main', 'event': 'push', 'status': 'completed', 'conclusion': 'success'}
+        self.compare = {'status': 'ahead', 'merge_base_commit': {'sha': self.a}}
+    def gh(self, path):
+        if '/actions/runs/' in path: return self.run
+        if '/git/ref/' in path: return {'object': {'sha': self.m}}
+        if '/compare/' in path:
+            before = path.split('/compare/')[1].split('...')[0]
+            return {'status': 'ahead', 'merge_base_commit': {'sha': before}}
+        raise AssertionError(path)
+    def admitted(self, gh=None):
+        with patch.dict(os.environ, KMS_CI_RUN_ID='10'), patch.object(c.admission, 'snapshot', return_value=self.entries), \
+             patch.object(c.admission, 'remote_snapshot', return_value=self.entries), patch.object(c.admission, 'git', return_value=b''):
+            return c.admission.admit(gh or self.gh, c.REPO, self.s)
+    def test_successful_ci_ancestor_allows_unrelated_main_movement(self):
+        receipt = self.admitted()
+        self.assertEqual(receipt['ci'], {'run': '10', 'attempt': 1, 'source': self.a})
+        self.assertEqual(receipt['source'], self.s)
+        self.assertEqual(receipt['observedMain'], self.m)
+    def test_nonmain_failed_pending_fork_or_rerun_ci_refuses(self):
+        for change in [{'event':'pull_request'}, {'head_branch':'feature'}, {'conclusion':'failure'}, {'status':'in_progress'},
+            {'run_attempt':2}, {'path':'.github/workflows/other.yml'}, {'id':11}, {'repository':{'full_name':'other/repo'}},
+            {'head_repository':{'full_name':'fork/apps'}}]:
+            with self.subTest(change=change):
+                saved=self.run; self.run={**saved,**change}
+                try:
+                    with self.assertRaises(ValueError): self.admitted()
+                finally:self.run=saved
+    def test_changed_anchor_workflow_code_contract_or_email_deps_refuses(self):
+        for path, _ in c.admission.BOUNDARY:
+            changed=copy.deepcopy(self.entries);changed[path]['sha']='f'*40
+            with self.subTest(path=path), patch.dict(os.environ,KMS_CI_RUN_ID='10'), \
+                 patch.object(c.admission,'snapshot',side_effect=[self.entries,changed]), \
+                 patch.object(c.admission,'remote_snapshot',return_value=self.entries), patch.object(c.admission,'git',return_value=b''):
+                with self.assertRaisesRegex(ValueError,'CI_ANCHOR_BOUNDARY_CHANGED'):c.admission.admit(self.gh,c.REPO,self.s)
+    def test_changed_current_main_dirty_source_and_divergence_refuse(self):
+        changed=copy.deepcopy(self.entries);changed['apps/emails']['sha']='f'*40
+        with patch.dict(os.environ,KMS_CI_RUN_ID='10'), patch.object(c.admission,'snapshot',return_value=self.entries), \
+             patch.object(c.admission,'remote_snapshot',return_value=changed), patch.object(c.admission,'git',return_value=b''):
+            with self.assertRaisesRegex(ValueError,'CURRENT_MAIN_BOUNDARY_CHANGED'):c.admission.admit(self.gh,c.REPO,self.s)
+        with patch.dict(os.environ,KMS_CI_RUN_ID='10'), patch.object(c.admission,'snapshot',return_value=self.entries), patch.object(c.admission,'git',return_value=b' M changed'):
+            with self.assertRaisesRegex(ValueError,'SOURCE_BOUNDARY_DIRTY'):c.admission.admit(self.gh,c.REPO,self.s)
+        for status in ['behind','diverged','identical']:
+            with self.subTest(status=status), self.assertRaises(ValueError):
+                c.admission.ancestor(lambda _: {'status':status,'merge_base_commit':{'sha':self.a}},c.REPO,self.a,self.s)
+    def test_remote_tree_is_complete_and_preserves_modes(self):
+        for response in [{'sha':'e'*40,'truncated':True,'tree':[]}, {'sha':'f'*40,'truncated':False,'tree':[]}]:
+            def gh(path):return {'sha':self.m,'tree':{'sha':'e'*40}} if '/commits/' in path else response
+            with self.assertRaises(ValueError):c.admission.remote_snapshot(gh,c.REPO,self.m)
+        changed=copy.deepcopy(self.entries);changed['.github/workflows/ci.yml']['mode']='120000'
+        with self.assertRaisesRegex(ValueError,'SOURCE_BOUNDARY_TYPE'):c.admission.validate_snapshot(changed)
+        changed.pop('apps/emails')
+        with self.assertRaisesRegex(ValueError,'SOURCE_BOUNDARY_MISSING'):c.admission.validate_snapshot(changed)
+    def test_complete_remote_tree_walk_matches_local_snapshot(self):
+        nodes={'root':{}}
+        for path, kind in c.admission.BOUNDARY:
+            parent='root'
+            parts=path.split('/')
+            for i,part in enumerate(parts):
+                key=parent+'/'+part
+                if part not in nodes[parent]:
+                    oid=format(len(nodes)+100, '040x')
+                    nodes[parent][part]={'path':part,'sha':oid,'type':'tree' if i<len(parts)-1 else kind,
+                        'mode':'040000' if i<len(parts)-1 or kind=='tree' else '100644'}
+                    nodes[key]={}
+                parent=key
+        by_oid={format(99,'040x'):nodes['root']}
+        for key,children in nodes.items():
+            for name,row in children.items():by_oid[row['sha']]=nodes[key+'/'+name]
+        def gh(path):
+            if '/commits/' in path:return {'sha':self.m,'tree':{'sha':format(99,'040x')}}
+            oid=path.rsplit('/',1)[1]
+            return {'sha':oid,'truncated':False,'tree':list(by_oid[oid].values())}
+        result=c.admission.remote_snapshot(gh,c.REPO,self.m)
+        self.assertEqual(set(result),{p for p,_ in c.admission.BOUNDARY})
+        for path,kind in c.admission.BOUNDARY:
+            parent='root'
+            for part in path.split('/'):
+                expected=nodes[parent][part];parent+='/'+part
+            self.assertEqual(result[path],{k:expected[k] for k in ('mode','type','sha')})
+
+    def test_prepared_run_can_have_older_identical_main_source(self):
+        current=self.admitted();previous={**current,'source':self.p,'observedMain':self.p}
+        with patch.object(c.admission,'snapshot',return_value=self.entries):
+            c.admission.prepared(self.gh,c.REPO,previous,current)
+            for change in [{'boundarySha256':'f'*64},{'ci':{'run':'11','attempt':1,'source':self.a}}]:
+                with self.assertRaises(ValueError):c.admission.prepared(self.gh,c.REPO,{**previous,**change},current)
+    def test_source_gate_preserves_exact_dispatch_checkout_and_each_step_rechecks(self):
+        env={'GITHUB_REPOSITORY':c.REPO,'GITHUB_REF':'refs/heads/main','GITHUB_EVENT_NAME':'workflow_dispatch',
+             'GITHUB_WORKFLOW_REF':c.REPO+'/'+c.WORKFLOW+'@refs/heads/main','GITHUB_RUN_ATTEMPT':'1','GITHUB_SHA':self.s}
+        with patch.dict(os.environ,env), patch.object(c.subprocess,'run',return_value=type('Result',(),{'returncode':0,'stdout':(self.s+'\n').encode()})()), \
+             patch.object(c.admission,'admit',return_value={'fixture':True}) as admit:
+            self.assertEqual(c.source_gate(self.s),{'fixture':True});admit.assert_called_once_with(c.gh,c.REPO,self.s)
+        source=(ROOT/'execute.py').read_text()
+        self.assertLess(source.index('admission = c.source_gate(args.source)'),source.index("c.aws('sts'"))
+        self.assertIn('KMS_CI_RUN_ID: ${{ inputs.kms_ci_run_id }}',(ROOT.parents[2]/'.github/workflows/emails-search-promotion-execute.yml').read_text())
 
 if __name__ == '__main__':
     unittest.main()

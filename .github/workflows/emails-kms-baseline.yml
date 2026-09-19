@@ -7,6 +7,10 @@ on:
         options: [kms_prepare, kms_execute]
         default: kms_prepare
         required: true
+      ci_run_id:
+        type: string
+        required: true
+        description: Successful main push CI run containing these exact KMS controls; attempt 1 only
       prepared_run_id:
         type: string
         default: ""
@@ -31,5 +35,6 @@ jobs:
     with:
       phase: ${{ inputs.phase }}
       source: ${{ github.sha }}
+      kms_ci_run_id: ${{ inputs.ci_run_id }}
       prepared_run_id: ${{ inputs.prepared_run_id }}
       prepared_sha256: ${{ inputs.prepared_sha256 }}

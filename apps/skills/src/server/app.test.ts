@@ -174,6 +174,57 @@ for (const backend of backends) {
       }
     });
 
+    test("admits only skills:publish onto an existing same-org key with scope CAS", async () => {
+      const ctx = await testServer(backend);
+      try {
+        await ctx.store.ensureBootstrapApiKey?.("sk_target_org_a", {
+          orgId: "org_a", orgSlug: "org-a", orgName: "Org A", userId: "user_target", email: "target@example.com",
+          apiKeyId: "key_target", role: "member", scopes: ["skills:read", "runs:write", "stations:write"],
+        });
+        const whoami = await fetch(`${ctx.baseUrl}/api/auth/whoami`, { headers: { authorization: "Bearer sk_test_org_a" } });
+        expect(await whoami.json()).toMatchObject({ apiKey: { id: "key_a", scopes: ["*"] } });
+
+        const updated = await fetch(`${ctx.baseUrl}/api/v1/admin/keys/key_target/scopes`, {
+          method: "PATCH", headers: { authorization: "Bearer sk_test_org_a", "content-type": "application/json" },
+          body: JSON.stringify({ expected_scopes: ["skills:read", "runs:write", "stations:write"], add_scopes: ["skills:publish"] }),
+        });
+        expect(updated.status).toBe(200);
+        expect(await updated.json()).toEqual({ keyId: "key_target", orgId: "org_a", scopes: ["skills:read", "runs:write", "stations:write", "skills:publish"], updated: true });
+
+        const readBack = await ctx.store.authenticateApiKeyHash(hashApiKey("sk_target_org_a"));
+        expect(readBack).toMatchObject({ apiKeyId: "key_target", orgId: "org_a", scopes: ["skills:read", "runs:write", "stations:write", "skills:publish"] });
+        const stale = await fetch(`${ctx.baseUrl}/api/v1/admin/keys/key_target/scopes`, {
+          method: "PATCH", headers: { authorization: "Bearer sk_test_org_a", "content-type": "application/json" },
+          body: JSON.stringify({ expected_scopes: ["skills:read", "runs:write", "stations:write"], add_scopes: ["skills:publish"] }),
+        });
+        expect(stale.status).toBe(409);
+        expect((await stale.json()).code).toBe("API_KEY_SCOPE_CONFLICT");
+
+        const denied = await fetch(`${ctx.baseUrl}/api/v1/admin/keys/key_target/scopes`, {
+          method: "PATCH", headers: { authorization: "Bearer sk_target_org_a", "content-type": "application/json" },
+          body: JSON.stringify({ expected_scopes: ["skills:read", "runs:write", "stations:write", "skills:publish"], add_scopes: ["skills:publish"] }),
+        });
+        expect(denied.status).toBe(403);
+        const escalation = await fetch(`${ctx.baseUrl}/api/v1/admin/keys/key_target/scopes`, {
+          method: "PATCH", headers: { authorization: "Bearer sk_test_org_a", "content-type": "application/json" },
+          body: JSON.stringify({ expected_scopes: ["skills:read", "runs:write", "stations:write", "skills:publish"], add_scopes: ["skills:*"] }),
+        });
+        expect(escalation.status).toBe(400);
+        const foreign = await fetch(`${ctx.baseUrl}/api/v1/admin/keys/key_b/scopes`, {
+          method: "PATCH", headers: { authorization: "Bearer sk_test_org_a", "content-type": "application/json" },
+          body: JSON.stringify({ expected_scopes: ["*"], add_scopes: ["skills:publish"] }),
+        });
+        expect(foreign.status).toBe(404);
+        const trailing = await fetch(`${ctx.baseUrl}/api/v1/admin/keys/key_target/scopes/extra`, {
+          method: "PATCH", headers: { authorization: "Bearer sk_test_org_a", "content-type": "application/json" },
+          body: JSON.stringify({ expected_scopes: ["skills:read", "runs:write", "stations:write", "skills:publish"], add_scopes: ["skills:publish"] }),
+        });
+        expect(trailing.status).toBe(404);
+      } finally {
+        await ctx.stop();
+      }
+    });
+
     test("pins round-trip through the API and are scoped per org and principal", async () => {
       const ctx = await testServer(backend);
       try {
