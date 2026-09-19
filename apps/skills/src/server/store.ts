@@ -756,23 +756,28 @@ export class PostgresSkillsStore implements SkillsProductStore {
       if (current.length !== expectedScopes.length || current.some((scope, index) => scope !== expectedScopes[index])) {
         return { kind: "stale", scopes: current };
       }
-      const scopes = [...current, ...addScopes.filter((scope) => !current.includes(scope))];
-      const updated = await tx`
-        UPDATE api_keys SET scopes_json = ${JSON.stringify(scopes)}::jsonb
-        WHERE id = ${keyId} AND org_id = ${actor.orgId} AND revoked_at IS NULL
-          AND scopes_json = ${JSON.stringify(expectedScopes)}::jsonb
-        RETURNING scopes_json
-      `;
+      const updated = await this.casUpdateApiKeyScopes(tx, keyId, actor.orgId, expectedScopes, addScopes);
       if (!updated[0]) {
         const latest = await tx`SELECT scopes_json FROM api_keys WHERE id = ${keyId} AND org_id = ${actor.orgId} AND revoked_at IS NULL LIMIT 1`;
         return { kind: "stale", scopes: latest[0] ? parseJsonArray(latest[0].scopes_json) : current };
       }
       await tx`
         INSERT INTO skills_audit_events (org_id, user_id, api_key_id, action, target_type, target_id, metadata_json)
-        VALUES (${actor.orgId}, ${actor.userId}, ${actor.apiKeyId}, ${"api_key_scopes_added"}, ${"api_key"}, ${keyId}, ${JSON.stringify({ added: addScopes, scopes })}::jsonb)
+        VALUES (${actor.orgId}, ${actor.userId}, ${actor.apiKeyId}, ${"api_key_scopes_added"}, ${"api_key"}, ${keyId}, ${JSON.stringify({ added: addScopes, scopes: parseJsonArray(updated[0].scopes_json) })}::jsonb)
       `;
-      return { kind: "updated", scopes };
+      return { kind: "updated", scopes: parseJsonArray(updated[0].scopes_json) };
     });
+  }
+
+  private async casUpdateApiKeyScopes(tx: SqlTag, keyId: string, orgId: string, expectedScopes: string[], addScopes: string[]): Promise<Record<string, unknown>[]> {
+    const current = expectedScopes;
+    const scopes = [...current, ...addScopes.filter((scope) => !current.includes(scope))];
+    return tx`
+      UPDATE api_keys SET scopes_json = ${JSON.stringify(scopes)}::jsonb
+      WHERE id = ${keyId} AND org_id = ${orgId} AND revoked_at IS NULL
+        AND scopes_json = ${JSON.stringify(expectedScopes)}::jsonb
+      RETURNING scopes_json
+    `;
   }
 
   async enrollPublishScopeByOperator(input: OperatorScopeEnrollmentInput): Promise<OperatorScopeEnrollmentResult> {
@@ -801,14 +806,9 @@ export class PostgresSkillsStore implements SkillsProductStore {
       if (current.length !== input.expectedScopes.length || current.some((scope, index) => scope !== input.expectedScopes[index])) {
         return { kind: "stale", scopes: current };
       }
-      const scopes = [...current, "skills:publish"];
-      const updated = await tx`
-        UPDATE api_keys SET scopes_json = ${JSON.stringify(scopes)}::jsonb
-        WHERE id = ${input.keyId} AND org_id = ${input.orgId} AND revoked_at IS NULL
-          AND scopes_json = ${JSON.stringify(input.expectedScopes)}::jsonb
-        RETURNING id
-      `;
+      const updated = await this.casUpdateApiKeyScopes(tx, input.keyId, input.orgId, input.expectedScopes, ["skills:publish"]);
       if (!updated[0]) return { kind: "stale", scopes: current };
+      const scopes = parseJsonArray(updated[0].scopes_json);
       await tx`
         INSERT INTO skills_audit_events (org_id, user_id, api_key_id, action, target_type, target_id, metadata_json)
         VALUES (${input.orgId}, NULL, NULL, ${"api_key_scopes_added"}, ${"api_key"}, ${input.keyId}, ${JSON.stringify({
