@@ -26,7 +26,7 @@ import {
 import { compactHint, pageItemsOrExit, truncateText } from "../../lib/compact-output.js";
 
 import { printLine, printErrorLine } from "../../lib/stdout.js";
-/** Record types the store (local sqlite CHECK + cloud API) accepts on write. */
+/** Record types the hosted API and PostgreSQL schema accept on write. */
 export const SUPPORTED_DNS_TYPES = new Set(["A", "AAAA", "CNAME", "MX", "TXT", "NS", "SRV"]);
 
 /**

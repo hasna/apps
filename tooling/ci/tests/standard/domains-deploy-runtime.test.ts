@@ -9,6 +9,7 @@ const readiness = join(root, "tooling/deploy/domains/verify-readiness.sh");
 const dataPlane = join(root, "tooling/deploy/domains/verify-canonical-data-plane.sh");
 const migration = join(root, "tooling/deploy/domains/run-migration.sh");
 const restore = join(root, "tooling/deploy/domains/restore-service-anchor.sh");
+const reconcile = join(root, "tooling/deploy/domains/emit-reconciliation-required.sh");
 const scratch: string[] = [];
 afterEach(() => { for (const dir of scratch.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 
@@ -115,6 +116,127 @@ exit 9
       restored: { task_definition: task21, image: previousImage },
       automatic_rollback_performed: true,
       cas_anchor_verified: true,
+    });
+  });
+
+
+  test("post-advance failure before service mutation records observed service and task state", async () => {
+    const dir = temp();
+    executable(join(dir, "aws"), `#!/usr/bin/env bash
+if [[ "$*" == *"ecs describe-services"* ]]; then
+  printf '{"failures":[],"services":[{"status":"ACTIVE","taskDefinition":"${task21}","desiredCount":1,"runningCount":1,"pendingCount":0,"deployments":[{"id":"ecs-svc/fixture","status":"PRIMARY","rolloutState":"COMPLETED","taskDefinition":"${task21}","desiredCount":1,"runningCount":1,"pendingCount":0}]}]}\n'
+  exit 0
+fi
+if [[ "$*" == *"ecs list-tasks"* ]]; then
+  [[ "$*" == *"--desired-status RUNNING"* ]] && printf '{"taskArns":["${taskArn}"]}\n' || printf '{"taskArns":[]}\n'
+  exit 0
+fi
+if [[ "$*" == *"ecs describe-tasks"* ]]; then
+  printf '{"failures":[],"tasks":[{"taskArn":"${taskArn}","taskDefinitionArn":"${task21}","lastStatus":"RUNNING","desiredStatus":"RUNNING","healthStatus":"HEALTHY","launchType":"FARGATE","containers":[{"name":"fixture-web","lastStatus":"RUNNING","image":"${image}","imageDigest":"${digest}"}]}]}\n'
+  exit 0
+fi
+exit 9
+`);
+    const receipt = join(dir, "reconciliation.json");
+    const result = await run(reconcile, [receipt], {
+      PATH: `${dir}:${process.env.PATH}`,
+      CLUSTER: "fixture-cluster",
+      SERVICE: "fixture-service",
+      SOURCE_SHA: source,
+      CANDIDATE_TASK_DEFINITION: task22,
+      CANDIDATE_IMAGE: image,
+      PREVIOUS_TASK_DEFINITION: task21,
+      PREVIOUS_IMAGE: "old@sha256:" + "e".repeat(64),
+      SERVICE_MUTATED: "false",
+      SCHEMA_ADVANCED: "true",
+      DEPLOY_OUTCOME: "failure",
+      VERIFY_OUTCOME: "skipped",
+      AUTOMATIC_ROLLBACK_PERFORMED: "false",
+      LEDGER_BEFORE_FILE: join(dir, "missing-before.json"),
+      LEDGER_AFTER_FILE: join(dir, "missing-after.json"),
+      MIGRATION_LAUNCH_FILE: join(dir, "missing-launch.json"),
+      MIGRATION_OBSERVED_FILE: join(dir, "missing-observed.json"),
+    });
+    expect(result.code).toBe(0);
+    expect(JSON.parse(readFileSync(receipt, "utf8"))).toMatchObject({
+      schema: "hasna.domains.deployment_reconciliation_required.v2",
+      status: "RECONCILIATION_REQUIRED",
+      reason: "failure_after_schema_advance_before_service_mutation",
+      schema_advanced: true,
+      deployment: { service_mutated: false, deploy_outcome: "failure", verify_outcome: "skipped" },
+      observed: {
+        service: { describe_available: true, task_definition: task21, running_count: 1 },
+        tasks: { list_available: true, describe_available: true, tasks: [{ task_arn: taskArn, task_definition: task21, last_status: "RUNNING" }] },
+      },
+      automatic_rollback_performed: false,
+    });
+  });
+
+  test("rollback waiter failure after update-service begins always writes reconciliation evidence", async () => {
+    const dir = temp();
+    executable(join(dir, "aws"), `#!/usr/bin/env bash
+if [[ "$*" == *"ecs describe-services"* ]]; then
+  printf '{"failures":[],"services":[{"status":"ACTIVE","taskDefinition":"${task22}","desiredCount":1,"runningCount":1,"pendingCount":0,"deployments":[{"id":"ecs-svc/fixture","status":"PRIMARY","rolloutState":"IN_PROGRESS","taskDefinition":"${task22}","desiredCount":1,"runningCount":1,"pendingCount":0}]}]}\n'
+  exit 0
+fi
+if [[ "$*" == *"ecs update-service"* ]]; then exit 0; fi
+if [[ "$*" == *"ecs wait services-stable"* ]]; then exit 255; fi
+if [[ "$*" == *"ecs list-tasks"* ]]; then
+  [[ "$*" == *"--desired-status RUNNING"* ]] && printf '{"taskArns":["${taskArn}"]}\n' || printf '{"taskArns":[]}\n'
+  exit 0
+fi
+if [[ "$*" == *"ecs describe-tasks"* ]]; then
+  printf '{"failures":[],"tasks":[{"taskArn":"${taskArn}","taskDefinitionArn":"${task22}","lastStatus":"RUNNING","desiredStatus":"RUNNING","healthStatus":"UNKNOWN","launchType":"FARGATE","containers":[{"name":"fixture-web","lastStatus":"RUNNING","image":"${image}","imageDigest":"${digest}"}]}]}\n'
+  exit 0
+fi
+exit 9
+`);
+    const rollback = join(dir, "rollback.json");
+    const receipt = join(dir, "reconciliation.json");
+    const result = await run(restore, ["fixture-cluster", "fixture-service", task22, task21, source, image, "old@sha256:" + "e".repeat(64), rollback, receipt], {
+      PATH: `${dir}:${process.env.PATH}`,
+    });
+    expect(result.code).not.toBe(0);
+    expect(existsSync(rollback)).toBe(false);
+    expect(JSON.parse(readFileSync(receipt, "utf8"))).toMatchObject({
+      schema: "hasna.domains.deployment_reconciliation_required.v2",
+      status: "RECONCILIATION_REQUIRED",
+      reason: "rollback_execution_uncertain",
+      deployment: { service_mutated: true, deploy_outcome: "rollback_update_started", verify_outcome: "uncertain" },
+      observed: {
+        service: { describe_available: true, task_definition: task22 },
+        tasks: { describe_available: true, tasks: [{ task_arn: taskArn, task_definition: task22 }] },
+      },
+      automatic_rollback_performed: null,
+    });
+  });
+
+  test("rollback final-verification mismatch also writes reconciliation evidence", async () => {
+    const dir = temp();
+    const state = join(dir, "describe-count");
+    executable(join(dir, "aws"), `#!/usr/bin/env bash
+if [[ "$*" == *"ecs describe-services"* ]]; then
+  count=0; [[ -f "$FAKE_STATE" ]] && count="$(cat "$FAKE_STATE")"; count=$((count + 1)); printf '%s' "$count" > "$FAKE_STATE"
+  printf '{"failures":[],"services":[{"status":"ACTIVE","taskDefinition":"${task22}","desiredCount":1,"runningCount":1,"pendingCount":0,"deployments":[{"id":"ecs-svc/fixture","status":"PRIMARY","rolloutState":"COMPLETED","taskDefinition":"${task22}","desiredCount":1,"runningCount":1,"pendingCount":0}]}]}\n'
+  exit 0
+fi
+if [[ "$*" == *"ecs update-service"* ]] || [[ "$*" == *"ecs wait services-stable"* ]]; then exit 0; fi
+if [[ "$*" == *"ecs list-tasks"* ]]; then printf '{"taskArns":[]}\n'; exit 0; fi
+exit 9
+`);
+    const rollback = join(dir, "rollback.json");
+    const receipt = join(dir, "reconciliation.json");
+    const result = await run(restore, ["fixture-cluster", "fixture-service", task22, task21, source, image, "old@sha256:" + "e".repeat(64), rollback, receipt], {
+      PATH: `${dir}:${process.env.PATH}`,
+      FAKE_STATE: state,
+    });
+    expect(result.code).not.toBe(0);
+    expect(existsSync(rollback)).toBe(false);
+    expect(JSON.parse(readFileSync(receipt, "utf8"))).toMatchObject({
+      status: "RECONCILIATION_REQUIRED",
+      reason: "rollback_execution_uncertain",
+      observed: { service: { describe_available: true, task_definition: task22 } },
+      automatic_rollback_performed: null,
     });
   });
 
