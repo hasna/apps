@@ -525,10 +525,13 @@ Add to an MCP client config:
 
 ## Streamable HTTP (MCP)
 
-MCP uses stdio by default. A long-lived Streamable HTTP transport is also available on `127.0.0.1`:
+MCP uses stdio by default. The default `core` profile exposes 20 routine project tools and keeps initial tool discovery under 19 KiB. Use `search_tools` and `describe_tools` to discover specialist operations without loading every schema into agent context. Select `--mcp-profile full` or `HASNA_PROJECTS_MCP_PROFILE=full` for the complete compatibility inventory.
+
+A long-lived Streamable HTTP transport is also available on `127.0.0.1`:
 
 ```bash
-projects-mcp --http              # default port 8871
+projects-mcp --http                         # core profile, default port 8871
+projects-mcp --mcp-profile full             # explicit complete compatibility inventory
 MCP_HTTP=1 MCP_HTTP_PORT=8871 projects-mcp
 ```
 
@@ -542,8 +545,8 @@ Endpoints: `GET /health` → `{"status":"ok","name":"projects"}`, MCP at `POST/G
 | `projects_recipes_list` / `projects_recipes_add` | Manage recipe defaults for project creation |
 | `projects_agents_list` / `projects_agents_add` | Register human, CLI, service, and AI agents |
 | `projects_tmux_profiles_list` / `projects_tmux_profiles_add` / `projects_tmux_profiles_apply` | Manage reusable tmux sessions/windows |
-| `projects_list` / `projects_show` | Legacy-compatible full project listing and project detail |
-| `projects_search` | Compact bounded project discovery with fields, query scopes, and continuation metadata |
+| `projects_list` / `projects_search` | Compact bounded project discovery with fields, query scopes, a 25-row default, 32 KiB ceiling, and continuation metadata; `projects_list full=true` preserves the legacy array |
+| `projects_show` | Full detail for one project |
 | `projects_render_list` / `projects_render_show` / `projects_render_start` / `projects_render_status` / `projects_render_sessions` / `projects_render_roots` / `projects_render_recipes` | Emit validated JSON Render specs for project surfaces |
 | `projects_store_inspect` | Inspect canonical project storage and the per-project app store under `$HASNA_PROJECTS_HOME/data/<workspace_id>/project.db` |
 | `projects_canvases_list` / `projects_canvases_create` / `projects_canvases_upsert` / `projects_canvases_compose` / `projects_render_canvas` | Manage, compose, update, and render per-project React Flow canvas records |
@@ -597,60 +600,32 @@ print a hint for the next detail command. Use `--limit <n>` to raise the row cap
 `show`/`events list` for detail workflows, and `--json` for stable
 machine-readable records.
 
-Legacy `projects list --json` remains a complete, full-record array for script
-compatibility. New agent and machine callers should opt into the bounded
-envelope with `--detail compact`; it defaults to 25 rows, minified JSON, and
-the fields `id,slug,name,status,kind,path`. `path` is the public compact name
-for the stored `primary_path`. Use `--fields`, `--limit`/`--offset`, and the
-returned `next_offset`/`next_arguments` to page; use `--all` explicitly for a
-complete compact population, `--detail full` for a bounded full-record page,
-`--max-bytes` to lower or raise the 32 KiB page ceiling, and `--pretty` only
-for interactive formatting. Explicit `--all` uses a 256 KiB ceiling when none
-is supplied and refuses rather than claiming completeness if the population
-still cannot fit. Byte-clipped pages report `truncated`,
-`omitted_from_page`, and a continuation that resumes at the first omitted row.
-Hosted compact reads require the server's `projects.list.v2` filter attestation;
-an older deployment that could ignore query/tag/eval filters is refused rather
-than returning a mislabeled page. Deploy the matching `projects-serve` before
-rolling out a client that uses these additive compact surfaces.
-The same fail-closed attestation applies whenever `--query-scope` is explicit,
-including human, JSON-array, and render-spec list output; no CLI path may send
-the new scope and silently accept a legacy producer's unscoped answer.
+Ordinary `projects list --json` now returns the bounded compact metadata envelope. This includes `--meta`, which is retained as a compatibility alias. The default is 25 rows, minified JSON, a 32 KiB UTF-8 ceiling, and the fields `id,slug,name,status,kind,path`; `path` is the public compact name for the stored `primary_path`. Responses carry `count`, `total`, `offset`, opaque `cursor`/`next_cursor`, a collection `snapshot` fingerprint, `has_more`, `complete`, `response_bytes`, and replayable `next_arguments`. `next_offset` is null for compact pages so an agent cannot accidentally resume with an unstable positional offset.
 
-Searches made through the compact contract default to `--query-scope
-discovery` (name, slug, description, and tags), so a common parent folder
-does not make nearly every project match. Select `identity`, `structured`, or
-the path-inclusive `all` scope explicitly when needed. Omitting
-`--query-scope` outside the additive compact contract preserves legacy search
-membership.
+Use `--fields`, `--limit`, and the returned `next_cursor` with `--cursor` to page. Use `--all` explicitly for a complete compact population under a 256 KiB hard ceiling. Use `--detail full` for a bounded full-record page. The exact historical full-record array remains available through `--full`; combine `--full --meta` for the historical metadata wrapper. Byte-clipped pages report `truncated`, `omitted_from_page`, and an opaque continuation that resumes after the last emitted immutable project id. Cursors are bound to the collection, filters, ordering, total, and ordered identity fingerprint. Insertions, deletions, filter changes, or sort-key reorders fail closed and require a first-page restart instead of silently skipping or duplicating rows. Duplicate project names remain deterministic through the immutable id tie-breaker.
 
-Compact terminal defaults cover the noisy project registry commands plus smaller
-registry lists such as `projects roots list`, `projects recipes list`,
-`projects agents list`, `projects tmux-profiles list`, `projects locks`,
-`projects locations list`, `projects budgets list`, and `projects doctor`.
+Hosted compact reads require the server's `projects.list.v2` filter attestation. An older deployment that could ignore query, tag, eval, or fixture filters is refused rather than returning a mislabeled page. The authority remains `https://api.hasna.com/projects/v1`; the client still appends `/v1` exactly once.
+
+Searches through the compact contract default to `--query-scope discovery` (name, slug, description, and tags), so a common parent folder does not make nearly every project match. Select `identity`, `structured`, or path-inclusive `all` explicitly when needed. Explicit legacy `--full` reads preserve their prior query behavior unless a scope is provided.
+
+Compact terminal defaults also cover roots, recipes, agents, tmux profiles, locks, locations, doctor, and event lists. Their MCP equivalents now default to bounded compact pages with collection/filter-bound opaque cursors, stable identity boundaries, snapshot fingerprints, and mutation refusal. Explicit `full=true`, `verbose=true`, or compatibility `compact=false` restores each legacy full-record response.
+
 Examples:
 
 ```bash
-projects list --limit 25
-projects list --query projects --json --detail compact
-projects list --query projects --query-scope all --json --detail compact --limit 25
-projects list --json --detail compact --fields slug,status,path --all
+projects list --json
+projects list --query projects --json
+projects list --query projects --query-scope all --json --limit 25
+projects list --query projects --query-scope all --json --limit 25 --cursor <next_cursor>
+projects list --json --fields slug,status,path --all
+projects list --json --detail full --limit 5
+projects list --json --full
 projects roots list --limit 10 --verbose
 projects doctor --limit 20 --verbose
 projects events list my-app --limit 10 --verbose
 ```
 
-MCP tools keep their existing full-record defaults for client compatibility.
-Where supported, pass `compact: true` to receive compact summaries; compact MCP
-calls accept `limit`, and `verbose: true` returns full records. Prompt-agent
-tools use compact project/event summaries by default; agent tools expose
-`verbose: true` for explicit detail retrieval.
-
-For non-empty MCP discovery queries, prefer `projects_search`. It is compact
-and bounded by default, uses discovery-scoped matching, returns truthful total
-and continuation fields, accepts a small field projection, and emits minified
-JSON. Keep `projects_list` for legacy or unfiltered enumeration; its existing
-contract is intentionally unchanged.
+The MCP server defaults to a 20-tool `core` profile. `search_tools` returns a bounded names-only page over the complete 71-tool inventory, and `describe_tools` expands only explicitly requested tools. The `full` profile retains every pre-profile Projects tool plus those two discovery helpers. `projects_list` uses the same 25-row, 32 KiB compact contract as `projects_search`; both continue only through an opaque `next_cursor` and refuse a changed population. Request `full=true` for the legacy array or `detail="full"` for a bounded full-record envelope.
 
 ## Data Model
 

@@ -118,7 +118,7 @@ describe("project agent CLI", () => {
     expect(payload.tool_calls[0]?.output?.status).toBe("already_exists");
     expect(payload.tool_calls[0]?.output?.project?.slug).toBe("existing-security");
 
-    const list = runProjects(["list", "--query", "security", "--json"], env);
+    const list = runProjects(["list", "--query", "security", "--json", "--full"], env);
     expect(list.exitCode).toBe(0);
     const rows = JSON.parse(text(list.stdout)) as Array<{ slug: string }>;
     expect(rows.filter((row) => row.slug === "existing-security")).toHaveLength(1);
@@ -367,7 +367,7 @@ describe("project agent CLI", () => {
     expect(payload.plan.rollback_actions.some((action) => action.action === "remove_file")).toBe(true);
     expect(existsSync(targetPath)).toBe(false);
 
-    const list = runProjects(["list", "--json"], env);
+    const list = runProjects(["list", "--json", "--full"], env);
     expect(JSON.parse(text(list.stdout))).toHaveLength(0);
   });
 
@@ -432,7 +432,7 @@ describe("project agent CLI", () => {
     expect(cleanupPayload.actions.some((action) => action.action === "remove_empty_directory" && action.status === "completed")).toBe(true);
     expect(existsSync(targetPath)).toBe(false);
 
-    const list = runProjects(["list", "--json"], env);
+    const list = runProjects(["list", "--json", "--full"], env);
     expect(JSON.parse(text(list.stdout))).toHaveLength(0);
   });
 
@@ -472,7 +472,7 @@ describe("project agent CLI", () => {
     expect(updated.tags).toEqual(["workspace", "replacement"]);
     expect(updated.metadata.owner).toBe("cli-test");
 
-    const search = runProjects(["list", "--query", "queryable", "--json"], env);
+    const search = runProjects(["list", "--query", "queryable", "--json", "--full"], env);
     expect(search.exitCode).toBe(0);
     expect(JSON.parse(text(search.stdout))).toHaveLength(1);
 

@@ -142,6 +142,7 @@ import {
   resolveProjectListFields,
   type ProjectListDetail,
 } from "../../lib/project-list-output.js";
+import { pageStableCollection } from "../../lib/collection-cursor.js";
 import {
   PROJECT_AGENT_ROLES,
   WORKSPACE_KINDS,
@@ -2591,10 +2592,12 @@ function registerProjectCommands(program: Command): void {
     .option("--include-fixtures", "Include registry-fixture projects (excluded from default reads)")
     .option(
       "--limit <n>",
-      `Max rows (terminal and --detail output default to ${DEFAULT_LIST_LIMIT}; legacy --json returns every matching project unless you pass this)`,
+      `Max rows (terminal and JSON default to ${DEFAULT_LIST_LIMIT}; use --full for the legacy full-record JSON shape)`,
     )
-    .option("--offset <n>", "Skip this many matching projects before listing")
-    .option("--meta", "With --json, wrap the array in { projects, count, total, has_more, complete }")
+    .option("--offset <n>", "Legacy numeric offset; compact JSON accepts only 0 and continues with --cursor")
+    .option("--cursor <cursor>", "Opaque collection/filter-bound cursor from next_cursor")
+    .option("--meta", "Compatibility alias: ordinary --json already returns the metadata envelope; with --full, wrap the legacy array")
+    .option("--full", "With --json, return the legacy full-record array; omit --limit to exhaust all matching projects")
     .option("--detail <detail>", "Machine detail: compact or full; enables the bounded metadata envelope")
     .option("--fields <fields>", "Comma-separated compact fields (stable id is always retained)")
     .option("--all", "With --detail, explicitly return the complete matching population")
@@ -2606,16 +2609,21 @@ function registerProjectCommands(program: Command): void {
     .action(async (opts) => {
       try {
         const json = wantsJson(opts);
-        const machineEnvelope = opts.detail !== undefined
-          || opts.fields !== undefined
-          || Boolean(opts.all)
-          || opts.maxBytes !== undefined;
-        if (machineEnvelope && !json) {
+        const legacyFull = Boolean(opts.full);
+        const machineEnvelope = json && !legacyFull;
+        if ((opts.detail !== undefined || opts.fields !== undefined || Boolean(opts.all) || opts.maxBytes !== undefined) && !json) {
           throw new Error("--detail, --fields, --all, and --max-bytes require --json");
+        }
+        if (legacyFull && !json) throw new Error("--full requires --json");
+        if (legacyFull && (opts.detail !== undefined || opts.fields !== undefined || opts.maxBytes !== undefined)) {
+          throw new Error("--full cannot be combined with --detail, --fields, or --max-bytes");
         }
         if (opts.pretty && !json) throw new Error("--pretty requires --json");
         if (opts.all && opts.limit !== undefined) throw new Error("--all cannot be combined with --limit");
         if (opts.all && opts.offset !== undefined) throw new Error("--all cannot be combined with --offset");
+        if (opts.all && opts.cursor !== undefined) throw new Error("--all cannot be combined with --cursor");
+        if (legacyFull && opts.cursor !== undefined) throw new Error("--cursor is for compact JSON; use --offset with --full");
+        if (opts.cursor !== undefined && !machineEnvelope) throw new Error("--cursor requires ordinary compact --json output");
         const detail = parseProjectListDetail(opts.detail) ?? (machineEnvelope ? "compact" : undefined);
         if (opts.all && detail === "full") throw new Error("--all is only available with --detail compact");
         if (opts.fields !== undefined && detail === "full") throw new Error("--fields is only available with --detail compact");
@@ -2633,6 +2641,13 @@ function registerProjectCommands(program: Command): void {
           opts.queryScope,
           machineEnvelope && opts.query ? "discovery" : "all",
         );
+        const requestedOffset = parseNonNegativeInteger(opts.offset, "--offset");
+        if (machineEnvelope && requestedOffset !== undefined && requestedOffset !== 0) {
+          throw new Error("Compact project JSON refuses raw continuation offsets; restart without --offset and continue with next_cursor/--cursor.");
+        }
+        if (machineEnvelope && opts.cursor !== undefined && opts.offset !== undefined) {
+          throw new Error("Pass --cursor or --offset 0, not both.");
+        }
         const baseFilter = {
           kind: parseKind(opts.kind),
           status: parseStatus(opts.status),
@@ -2640,7 +2655,7 @@ function registerProjectCommands(program: Command): void {
           ...(opts.queryScope || machineEnvelope ? { query_scope: queryScope } : {}),
           ...(opts.queryScope !== undefined ? { require_list_v2_contract: true } : {}),
           tags: splitLabelFilters(opts.tags, opts.label, opts.labels),
-          offset: parseNonNegativeInteger(opts.offset, "--offset"),
+          offset: requestedOffset,
         };
         const store = resolveProjectStore();
         if (wantsRenderSpec(opts)) {
@@ -2658,22 +2673,36 @@ function registerProjectCommands(program: Command): void {
             const requestedLimit = opts.all
               ? undefined
               : parsePositiveInteger(opts.limit, "--limit") ?? DEFAULT_LIST_LIMIT;
-            const page = await store.listProjectsPage({
-              ...baseFilter,
-              offset: opts.all ? undefined : baseFilter.offset,
+            const stableFilter = {
+              kind: baseFilter.kind,
+              status: baseFilter.status,
+              query: baseFilter.query,
+              query_scope: queryScope,
+              tags: baseFilter.tags,
               exclude_eval_artifacts: !opts.includeEvals,
               exclude_registry_fixtures: !opts.includeFixtures,
-              limit: requestedLimit,
               require_list_v2_contract: true,
-            });
-            const projects = filterRegistryFixtures(filterProjectEvalArtifacts(page.projects, opts.includeEvals), opts.includeFixtures);
-            if (projects.length !== page.projects.length) {
+            };
+            const population = await store.listProjectsComplete(stableFilter);
+            const projects = filterRegistryFixtures(filterProjectEvalArtifacts(population.projects, opts.includeEvals), opts.includeFixtures);
+            if (projects.length !== population.projects.length || projects.length !== population.total) {
               throw new Error("Projects producer attested the v2 filter contract but returned an excluded eval/fixture row.");
             }
-            const total = page.total;
+            const stablePage = pageStableCollection(projects, {
+              collection: "projects",
+              filter: {
+                ...stableFilter,
+                detail,
+                fields,
+              },
+              limit: opts.all ? Math.max(projects.length, 1) : requestedLimit!,
+              cursor: opts.cursor,
+              identity: (project) => project.id,
+              compare: (left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id),
+            });
             const rows: unknown[] = detail === "full"
-              ? projects
-              : projects.map((project) => projectListRow(project, fields ?? undefined));
+              ? stablePage.items
+              : stablePage.items.map((project) => projectListRow(project, fields ?? undefined));
             const safeRows = redactProjectValue(rows) as unknown[];
             const nextArguments = redactProjectValue({
               ...(opts.query ? { query: opts.query } : {}),
@@ -2690,15 +2719,18 @@ function registerProjectCommands(program: Command): void {
             }) as Record<string, unknown>;
             const output = buildBoundedProjectListOutput({
               projects: safeRows,
-              total,
-              offset: page.offset,
-              limit: page.limit,
+              total: stablePage.total,
+              offset: stablePage.position,
+              limit: opts.all ? null : requestedLimit!,
               detail: detail as ProjectListDetail,
               fields,
               queryScope,
-              hasMore: page.has_more,
-              complete: page.complete,
-              nextOffset: page.has_more ? page.offset + page.projects.length : null,
+              hasMore: stablePage.has_more,
+              complete: stablePage.complete,
+              cursor: stablePage.cursor,
+              snapshot: stablePage.snapshot,
+              opaqueCursor: true,
+              nextCursorForCount: stablePage.cursorForCount,
               nextArguments,
             }, {
               maxBytes,
@@ -2721,7 +2753,7 @@ function registerProjectCommands(program: Command): void {
             ...baseFilter,
             exclude_eval_artifacts: !opts.includeEvals,
             exclude_registry_fixtures: !opts.includeFixtures,
-            limit: parsePositiveInteger(opts.limit, "--limit"),
+            limit: opts.all ? undefined : parsePositiveInteger(opts.limit, "--limit"),
           });
           const projects = filterRegistryFixtures(filterProjectEvalArtifacts(page.projects, opts.includeEvals), opts.includeFixtures);
           const rows = projects.map(projectWithManagement);
