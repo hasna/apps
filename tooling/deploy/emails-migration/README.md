@@ -5,11 +5,28 @@ inspection proves that its migration-definition inputs differ from the healthy
 live image. It is separate from the image-only lane and from npm release
 metadata.
 
-The workflow is manual and exact-main. All three phases share the
+The workflow is manual and exact-main. All phases share the
 `emails-search-production` concurrency group and delegate AWS authority to the
 existing IAM-trusted `emails-search-promotion-execute` reusable workflow.
 
-## 1. Reconcile
+## 1. Build and inspect the current immutable image
+
+`phase=image` requires successful CI for the exact current main commit. The
+existing protected production workflow builds the Linux amd64 Emails image,
+exercises it with isolated PostgreSQL, rejects high and critical vulnerabilities,
+pushes a unique immutable tag to the existing `mailery` ECR repository, then
+reads the registry manifest and every selected migration-definition input.
+The metadata-only `emails-current-migration-image/image.json` artifact binds
+the ECR digest, image version and revision label to the exact source SHA and
+selected source-module bytes. Review its run, digest and inventory before using
+the image in a later release proposal. This selected-input inspection is not a
+full-image provenance attestation or production database proof.
+
+This phase does not register or launch an ECS task, update a service, inspect the
+production database or change provider settings. It prepares image evidence;
+the protected probe, migration, and paired cutover require separate admission.
+
+## 2. Reconcile
 
 `phase=reconcile` takes the reviewed historical healthy anchor reconciliation
 and both failed image-only deployment run IDs. Run it only after a separately
@@ -30,7 +47,18 @@ performs no AWS mutation. It verifies that:
 
 Review and hash `emails-current-migration-reconciled/reconciled.json`.
 
-## 2. Prepare
+## 3. Prepare — disabled until a dedicated read-only probe is available
+
+The existing preparation code clones the production API task and launches it
+with command and environment overrides. Its launcher is the same production
+deploy role that can register API tasks, and that role correctly denies all
+`ecs:RunTask`. If dispatched, the old path could push an image and register a
+candidate task before the launch fails. Both the exact-main gate and deployment
+entrypoint now refuse `prepare` before AWS access or candidate registration.
+The future planner must use a separately reviewed, read-only probe task and
+launcher authority; changing this gate alone cannot authorize that work.
+
+The following describes the retained draft implementation, not an active runbook.
 
 `phase=prepare` requires that reviewed reconciliation. It builds, exercises,
 scans, and pushes the exact amd64 current image, then:
@@ -51,7 +79,7 @@ The planner directly selects the existing production ledger and performs no DDL
 or migration. Review and hash
 `emails-current-migration-prepared/prepared.json`.
 
-## 3. Execute — disabled pending a separate reviewed activation
+## 4. Execute — disabled pending a separate reviewed activation
 
 The workflow still displays `execute`, but the exact-main gate and deployment
 entrypoint both reject it

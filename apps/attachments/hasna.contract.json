@@ -1,0 +1,83 @@
+{
+  "schema": "hasna.service_contract.v1",
+  "name": "attachments",
+  "class": "service",
+  "contractVersion": "v1",
+  "kitVersion": "1.1.0",
+  "description": "Authenticated HTTPS clients; server-side PostgreSQL metadata and object storage.",
+  "bins": [
+    "attachments",
+    "attachments-mcp",
+    "attachments-serve"
+  ],
+  "hosting": [
+    "user-hosted"
+  ],
+  "storage": {
+    "engines": [
+      "postgresql"
+    ],
+    "envPrefix": "HASNA_ATTACHMENTS_",
+    "aliasEnvPrefix": "ATTACHMENTS_",
+    "pgTestGate": {
+      "envVar": "HASNA_ATTACHMENTS_TEST_DATABASE_URL",
+      "command": "HASNA_ATTACHMENTS_DATABASE_URL=\"${HASNA_ATTACHMENTS_TEST_DATABASE_URL:?point it at a throwaway Postgres; the live-PG gate must not pass without one}\" ATTACHMENTS_REQUIRE_POSTGRES=1 bun test src/db"
+    },
+    "backend": "postgresql"
+  },
+  "serviceSurfaces": [
+    {
+      "name": "attachments-api",
+      "kind": "api",
+      "status": "supported",
+      "bin": "attachments-serve",
+      "authMode": "api-key",
+      "health": {
+        "method": "GET",
+        "path": "/health",
+        "public": true
+      },
+      "readiness": {
+        "method": "GET",
+        "path": "/ready",
+        "public": true
+      },
+      "version": {
+        "method": "GET",
+        "path": "/version",
+        "public": true
+      },
+      "apiBasePath": "/v1",
+      "openApiPath": "/openapi.json"
+    },
+    {
+      "name": "attachments-sdk",
+      "kind": "sdk",
+      "status": "supported",
+      "authMode": "api-key",
+      "exportSubpath": "./sdk",
+      "generatedFrom": "/openapi.json"
+    },
+    {
+      "name": "attachments-mcp",
+      "kind": "mcp",
+      "status": "supported",
+      "mcpBin": "attachments-mcp",
+      "authMode": "api-key"
+    },
+    {
+      "name": "attachments-cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "attachments",
+      "authMode": "api-key"
+    }
+  ],
+  "metadata": {
+    "release": {
+      "artifactScan": {
+        "script": "scan:artifact"
+      }
+    }
+  }
+}

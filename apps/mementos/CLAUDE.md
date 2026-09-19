@@ -182,7 +182,7 @@ mementos profile delete work     # delete profile + its DB
 ```
 src/
   cli/          Commander.js + Ink TUI — flat commands plus grouped subcommands
-  mcp/          MCP server — 123 live tools and three resources
+  mcp/          MCP server — 124 live tools and three resources
   server/       REST API — Bun.serve, live route registry + OpenAPI generation
   db/           SQLite layer (bun:sqlite) — memories, agents, projects, entities, relations
   lib/          search (FTS5+fuzzy), extractor, injection, retention, sync

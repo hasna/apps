@@ -105,20 +105,13 @@ jobs:
             }
           '
 
-      # Root lockfile; select this package and its current workspace dependencies.
-      # Lifecycle scripts remain enabled.
+      # Match main CI's complete peer-dependency layout. A filtered install
+      # changes Bun's cache identities embedded in tracked dependency bundles.
+      # Run the shared lifecycle preparation in its required dependency order.
       - name: Install locked release dependencies
         run: |
-          bun install --frozen-lockfile \
-            --filter @hasna/todos \
-            --filter @hasna/contracts \
-            --filter @hasna/events
-
-      - name: Build workspace dependencies in order
-        run: |
-          set -euo pipefail
-          bun run --filter @hasna/contracts build
-          bun run --filter @hasna/events build
+          bun install --frozen-lockfile --ignore-scripts
+          bun run prepare:ordered
 
       - name: Typecheck
         working-directory: apps/todos

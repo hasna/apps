@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { listMemories, touchMemory, semanticSearch, getMemoryEmbeddings } from "../../db/memories.js";
+import { resolveInjectionProjectId } from "../../lib/injection-project.js";
 import { getSubscriptionNotifications } from "../../db/subscriptions.js";
 import { hookRegistry } from "../../lib/hooks.js";
 import {
@@ -32,7 +33,9 @@ export function registerMemoryInjectTools(server: McpServer): void {
     },
     async (args) => {
       try {
-        // Smart strategy: delegate to full smartInject pipeline (skip for hints mode — fall through to hints handler below)
+        // Smart strategy delegates raw project references to smartInject, which
+        // resolves exactly once before profile or memory work.
+        // Skip for hints mode — it uses the direct path below.
         if (args.strategy === "smart" && args.task_context && args.mode !== "hints") {
           const { smartInject } = await import("../../lib/injector.js");
           const result = await smartInject({
@@ -47,6 +50,7 @@ export function registerMemoryInjectTools(server: McpServer): void {
           return { content: [{ type: "text" as const, text: result.output }] };
         }
 
+        const projectId = resolveInjectionProjectId(args.project_id);
         const maxTokens = args.max_tokens || 500;
         const minImportance = args.min_importance || 3;
         const categories = args.categories || ["preference", "fact", "knowledge"];
@@ -61,27 +65,28 @@ export function registerMemoryInjectTools(server: McpServer): void {
           category: categories as MemoryCategory[],
           min_importance: minImportance,
           status: "active",
-          project_id: args.project_id,
+          project_id: projectId,
           ...visibleToMachineFilter(visibleMachineId),
           limit: 50,
         });
         allMemories.push(...globalMems);
 
         // Shared memories (project-scoped)
-        if (args.project_id) {
+        if (projectId) {
           const sharedMems = listMemories({
             scope: "shared",
             category: categories as MemoryCategory[],
             min_importance: minImportance,
             status: "active",
-            project_id: args.project_id,
+            project_id: projectId,
             ...visibleToMachineFilter(visibleMachineId),
             limit: 50,
           });
           allMemories.push(...sharedMems);
         }
 
-        // Private memories (agent-scoped)
+        // Include unassigned agent-private context across projects, applying
+        // project eligibility in the store before the candidate limit.
         if (args.agent_id) {
           const privateMems = listMemories({
             scope: "private",
@@ -89,6 +94,8 @@ export function registerMemoryInjectTools(server: McpServer): void {
             min_importance: minImportance,
             status: "active",
             agent_id: args.agent_id,
+            project_id: projectId,
+            include_unassigned_project: true,
             ...visibleToMachineFilter(visibleMachineId),
             limit: 50,
           });
@@ -102,7 +109,7 @@ export function registerMemoryInjectTools(server: McpServer): void {
             status: "active",
             ...(args.session_id ? { session_id: args.session_id } : {}),
             ...(args.agent_id ? { agent_id: args.agent_id } : {}),
-            ...(args.project_id ? { project_id: args.project_id } : {}),
+            ...(projectId ? { project_id: projectId } : {}),
             ...visibleToMachineFilter(visibleMachineId),
             limit: 50,
           });
@@ -127,7 +134,7 @@ export function registerMemoryInjectTools(server: McpServer): void {
               limit: 20,
               scope: undefined,
               agent_id: args.agent_id,
-              project_id: args.project_id,
+              project_id: projectId,
             });
             for (const r of activationResults) {
               if (!isMemoryVisibleToMachine(r.memory, visibleMachineId)) continue;
@@ -271,7 +278,7 @@ export function registerMemoryInjectTools(server: McpServer): void {
           memories: unique,
           format: fmt,
           agentId: args.agent_id,
-          projectId: args.project_id,
+          projectId: projectId,
           sessionId: args.session_id,
           timestamp: Date.now(),
         };
@@ -320,7 +327,7 @@ export function registerMemoryInjectTools(server: McpServer): void {
           format: fmt,
           contextLength: context.length,
           agentId: args.agent_id,
-          projectId: args.project_id,
+          projectId: projectId,
           sessionId: args.session_id,
           timestamp: Date.now(),
         });

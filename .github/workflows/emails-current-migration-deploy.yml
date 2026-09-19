@@ -1,13 +1,14 @@
 name: emails-current-migration-deploy
 
 # Reviewed, roll-forward-only deployment for a current Emails image whose actual
-# migration inputs differ from the live image. This is separate from npm release.
+# migration inputs differ from the live image. Image preparation is available;
+# task preparation and migration execution remain disabled. Separate from npm release.
 on:
   workflow_dispatch:
     inputs:
       phase:
         type: choice
-        options: [reconcile, prepare, execute]
+        options: [image, reconcile, prepare, execute]
         required: true
         default: reconcile
       anchor_reconciliation_run_id:
@@ -99,7 +100,7 @@ jobs:
       id-token: write
     uses: ./.github/workflows/emails-search-promotion-execute.yml
     with:
-      phase: ${{ inputs.phase == 'reconcile' && 'migration_reconcile' || inputs.phase == 'prepare' && 'migration_prepare' || 'migration_execute' }}
+      phase: ${{ inputs.phase == 'image' && 'migration_image' || inputs.phase == 'reconcile' && 'migration_reconcile' || inputs.phase == 'prepare' && 'migration_prepare' || 'migration_execute' }}
       source: ${{ github.sha }}
       prepared_run_id: ""
       prepared_sha256: ""

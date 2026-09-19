@@ -18,6 +18,7 @@ export function cliFixture(api: V1Stub) {
   const home = mkdtempSync(join(tmpdir(), "emails-domain-setup-")); chmodSync(home, 0o700);
   mkdirSync(join(home, "tmp"), { mode: 0o700 });
   const env = { ...buildPrepublishTestEnv(process.env, home), HOME: home, HASNA_HOME: join(home, ".hasna"), HASNA_STATION: `domain-setup-${crypto.randomUUID()}`, EMAILS_CLIENT_ENV_LOADED: "1", NO_COLOR: "1" };
+  // hasna-credential-seam-waiver: fixture setup SCRUBS inherited credentials so the child resolves only the temp-dir credential file; deleting names from a copied env is not a client credential resolution.
   delete env.HASNA_EMAILS_API_URL; delete env.HASNA_EMAILS_API_KEY;
   const directory = join(home, ".hasna", "emails", "config"); mkdirSync(directory, { recursive: true, mode: 0o700 });
   const credentials = join(directory, "credentials");
