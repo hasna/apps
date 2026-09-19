@@ -15,8 +15,8 @@ import {
 } from "../../lib/identity.js";
 import { emitCliError } from "../cli-error.js";
 import { isAgentConflict, normalizeAgentName } from "../../lib/agent-names.js";
-import { buildCompactCollectionEnvelope, summarizeAgent, windowItems } from "../../lib/compact-output.js";
-import { getCliWindow, printCompactFooter, windowJsonList } from "../compact.js";
+import { buildCompactCollectionEnvelope, compareAgentCollectionRows, summarizeAgent } from "../../lib/compact-output.js";
+import { printCompactFooter, windowJsonList } from "../compact.js";
 import { printErrorLine, printJson, printJsonLine, printLine } from "../../lib/stdout.js";
 
 type PresenceView = {
@@ -73,7 +73,7 @@ export function registerAgentCommands(program: Command): void {
     .description("List all agents with their presence status")
     .option("--online", "Only show online agents")
     .option("--limit <n>", "Max agents to show", parseInt)
-    .option("--cursor <n>", "Skip first N agents for pagination", parseInt)
+    .option("--cursor <token>", "Opaque continuation cursor from next_cursor")
     .option("-j, --json", "Output bounded compact JSON")
     .option("--full", "Return the legacy full-record JSON array")
     .option("--all", "Alias for --full")
@@ -91,33 +91,45 @@ export function registerAgentCommands(program: Command): void {
       } catch (err) {
         if (!(err instanceof IdentityError)) throw err;
       }
-      if (agent) await getStore().heartbeat(agent);
+      if (agent && !opts.cursor) await getStore().heartbeat(agent);
 
       const agentsList = await getStore().listAgents({ online_only: opts.online });
       const sort = getStore().describeListOrder("agents");
-      const window = getCliWindow({ limit: opts.limit, cursor: opts.cursor });
-      const page = windowItems(agentsList, window);
+      if (opts.json && (opts.full || opts.all)) {
+        if (opts.cursor !== undefined) throw new Error("--cursor cannot be combined with --full or --all; use ordinary --json for safe continuation");
+        const listing = windowJsonList(agentsList, opts.all ? {} : { limit: opts.limit });
+        printJson(listing.rows);
+        return;
+      }
+      const page = (() => {
+        try {
+          return buildCompactCollectionEnvelope({
+        collection: "agents",
+        items: agentsList,
+        summarize: summarizeAgent,
+        compare: compareAgentCollectionRows,
+        key: (row) => ({ agent: row.agent, id: row.id }),
+        snapshot: (row) => ({ id: row.id, ...summarizeAgent(row) }),
+        filters: { online: Boolean(opts.online) },
+        tieBreakers: ["agent asc", "id asc"],
+        limit: opts.limit,
+        cursor: opts.cursor,
+        sort,
+        hint: "Continue with the opaque next_cursor; restart from page one if the collection changes. Pass --full or --all for the legacy array.",
+      });;
+        } catch (error) {
+          emitCliError(error instanceof Error ? error.message : String(error), opts);
+        }
+      })()
 
       if (opts.json) {
-        if (opts.full || opts.all) {
-          const listing = windowJsonList(agentsList, opts.all ? {} : opts);
-          printJson(listing.rows);
-        } else {
-          printJsonLine(buildCompactCollectionEnvelope({
-            collection: "agents",
-            items: agentsList,
-            summarize: summarizeAgent,
-            limit: opts.limit,
-            cursor: opts.cursor,
-            sort,
-            hint: "Continue with next_cursor; pass --full or --all for the legacy full-record array.",
-          }));
-        }
+        printJsonLine(page);
       } else {
-        if (agentsList.length === 0) {
+        const rows = page.agents as ReturnType<typeof summarizeAgent>[];
+        if (rows.length === 0) {
           printLine(chalk.dim("No agents found."));
         } else {
-          for (const a of page.items) {
+          for (const a of rows) {
             const status = a.online ? chalk.green("online") : chalk.dim("offline");
             const lastSeen = chalk.dim(a.last_seen_at.slice(0, 19));
             const agentName = a.agent === agent ? chalk.cyan(`${a.agent} (you)`) : chalk.cyan(a.agent);
@@ -126,9 +138,9 @@ export function registerAgentCommands(program: Command): void {
           printCompactFooter({
             shown: page.count,
             total: page.total,
-            hasMore: page.hasMore,
-            nextCursor: page.nextCursor,
-            limitCapped: window.limitCapped,
+            hasMore: page.has_more,
+            nextCursor: page.next_cursor,
+            limitCapped: page.limit_capped,
             sort,
             detailHint: "Use --online to filter active agents.",
           });

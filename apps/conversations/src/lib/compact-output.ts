@@ -11,6 +11,7 @@ import type {
   Session,
   TaskInfo,
 } from "../types.js";
+import { createHash } from "node:crypto";
 import { takeWindow } from "./message-window.js";
 import type { SortDescriptor } from "./list-order.js";
 
@@ -316,31 +317,159 @@ export function summarizeSession(session: Session) {
 
 
 
+export type CompactCollectionKind = "agents" | "sessions" | "members" | "subscriptions";
+
+export const MAX_COMPACT_COLLECTION_CURSOR_BYTES = 1_024;
+const COMPACT_COLLECTION_CURSOR_VERSION = 1;
+const COMPACT_COLLECTION_CURSOR_DOMAIN = "hasna.conversations.compact-collection.v1";
+
+interface CompactCollectionCursorPayload {
+  v: 1;
+  collection: CompactCollectionKind;
+  query: string;
+  snapshot: string;
+  after: string;
+  check: string;
+}
+
+function canonicalJson(value: unknown): string {
+  if (value === null) return "null";
+  if (typeof value === "string" || typeof value === "boolean") return JSON.stringify(value);
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw new Error("Compact collection fingerprints require finite numbers");
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) return `[${value.map((entry) => canonicalJson(entry ?? null)).join(",")}]`;
+  if (typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record).filter((key) => record[key] !== undefined).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(",")}}`;
+  }
+  throw new Error(`Unsupported compact collection fingerprint value: ${typeof value}`);
+}
+
+function digest(value: unknown): string {
+  return createHash("sha256").update(canonicalJson(value)).digest("base64url");
+}
+
+function cursorCheck(payload: Omit<CompactCollectionCursorPayload, "check">): string {
+  return digest({ domain: COMPACT_COLLECTION_CURSOR_DOMAIN, ...payload });
+}
+
+function encodeCompactCollectionCursor(payload: Omit<CompactCollectionCursorPayload, "check">): string {
+  const complete: CompactCollectionCursorPayload = { ...payload, check: cursorCheck(payload) };
+  return Buffer.from(canonicalJson(complete), "utf8").toString("base64url");
+}
+
+function decodeCompactCollectionCursor(
+  raw: unknown,
+  collection: CompactCollectionKind,
+  query: string,
+): CompactCollectionCursorPayload | null {
+  if (raw === undefined || raw === null || raw === "") return null;
+  if (
+    typeof raw !== "string"
+    || Buffer.byteLength(raw, "utf8") > MAX_COMPACT_COLLECTION_CURSOR_BYTES
+    || !/^[A-Za-z0-9_-]+$/.test(raw)
+  ) throw new Error(`Invalid ${collection} continuation cursor`);
+  let decoded: Buffer;
+  let value: unknown;
+  try {
+    decoded = Buffer.from(raw, "base64url");
+    if (decoded.toString("base64url") !== raw) throw new Error("noncanonical cursor");
+    value = JSON.parse(decoded.toString("utf8"));
+  } catch {
+    throw new Error(`Invalid ${collection} continuation cursor`);
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`Invalid ${collection} continuation cursor`);
+  }
+  const payload = value as Partial<CompactCollectionCursorPayload> & Record<string, unknown>;
+  if (
+    Object.keys(payload).sort().join(",") !== "after,check,collection,query,snapshot,v"
+    || payload.v !== COMPACT_COLLECTION_CURSOR_VERSION
+    || payload.collection !== collection
+    || payload.query !== query
+    || typeof payload.snapshot !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(payload.snapshot)
+    || typeof payload.after !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(payload.after)
+    || typeof payload.check !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(payload.check)
+  ) throw new Error(`${collection} continuation cursor does not match this collection or its filters`);
+  const withoutCheck = {
+    v: 1 as const,
+    collection,
+    query,
+    snapshot: payload.snapshot,
+    after: payload.after,
+  };
+  if (payload.check !== cursorCheck(withoutCheck) || encodeCompactCollectionCursor(withoutCheck) !== raw) {
+    throw new Error(`Invalid ${collection} continuation cursor`);
+  }
+  return payload as CompactCollectionCursorPayload;
+}
+
+function compareText(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+/** Stable total ordering: newest heartbeat first, then immutable presence identity. */
+export function compareAgentCollectionRows(left: AgentPresence, right: AgentPresence): number {
+  return compareText(right.last_seen_at, left.last_seen_at)
+    || compareText(left.agent, right.agent)
+    || compareText(left.id, right.id);
+}
+
+/** Stable total ordering: newest session first, then unique session id. */
+export function compareSessionCollectionRows(left: Session, right: Session): number {
+  return compareText(right.last_message_at, left.last_message_at)
+    || compareText(left.session_id, right.session_id);
+}
+
+/** Stable total ordering: earliest join first, then unique channel member identity. */
+export function compareMemberCollectionRows(left: ChannelMember, right: ChannelMember): number {
+  return compareText(left.joined_at, right.joined_at)
+    || compareText(left.agent, right.agent)
+    || compareText(left.channel, right.channel);
+}
+
+/** Stable total ordering: earliest subscription first, then channel and agent identity. */
+export function compareSubscriptionCollectionRows(left: ChannelNotificationSubscription, right: ChannelNotificationSubscription): number {
+  return compareText(left.created_at, right.created_at)
+    || compareText(left.channel, right.channel)
+    || compareText(left.agent, right.agent);
+}
+
 export interface CompactCollectionEnvelope<T> {
   [key: string]: unknown;
   count: number;
   total: number;
   limit: number;
-  cursor: number;
-  next_cursor: number | null;
+  cursor: string | null;
+  next_cursor: string | null;
   has_more: boolean;
   limit_capped: boolean;
   max_bytes: number;
   byte_length: number;
   compact: true;
   sort: SortDescriptor;
+  tie_breakers: string[];
+  collection_fingerprint: string;
   hint: string;
 }
 
 /**
- * Build a minified, row- and UTF-8-byte-bounded collection page. The cursor
- * advances by exactly the rows disclosed, including when the byte ceiling
- * trims a requested page, so following next_cursor cannot skip records.
+ * Build a minified collection page with an opaque keyset continuation bound to
+ * the tool, filters and the exact ordered snapshot. Any insertion, deletion,
+ * reordering or projected-field mutation between pages invalidates the cursor
+ * and fails closed instead of silently skipping or duplicating rows.
  */
 export function buildCompactCollectionEnvelope<T, S>(opts: {
-  collection: string;
+  collection: CompactCollectionKind;
   items: T[];
   summarize: (item: T) => S;
+  compare: (left: T, right: T) => number;
+  key: (item: T) => unknown;
+  filters?: Record<string, unknown>;
+  snapshot?: (item: T) => unknown;
+  tieBreakers: string[];
   limit?: unknown;
   cursor?: unknown;
   defaultLimit?: number;
@@ -349,12 +478,8 @@ export function buildCompactCollectionEnvelope<T, S>(opts: {
   sort: SortDescriptor;
   hint: string;
 }): CompactCollectionEnvelope<S> {
-  if (!/^[a-z][a-z0-9_]*$/.test(opts.collection)) {
-    throw new Error(`Invalid compact collection key: ${JSON.stringify(opts.collection)}`);
-  }
   const window = resolveOutputWindow({
     limit: opts.limit,
-    cursor: opts.cursor,
     defaultLimit: opts.defaultLimit ?? DEFAULT_COMPACT_LIMIT,
     maxLimit: opts.maxLimit ?? MAX_COMPACT_LIMIT,
   });
@@ -362,31 +487,63 @@ export function buildCompactCollectionEnvelope<T, S>(opts: {
     Math.floor(opts.maxBytes ?? DEFAULT_COLLECTION_MAX_BYTES),
     DEFAULT_COLLECTION_MAX_BYTES,
   ));
-  const total = opts.items.length;
-  const start = Math.min(window.offset, total);
-  const selected = opts.items.slice(start, start + window.limit).map(opts.summarize);
-  const rows = [...selected];
+  const query = digest({ collection: opts.collection, filters: opts.filters ?? {} });
+  const ordered = [...opts.items].sort(opts.compare);
+  const keyed = ordered.map((item) => ({
+    item,
+    key: digest(opts.key(item)),
+    snapshot: (opts.snapshot ?? opts.summarize)(item),
+  }));
+  if (new Set(keyed.map((entry) => entry.key)).size !== keyed.length) {
+    throw new Error(`${opts.collection} collection lacks a unique stable identity; safe traversal is impossible`);
+  }
+  const collectionFingerprint = digest(keyed.map((entry) => ({ key: entry.key, value: entry.snapshot })));
+  const decoded = decodeCompactCollectionCursor(opts.cursor, opts.collection, query);
+  if (decoded && decoded.snapshot !== collectionFingerprint) {
+    throw new Error(`${opts.collection} collection changed during pagination; restart from the first page`);
+  }
+  let start = 0;
+  if (decoded) {
+    const afterIndex = keyed.findIndex((entry) => entry.key === decoded.after);
+    if (afterIndex < 0) {
+      throw new Error(`${opts.collection} continuation no longer names a member; restart from the first page`);
+    }
+    start = afterIndex + 1;
+  }
+  const selected = keyed.slice(start, start + window.limit);
+  const rows = selected.map((entry) => opts.summarize(entry.item));
 
   const build = (): CompactCollectionEnvelope<S> => {
-    const nextOffset = start + rows.length;
-    const hasMore = nextOffset < total;
+    const emitted = rows.length;
+    const nextOffset = start + emitted;
+    const hasMore = nextOffset < keyed.length;
+    const lastKey = emitted > 0 ? selected[emitted - 1]!.key : null;
+    const nextCursor = hasMore && lastKey
+      ? encodeCompactCollectionCursor({
+          v: 1,
+          collection: opts.collection,
+          query,
+          snapshot: collectionFingerprint,
+          after: lastKey,
+        })
+      : null;
     const envelope: CompactCollectionEnvelope<S> = {
       [opts.collection]: [...rows],
-      count: rows.length,
-      total,
+      count: emitted,
+      total: keyed.length,
       limit: window.limit,
-      cursor: window.offset,
-      next_cursor: hasMore ? nextOffset : null,
+      cursor: typeof opts.cursor === "string" && opts.cursor ? opts.cursor : null,
+      next_cursor: nextCursor,
       has_more: hasMore,
       limit_capped: window.limitCapped,
       max_bytes: maxBytes,
       byte_length: 0,
       compact: true,
       sort: opts.sort,
+      tie_breakers: [...opts.tieBreakers],
+      collection_fingerprint: collectionFingerprint,
       hint: opts.hint,
     };
-    // byte_length includes its own decimal representation. Recompute until the
-    // serialized size stabilizes (normally two iterations).
     for (let index = 0; index < 4; index += 1) {
       const next = Buffer.byteLength(JSON.stringify(envelope), "utf8");
       if (next === envelope.byte_length) break;
@@ -400,7 +557,7 @@ export function buildCompactCollectionEnvelope<T, S>(opts: {
     rows.pop();
     envelope = build();
   }
-  if (envelope.byte_length > maxBytes || (rows.length === 0 && start < total)) {
+  if (envelope.byte_length > maxBytes || (rows.length === 0 && start < keyed.length)) {
     throw new Error(`Compact ${opts.collection} envelope cannot advance within max_bytes (${maxBytes}).`);
   }
   return envelope;

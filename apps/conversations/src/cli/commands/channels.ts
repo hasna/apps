@@ -1,9 +1,9 @@
 import type { Command } from "commander";
-import { getStore } from "../../lib/store/index.js";
+import { getStore, normalizeChannelName } from "../../lib/store/index.js";
 import chalk from "chalk";
 // Reads/writes route through getStore(): ApiStore (HTTP API) or LocalStore.
 import { resolveIdentity } from "../../lib/identity.js";
-import { buildCompactCollectionEnvelope, previewText, summarizeChannel, summarizeChannelMember, summarizeChannelSubscription, windowItems } from "../../lib/compact-output.js";
+import { buildCompactCollectionEnvelope, compareMemberCollectionRows, compareSubscriptionCollectionRows, previewText, summarizeChannel, summarizeChannelMember, summarizeChannelSubscription, windowItems } from "../../lib/compact-output.js";
 import { assertNoSensitiveContent } from "../../lib/content-safety.js";
 import { getCliWindow, pageFromQuery, printCompactFooter, printJsonDisclosure, queryLimitFor, warnIfPageFull, windowJsonList } from "../compact.js";
 import { CHANNEL_MEMBER_ORDER, CHANNEL_SUBSCRIPTION_AGENT_ORDER } from "../../lib/list-order.js";
@@ -803,7 +803,7 @@ export function registerChannelCommands(program: Command): void {
     .option("--from <agent>", "Agent ID")
     .option("--channel <name>", "Filter by channel")
     .option("--limit <n>", "Max subscriptions to show", parseInt)
-    .option("--cursor <n>", "Skip first N subscriptions for pagination", parseInt)
+    .option("--cursor <token>", "Opaque continuation cursor from next_cursor")
     .option("-j, --json", "Output bounded compact JSON")
     .option("--full", "Return the legacy full-record JSON array")
     .option("--all", "Alias for --full")
@@ -818,39 +818,53 @@ export function registerChannelCommands(program: Command): void {
       if (opts.channel) {
         subscriptions = subscriptions.filter((row) => row.channel === opts.channel);
       }
-      const window = getCliWindow({ limit: opts.limit, cursor: opts.cursor });
-      const page = windowItems(subscriptions, window);
+      if (opts.json && (opts.full || opts.all)) {
+        if (opts.cursor !== undefined) throw new Error("--cursor cannot be combined with --full or --all; use ordinary --json for safe continuation");
+        const listing = windowJsonList(subscriptions, opts.all ? {} : { limit: opts.limit });
+        printJson(listing.rows);
+        return;
+      }
+      const page = (() => {
+        try {
+          return buildCompactCollectionEnvelope({
+        collection: "subscriptions",
+        items: subscriptions,
+        summarize: summarizeChannelSubscription,
+        compare: compareSubscriptionCollectionRows,
+        key: (row) => ({ channel: row.channel, agent: row.agent }),
+        snapshot: summarizeChannelSubscription,
+        filters: { agent, channel: opts.channel ?? null },
+        tieBreakers: ["channel asc", "agent asc"],
+        limit: opts.limit,
+        cursor: opts.cursor,
+        sort: CHANNEL_SUBSCRIPTION_AGENT_ORDER,
+        hint: "Continue with the opaque next_cursor; restart from page one if the collection changes. Pass --full or --all for the legacy array.",
+      });;
+        } catch (error) {
+          emitCliError(error instanceof Error ? error.message : String(error), opts);
+        }
+      })()
 
       if (opts.json) {
-        if (opts.full || opts.all) {
-          const listing = windowJsonList(subscriptions, opts.all ? {} : opts);
-          printJson(listing.rows);
-        } else {
-          printJsonLine(buildCompactCollectionEnvelope({
-            collection: "subscriptions",
-            items: subscriptions,
-            summarize: summarizeChannelSubscription,
-            limit: opts.limit,
-            cursor: opts.cursor,
-            sort: CHANNEL_SUBSCRIPTION_AGENT_ORDER,
-            hint: "Continue with next_cursor; pass --full or --all for the legacy full-record array.",
-          }));
-        }
-      } else if (subscriptions.length === 0) {
-        printLine(chalk.dim(`No notification subscriptions for ${agent}.`));
+        printJsonLine(page);
       } else {
-        printLine(chalk.bold(`${agent} notification subscriptions:`));
-        for (const row of page.items) {
-          printLine(`  ${chalk.magenta(`#${row.channel}`)} ${chalk.dim(`preview ${row.preview_chars} chars`)}`);
+        const rows = page.subscriptions as ReturnType<typeof summarizeChannelSubscription>[];
+        if (rows.length === 0) {
+          printLine(chalk.dim(`No notification subscriptions for ${agent}.`));
+        } else {
+          printLine(chalk.bold(`${agent} notification subscriptions:`));
+          for (const row of rows) {
+            printLine(`  ${chalk.magenta(`#${row.channel}`)} ${chalk.dim(`preview ${row.preview_chars} chars`)}`);
+          }
+          printCompactFooter({
+            shown: page.count,
+            total: page.total,
+            hasMore: page.has_more,
+            nextCursor: page.next_cursor,
+            limitCapped: page.limit_capped,
+            sort: CHANNEL_SUBSCRIPTION_AGENT_ORDER,
+          });
         }
-        printCompactFooter({
-          shown: page.count,
-          total: page.total,
-          hasMore: page.hasMore,
-          nextCursor: page.nextCursor,
-          limitCapped: window.limitCapped,
-          sort: CHANNEL_SUBSCRIPTION_AGENT_ORDER,
-        });
       }
     });
 
@@ -859,7 +873,7 @@ export function registerChannelCommands(program: Command): void {
     .description("List channel members")
     .argument("<channel>", "Channel name")
     .option("--limit <n>", "Max members to show", parseInt)
-    .option("--cursor <n>", "Skip first N members for pagination", parseInt)
+    .option("--cursor <token>", "Opaque continuation cursor from next_cursor")
     .option("-j, --json", "Output bounded compact JSON")
     .option("--full", "Return the legacy full-record JSON array")
     .option("--all", "Alias for --full")
@@ -874,38 +888,50 @@ export function registerChannelCommands(program: Command): void {
         emitCliError(`Channel #${channelArg} not found.`, opts);
       }
       const members = await store.getChannelMembers(channelArg);
-      const window = getCliWindow({ limit: opts.limit, cursor: opts.cursor });
-      const page = windowItems(members, window);
+      if (opts.json && (opts.full || opts.all)) {
+        if (opts.cursor !== undefined) throw new Error("--cursor cannot be combined with --full or --all; use ordinary --json for safe continuation");
+        const listing = windowJsonList(members, opts.all ? {} : { limit: opts.limit });
+        printJson(listing.rows);
+        return;
+      }
+      const page = (() => {
+        try {
+          return buildCompactCollectionEnvelope({
+        collection: "members",
+        items: members,
+        summarize: summarizeChannelMember,
+        compare: compareMemberCollectionRows,
+        key: (row) => ({ channel: row.channel, agent: row.agent }),
+        snapshot: summarizeChannelMember,
+        filters: { channel: normalizeChannelName(channelArg) },
+        tieBreakers: ["agent asc", "channel asc"],
+        limit: opts.limit,
+        cursor: opts.cursor,
+        sort: CHANNEL_MEMBER_ORDER,
+        hint: "Continue with the opaque next_cursor; restart from page one if the collection changes. Pass --full or --all for the legacy array.",
+      });;
+        } catch (error) {
+          emitCliError(error instanceof Error ? error.message : String(error), opts);
+        }
+      })()
 
       if (opts.json) {
-        if (opts.full || opts.all) {
-          const listing = windowJsonList(members, opts.all ? {} : opts);
-          printJson(listing.rows);
-        } else {
-          printJsonLine(buildCompactCollectionEnvelope({
-            collection: "members",
-            items: members,
-            summarize: summarizeChannelMember,
-            limit: opts.limit,
-            cursor: opts.cursor,
-            sort: CHANNEL_MEMBER_ORDER,
-            hint: "Continue with next_cursor; pass --full or --all for the legacy full-record array.",
-          }));
-        }
+        printJsonLine(page);
       } else {
-        if (members.length === 0) {
+        const rows = page.members as ReturnType<typeof summarizeChannelMember>[];
+        if (rows.length === 0) {
           printLine(chalk.dim(`No members in #${channelArg}.`));
         } else {
-          printLine(chalk.magenta(`#${channelArg}`) + chalk.dim(` — ${members.length} member(s)`));
-          for (const m of page.items) {
-            printLine(`  ${chalk.cyan(m.agent)} ${chalk.dim(`joined ${m.joined_at.slice(0, 10)}`)}`);
+          printLine(chalk.magenta(`#${channelArg}`) + chalk.dim(` — ${page.total} member(s)`));
+          for (const member of rows) {
+            printLine(`  ${chalk.cyan(member.agent)} ${chalk.dim(`joined ${member.joined_at.slice(0, 10)}`)}`);
           }
           printCompactFooter({
             shown: page.count,
             total: page.total,
-            hasMore: page.hasMore,
-            nextCursor: page.nextCursor,
-            limitCapped: window.limitCapped,
+            hasMore: page.has_more,
+            nextCursor: page.next_cursor,
+            limitCapped: page.limit_capped,
             sort: CHANNEL_MEMBER_ORDER,
           });
         }

@@ -208,13 +208,13 @@ describe("bounded secondary collection JSON", () => {
   function expectCompact(result: ReturnType<typeof runCli>, key: string) {
     expect(result.exitCode, result.stderr).toBe(0);
     const payload = JSON.parse(result.stdout) as Record<string, any>;
-    expect(payload).toMatchObject({ compact: true, cursor: 0, max_bytes: 48 * 1024 });
+    expect(payload).toMatchObject({ compact: true, cursor: null, max_bytes: 48 * 1024 });
     expect(Array.isArray(payload[key])).toBe(true);
     expect(payload.count).toBe(payload[key].length);
     expect(payload.byte_length).toBe(Buffer.byteLength(result.stdout.trim(), "utf8"));
     expect(payload.byte_length).toBeLessThanOrEqual(48 * 1024);
     expect(result.stdout).toBe(`${JSON.stringify(payload)}\n`);
-    if (payload.has_more) expect(payload.next_cursor).toBe(payload.count);
+    if (payload.has_more) expect(payload.next_cursor).toMatch(/^[A-Za-z0-9_-]+$/);
     else expect(payload.next_cursor).toBeNull();
     return payload;
   }

@@ -88,9 +88,13 @@ The same gradual disclosure pattern applies to channel reads, message search,
 recent activity, pinned messages, blockers, and collection lists. Ordinary JSON
 for `channel subscriptions`, `channel members`, `sessions`, and `agents list`
 returns a minified envelope capped at 100 rows and 48 KiB with `count`, `total`,
-`has_more`, and `next_cursor`. Follow `next_cursor` until `has_more` is false.
-Use explicit `--full` (or `--all`) only when a script requires the legacy bare
-array of full records.
+`has_more`, and `next_cursor`. The continuation is opaque and bound to the
+command filters plus an exact collection fingerprint. Follow it verbatim until
+`has_more` is false; if membership or ordering changes between pages, the CLI
+fails closed and requires a restart from page one rather than skipping or
+repeating rows. Use explicit `--full` (or `--all`) only when a script requires
+the legacy bare array of full records; full arrays do not accept a continuation
+cursor.
 
 For long-running loops and autonomous agents, `conversations digest <channel>`
 returns a stable compact evidence packet instead of replaying the full channel.

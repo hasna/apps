@@ -3,6 +3,10 @@ import type { AgentPresence, ChannelMember, ChannelNotificationSubscription, Ses
 import {
   DEFAULT_COLLECTION_MAX_BYTES,
   buildCompactCollectionEnvelope,
+  compareAgentCollectionRows,
+  compareMemberCollectionRows,
+  compareSessionCollectionRows,
+  compareSubscriptionCollectionRows,
   summarizeAgent,
   summarizeChannelMember,
   summarizeChannelSubscription,
@@ -17,9 +21,20 @@ function expectBoundedPage(envelope: Record<string, any>, collection: string): v
   expect(envelope.byte_length).toBeLessThanOrEqual(DEFAULT_COLLECTION_MAX_BYTES);
   expect(envelope.count).toBe(envelope[collection].length);
   expect(envelope.has_more).toBe(envelope.next_cursor !== null);
-  if (envelope.has_more) expect(envelope.next_cursor).toBe(envelope.cursor + envelope.count);
+  if (envelope.has_more) expect(envelope.next_cursor).toMatch(/^[A-Za-z0-9_-]+$/);
+  expect(envelope.collection_fingerprint).toMatch(/^[A-Za-z0-9_-]{43}$/);
   expect(serialized).not.toContain("\n");
 }
+
+const agentPaging = {
+  collection: "agents" as const,
+  summarize: summarizeAgent,
+  compare: compareAgentCollectionRows,
+  key: (row: AgentPresence) => ({ agent: row.agent, id: row.id }),
+  tieBreakers: ["agent asc", "id asc"],
+  sort,
+  hint: "continue",
+};
 
 describe("large compact collection envelopes", () => {
   test("agents stay under 48 KiB and continue without gaps", () => {
@@ -35,19 +50,15 @@ describe("large compact collection envelopes", () => {
       online: index % 2 === 0,
       metadata: { omitted: "m".repeat(10_000) },
     }));
-    const first = buildCompactCollectionEnvelope({
-      collection: "agents", items: agents, summarize: summarizeAgent,
-      limit: 500, sort, hint: "continue",
-    });
+    const first = buildCompactCollectionEnvelope({ ...agentPaging, items: agents, limit: 500 });
     expectBoundedPage(first, "agents");
     expect(first.limit).toBe(100);
     expect(first.limit_capped).toBe(true);
-    const second = buildCompactCollectionEnvelope({
-      collection: "agents", items: agents, summarize: summarizeAgent,
-      cursor: first.next_cursor, limit: 100, sort, hint: "continue",
-    });
+    const second = buildCompactCollectionEnvelope({ ...agentPaging, items: agents, cursor: first.next_cursor, limit: 100 });
     expectBoundedPage(second, "agents");
-    expect(second.cursor).toBe(first.count);
+    expect(second.cursor).toBe(first.next_cursor);
+    const firstNames = new Set((first.agents as any[]).map((row) => row.agent));
+    expect((second.agents as any[]).every((row) => !firstNames.has(row.agent))).toBe(true);
   });
 
   test("sessions byte-trim oversized participant populations truthfully", () => {
@@ -60,7 +71,8 @@ describe("large compact collection envelopes", () => {
     }));
     const page = buildCompactCollectionEnvelope({
       collection: "sessions", items: sessions, summarize: summarizeSession,
-      limit: 100, sort, hint: "continue",
+      compare: compareSessionCollectionRows, key: row => ({ session_id: row.session_id }),
+      tieBreakers: ["session_id asc"], limit: 100, sort, hint: "continue",
     });
     expectBoundedPage(page, "sessions");
     expect(page.count).toBeLessThan(100);
@@ -84,15 +96,42 @@ describe("large compact collection envelopes", () => {
     }));
     const memberPage = buildCompactCollectionEnvelope({
       collection: "members", items: members, summarize: summarizeChannelMember,
-      limit: 100, sort, hint: "continue",
+      compare: compareMemberCollectionRows, key: row => ({ channel: row.channel, agent: row.agent }),
+      tieBreakers: ["agent asc", "channel asc"], limit: 100, sort, hint: "continue",
     });
     const subscriptionPage = buildCompactCollectionEnvelope({
       collection: "subscriptions", items: subscriptions, summarize: summarizeChannelSubscription,
-      limit: 100, sort, hint: "continue",
+      compare: compareSubscriptionCollectionRows, key: row => ({ channel: row.channel, agent: row.agent }),
+      tieBreakers: ["channel asc", "agent asc"], limit: 100, sort, hint: "continue",
     });
     expectBoundedPage(memberPage, "members");
     expectBoundedPage(subscriptionPage, "subscriptions");
     expect((memberPage.members as any[])[0].agent.length).toBeLessThanOrEqual(96);
     expect((subscriptionPage.subscriptions as any[])[0].channel.length).toBeLessThanOrEqual(96);
+  });
+
+  test("opaque cursors bind collection, filters and exact snapshot", () => {
+    const agents: AgentPresence[] = ["alpha", "bravo", "charlie"].map((agent, index) => ({
+      id: `id-${index}`, agent, session_id: null, role: "agent", project_id: null,
+      status: "online", last_seen_at: "2026-09-19T00:00:00.000Z", created_at: "2026-09-19T00:00:00.000Z",
+      online: true, metadata: null,
+    }));
+    const options = { ...agentPaging, filters: { online: false }, limit: 1 };
+    const first = buildCompactCollectionEnvelope({ ...options, items: agents });
+    expect(first.next_cursor).not.toBeNull();
+    expect(() => buildCompactCollectionEnvelope({
+      ...options,
+      items: [...agents, { ...agents[0]!, id: "id-new", agent: "aardvark" }],
+      cursor: first.next_cursor,
+    })).toThrow(/collection changed during pagination/);
+    expect(() => buildCompactCollectionEnvelope({
+      ...options, filters: { online: true }, items: agents, cursor: first.next_cursor,
+    })).toThrow(/does not match this collection or its filters/);
+    expect(() => buildCompactCollectionEnvelope({
+      ...options, items: agents, cursor: `${first.next_cursor}x`,
+    })).toThrow(/Invalid agents continuation cursor/);
+    expect(() => buildCompactCollectionEnvelope({
+      ...options, items: agents, cursor: "A".repeat(1_025),
+    })).toThrow(/Invalid agents continuation cursor/);
   });
 });

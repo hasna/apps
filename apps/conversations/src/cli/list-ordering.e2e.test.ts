@@ -217,7 +217,7 @@ describe("item 3 — --limit is honoured by the JSON listing verbs", () => {
     const res = runCli(["agents", "list", "--json"]);
     expect(res.exitCode).toBe(0);
     const page = JSON.parse(res.stdout);
-    expect(page).toMatchObject({ limit: 10, cursor: 0, compact: true });
+    expect(page).toMatchObject({ limit: 10, cursor: null, compact: true });
     expect(page.agents.length).toBeLessThanOrEqual(10);
     const full = JSON.parse(runCli(["agents", "list", "--json", "--full"]).stdout);
     expect(Array.isArray(full)).toBe(true);
