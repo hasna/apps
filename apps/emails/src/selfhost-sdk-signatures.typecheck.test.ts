@@ -6,7 +6,7 @@ import type {
   MessageListItem,
   SendKey,
   Tenant,
-} from "./selfhost.js";
+} from "@hasna/emails/sdk";
 
 type Equal<Left, Right> =
   (<Type>() => Type extends Left ? 1 : 2) extends

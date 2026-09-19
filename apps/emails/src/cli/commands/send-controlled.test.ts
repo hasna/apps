@@ -16,6 +16,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import { buildPrepublishTestEnv } from "../../../scripts/prepublish-local-test.mjs";
 import { startV1Stub, type V1Stub } from "../../test-support/v1-stub.js";
 
 type TerminalState =
@@ -54,13 +55,18 @@ const PRIVATE_SENTINELS = [
 
 const tempDirs: string[] = [];
 let stub: V1Stub;
+let testHome: string;
 
 function cliEnv(): NodeJS.ProcessEnv {
-  const { EMAILS_DB_PATH: _ignoredDbPath, HASNA_EMAILS_LOCAL: _ignoredLocalOptIn, ...environment } = process.env;
   return {
-    ...environment,
+    ...buildPrepublishTestEnv(process.env, testHome),
+    HASNA_HOME: join(testHome, ".hasna"),
+    EMAILS_HOME: join(testHome, ".emails"),
+    HASNA_EMAILS_HOME: join(testHome, ".hasna", "emails"),
+    HASNA_STATION: `controlled-send-${crypto.randomUUID()}`,
     HASNA_EMAILS_API_URL: stub.baseUrl,
     HASNA_EMAILS_API_KEY: stub.apiKey,
+    EMAILS_CLIENT_ENV_LOADED: "1",
     NO_COLOR: "1",
   };
 }
@@ -164,6 +170,10 @@ beforeAll(async () => {
 afterAll(() => stub.stop());
 
 beforeEach(async () => {
+  testHome = privateDir("emails-controlled-send-home-");
+  for (const name of ["config", "data", "cache", "state", "tmp"]) {
+    mkdirSync(join(testHome, name), { mode: 0o700 });
+  }
   await stub.reset();
   stub.applyEnv();
 });
@@ -177,15 +187,17 @@ type ContractMode = "supported" | "missing" | "old" | "wrong-type" | "malformed"
 
 async function withReplyContract(
   mode: ContractMode,
-  action: (apiUrl: string, calls: string[]) => Promise<void>,
+  action: (apiUrl: string, calls: string[], authorizations: string[]) => Promise<void>,
 ): Promise<void> {
   const calls: string[] = [];
+  const authorizations: string[] = [];
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
     async fetch(request) {
       const path = new URL(request.url).pathname;
       calls.push(`${request.method} ${path}`);
+      authorizations.push(request.headers.get("authorization") ?? "");
       if (path === "/v1/openapi.json") {
         if (mode === "missing") return Response.json({ error: "not found" }, { status: 404 });
         if (mode === "unavailable") return Response.json({ error: "unavailable" }, { status: 503 });
@@ -201,7 +213,7 @@ async function withReplyContract(
   });
   const apiUrl = `http://127.0.0.1:${server.port}`;
   if (mode === "unreachable") server.stop(true);
-  try { await action(apiUrl, calls); }
+  try { await action(apiUrl, calls, authorizations); }
   finally { server.stop(true); }
 }
 
@@ -227,7 +239,7 @@ async function invokeControlled(
 describe("controlled threaded replies", () => {
   it("passes the exact typed parent and reviewed envelope once, then replays the same key", async () => {
     const files = fixture({ reply_to_message_id: "parent-PARENT_PRIVATE_SENTINEL" });
-    await withReplyContract("supported", async (apiUrl, calls) => {
+    await withReplyContract("supported", async (apiUrl, calls, authorizations) => {
       const first = await invokeControlled(files, apiUrl);
       expect(first.exitCode, first.stderr).toBe(0);
       const replay = await invokeControlled(files, apiUrl, "apply", files.secondReceiptPath);
@@ -238,6 +250,7 @@ describe("controlled threaded replies", () => {
         "GET /v1/openapi.json", "POST /v1/messages/send",
         "GET /v1/openapi.json", "POST /v1/messages/send",
       ]);
+      expect(authorizations).toEqual(Array(4).fill(`Bearer ${stub.apiKey}`));
       const requests = await stub.sendRequests();
       expect(requests).toHaveLength(2);
       expect(requests[1]).toEqual(requests[0]);

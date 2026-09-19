@@ -34,6 +34,14 @@ describe("published package identity", () => {
     expect(Object.keys(pkg.bin)).toEqual(CANONICAL_BINS);
   });
 
+  it("exports ./sdk as an exact alias of the single generated selfhost client", () => {
+    expect(pkg.exports["./sdk"]).toEqual(pkg.exports["./selfhost"]);
+    expect(pkg.exports["./sdk"]).toEqual({
+      types: "./dist/selfhost.d.ts",
+      import: "./dist/selfhost.js",
+    });
+  });
+
   it("declares the same identity in the service contract", () => {
     expect(contract.name).toBe("emails");
     expect(contract.bins).toEqual(CANONICAL_BINS);

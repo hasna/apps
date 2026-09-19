@@ -66,3 +66,19 @@ test("parent refusals satisfy the typed SDK error contract without write effects
   expect(f.reserved).toHaveLength(0);expect(f.queued).toHaveLength(0);expect(f.sent).toHaveLength(0);
  }
 });
+
+
+test("typed replies remain behind authentication and write-scope authorization", async()=>{
+ for(const [headers,status] of [
+  [{"Content-Type":"application/json"},401],
+  [{"Content-Type":"application/json","x-api-key":mintApiKey({app:"emails",scopes:["emails:read"],signingSecret:secret}).token},403],
+ ] as const){
+  const f=fixture();let parentReads=0;
+  Object.assign(f.store,{getMessage:async()=>{parentReads++;return f.parent();}});
+  const response=await handleSelfHostedRequest(f.deps,new Request("http://fixture/v1/messages/send",{method:"POST",headers,body:JSON.stringify({from:"me@example.com",to:["external@example.com"],subject:"Re: Topic",text:"Reply",idempotency_key:crypto.randomUUID(),reply_to_message_id:"parent"})}));
+  expect(response?.status).toBe(status);
+  expect(parentReads).toBe(0);
+  expect(f.reserved).toHaveLength(0);
+  expect(f.sent).toHaveLength(0);
+ }
+});
