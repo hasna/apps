@@ -41,7 +41,7 @@ function isolatedEnv(root: string) {
 }
 
 function rowsNamed(root: string, name: string): Array<{ slug: string; version: number }> {
-  const listed = runCli(["list", "--json"], isolatedEnv(root));
+  const listed = runCli(["list", "--json", "--full"], isolatedEnv(root));
   expect(listed.status).toBe(0);
   const all = JSON.parse(listed.stdout) as Array<{ slug: string; name: string; version: number }>;
   return all.filter((c) => c.name === name).map(({ slug, version }) => ({ slug, version }));

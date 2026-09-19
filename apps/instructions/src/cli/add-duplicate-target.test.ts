@@ -32,7 +32,7 @@ function isolatedEnv(root: string) {
 }
 
 function rowsForTarget(root: string, target: string): Array<{ slug: string; content: string }> {
-  const listed = runCli(["list", "--json"], isolatedEnv(root));
+  const listed = runCli(["list", "--json", "--full"], isolatedEnv(root));
   expect(listed.status).toBe(0);
   const all = JSON.parse(listed.stdout) as Array<{ slug: string; target_path: string | null; content: string }>;
   return all.filter((c) => c.target_path === target).map(({ slug, content }) => ({ slug, content }));
@@ -105,7 +105,7 @@ describe("instructions add — one target_path, one row", () => {
     const again = runCli(["add", target, "--name", "CLAUDE.md"], isolatedEnv(root));
     expect(again.status).not.toBe(0);
 
-    const listed = runCli(["list", "--json"], isolatedEnv(root));
+    const listed = runCli(["list", "--json", "--full"], isolatedEnv(root));
     const all = JSON.parse(listed.stdout) as Array<{ target_path: string | null }>;
     const owning = all.filter((c) => c.target_path && /CLAUDE\.md$/.test(c.target_path));
     expect(owning.length).toBe(1);
