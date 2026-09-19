@@ -21,6 +21,7 @@ def load(name, path):
 promotion = load('kms_promotion', ROOT.parent / 'emails-search/promotion.py')
 oldgate = load('kms_existing_gate', ROOT.parent / 'emails-search/gate.py')
 public = load('kms_public', ROOT.parent / 'emails-current/public_proof.py')
+admission = load('kms_source_admission', ROOT / 'source_admission.py')
 require, aws, save, encode = promotion.require, promotion.aws, promotion.save, promotion.encode
 gh = oldgate.gh
 
@@ -47,6 +48,4 @@ def source_gate(source):
     require(re.fullmatch('[a-f0-9]{40}', source or '') and os.environ.get('GITHUB_SHA') == source, 'SOURCE_SHA')
     result = subprocess.run(['git', 'rev-parse', 'HEAD'], capture_output=True, timeout=20)
     require(result.returncode == 0 and result.stdout.decode().strip() == source, 'CHECKOUT_SOURCE')
-    require(gh('repos/' + REPO + '/git/ref/heads/main')['object']['sha'] == source, 'SUPERSEDED_SOURCE')
-    runs = gh(f'repos/{REPO}/actions/workflows/ci.yml/runs?branch=main&event=push&status=completed&head_sha={source}&per_page=100')['workflow_runs']
-    require(oldgate.admit_runs(runs, source), 'EXACT_MAIN_CI_REQUIRED')
+    return admission.admit(gh, REPO, source)

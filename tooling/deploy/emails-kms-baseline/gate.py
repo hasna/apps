@@ -36,8 +36,9 @@ def unused():
         c.require(len(steps) == 1 and steps[0].get('conclusion') == 'skipped', 'PRIOR_INTENT_SPENT_OR_UNKNOWN')
 
 def validate(plan, source, run_id):
-    c.require(plan.get('schema') == 'emails.kms-baseline-prepared.v1'
+    c.require(plan.get('schema') == 'emails.kms-baseline-prepared.v2'
               and plan.get('source') == source and plan.get('run') == str(run_id), 'PREPARED_IDENTITY')
+    c.admission.validate_receipt(plan.get('sourceAdmission'), source)
     c.require(plan.get('contract') == c.contract(), 'PREPARED_CONTRACT')
     age = time.time() - plan.get('createdAt', 0)
     c.require(0 <= age <= c.contract()['maxAgeSeconds'], 'PREPARED_EXPIRED')
@@ -47,10 +48,11 @@ def validate(plan, source, run_id):
         row = plan['services'][target]
         c.require(row.get('desiredCount') == 1 and re.fullmatch('[a-f0-9]{64}', row.get('configurationSha256', '')), 'PREPARED_SERVICE')
 
-def reviewed(source, run_id, expected, destination):
+def reviewed(source, run_id, expected, destination, admission):
     c.require(re.fullmatch('[1-9][0-9]{0,19}', run_id or '') and re.fullmatch('[a-f0-9]{64}', expected or ''), 'REVIEW_BINDING')
     run = c.gh(f'repos/{c.REPO}/actions/runs/{run_id}')
-    c.require(run.get('path') == c.WORKFLOW and run.get('head_sha') == source
+    prepared_source = c.admission.sha(run.get('head_sha'))
+    c.require(run.get('path') == c.WORKFLOW
               and run.get('head_branch') == 'main' and run.get('event') == 'workflow_dispatch'
               and run.get('status') == 'completed' and run.get('conclusion') == 'success'
               and run.get('run_attempt') == 1, 'PREPARED_RUN')
@@ -65,7 +67,8 @@ def reviewed(source, run_id, expected, destination):
               and set(x.name for x in destination.iterdir()) == {'prepared.json'}, 'PREPARED_FILE')
     c.require(hashlib.sha256(path.read_bytes()).hexdigest() == expected, 'PREPARED_DIGEST')
     plan = c.read(path)
-    validate(plan, source, run_id)
+    validate(plan, prepared_source, run_id)
+    c.admission.prepared(c.gh, c.REPO, plan['sourceAdmission'], admission)
     return plan
 
 def main():
@@ -77,20 +80,21 @@ def main():
     p.add_argument('--out', type=Path, required=True)
     args = p.parse_args()
     os.umask(0o077)
-    c.source_gate(args.source)
+    admission = c.source_gate(args.source)
     args.out.mkdir(mode=0o700)
     if args.phase == 'kms_execute':
         unused()
-        plan = reviewed(args.source, args.run, args.sha256, args.out / 'reviewed')
+        plan = reviewed(args.source, args.run, args.sha256, args.out / 'reviewed', admission)
         c.save(args.out / 'intent.json', {
-            'schema': 'emails.kms-baseline-intent.v1', 'source': args.source,
+            'schema': 'emails.kms-baseline-intent.v2', 'source': args.source,
+            'sourceAdmission': admission, 'preparedSource': plan['source'],
             'run': os.environ['GITHUB_RUN_ID'], 'preparedRun': args.run,
             'preparedSha256': args.sha256, 'contract': c.contract(),
             'operations': ['register-api', 'register-worker', 'update-api', 'update-worker'],
             'rollback': {t: c.contract()[t]['taskDefinition'] for t in ('api', 'worker')},
             'automaticRetry': False, 'automaticRollback': False,
         })
-    print('Exact-main paired KMS baseline admission passed; no AWS mutation')
+    print('CI-anchored unchanged-source paired KMS baseline admission passed; no AWS mutation')
 
 if __name__ == '__main__':
     try:

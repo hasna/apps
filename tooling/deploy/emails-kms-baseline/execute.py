@@ -120,27 +120,29 @@ def baseline_pair():
     return result
 
 
-def prepare(source, out):
+def prepare(source, out, admission):
     before = baseline_pair()
     version = readiness()
     after = baseline_pair()
     c.require(before == after, 'PREPARATION_RACE')
     c.save(out / 'prepared.json', {
-        'schema': 'emails.kms-baseline-prepared.v1', 'source': source,
+        'schema': 'emails.kms-baseline-prepared.v2', 'source': source, 'sourceAdmission': admission,
         'run': os.environ['GITHUB_RUN_ID'], 'createdAt': int(time.time()),
         'contract': c.contract(), 'services': before, 'publicVersion': version,
         'effect': 'metadata only; no AWS writes',
     })
 
 
-def reviewed(out, source):
+def reviewed(out, source, admission):
     intent = c.read(out / 'intent.json')
     path = out / 'reviewed/prepared.json'
-    c.require(intent.get('schema') == 'emails.kms-baseline-intent.v1' and intent.get('source') == source
+    c.require(intent.get('schema') == 'emails.kms-baseline-intent.v2' and intent.get('source') == source
               and intent.get('run') == os.environ['GITHUB_RUN_ID'] and intent.get('contract') == c.contract(), 'INTENT_IDENTITY')
     c.require(hashlib.sha256(path.read_bytes()).hexdigest() == intent['preparedSha256'], 'PREPARED_DIGEST')
     plan = c.read(path)
-    gate.validate(plan, source, intent['preparedRun'])
+    gate.validate(plan, intent['preparedSource'], intent['preparedRun'])
+    c.admission.prepared(c.gh, c.REPO, intent['sourceAdmission'], admission)
+    c.admission.prepared(c.gh, c.REPO, plan['sourceAdmission'], admission)
     return plan
 
 
@@ -171,8 +173,8 @@ def recheck_pair(plan, out, api_updated=False, worker_updated=False):
     readiness(plan['publicVersion'])
 
 
-def register(target, source, out):
-    plan = reviewed(out, source)
+def register(target, source, out, admission=None):
+    plan = reviewed(out, source, admission)
     recheck_pair(plan, out)
     payload = candidate(task(c.contract()[target]['taskDefinition']), target)
     if target == 'worker':
@@ -190,8 +192,8 @@ def register(target, source, out):
     registered(out, target)
 
 
-def update(target, source, out):
-    plan = reviewed(out, source)
+def update(target, source, out, admission=None):
+    plan = reviewed(out, source, admission)
     recheck_pair(plan, out, api_updated=(target == 'worker'))
     for member in ('api', 'worker'):
         registered(out, member)
@@ -223,20 +225,21 @@ def main():
     p.add_argument('--out', type=Path, required=True)
     args = p.parse_args()
     os.umask(0o077)
-    c.source_gate(args.source)
+    admission = c.source_gate(args.source)
     c.require(c.aws('sts', 'get-caller-identity')['Account'] == c.promotion.ACCOUNT, 'AWS_ACCOUNT')
     c.require(args.out.is_dir(), 'OUTPUT_DIRECTORY')
+    c.save(args.out / ('source-admission-' + args.operation + '.json'), admission)
     if args.operation == 'prepare':
-        prepare(args.source, args.out)
+        prepare(args.source, args.out, admission)
     elif args.operation.startswith('register-'):
-        register(args.operation.split('-')[1], args.source, args.out)
+        register(args.operation.split('-')[1], args.source, args.out, admission)
     elif args.operation.startswith('update-'):
-        update(args.operation.split('-')[1], args.source, args.out)
+        update(args.operation.split('-')[1], args.source, args.out, admission)
     else:
-        plan = reviewed(args.out, args.source)
+        plan = reviewed(args.out, args.source, admission)
         recheck_pair(plan, args.out, True, True)
         c.save(args.out / 'verified.json', {'schema': 'emails.kms-baseline-verified.v1',
-            'run': os.environ['GITHUB_RUN_ID'], 'source': args.source,
+            'run': os.environ['GITHUB_RUN_ID'], 'source': args.source, 'sourceAdmission': admission,
             'tasks': {t: registered(args.out, t) for t in ('api', 'worker')},
             'rollback': {t: c.contract()[t]['taskDefinition'] for t in ('api', 'worker')},
             'imagesPreserved': True, 'onlyTwoKmsSettingsAdded': True,
