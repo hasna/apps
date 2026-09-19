@@ -135,28 +135,20 @@ export class SqliteSkillSelectionStore implements SkillSelectionStore {
     selected: SkillSelection[],
     expected: string | null,
   ) {
-    const revision = randomUUID(),
-      timestamp = new Date().toISOString();
-    const row =
-      expected === null
-        ? this.db
-            .query(
-              "INSERT INTO skills_profiles(org_id,profile_id,revision,selections_json,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(org_id,profile_id) DO NOTHING RETURNING *",
-            )
-            .get(p.orgId, id, revision, JSON.stringify(selected), timestamp)
-        : this.db
-            .query(
-              "UPDATE skills_profiles SET revision=?,selections_json=?,updated_at=? WHERE org_id=? AND profile_id=? AND revision=? RETURNING *",
-            )
-            .get(
-              revision,
-              JSON.stringify(selected),
-              timestamp,
-              p.orgId,
-              id,
-              expected,
-            );
-    return row ? profile(row as Row) : null;
+    return this.db.transaction(() => {
+      // The registry rows are the lifecycle fence. A profile write locks every
+      // selected skill before checking/writing the profile, so archive and
+      // profile selection cannot pass each other's precondition concurrently.
+      for (const selection of [...selected].sort((a, b) => a.slug.localeCompare(b.slug))) {
+        const skill = this.db.query("SELECT lifecycle FROM skills_registry WHERE org_id=? AND slug=?").get(p.orgId, selection.slug) as Row | null;
+        if (skill?.lifecycle === "archived") return null;
+      }
+      const revision = randomUUID(), timestamp = new Date().toISOString();
+      const row = expected === null
+        ? this.db.query("INSERT INTO skills_profiles(org_id,profile_id,revision,selections_json,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(org_id,profile_id) DO NOTHING RETURNING *").get(p.orgId, id, revision, JSON.stringify(selected), timestamp)
+        : this.db.query("UPDATE skills_profiles SET revision=?,selections_json=?,updated_at=? WHERE org_id=? AND profile_id=? AND revision=? RETURNING *").get(revision, JSON.stringify(selected), timestamp, p.orgId, id, expected);
+      return row ? profile(row as Row) : null;
+    })();
   }
   async getStationState(p: ApiPrincipal, id: string) {
     const row = this.db
@@ -197,8 +189,14 @@ type Sql = (
   strings: TemplateStringsArray,
   ...values: unknown[]
 ) => Promise<Row[]>;
+type SqlTransaction = Sql;
+// The product and selection stores share the same pooled transaction so the
+// registry-row lifecycle fence is held while a profile is written.
+interface SqlWithTransaction extends Sql {
+  begin<T>(fn: (tx: SqlTransaction) => Promise<T>): Promise<T>;
+}
 export class PostgresSkillSelectionStore implements SkillSelectionStore {
-  constructor(private sql: Sql) {}
+  constructor(private sql: SqlWithTransaction) {}
   async profilesReferencingSkill(p: ApiPrincipal, slug: string) {
     const rows = await this.sql`SELECT profile_id,selections_json FROM skills_profiles WHERE org_id=${p.orgId}`;
     return rows.filter((row) => selections(row.selections_json).some((selection) => selection.slug === slug)).map((row) => String(row.profile_id)).sort();
@@ -214,15 +212,20 @@ export class PostgresSkillSelectionStore implements SkillSelectionStore {
     selected: SkillSelection[],
     expected: string | null,
   ) {
-    const revision = randomUUID(),
-      timestamp = new Date().toISOString();
-    const rows =
-      expected === null
-        ? await this
-            .sql`INSERT INTO skills_profiles(org_id,profile_id,revision,selections_json,updated_at) VALUES(${p.orgId},${id},${revision},${JSON.stringify(selected)}::jsonb,${timestamp}) ON CONFLICT(org_id,profile_id) DO NOTHING RETURNING *`
-        : await this
-            .sql`UPDATE skills_profiles SET revision=${revision},selections_json=${JSON.stringify(selected)}::jsonb,updated_at=${timestamp} WHERE org_id=${p.orgId} AND profile_id=${id} AND revision=${expected} RETURNING *`;
-    return rows[0] ? profile(rows[0]) : null;
+    return this.sql.begin(async (tx) => {
+      // Lock registry rows as the shared lifecycle fence. Archive takes the
+      // same row locks before checking profiles, eliminating the read/write
+      // race between selection and archival.
+      for (const selection of [...selected].sort((a, b) => a.slug.localeCompare(b.slug))) {
+        const rows = await tx`SELECT lifecycle FROM skills_registry WHERE org_id=${p.orgId} AND slug=${selection.slug} FOR UPDATE`;
+        if (rows[0]?.lifecycle === "archived") return null;
+      }
+      const revision = randomUUID(), timestamp = new Date().toISOString();
+      const rows = expected === null
+        ? await tx`INSERT INTO skills_profiles(org_id,profile_id,revision,selections_json,updated_at) VALUES(${p.orgId},${id},${revision},${JSON.stringify(selected)}::jsonb,${timestamp}) ON CONFLICT(org_id,profile_id) DO NOTHING RETURNING *`
+        : await tx`UPDATE skills_profiles SET revision=${revision},selections_json=${JSON.stringify(selected)}::jsonb,updated_at=${timestamp} WHERE org_id=${p.orgId} AND profile_id=${id} AND revision=${expected} RETURNING *`;
+      return rows[0] ? profile(rows[0]) : null;
+    });
   }
   async getStationState(p: ApiPrincipal, id: string) {
     const rows = await this

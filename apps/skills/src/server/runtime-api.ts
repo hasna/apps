@@ -210,6 +210,7 @@ export async function handleRuntimeApiRequest(
       const versionName = query.get("version");
       if (!versionName || !/^\d+\.\d+\.\d+$/.test(versionName)) return refusal("REVIEWED_VERSION_REQUIRED", 400);
       const skill = await service.productStore.getSkill(principal, id);
+      if (skill?.lifecycle === "archived") return refusal("SKILL_ARCHIVED", 410);
       const version = skill && !skill.tombstonedAt && await service.productStore.getSkillVersion(principal, id, versionName);
       if (!version) return refusal("SKILL_VERSION_NOT_FOUND", 404);
       const pinned = query.get("bundleDigest");

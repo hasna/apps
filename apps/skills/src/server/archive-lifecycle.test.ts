@@ -1,7 +1,14 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { useDefaultTestTimeout } from "../test-preload.js";
 import { ownBytes } from "../lib/skill-bundle.js";
 import { publicPrincipal } from "./auth.js";
 import { MemorySkillsStore } from "./store.js";
+import { SqliteSkillsStore } from "./sqlite-store.js";
+
+useDefaultTestTimeout();
 import { listMergedSkills } from "./skills-api.js";
 
 const principal = publicPrincipal({ orgId: "org_archive", orgSlug: "archive", orgName: "Archive", userId: "owner", email: "owner@example.test", apiKeyId: "key" });
@@ -29,5 +36,18 @@ describe("skill archive lifecycle", () => {
     const published = await store.publishSkill(input());
     await store.selectionStore.saveProfile(principal, "fleet", [{ slug: "legacy-skill", version: "1.0.0", bundleDigest: `sha256:${"a".repeat(64)}` }], null);
     await expect(store.setSkillLifecycle(principal, "legacy-skill", { lifecycle: "archived" }, published.revisionId)).rejects.toMatchObject({ name: "SkillLifecycleConflictError", profiles: ["fleet"] });
+  });
+
+  test("SQLite lifecycle fence rejects a racing profile selection", async () => {
+    const store = new SqliteSkillsStore(join(mkdtempSync(join(tmpdir(), "skills-archive-")), "server.db"));
+    await store.ensureBootstrapApiKey("synthetic", { orgId: principal.orgId, orgSlug: principal.orgSlug, orgName: principal.orgName, userId: principal.userId, email: principal.email, apiKeyId: principal.apiKeyId });
+    const published = await store.publishSkill(input());
+    await store.selectionStore.saveProfile(principal, "fleet", [], null);
+    const profile = await store.selectionStore.getProfile(principal, "fleet");
+    const archived = await store.setSkillLifecycle(principal, "legacy-skill", { lifecycle: "archived" }, published.revisionId);
+    expect(archived?.lifecycle).toBe("archived");
+    const refused = await store.selectionStore.saveProfile(principal, "fleet", [{ slug: "legacy-skill", version: "1.0.0", bundleDigest: `sha256:${"a".repeat(64)}` }], profile!.revision);
+    expect(refused).toBeNull();
+    await store.close();
   });
 });

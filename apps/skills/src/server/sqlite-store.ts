@@ -704,16 +704,21 @@ export class SqliteSkillsStore implements SkillsProductStore {
   }
 
   async setSkillLifecycle(principal: ApiPrincipal, slug: string, patch: SkillLifecyclePatch, expectedRevisionId?: string) {
-    const current = await this.getSkill(principal, slug);
-    if (!current || current.tombstonedAt) return null;
-    if (expectedRevisionId !== current.revisionId) throw new SkillRevisionConflictError(slug, expectedRevisionId, current.revisionId);
-    if (patch.lifecycle === "archived" && current.lifecycle !== "archived") {
-      const profiles = await this.selectionStore.profilesReferencingSkill(principal, slug);
-      if (profiles.length) throw new SkillLifecycleConflictError(slug, profiles);
-    }
-    const next = { ...current, lifecycle: patch.lifecycle, updatedAt: nowIso(), ...(patch.lifecycle === "archived" ? { archivedAt: current.archivedAt ?? nowIso(), ...(patch.reason ? { archiveReason: patch.reason } : {}), ...(patch.replacementSlug ? { replacementSlug: patch.replacementSlug } : {}) } : {}) };
-    if (patch.lifecycle === "active") { delete next.archivedAt; delete next.archiveReason; delete next.replacementSlug; }
     return this.db.transaction(() => {
+      const rowCurrent = this.get("SELECT * FROM skills_registry WHERE org_id=? AND slug=? LIMIT 1", [principal.orgId, slug]);
+      const current = rowCurrent ? rowToSkill(rowCurrent) : null;
+      if (!current || current.tombstonedAt) return null;
+      if (expectedRevisionId !== current.revisionId) throw new SkillRevisionConflictError(slug, expectedRevisionId, current.revisionId);
+      if (patch.lifecycle === "archived" && current.lifecycle !== "archived") {
+        const profiles = this.db.query("SELECT profile_id,selections_json FROM skills_profiles WHERE org_id=?").all(principal.orgId) as Array<{ profile_id: unknown; selections_json: unknown }>;
+        const referencing = profiles.filter((profile) => {
+          const selections = typeof profile.selections_json === "string" ? JSON.parse(profile.selections_json) : profile.selections_json;
+          return Array.isArray(selections) && selections.some((selection) => selection?.slug === slug);
+        }).map((profile) => String(profile.profile_id)).sort();
+        if (referencing.length) throw new SkillLifecycleConflictError(slug, referencing);
+      }
+      const next = { ...current, lifecycle: patch.lifecycle, updatedAt: nowIso(), ...(patch.lifecycle === "archived" ? { archivedAt: current.archivedAt ?? nowIso(), ...(patch.reason ? { archiveReason: patch.reason } : {}), ...(patch.replacementSlug ? { replacementSlug: patch.replacementSlug } : {}) } : {}) };
+      if (patch.lifecycle === "active") { delete next.archivedAt; delete next.archiveReason; delete next.replacementSlug; }
       const row = this.get("UPDATE skills_registry SET lifecycle=?, archived_at=?, archive_reason=?, replacement_slug=?, revision_id=?, revision_number=revision_number+1, updated_at=? WHERE org_id=? AND slug=? AND tombstoned_at IS NULL AND revision_id=? RETURNING *", [next.lifecycle, next.archivedAt ?? null, next.archiveReason ?? null, next.replacementSlug ?? null, revisionIdOfRecord(next), next.updatedAt, principal.orgId, slug, current.revisionId]);
       if (!row) throw new SkillRevisionConflictError(slug, expectedRevisionId, this.getSkillSync(principal, slug)?.revisionId ?? null);
       return rowToSkill(row);

@@ -1089,23 +1089,31 @@ export class PostgresSkillsStore implements SkillsProductStore {
   }
 
   async setSkillLifecycle(principal: ApiPrincipal, slug: string, patch: SkillLifecyclePatch, expectedRevisionId?: string) {
-    const current = await this.getSkill(principal, slug);
-    if (!current || current.tombstonedAt) return null;
-    if (expectedRevisionId !== current.revisionId) throw new SkillRevisionConflictError(slug, expectedRevisionId, current.revisionId);
-    if (patch.lifecycle === "archived" && current.lifecycle !== "archived") {
-      const profiles = await this.selectionStore.profilesReferencingSkill(principal, slug);
-      if (profiles.length) throw new SkillLifecycleConflictError(slug, profiles);
-    }
-    const next: ServerSkillRecord = {
-      ...current,
-      lifecycle: patch.lifecycle,
-      updatedAt: nowIso(),
-      revisionId: revisionIdOfRecord({ ...current, lifecycle: patch.lifecycle, archiveReason: patch.reason, replacementSlug: patch.replacementSlug }),
-      revisionNumber: current.revisionNumber + 1,
-      ...(patch.lifecycle === "archived" ? { archivedAt: current.archivedAt ?? nowIso(), ...(patch.reason ? { archiveReason: patch.reason } : {}), ...(patch.replacementSlug ? { replacementSlug: patch.replacementSlug } : {}) } : {}),
-    };
-    if (patch.lifecycle === "active") { delete next.archivedAt; delete next.archiveReason; delete next.replacementSlug; }
     return this.sql.begin(async (tx) => {
+      // Lock the registry row before reading profiles. Profile writes acquire
+      // this same row lock for every selected skill, forming the lifecycle
+      // fence across both operations.
+      const currentRows = await tx`SELECT * FROM skills_registry WHERE org_id=${principal.orgId} AND slug=${slug} LIMIT 1 FOR UPDATE`;
+      const current = currentRows[0] ? rowToSkill(currentRows[0]) : null;
+      if (!current || current.tombstonedAt) return null;
+      if (expectedRevisionId !== current.revisionId) throw new SkillRevisionConflictError(slug, expectedRevisionId, current.revisionId);
+      if (patch.lifecycle === "archived" && current.lifecycle !== "archived") {
+        const profiles = await tx`SELECT profile_id,selections_json FROM skills_profiles WHERE org_id=${principal.orgId}`;
+        const referencing = profiles.filter((profile) => {
+          const selections = typeof profile.selections_json === "string" ? JSON.parse(profile.selections_json) : profile.selections_json;
+          return Array.isArray(selections) && selections.some((selection) => selection?.slug === slug);
+        }).map((profile) => String(profile.profile_id)).sort();
+        if (referencing.length) throw new SkillLifecycleConflictError(slug, referencing);
+      }
+      const next: ServerSkillRecord = {
+        ...current,
+        lifecycle: patch.lifecycle,
+        updatedAt: nowIso(),
+        revisionId: revisionIdOfRecord({ ...current, lifecycle: patch.lifecycle, archiveReason: patch.reason, replacementSlug: patch.replacementSlug }),
+        revisionNumber: current.revisionNumber + 1,
+        ...(patch.lifecycle === "archived" ? { archivedAt: current.archivedAt ?? nowIso(), ...(patch.reason ? { archiveReason: patch.reason } : {}), ...(patch.replacementSlug ? { replacementSlug: patch.replacementSlug } : {}) } : {}),
+      };
+      if (patch.lifecycle === "active") { delete next.archivedAt; delete next.archiveReason; delete next.replacementSlug; }
       const rows = await tx`UPDATE skills_registry SET lifecycle=${next.lifecycle}, archived_at=${next.archivedAt ?? null}, archive_reason=${next.archiveReason ?? null}, replacement_slug=${next.replacementSlug ?? null}, revision_id=${next.revisionId}, revision_number=revision_number+1, updated_at=${next.updatedAt} WHERE org_id=${principal.orgId} AND slug=${slug} AND tombstoned_at IS NULL AND revision_id=${current.revisionId} RETURNING *`;
       if (!rows[0]) throw new SkillRevisionConflictError(slug, expectedRevisionId, (await this.getSkill(principal, slug))?.revisionId ?? null);
       return rowToSkill(rows[0]);
