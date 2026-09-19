@@ -287,7 +287,7 @@ export class SqliteSkillsStore implements SkillsProductStore {
     const tx = this.db.transaction(() => {
       const changed = this.db.run("UPDATE api_keys SET scopes_json = ? WHERE id = ? AND org_id = ? AND revoked_at IS NULL AND scopes_json = ?", [JSON.stringify(scopes), input.keyId, input.orgId, JSON.stringify(input.expectedScopes)]);
       if (changed.changes !== 1) return false;
-      this.db.run("INSERT INTO skills_audit_events (org_id, user_id, api_key_id, action, target_type, target_id, metadata_json) VALUES (?, NULL, NULL, ?, ?, ?, ?)", [input.orgId, "api_key_scopes_added", "api_key", input.keyId, JSON.stringify({ added: ["skills:publish"], scopes, operator_operation_id: input.operationId, operator_job_id: input.operatorJobId, operator_task_arn: input.operatorTaskArn, target_manifest_digest: input.manifestDigest, station_id: input.stationId })]);
+      this.db.run("INSERT INTO skills_audit_events (org_id, user_id, api_key_id, action, target_type, target_id, operator_operation_id, metadata_json) VALUES (?, NULL, NULL, ?, ?, ?, ?, ?)", [input.orgId, "api_key_scopes_added", "api_key", input.keyId, input.operationId, JSON.stringify({ added: ["skills:publish"], scopes, operator_operation_id: input.operationId, operator_job_id: input.operatorJobId, operator_task_arn: input.operatorTaskArn, target_manifest_digest: input.manifestDigest, station_id: input.stationId })]);
       return true;
     });
     if (!tx()) {

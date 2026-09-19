@@ -3,6 +3,9 @@ import { mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { MemorySkillsStore } from "./store.js";
 import { SqliteSkillsStore } from "./sqlite-store.js";
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
 
 const input = {
   keyId: "station-key",

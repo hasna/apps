@@ -810,8 +810,8 @@ export class PostgresSkillsStore implements SkillsProductStore {
       if (!updated[0]) return { kind: "stale", scopes: current };
       const scopes = parseJsonArray(updated[0].scopes_json);
       await tx`
-        INSERT INTO skills_audit_events (org_id, user_id, api_key_id, action, target_type, target_id, metadata_json)
-        VALUES (${input.orgId}, NULL, NULL, ${"api_key_scopes_added"}, ${"api_key"}, ${input.keyId}, ${JSON.stringify({
+        INSERT INTO skills_audit_events (org_id, user_id, api_key_id, action, target_type, target_id, operator_operation_id, metadata_json)
+        VALUES (${input.orgId}, NULL, NULL, ${"api_key_scopes_added"}, ${"api_key"}, ${input.keyId}, ${input.operationId}, ${JSON.stringify({
           added: ["skills:publish"], scopes, operator_operation_id: input.operationId, operator_job_id: input.operatorJobId,
           operator_task_arn: input.operatorTaskArn, target_manifest_digest: input.manifestDigest, station_id: input.stationId,
         })}::jsonb)
