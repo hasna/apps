@@ -13,10 +13,68 @@ import { need, snapshot, unchanged, save } from "./codex-hook-trust-files.js";
 import { bindSkillsCli, type ReviewedSkillsCli } from "./codex-hook-trust-identity.js";
 
 export interface CodexNativeHookTrustOptions { home?: string; dataDir?: string; codexCommand?: string; apply?: boolean; reviewedPlanDigest?: string; reviewedSkillsCli?: ReviewedSkillsCli }
+export interface CodexNativeHookReconcileOptions { home?: string; dataDir?: string; codexCommand?: string; journal: string; reviewedSkillsCli?: ReviewedSkillsCli }
 type Connect = typeof connectCodexHookRpc;
 const json = (value: unknown) => JSON.stringify(value, null, 2) + "\n";
 const structure = (text: string) => JSON.parse(JSON.stringify(Bun.TOML.parse(text)));
 const eventNames = { UserPromptSubmit: ["userPromptSubmit", "user_prompt_submit"], SessionStart: ["sessionStart", "session_start"], SubagentStart: ["subagentStart", "subagent_start"] } as const;
+
+/** Resolve an interrupted native write only after the native consumer and every
+ * captured pre-write input agree. This never writes Codex state; it records a
+ * receipt for an already-effective operation so the ordinary apply guard can
+ * stop refusing the same journal. */
+export async function reconcileCodexNativeHooks(options: CodexNativeHookReconcileOptions, connect: Connect = connectCodexHookRpc) {
+  let rpc: CodexHookRpc | undefined;
+  try {
+    const home = resolve(options.home ?? homedir()), dataDir = resolve(options.dataDir ?? getDataDirReadOnly());
+    const parent = resolve(join(dataDir, "native-hook-trust")), journal = resolve(options.journal);
+    need(journal.startsWith(parent + "/") && /^[a-f0-9-]{36}$/.test(journal.slice(parent.length + 1)), "RECONCILE_JOURNAL_PATH");
+    const dir = lstatSync(journal, { throwIfNoEntry: false });
+    need(!!dir && dir.isDirectory() && !dir.isSymbolicLink() && dir.uid === process.getuid!() && (dir.mode & 0o777) === 0o700, "UNSAFE_JOURNAL");
+    need(!lstatSync(join(journal, "receipt.json"), { throwIfNoEntry: false }), "RECONCILE_ALREADY_COMPLETE");
+    need(lstatSync(join(journal, "stopped.json"), { throwIfNoEntry: false })?.isFile(), "RECONCILE_JOURNAL_INCOMPLETE");
+    const intentFile = snapshot(join(journal, "intent.json"), true), intent: any = JSON.parse(intentFile.text);
+    need(intent.version === 1 && /^[a-f0-9]{64}$/.test(intent.planDigest) && typeof intent.configPath === "string" && Array.isArray(intent.hooks) && intent.hooks.length > 0 && intent.hooks.length <= 100, "RECONCILE_INTENT_INVALID");
+    const configBefore = snapshot(join(journal, "config.before.toml"), true), hooksBefore = snapshot(join(journal, "hooks.before.json"), true), policyBefore = snapshot(join(journal, "policy.before.json"), true);
+    need(configBefore.sha256 === intent.beforeSha256 && hooksBefore.sha256 === intent.hooksSha256 && policyBefore.sha256 === intent.policySha256, "RECONCILE_JOURNAL_CHANGED");
+    const currentConfig = snapshot(intent.configPath, true);
+    need(codexTrustTextWitness(configBefore.text, intent.hooks.map((h: any) => h.key)) === codexTrustTextWitness(currentConfig.text, intent.hooks.map((h: any) => h.key)), "RECONCILE_UNRELATED_CONFIG_CHANGED");
+    const before = structure(configBefore.text), current = structure(currentConfig.text), expectedConfig = structuredClone(before);
+    expectedConfig.hooks ??= {}; expectedConfig.hooks.state ??= {};
+    for (const hook of intent.hooks) expectedConfig.hooks.state[hook.key] = { ...expectedConfig.hooks.state[hook.key], enabled: true, trusted_hash: hook.currentHash };
+    need(isDeepStrictEqual(expectedConfig, current), "RECONCILE_CONFIG_DRIFT");
+    const policyCurrent = snapshot(join(dataDir, "agent-policy.json"), true);
+    need(policyCurrent.sha256 === policyBefore.sha256, "RECONCILE_POLICY_CHANGED");
+    const policy = parseManagedSkillPolicy(policyBefore.text), binding = policy.bridge;
+    assertManagedAgentBridge("codex", { home, dataDir, projectDir: home });
+    const skillsCli = bindSkillsCli(binding.commands.codex, options.reviewedSkillsCli);
+    need(isDeepStrictEqual(skillsCli.receipt, intent.skillsCli), "RECONCILE_SKILLS_BINDING_CHANGED");
+    const alias = binding.rootAliases?.find((item: any) => item.agent === "codex"), codexHome = alias?.target ?? join(home, ".codex"), hooksPath = join(codexHome, "hooks.json");
+    need(resolve(intent.configPath) === resolve(join(codexHome, "config.toml")), "RECONCILE_CONFIG_PATH_CHANGED");
+    const hooksCurrent = snapshot(hooksPath);
+    need(hooksCurrent.sha256 === intent.hooksSha256 || hooksCurrent.sha256 === hooksBefore.sha256, "RECONCILE_HOOKS_CHANGED");
+    rpc = await connect({ command: options.codexCommand ?? "codex", home, codexHome });
+    need(rpc.version === intent.nativeVersion, "RECONCILE_NATIVE_VERSION_CHANGED");
+    const discovered = await rpc.request("hooks/list", { cwds: [home] });
+    need(Array.isArray(discovered?.data) && discovered.data.length === 1 && discovered.data[0].cwd === home && !discovered.data[0].errors?.length && !discovered.data[0].warnings?.length, "RECONCILE_NATIVE_DISCOVERY_REFUSED");
+    const nativeHooks = discovered.data[0].hooks as any[];
+    for (const wanted of intent.hooks) {
+      const matches = nativeHooks.filter((h: any) => h.key === wanted.key || h.key === wanted.key.replace(join(home, ".codex/hooks.json"), hooksPath));
+      need(matches.length === 1, "RECONCILE_NATIVE_IDENTITY_CHANGED");
+      const h = matches[0];
+      need(h.enabled === true && h.trustStatus === "trusted" && h.currentHash === wanted.currentHash, "RECONCILE_NATIVE_STATE_INCOMPLETE");
+    }
+    const config = await rpc.request("config/read", { includeLayers: true, cwd: home });
+    const layers = config?.layers?.filter((layer: any) => layer.name?.type === "user" && layer.name.file === intent.configPath && !layer.name.profile);
+    need(layers?.length === 1 && !layers[0].disabledReason && isDeepStrictEqual(layers[0].config, current), "RECONCILE_NATIVE_CONFIG_MISMATCH");
+    const receipt = { version: 1, status: "reconciled", reconciled: true, automaticRollback: false, journal, planDigest: intent.planDigest, nativeVersion: rpc.version, nativeExecutionVerified: true, configSha256: currentConfig.sha256, hooksSha256: hooksCurrent.sha256, policySha256: policyBefore.sha256, skillsCli: skillsCli.receipt, unrelatedSettingsAndCommentsPreserved: true };
+    save(join(journal, "receipt.json"), json(receipt));
+    return receipt;
+  } catch (error) {
+    const message = error instanceof Error && error.message.startsWith("CODEX_HOOK_TRUST_") ? error.message : "CODEX_HOOK_TRUST_RECONCILE_REFUSED";
+    throw new Error(message);
+  } finally { await rpc?.close(); }
+}
 
 /** Deliberately separate from filesystem hook installation: native trust is an
  * explicit authorization of exact owned commands, never a broad trust bypass. */

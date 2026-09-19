@@ -9,6 +9,14 @@ const prune = (value: any) => { if (value.hooks?.state && !Object.keys(value.hoo
 const canonicalizeTableOrder = (text: string): string => {
   const headers = [...text.matchAll(/^[ \t]*(\[\[?[^\r\n]+\]\]?)[ \t]*(#[^\r\n]*)?(?:\r?\n|$)/gm)];
   if (!headers.length) return text;
+  // Array-of-tables and parent/child table ordering carry parser-sensitive
+  // structure. The native writer is admitted only for the simple unrelated
+  // table reorder observed in Codex 0.154; all other layouts remain fail-closed
+  // under the ordinary preservation witness.
+  const keys = headers.map(header => header[1]!.trim());
+  if (keys.some(key => key.startsWith("[[") || keys.filter(other => other === key).length > 1)) return text;
+  const plain = keys.map(key => key.slice(1, -1).trim());
+  if (plain.some((key, index) => plain.some((other, otherIndex) => index !== otherIndex && (other.startsWith(`${key}.`) || key.startsWith(`${other}.`))))) return text;
   const first = headers[0]!.index!;
   const prefix = text.slice(0, first);
   const blocks = headers.map((header, index) => ({
