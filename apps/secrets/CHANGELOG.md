@@ -1,5 +1,53 @@
 # Changelog
 
+## 0.5.0
+
+### Minor Changes
+
+- Add bounded compact metadata envelopes with explicit full compatibility, teach the browser native host to accept both envelope and legacy-array CLI output, restore the full audit default to 50 rows, and add deterministic id tie-breakers for vault items, users, and audit records.
+- Add `secrets exec --secret-ref` for exact AWS Secrets Manager references, including JSON fields and explicit versions. Validate the configured profile, actual caller account, region and returned identity before injecting a string into a trusted child, with value-safe failure messages.
+- Add an explicitly scoped, atomic vault migration protocol that preserves all supported source tables, re-encrypts values server-side, protects imported history, and verifies complete readback before reporting success. Sources are never deleted; unsupported schemas and conflicts fail closed.
+- Removed the `~/.secrets` env-file bridge and the vestigial `path` verb, and
+  `encrypt-vault` now reports a single service-verified outcome.
+
+  - `export-env` is gone. It wrote hosted secret **values** as plaintext `.env`
+    files under `~/.secrets/`; `secrets exec <key> --as VAR -- <command>` is the
+    supported way to hand a value to a consumer without ever writing it down.
+  - `import-env` is gone with it — it was the one-time migration aid that read
+    those same plaintext files back into the vault.
+  - `path` is gone. It printed "where is the vault", which on the hosted client
+    is just the API URL that `secrets status` already reports (with the
+    credential source, redacted).
+  - `encrypt-vault` prints the service's verified repair result only. It calls
+    `POST /v1/encryption/repair` and no longer has a second, locally worded
+    outcome that omits the server's verification.
+
+### Patch Changes
+
+- The direct `SecretsClient` constructor refuses loudly when a caller pins an
+  explicit `baseUrl` without a key (hasna/apps#1720, adversarial credential-seam
+  audit). `apiKey: options.apiKey ?? ""` silently built an UNAUTHENTICATED
+  transport — the factory path already refused, but a direct
+  `new SecretsClient({ baseUrl })` (or a blank `apiKey: ""`) still produced a
+  client that sends no credential at all. The constructor now throws
+  `SECRETS_CLIENT_PIN_REQUIRED` at construction time, naming the expected env
+  sources (`HASNA_SECRETS_API_URL` / `HASNA_SECRETS_API_KEY`) and never
+  carrying a key value; an explicit key or a per-request `CredentialProvider`
+  is unchanged, and `createSecretsClientFromEnv` behaves exactly as before.
+  The regression suite pins the refusal (absent key and blank key), the
+  provider path, and the pinned-key path.
+- Retire the stale Contracts 1.0.2 changeset already shipped in 0.4.1. The current Contracts 1.1.0 development pin remains unchanged.
+- Track Contracts 1.1.0 explicitly so clean registry installs retain the credential
+  resolver used by Events and Secrets after the workspace release. Secrets vault
+  migration retains the resolver's refusal of recursive bootstrap references.
+  Contracts' development SDK uses an exact public registry artifact, preserving
+  producer acceptance without creating a circular workspace build dependency.
+- Every command works in every transport (storage-mode axis retired; hasna/apps#1720). `key` / `key init` / `key path` / `key exists` / `key kms` no longer refuse to run against the hosted API: they report the hosted vault's server-owned at-rest encryption and create no local key material. `encrypt-vault` verifies and reports the hosted at-rest state instead of throwing, and `gc` prunes expired secrets through whichever transport is active instead of being a silent no-op. The container/dev-stack env no longer sets the retired `HASNA_APP_MODE` / `HASNA_SECRETS_STORAGE_MODE` variables (the server refuses to boot with them); the deploy manifest declares api-key auth for the CLI/MCP surfaces; the live-PostgreSQL proof gate (`bun run test:pg`) now passes (UUID tenant probe).
+- Require synchronous PostgreSQL commits and safe WAL settings before vault migration reads or writes, preserving durable receipts even when the caller session disables synchronous commit.
+- Build the packaged server with the pinned Bun runtime, verified RDS certificate bundle, and production dependencies without desktop installation hooks.
+- Keep ordinary CLI, MCP and default store access on the shared authenticated API. Reject legacy local/database selectors, preserve explicit migration/library handles, and prevent browser/AWS client configuration from copying legacy vault databases or key files. Exercise public client paths through authenticated loopback fixtures.
+- Verify server key and tenant payload encryption through authenticated API operations. Repair legacy plaintext across secrets, structured items, history and migration manifests atomically, preserving identities and timestamps. Replace assumed key/KMS success with observed runtime evidence and an explicit unsupported KMS setup capability.
+
 ## 0.4.2
 
 ### Patch Changes
