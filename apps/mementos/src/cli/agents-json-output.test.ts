@@ -52,7 +52,11 @@ afterAll(() => {
 describe("agents JSON output", () => {
   test("emits complete parseable JSON for a large listing", async () => {
     const result = await runCli("agents", "--limit", String(AGENT_COUNT + 1));
-    expect(result.exitCode, `agents CLI stderr: ${result.stderr}\nstdout prefix: ${result.stdout.slice(0, 200)}`).toBe(0);
+    if (result.exitCode !== 0) {
+      throw new Error(
+        `agents CLI exited ${result.exitCode}; stderr: ${result.stderr.slice(0, 2000)}; stdout prefix: ${result.stdout.slice(0, 200)}`,
+      );
+    }
     expect(result.stderr).not.toContain("error:");
     expect(Buffer.byteLength(result.stdout)).toBeGreaterThan(327_680);
     const rows = JSON.parse(result.stdout) as Array<{ name: string }>;
