@@ -7973,6 +7973,10 @@ function normalizeKnowledgeApiOrigin(apiUrl) {
     url.pathname = pathname.slice(0, -"/api/v1".length) || "/";
   } else if (pathname.endsWith("/api")) {
     url.pathname = pathname.slice(0, -"/api".length) || "/";
+  } else if (pathname === "/v1") {
+    url.pathname = "/";
+  } else if (pathname.endsWith("/v1")) {
+    url.pathname = pathname.slice(0, -"/v1".length) || "/";
   }
   return url.toString().replace(/\/+$/, "");
 }
