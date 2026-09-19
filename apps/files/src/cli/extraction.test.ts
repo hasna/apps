@@ -40,7 +40,7 @@ describe("extraction CLI", () => {
     expect(index.exitCode).toBe(0);
 
     const list = Bun.spawnSync({
-      cmd: ["bun", "run", cliPath, "list", "--json"],
+      cmd: ["bun", "run", cliPath, "list", "--json", "--full"],
       env,
       stdout: "pipe",
       stderr: "pipe",
@@ -92,7 +92,7 @@ describe("extraction CLI", () => {
     }).exitCode).toBe(0);
 
     const list = Bun.spawnSync({
-      cmd: ["bun", "run", cliPath, "list", "--json"],
+      cmd: ["bun", "run", cliPath, "list", "--json", "--full"],
       env,
       stdout: "pipe",
       stderr: "pipe",

@@ -4,7 +4,10 @@ import {
   FILE_COMPACT_FIELDS,
   SEARCH_COMPACT_FIELDS,
   buildFilePage,
+  decodeFilePageCursor,
+  encodeFilePageCursor,
   parseFileFields,
+  resolveFilePageOffset,
 } from "./compact-output.js";
 
 function file(index: number): FileWithTags {
@@ -213,4 +216,36 @@ describe("compact file output", () => {
     expect(page.items).toEqual(rows);
     expect(page._meta).toMatchObject({ count: 2, has_more: false, complete: true, detail: "full" });
   });
+
+  test("continuation cursors are deterministic, query-bound, and byte-budgeted", () => {
+    const continuation = {
+      kind: "list" as const,
+      query: { source_id: "src_1", sort: "date", sort_dir: "desc" },
+    };
+    const page = buildFilePage(Array.from({ length: 21 }, (_, i) => file(i)), {
+      limit: 20,
+      offset: 0,
+      detail: "compact",
+      fields: FILE_COMPACT_FIELDS,
+      maxBytes: 4_096,
+      continuation,
+    });
+    expect(page._meta.cursor_contract).toBe("files.collection.page.v1");
+    expect(page._meta.cursor).toBeNull();
+    expect(page._meta.next_cursor).toEqual(expect.any(String));
+    expect(page._meta.byte_length).toBe(Buffer.byteLength(JSON.stringify(page)));
+    expect(page._meta.byte_length).toBeLessThanOrEqual(4_096);
+    expect(decodeFilePageCursor(page._meta.next_cursor!, "list", continuation.query)).toBe(page.items.length);
+    expect(resolveFilePageOffset(page._meta.next_cursor!, undefined, continuation)).toBe(page.items.length);
+    expect(() => resolveFilePageOffset(page._meta.next_cursor!, 0, continuation)).toThrow(/cursor or offset/);
+    expect(() => decodeFilePageCursor(page._meta.next_cursor!, "search", continuation.query)).toThrow(/does not match/);
+    expect(() => decodeFilePageCursor(page._meta.next_cursor!, "list", { ...continuation.query, source_id: "other" })).toThrow(/does not match/);
+    expect(() => decodeFilePageCursor("!", "list", continuation.query)).toThrow(/Invalid file page cursor/);
+    expect(() => decodeFilePageCursor("A".repeat(2_049), "list", continuation.query)).toThrow(/Invalid file page cursor/);
+    const decoded = Buffer.from(page._meta.next_cursor!, "base64url").toString("utf8");
+    const noncanonical = Buffer.from(decoded.replace('"v":1', '"v":1,"v":1'), "utf8").toString("base64url");
+    expect(() => decodeFilePageCursor(noncanonical, "list", continuation.query)).toThrow(/Invalid file page cursor/);
+    expect(encodeFilePageCursor("list", page.items.length, continuation.query)).toBe(page._meta.next_cursor);
+  });
+
 });

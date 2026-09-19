@@ -14,7 +14,7 @@ afterEach(() => {
 describe("context-pack CLI", () => {
   test("prints bounded JSON packs and dry-run artifact pointers", () => {
     const env = seedCliFiles();
-    const files = JSON.parse(stdout(run(["list", "--json"], env))) as Array<{ id: string; name: string }>;
+    const files = JSON.parse(stdout(run(["list", "--json", "--full"], env))) as Array<{ id: string; name: string }>;
     const file = files.find((entry) => entry.name === "loop-receipt.txt")!;
 
     const context = run(["context-pack", `open-files://file/${file.id}`, "--max-excerpt-chars", "64", "--max-total-chars", "64"], env);

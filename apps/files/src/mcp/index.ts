@@ -41,6 +41,7 @@ import {
   fetchFilePageRows,
   filePageJson,
   normalizeFileOutputMaxBytes,
+  resolveFilePageOffset,
   validateFileProjection,
 } from "../lib/compact-output.js";
 import { FILES_API_MAX_PAGE_SIZE } from "../lib/api-pagination.js";
@@ -486,7 +487,7 @@ registerTool("index_source", "Re-index a source (or all sources on this machine)
 
 // ─── Files ────────────────────────────────────────────────────────────────────
 
-registerTool("list_files", "List files. Legacy full array by default; set format=page for bounded receipts.", {
+registerTool("list_files", "List compact files. format=legacy returns the full bare array.", {
   source_id: z.string().optional(),
   machine_id: z.string().optional(),
   tag: z.string().optional(),
@@ -499,41 +500,76 @@ registerTool("list_files", "List files. Legacy full array by default; set format
   max_size: z.number().optional().describe("Maximum file size in bytes"),
   sort: z.enum(["name", "size", "date"]).optional().default("date"),
   sort_dir: z.enum(["asc", "desc"]).optional().default("desc"),
-  limit: z.number().int().positive().optional().describe("Rows to return; legacy default 50, page default 20"),
-  offset: z.number().int().nonnegative().optional().default(0),
-  format: z.enum(["legacy", "page"]).optional().default("legacy").describe("legacy array or receipt-bearing page"),
-  all: z.boolean().optional().default(false).describe("Exhaust safely; requires format=page"),
-  detail: z.enum(["compact", "full"]).optional().describe("With format=page; default compact"),
-  fields: z.array(z.enum(FILE_LIST_FIELDS)).nonempty().optional().describe("Fields to return; id is always included"),
-  max_bytes: z.number().int().min(1024).max(1024 * 1024).optional().describe("Compact response byte ceiling (default 32768)"),
+  limit: z.number().int().positive().optional().describe("Rows (20 default; legacy 50)"),
+  offset: z.number().int().nonnegative().optional(),
+  cursor: z.string().min(1).max(2048).optional(),
+  format: z.enum(["legacy", "page"]).optional().default("page"),
+  all: z.boolean().optional().default(false),
+  detail: z.enum(["compact", "full"]).optional(),
+  fields: z.array(z.enum(FILE_LIST_FIELDS)).nonempty().optional(),
+  max_bytes: z.number().int().min(1024).max(1024 * 1024).optional(),
   sync_status: z.enum(["local_only", "synced", "conflict"]).optional().describe("Filter by sync status"),
-  agent_id: z.string().optional().describe("Agent ID — auto-applies focused project filter if set"),
+  agent_id: z.string().optional().describe("Agent ID; applies focused project"),
 }, async (opts) => {
   if (opts.sync_status && transport === "api") {
     throw new Error("sync_status is unavailable on the hosted /v1 files list; refusing to ignore the filter");
   }
-  // Workspace scoping: auto-apply agent's focused project (a local-store
-  // concern; the ApiStore honors only the source_id/machine_id/ext/limit/offset
-  // subset the cloud /v1/files endpoint supports).
   if (opts.agent_id && !opts.project_id) {
     const agent = await store().getAgent(opts.agent_id);
     if (agent?.project_id) opts.project_id = agent.project_id;
   }
-  const format = opts.format ?? "legacy";
-  const limit = opts.limit ?? (format === "page" ? 20 : 50);
-  const offset = opts.offset ?? 0;
+
+  const format = opts.format ?? "page";
+  const limit = opts.limit ?? (format === "legacy" ? 50 : 20);
   if (format === "legacy") {
-    if (opts.all || opts.detail !== undefined || opts.fields !== undefined || opts.max_bytes !== undefined) {
-      throw new Error("all, detail, fields, and max_bytes require format=page");
+    if (opts.cursor !== undefined || opts.all || opts.detail !== undefined || opts.fields !== undefined || opts.max_bytes !== undefined) {
+      throw new Error("cursor, all, detail, fields, and max_bytes require format=page");
     }
-    const files = await store().listFiles({ ...opts, limit, offset });
+    const files = await store().listFiles({
+      source_id: opts.source_id,
+      machine_id: opts.machine_id,
+      tag: opts.tag,
+      collection_id: opts.collection_id,
+      project_id: opts.project_id,
+      ext: opts.ext,
+      after: opts.after,
+      before: opts.before,
+      min_size: opts.min_size,
+      max_size: opts.max_size,
+      sort: opts.sort,
+      sort_dir: opts.sort_dir,
+      sync_status: opts.sync_status,
+      limit,
+      offset: opts.offset ?? 0,
+    });
     return { content: [{ type: "text", text: JSON.stringify(files, null, 2) }] };
   }
+
+  const continuation = {
+    kind: "list" as const,
+    query: {
+      source_id: opts.source_id ?? null,
+      machine_id: opts.machine_id ?? null,
+      tag: opts.tag ?? null,
+      collection_id: opts.collection_id ?? null,
+      project_id: opts.project_id ?? null,
+      ext: opts.ext ?? null,
+      after: opts.after ?? null,
+      before: opts.before ?? null,
+      min_size: opts.min_size ?? null,
+      max_size: opts.max_size ?? null,
+      sort: opts.sort ?? "date",
+      sort_dir: opts.sort_dir ?? "desc",
+      sync_status: opts.sync_status ?? null,
+    },
+  };
+  const offset = resolveFilePageOffset(opts.cursor, opts.offset, continuation);
   const detail = opts.detail ?? "compact";
   const fields = validateFileProjection(detail, opts.fields, "list");
   if (!opts.all && limit > FILES_API_MAX_PAGE_SIZE) {
-    throw new Error(`Page limit must be <= ${FILES_API_MAX_PAGE_SIZE}; paginate with offset`);
+    throw new Error(`Page limit must be <= ${FILES_API_MAX_PAGE_SIZE}; continue with cursor or offset`);
   }
+  if (opts.all && opts.cursor !== undefined) throw new Error("all=true cannot be combined with cursor");
   if (opts.all && offset !== 0) throw new Error("all=true requires offset=0 so completeness covers the whole query");
   if (opts.all && detail !== "compact") throw new Error("all=true requires compact detail for bounded exhaustive output");
   if (detail === "full" && opts.max_bytes !== undefined) {
@@ -543,7 +579,23 @@ registerTool("list_files", "List files. Legacy full array by default; set format
     ? normalizeFileOutputMaxBytes(opts.max_bytes)
     : opts.all ? DEFAULT_ALL_FILE_MAX_BYTES
       : detail === "compact" ? DEFAULT_COMPACT_FILE_MAX_BYTES : undefined;
-  const readPage = (pageLimit: number, pageOffset: number) => store().listFiles({ ...opts, limit: pageLimit, offset: pageOffset });
+  const readPage = (pageLimit: number, pageOffset: number) => store().listFiles({
+    source_id: opts.source_id,
+    machine_id: opts.machine_id,
+    tag: opts.tag,
+    collection_id: opts.collection_id,
+    project_id: opts.project_id,
+    ext: opts.ext,
+    after: opts.after,
+    before: opts.before,
+    min_size: opts.min_size,
+    max_size: opts.max_size,
+    sort: opts.sort,
+    sort_dir: opts.sort_dir,
+    sync_status: opts.sync_status,
+    limit: pageLimit,
+    offset: pageOffset,
+  });
   const files = opts.all
     ? await fetchAllFileRows(readPage)
     : await fetchFilePageRows(readPage, limit, offset);
@@ -554,6 +606,7 @@ registerTool("list_files", "List files. Legacy full array by default; set format
     fields,
     maxBytes,
     all: opts.all,
+    continuation,
   });
   if (opts.all && page._meta.byte_limited) {
     throw new Error(`Exhaustive list output exceeds max_bytes=${maxBytes}; use paginated format=page output`);
@@ -561,62 +614,85 @@ registerTool("list_files", "List files. Legacy full array by default; set format
   return { content: [{ type: "text", text: filePageJson(page) }] };
 });
 
-registerTool("search_files", "Search files. Legacy full array by default; set format=page for bounded receipts.", {
+registerTool("search_files", "Search compact files. format=legacy returns the full bare array.", {
   query: z.string().describe("Search query"),
   source_id: z.string().optional(),
   machine_id: z.string().optional(),
   tag: z.string().optional(),
   ext: z.string().optional(),
-  limit: z.number().int().positive().optional().default(20),
-  offset: z.number().int().nonnegative().optional().default(0),
-  format: z.enum(["legacy", "page"]).optional().default("legacy").describe("legacy array or receipt-bearing page"),
-  all: z.boolean().optional().default(false).describe("Exhaust safely; requires format=page"),
-  detail: z.enum(["compact", "full"]).optional().describe("With format=page; default compact"),
-  fields: z.array(z.enum(FILE_SEARCH_FIELDS)).nonempty().optional().describe("Fields to return; id is always included"),
-  max_bytes: z.number().int().min(1024).max(1024 * 1024).optional().describe("Compact response byte ceiling (default 32768)"),
+  limit: z.number().int().positive().optional().describe("Rows (default 20)"),
+  offset: z.number().int().nonnegative().optional(),
+  cursor: z.string().min(1).max(2048).optional(),
+  format: z.enum(["legacy", "page"]).optional().default("page"),
+  all: z.boolean().optional().default(false),
+  detail: z.enum(["compact", "full"]).optional(),
+  fields: z.array(z.enum(FILE_SEARCH_FIELDS)).nonempty().optional(),
+  max_bytes: z.number().int().min(1024).max(1024 * 1024).optional(),
   agent_id: z.string().optional().describe("Agent ID for activity tracking"),
-}, async ({ query, source_id, machine_id, tag, ext, limit = 20, offset = 0, format = "legacy", all = false, detail: requestedDetail, fields: requestedFields, max_bytes, agent_id }) => {
-  const readPage = (pageLimit: number, pageOffset: number) => store().searchFiles(query, {
-    source_id, machine_id, tag, ext, limit: pageLimit, offset: pageOffset,
+}, async (opts) => {
+  const format = opts.format ?? "page";
+  const limit = opts.limit ?? 20;
+  const readPage = (pageLimit: number, pageOffset: number) => store().searchFiles(opts.query, {
+    source_id: opts.source_id,
+    machine_id: opts.machine_id,
+    tag: opts.tag,
+    ext: opts.ext,
+    limit: pageLimit,
+    offset: pageOffset,
   });
   if (format === "legacy") {
-    if (all || requestedDetail !== undefined || requestedFields !== undefined || max_bytes !== undefined) {
-      throw new Error("all, detail, fields, and max_bytes require format=page");
+    if (opts.cursor !== undefined || opts.all || opts.detail !== undefined || opts.fields !== undefined || opts.max_bytes !== undefined) {
+      throw new Error("cursor, all, detail, fields, and max_bytes require format=page");
     }
-    const results = await readPage(limit, offset);
-    if (agent_id) logActivity({ agent_id, action: "search", metadata: { query, results_count: results.length } });
+    const results = await readPage(limit, opts.offset ?? 0);
+    if (opts.agent_id) logActivity({ agent_id: opts.agent_id, action: "search", metadata: { query: opts.query, results_count: results.length } });
     return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
   }
-  const detail = requestedDetail ?? "compact";
-  const fields = validateFileProjection(detail, requestedFields, "search");
-  if (!all && limit > FILES_API_MAX_PAGE_SIZE) {
-    throw new Error(`Page limit must be <= ${FILES_API_MAX_PAGE_SIZE}; paginate with offset`);
+
+  const continuation = {
+    kind: "search" as const,
+    query: {
+      query: opts.query,
+      source_id: opts.source_id ?? null,
+      machine_id: opts.machine_id ?? null,
+      tag: opts.tag ?? null,
+      ext: opts.ext ?? null,
+      search_scope: "all",
+    },
+  };
+  const offset = resolveFilePageOffset(opts.cursor, opts.offset, continuation);
+  const detail = opts.detail ?? "compact";
+  const fields = validateFileProjection(detail, opts.fields, "search");
+  if (!opts.all && limit > FILES_API_MAX_PAGE_SIZE) {
+    throw new Error(`Page limit must be <= ${FILES_API_MAX_PAGE_SIZE}; continue with cursor or offset`);
   }
-  if (all && offset !== 0) throw new Error("all=true requires offset=0 so completeness covers the whole query");
-  if (all && detail !== "compact") throw new Error("all=true requires compact detail for bounded exhaustive output");
-  if (detail === "full" && max_bytes !== undefined) {
+  if (opts.all && opts.cursor !== undefined) throw new Error("all=true cannot be combined with cursor");
+  if (opts.all && offset !== 0) throw new Error("all=true requires offset=0 so completeness covers the whole query");
+  if (opts.all && detail !== "compact") throw new Error("all=true requires compact detail for bounded exhaustive output");
+  if (detail === "full" && opts.max_bytes !== undefined) {
     throw new Error("max_bytes cannot be combined with detail=full");
   }
-  const maxBytes = max_bytes !== undefined
-    ? normalizeFileOutputMaxBytes(max_bytes)
-    : all ? DEFAULT_ALL_FILE_MAX_BYTES
+  const maxBytes = opts.max_bytes !== undefined
+    ? normalizeFileOutputMaxBytes(opts.max_bytes)
+    : opts.all ? DEFAULT_ALL_FILE_MAX_BYTES
       : detail === "compact" ? DEFAULT_COMPACT_FILE_MAX_BYTES : undefined;
-  const results = all
+  const results = opts.all
     ? await fetchAllFileRows(readPage)
     : await fetchFilePageRows(readPage, limit, offset);
   const page = buildFilePage(results, {
-    limit: all ? MAX_ALL_FILE_ROWS : limit,
+    limit: opts.all ? MAX_ALL_FILE_ROWS : limit,
     offset,
     detail,
     fields,
     maxBytes,
-    all,
+    all: opts.all,
+    continuation,
   });
-  if (all && page._meta.byte_limited) {
+  if (opts.all && page._meta.byte_limited) {
     throw new Error(`Exhaustive search output exceeds max_bytes=${maxBytes}; use paginated format=page output`);
   }
-  if (agent_id) {
-    logActivity({ agent_id, action: "search", metadata: { query, results_count: page._meta.count } });
+  if (opts.agent_id) {
+    logActivity({ agent_id: opts.agent_id, action: "search", metadata: { query: opts.query, results_count: page._meta.count } });
   }
   return { content: [{ type: "text", text: filePageJson(page) }] };
 });

@@ -90,18 +90,11 @@ describe("Files MCP output efficiency", () => {
     expect(full).toHaveLength(94);
   });
 
-  test("list_files keeps the legacy array default and exposes explicit minified page output", async () => {
+  test("list_files defaults to a compact page and format=legacy preserves the bare array", async () => {
     await seedFiles(21);
     const { client, close } = await connectedClient();
     try {
-      const legacy = await client.callTool({ name: "list_files", arguments: { limit: 20 } });
-      const legacyRows = JSON.parse(text(legacy)) as Array<Record<string, unknown>>;
-      expect(Array.isArray(legacyRows)).toBe(true);
-      expect(legacyRows).toHaveLength(20);
-      expect(legacyRows[0]).toHaveProperty("hash");
-      expect(text(legacy)).toContain("\n");
-
-      const compact = await client.callTool({ name: "list_files", arguments: { format: "page", limit: 20 } });
+      const compact = await client.callTool({ name: "list_files", arguments: { limit: 20 } });
       const compactText = text(compact);
       expect(compactText).not.toContain("\n");
       expect(Buffer.byteLength(compactText)).toBeLessThan(8_000);
@@ -109,10 +102,34 @@ describe("Files MCP output efficiency", () => {
       expect(compactPage.items).toHaveLength(20);
       expect(compactPage.items[0]).not.toHaveProperty("description");
       expect(compactPage._meta).toMatchObject({ count: 20, limit: 20, offset: 0, next_offset: 20, has_more: true, complete: false, detail: "compact", max_bytes: 32_768, byte_limited: false });
+      expect(compactPage._meta.next_cursor).toEqual(expect.any(String));
       expect(compactPage._meta.byte_length).toBe(Buffer.byteLength(compactText));
       expect(compactText).toBe(JSON.stringify(compactPage));
 
-      const full = await client.callTool({ name: "list_files", arguments: { format: "page", limit: 1, detail: "full" } });
+      const legacy = await client.callTool({ name: "list_files", arguments: { format: "legacy", limit: 20 } });
+      const legacyRows = JSON.parse(text(legacy)) as Array<Record<string, unknown>>;
+      expect(Array.isArray(legacyRows)).toBe(true);
+      expect(legacyRows).toHaveLength(20);
+      expect(legacyRows[0]).toHaveProperty("hash");
+      expect(text(legacy)).toContain("\n");
+
+      const tail = await client.callTool({
+        name: "list_files",
+        arguments: { limit: 20, cursor: compactPage._meta.next_cursor },
+      });
+      expect((JSON.parse(text(tail)) as { items: Array<{ id: string }>; _meta: Record<string, unknown> })).toMatchObject({
+        items: [{ id: "f_output_020" }],
+        _meta: { offset: 20, cursor: compactPage._meta.next_cursor, next_cursor: null, has_more: false },
+      });
+
+      const mismatch = await client.callTool({
+        name: "list_files",
+        arguments: { source_id: "different", cursor: compactPage._meta.next_cursor },
+      });
+      expect(mismatch.isError).toBe(true);
+      expect(text(mismatch)).toContain("does not match this query");
+
+      const full = await client.callTool({ name: "list_files", arguments: { limit: 1, detail: "full" } });
       const fullPage = JSON.parse(text(full)) as { items: Array<Record<string, unknown>> };
       expect(fullPage.items[0]).toHaveProperty("hash");
 
@@ -122,7 +139,7 @@ describe("Files MCP output efficiency", () => {
 
       const incompatible = await client.callTool({
         name: "list_files",
-        arguments: { format: "page", limit: 1, detail: "full", max_bytes: 4096 },
+        arguments: { limit: 1, detail: "full", max_bytes: 4096 },
       });
       expect(incompatible.isError).toBe(true);
       expect(text(incompatible)).toContain("max_bytes cannot be combined with detail=full");
@@ -131,16 +148,13 @@ describe("Files MCP output efficiency", () => {
     }
   });
 
-  test("search_files keeps the legacy array default and supports explicit compact page projection", async () => {
+  test("search_files defaults to compact projection and keeps format=legacy compatibility", async () => {
     await seedFiles(21);
     const { client, close } = await connectedClient();
     try {
-      const legacy = await client.callTool({ name: "search_files", arguments: { query: "contract", limit: 1 } });
-      expect(Array.isArray(JSON.parse(text(legacy)))).toBe(true);
-
       const result = await client.callTool({
         name: "search_files",
-        arguments: { query: "contract", format: "page", limit: 20, fields: ["name", "size"] },
+        arguments: { query: "contract", limit: 20, fields: ["name", "size"] },
       });
       const body = text(result);
       expect(body).not.toContain("\n");
@@ -148,17 +162,27 @@ describe("Files MCP output efficiency", () => {
       expect(page.items).toHaveLength(20);
       expect(Object.keys(page.items[0]!)).toEqual(["id", "name", "size"]);
       expect(page._meta).toMatchObject({ count: 20, next_offset: 20, has_more: true, complete: false, fields: ["id", "name", "size"] });
+      expect(page._meta.next_cursor).toEqual(expect.any(String));
       expect(body).toBe(JSON.stringify(page));
+
+      const legacy = await client.callTool({
+        name: "search_files",
+        arguments: { query: "contract", format: "legacy", limit: 1 },
+      });
+      expect(Array.isArray(JSON.parse(text(legacy)))).toBe(true);
 
       const tail = await client.callTool({
         name: "search_files",
-        arguments: { query: "contract", format: "page", limit: 20, offset: 20 },
+        arguments: { query: "contract", limit: 20, cursor: page._meta.next_cursor },
       });
       expect((JSON.parse(text(tail)) as { _meta: Record<string, unknown> })._meta).toMatchObject({
         count: 1,
+        offset: 20,
         has_more: false,
         end_reached: true,
         complete: false,
+        cursor: page._meta.next_cursor,
+        next_cursor: null,
       });
     } finally {
       await close();
@@ -282,7 +306,7 @@ describe("Files MCP output efficiency", () => {
 
       const legacyAll = await client.callTool({
         name: "list_files",
-        arguments: { all: true },
+        arguments: { format: "legacy", all: true },
       });
       expect(legacyAll.isError).toBe(true);
       expect(text(legacyAll)).toContain("require format=page");
