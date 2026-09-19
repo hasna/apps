@@ -274,8 +274,12 @@ test("embedded events/channels local surface runs with no Calendar credential", 
   const env = { ...bareMinimalEnv(), HASNA_EVENTS_DIR: join(tempDir, "events") };
   try {
     const emitted = JSON.parse((await runCalendarMinimal(["--json", "events", "emit", "calendar.census", "--subject", "local surface", "--message", "no credential needed"], env)).stdout) as { event: { id: string } };
-    const list = JSON.parse((await runCalendarMinimal(["--json", "events", "list"], env)).stdout) as Array<{ type: string }>;
-    expect(list.some((e) => e.type === "calendar.census")).toBe(true);
+    const list = JSON.parse((await runCalendarMinimal(["--json", "events", "list"], env)).stdout) as {
+      events: Array<{ type: string }>;
+      compact: boolean;
+    };
+    expect(list.compact).toBe(true);
+    expect(list.events.some((event) => event.type === "calendar.census")).toBe(true);
     const replay = JSON.parse((await runCalendarMinimal(["--json", "events", "replay", "--id", emitted.event.id, "--dry-run"], env)).stdout) as { events: unknown[] };
     expect(replay.events.length).toBeGreaterThan(0);
 
