@@ -8811,6 +8811,10 @@ function normalizeKnowledgeApiOrigin(apiUrl) {
     url.pathname = pathname.slice(0, -"/api/v1".length) || "/";
   } else if (pathname.endsWith("/api")) {
     url.pathname = pathname.slice(0, -"/api".length) || "/";
+  } else if (pathname === "/v1") {
+    url.pathname = "/";
+  } else if (pathname.endsWith("/v1")) {
+    url.pathname = pathname.slice(0, -"/v1".length) || "/";
   }
   return url.toString().replace(/\/+$/, "");
 }
@@ -22180,9 +22184,14 @@ function createKnowledgeService(options = {}) {
 }
 
 // src/search-output.ts
+var KNOWLEDGE_COMPACT_RESPONSE_MAX_BYTES = 64 * 1024;
+var COMPACT_PROJECTION_MAX_BYTES = KNOWLEDGE_COMPACT_RESPONSE_MAX_BYTES - 1024;
 var DEFAULT_SEARCH_PREVIEW_CHARS = 320;
 var DEFAULT_CONTEXT_PREVIEW_CHARS = 520;
 var DEFAULT_CITATION_PREVIEW_CHARS = 240;
+function encodedBytes(value) {
+  return Buffer.byteLength(JSON.stringify(value), "utf8");
+}
 function compactText2(value, maxChars) {
   if (value === null || value === undefined)
     return null;
@@ -22193,10 +22202,21 @@ function compactText2(value, maxChars) {
     return normalized.slice(0, Math.max(0, maxChars));
   return `${normalized.slice(0, maxChars - 3).trim()}...`;
 }
+function compactStrings(values, maxItems, maxChars) {
+  return values.slice(0, maxItems).map((value) => compactText2(value, maxChars) ?? "");
+}
 function boundedPreviewChars(value, fallback) {
   if (!Number.isFinite(value ?? NaN))
     return fallback;
   return Math.max(80, Math.min(Math.floor(value), 2000));
+}
+function stringifyKnowledgeCompactResponse(value) {
+  const text = JSON.stringify(value);
+  const bytes = Buffer.byteLength(text, "utf8");
+  if (bytes > KNOWLEDGE_COMPACT_RESPONSE_MAX_BYTES) {
+    throw new Error(`Knowledge compact response exceeded ${KNOWLEDGE_COMPACT_RESPONSE_MAX_BYTES} UTF-8 bytes (${bytes}). Use explicit detail='full' or detail='legacy' for exhaustive output.`);
+  }
+  return text;
 }
 function compactSource(source) {
   if (!source)
@@ -22219,12 +22239,21 @@ function compactArtifact(artifact) {
     shard_key: compactText2(artifact.shard_key, 160)
   };
 }
+function compactEntryCitation(citation) {
+  if (!citation)
+    return null;
+  return {
+    chunk_id: compactText2(citation.chunk_id, 160),
+    start_offset: citation.start_offset,
+    end_offset: citation.end_offset
+  };
+}
 function compactSearchEntry(entry, options) {
   const textLength = entry.text?.length ?? 0;
   const titleLength = entry.title?.length ?? 0;
   return {
     kind: entry.kind,
-    id: entry.id,
+    id: compactText2(entry.id, 240),
     title: compactText2(entry.title, 160),
     title_length: titleLength,
     title_truncated: titleLength > 160,
@@ -22235,7 +22264,7 @@ function compactSearchEntry(entry, options) {
       text_truncated: textLength > options.previewChars
     } : {},
     source: compactSource(entry.source),
-    citation: entry.citation,
+    citation: compactEntryCitation(entry.citation),
     artifact: compactArtifact(entry.artifact),
     reasons: entry.reasons.slice(0, 8).map((reason) => compactText2(reason, 80)),
     ..."rerank" in entry ? { rerank: entry.rerank } : {}
@@ -22244,8 +22273,8 @@ function compactSearchEntry(entry, options) {
 function compactCitation(citation) {
   const quoteLength = citation.quote?.length ?? 0;
   return {
-    id: citation.id,
-    result_id: citation.result_id,
+    id: compactText2(citation.id, 240),
+    result_id: compactText2(citation.result_id, 240),
     kind: citation.kind,
     source_uri: compactText2(citation.source_uri, 512),
     source_ref: compactText2(citation.source_ref, 512),
@@ -22253,7 +22282,7 @@ function compactCitation(citation) {
     artifact_path: compactText2(citation.artifact_path, 512),
     revision: compactText2(citation.revision, 160),
     hash: compactText2(citation.hash, 160),
-    chunk_id: citation.chunk_id,
+    chunk_id: compactText2(citation.chunk_id, 160),
     start_offset: citation.start_offset,
     end_offset: citation.end_offset,
     quote_preview: compactText2(citation.quote, DEFAULT_CITATION_PREVIEW_CHARS),
@@ -22263,9 +22292,9 @@ function compactCitation(citation) {
 }
 function compactExcerpt(excerpt2, previewChars) {
   return {
-    id: excerpt2.id,
-    result_id: excerpt2.result_id,
-    citation_id: excerpt2.citation_id,
+    id: compactText2(excerpt2.id, 240),
+    result_id: compactText2(excerpt2.result_id, 240),
+    citation_id: compactText2(excerpt2.citation_id, 240),
     kind: excerpt2.kind,
     text_preview: compactText2(excerpt2.text, previewChars),
     text_length: excerpt2.text.length,
@@ -22273,18 +22302,69 @@ function compactExcerpt(excerpt2, previewChars) {
     score: excerpt2.score
   };
 }
+function compactGraphCitation(citation) {
+  return {
+    id: compactText2(citation.id, 240),
+    chunk_id: compactText2(citation.chunk_id, 160),
+    wiki_page_id: compactText2(citation.wiki_page_id, 160),
+    source_uri: compactText2(citation.source_uri, 512),
+    start_offset: citation.start_offset,
+    end_offset: citation.end_offset
+  };
+}
+function compactBacklink(backlink) {
+  return {
+    from_page_id: compactText2(backlink.from_page_id, 240),
+    to_page_id: compactText2(backlink.to_page_id, 240),
+    label: compactText2(backlink.label, 160)
+  };
+}
+function receiptWithBytes(receipt, build) {
+  let current = { ...receipt, encoded_bytes: 0 };
+  for (let index = 0;index < 4; index += 1) {
+    const bytes = encodedBytes(build(current));
+    if (current.encoded_bytes === bytes)
+      break;
+    current = { ...current, encoded_bytes: bytes };
+  }
+  return current;
+}
 function projectKnowledgeSearchResult(result, options) {
   if (options.detail === "legacy")
     return result;
   if (options.detail === "full")
     return { ...result, detail: "full" };
   const previewChars = boundedPreviewChars(options.previewChars, DEFAULT_SEARCH_PREVIEW_CHARS);
-  return {
-    ...result,
+  const projectedRows = result.results.map((entry) => compactSearchEntry(entry, { previewChars, includePreview: true }));
+  const rows = [...projectedRows];
+  const base = {
+    query: compactText2(result.query, 512),
+    limit: result.limit,
+    offset: result.offset,
+    mode: result.mode,
+    semantic_provider: compactText2(result.semantic_provider, 120),
+    semantic_model: compactText2(result.semantic_model, 160),
+    semantic_dimensions: result.semantic_dimensions,
+    counts: result.counts,
+    warnings: compactStrings(result.warnings, 8, 240),
     detail: "compact",
-    results: result.results.map((entry) => compactSearchEntry(entry, { previewChars, includePreview: true })),
     detail_hint: "Use detail='full' (MCP) or --detail full --json (CLI) only when complete result text is required."
   };
+  const build = (receipt2) => ({ ...base, results: rows, response_budget: receipt2 });
+  let receipt = {};
+  do {
+    receipt = {
+      max_bytes: KNOWLEDGE_COMPACT_RESPONSE_MAX_BYTES,
+      returned_results: rows.length,
+      omitted_results: projectedRows.length - rows.length,
+      complete: rows.length === projectedRows.length
+    };
+    receipt = receiptWithBytes(receipt, build);
+    if (encodedBytes(build(receipt)) <= COMPACT_PROJECTION_MAX_BYTES || rows.length === 0)
+      break;
+    rows.pop();
+  } while (true);
+  return build(receipt);
 }
 function projectKnowledgeContextResult(context, options) {
   if (options.detail === "legacy")
@@ -22292,18 +22372,75 @@ function projectKnowledgeContextResult(context, options) {
   if (options.detail === "full")
     return { ...context, detail: "full" };
   const previewChars = boundedPreviewChars(options.contextPreviewChars, DEFAULT_CONTEXT_PREVIEW_CHARS);
-  return {
-    ...context,
-    detail: "compact",
-    results: context.results.map((entry) => compactSearchEntry(entry, { previewChars, includePreview: false })),
-    citations: context.citations.map(compactCitation),
-    excerpts: context.excerpts.map((entry) => compactExcerpt(entry, previewChars)),
-    graph: {
-      ...context.graph,
-      citations: context.graph.citations.map(({ quote: _quote, ...citation }) => citation)
+  const allResults = context.results.map((entry) => compactSearchEntry(entry, { previewChars, includePreview: false }));
+  const allCitations = context.citations.map(compactCitation);
+  const allExcerpts = context.excerpts.map((entry) => compactExcerpt(entry, previewChars));
+  const allGraphCitations = context.graph.citations.map(compactGraphCitation);
+  const allBacklinks = context.graph.backlinks.map(compactBacklink);
+  const results = [...allResults];
+  const citations = [...allCitations];
+  const excerpts = [...allExcerpts];
+  const graphCitations = [...allGraphCitations];
+  const backlinks = [...allBacklinks];
+  const base = {
+    query: compactText2(context.query, 512),
+    normalized_query: compactText2(context.normalized_query, 512),
+    created_at: context.created_at,
+    mode: context.mode,
+    warnings: compactStrings(context.warnings, 8, 240),
+    search_counts: context.search_counts,
+    notes: {
+      permissions: compactStrings(context.notes.permissions, 20, 240),
+      freshness: compactStrings(context.notes.freshness, 20, 240)
     },
+    detail: "compact",
     detail_hint: "Use detail='full' (MCP) or --detail full --json (CLI) only when raw result, excerpt, and citation bodies are required."
   };
+  const build = (receipt2) => ({
+    ...base,
+    results,
+    citations,
+    excerpts,
+    graph: { citations: graphCitations, backlinks },
+    response_budget: receipt2
+  });
+  let receipt = {};
+  do {
+    receipt = {
+      max_bytes: KNOWLEDGE_COMPACT_RESPONSE_MAX_BYTES,
+      returned: {
+        results: results.length,
+        citations: citations.length,
+        excerpts: excerpts.length,
+        graph_citations: graphCitations.length,
+        backlinks: backlinks.length
+      },
+      omitted: {
+        results: allResults.length - results.length,
+        citations: allCitations.length - citations.length,
+        excerpts: allExcerpts.length - excerpts.length,
+        graph_citations: allGraphCitations.length - graphCitations.length,
+        backlinks: allBacklinks.length - backlinks.length
+      },
+      complete: results.length === allResults.length && citations.length === allCitations.length && excerpts.length === allExcerpts.length && graphCitations.length === allGraphCitations.length && backlinks.length === allBacklinks.length
+    };
+    receipt = receiptWithBytes(receipt, build);
+    if (encodedBytes(build(receipt)) <= COMPACT_PROJECTION_MAX_BYTES)
+      break;
+    if (backlinks.length > 0)
+      backlinks.pop();
+    else if (graphCitations.length > 0)
+      graphCitations.pop();
+    else if (excerpts.length > 0)
+      excerpts.pop();
+    else if (citations.length > 0)
+      citations.pop();
+    else if (results.length > 0)
+      results.pop();
+    else
+      break;
+  } while (true);
+  return build(receipt);
 }
 
 // src/db/storage-sync.ts
@@ -22368,6 +22505,117 @@ function ensureSyncMetaTable(db) {
     )
   `);
 }
+// src/mcp-profile.ts
+var KNOWLEDGE_MCP_PROFILE_ENV = "HASNA_KNOWLEDGE_MCP_PROFILE";
+var KNOWLEDGE_CORE_TOOL_NAMES = [
+  "search_tools",
+  "describe_tools",
+  "ok_paths",
+  "ok_storage_status",
+  "ok_add",
+  "ok_list",
+  "ok_get",
+  "ok_update",
+  "ok_stats",
+  "ok_search",
+  "knowledge_search",
+  "knowledge_context_pack",
+  "knowledge_ask",
+  "knowledge_get",
+  "knowledge_ingest",
+  "knowledge_build",
+  "knowledge_run_status",
+  "knowledge_storage"
+];
+var CORE_TOOLS = new Set(KNOWLEDGE_CORE_TOOL_NAMES);
+
+class KnowledgeToolCatalog {
+  entries = new Map;
+  record(name, description, inputSchema) {
+    const parameters = inputSchema && typeof inputSchema === "object" && !Array.isArray(inputSchema) ? Object.keys(inputSchema) : [];
+    this.entries.set(name, {
+      name,
+      description,
+      parameters,
+      active_in_core: CORE_TOOLS.has(name)
+    });
+  }
+  all() {
+    return [...this.entries.values()].sort((left, right) => left.name.localeCompare(right.name));
+  }
+  search(query = "") {
+    const normalized = query.trim().toLowerCase();
+    return this.all().filter((entry) => !normalized || entry.name.toLowerCase().includes(normalized) || entry.description.toLowerCase().includes(normalized));
+  }
+  describe(names) {
+    const items = [];
+    const missing = [];
+    for (const name of names) {
+      const entry = this.entries.get(name);
+      if (entry)
+        items.push(entry);
+      else
+        missing.push(name);
+    }
+    return { items, missing };
+  }
+}
+function resolveKnowledgeMcpProfile(argv = process.argv, env = process.env, defaultProfile = "core") {
+  let cliValue;
+  for (let index = 0;index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === "--mcp-profile") {
+      const value2 = argv[index + 1];
+      if (!value2 || value2.startsWith("-"))
+        throw new Error("--mcp-profile requires core or full");
+      if (cliValue !== undefined)
+        throw new Error("--mcp-profile may be provided only once");
+      cliValue = value2;
+      index += 1;
+    } else if (arg.startsWith("--mcp-profile=")) {
+      if (cliValue !== undefined)
+        throw new Error("--mcp-profile may be provided only once");
+      cliValue = arg.slice("--mcp-profile=".length);
+    }
+  }
+  const value = (cliValue ?? env[KNOWLEDGE_MCP_PROFILE_ENV] ?? defaultProfile).trim().toLowerCase();
+  if (value === "core" || value === "full")
+    return value;
+  throw new Error(`Invalid ${KNOWLEDGE_MCP_PROFILE_ENV} value ${JSON.stringify(value)}: expected core or full`);
+}
+function shouldRegisterKnowledgeTool(name, profile) {
+  return profile === "full" || CORE_TOOLS.has(name);
+}
+function registrationMetadata(property, args) {
+  if (property === "registerTool") {
+    const config = args[1] && typeof args[1] === "object" ? args[1] : {};
+    return {
+      description: typeof config.description === "string" ? config.description : "",
+      inputSchema: config.inputSchema
+    };
+  }
+  const description = typeof args[1] === "string" ? args[1] : "";
+  const inputSchema = args.find((value, index) => index >= 2 && value && typeof value === "object" && !Array.isArray(value));
+  return { description, inputSchema };
+}
+function createProfiledKnowledgeServer(server, profile, catalog) {
+  return new Proxy(server, {
+    get(target, property, receiver) {
+      if (property !== "tool" && property !== "registerTool")
+        return Reflect.get(target, property, receiver);
+      return (...args) => {
+        const name = String(args[0] ?? "");
+        const metadata = registrationMetadata(property, args);
+        catalog.record(name, metadata.description, metadata.inputSchema);
+        if (!shouldRegisterKnowledgeTool(name, profile))
+          return;
+        const method = target[property];
+        return method.apply(target, args);
+      };
+    }
+  });
+}
+
 // src/mcp.js
 var storePathField = exports_external.string().optional().describe("Path to the JSON store file");
 var scopeField = exports_external.enum(["local", "global", "project"]).optional().describe("Workspace scope");
@@ -22376,6 +22624,9 @@ function jsonText(data) {
 }
 function compactJsonText(data) {
   return { content: [{ type: "text", text: JSON.stringify(data) }] };
+}
+function boundedCompactJsonText(data) {
+  return { content: [{ type: "text", text: stringifyKnowledgeCompactResponse(data) }] };
 }
 function errorText(message) {
   return { content: [{ type: "text", text: `Error: ${message}` }], isError: true };
@@ -22447,6 +22698,50 @@ function jsonResource(uri, data) {
 }
 function registerTool(server, name, title, description, inputSchema, handler) {
   server.registerTool(name, { title, description, inputSchema }, handler);
+}
+function registerKnowledgeDiscoveryTools(server, catalog, profile) {
+  const searchSchema = {
+    query: exports_external.string().optional().describe("Optional tool name/description filter"),
+    limit: exports_external.number().int().positive().max(50).optional().describe("Maximum names, default 20"),
+    cursor: exports_external.number().int().nonnegative().optional().describe("Zero-based catalog cursor")
+  };
+  catalog.record("search_tools", "Search the complete Knowledge MCP tool inventory by name or description.", searchSchema);
+  registerTool(server, "search_tools", "Search Knowledge tools", "Search the complete Knowledge MCP tool inventory; specialist tools require the explicit full profile.", searchSchema, async ({ query, limit, cursor }) => {
+    const matches = catalog.search(query);
+    const effectiveLimit = Math.min(50, Math.max(1, Math.trunc(limit ?? 20)));
+    const effectiveCursor = Math.max(0, Math.trunc(cursor ?? 0));
+    const names = matches.slice(effectiveCursor, effectiveCursor + effectiveLimit).map((entry) => entry.name);
+    const nextCursor = effectiveCursor + names.length < matches.length ? effectiveCursor + names.length : null;
+    return compactJsonText({
+      names,
+      count: names.length,
+      total: matches.length,
+      cursor: effectiveCursor,
+      next_cursor: nextCursor,
+      has_more: nextCursor !== null,
+      active_profile: profile,
+      hint: profile === "full" ? "All returned tools are callable in the active full profile; use describe_tools for schemas." : "Use describe_tools for schemas; restart with HASNA_KNOWLEDGE_MCP_PROFILE=full to call specialist tools."
+    });
+  });
+  const describeSchema = {
+    names: exports_external.array(exports_external.string()).min(1).max(10).describe("One to ten exact tool names")
+  };
+  catalog.record("describe_tools", "Describe selected Knowledge MCP tools from the complete inventory.", describeSchema);
+  registerTool(server, "describe_tools", "Describe Knowledge tools", "Return descriptions and parameter names for selected tools from the complete inventory.", describeSchema, async ({ names }) => {
+    const described = catalog.describe(names);
+    return compactJsonText({
+      items: described.items.map((entry) => ({
+        ...entry,
+        active: profile === "full" || entry.active_in_core
+      })),
+      missing: described.missing,
+      count: described.items.length,
+      requested: names.length,
+      complete: described.missing.length === 0,
+      active_profile: profile,
+      hint: profile === "full" ? "All described tools are callable in the active full profile." : "Tools with active=false require HASNA_KNOWLEDGE_MCP_PROFILE=full or --mcp-profile full."
+    });
+  });
 }
 function registerJsonResource(server, name, uri, title, description, read) {
   server.registerResource(name, uri, {
@@ -22942,13 +23237,19 @@ function registerKnowledgeResources(server) {
     return record ? { ok: true, ...record } : { ok: false, error: `Decision not found: ${id}` };
   });
 }
-function buildServer() {
+function buildServer(profile = resolveKnowledgeMcpProfile()) {
   assertNoRetiredKnowledgeStorageSelector(process.env);
-  const server = new McpServer({
+  const rawServer = new McpServer({
     name: "knowledge",
     version: package_default.version
+  }, {
+    instructions: `Active MCP profile: ${profile}. The default core profile keeps discovery bounded; use search_tools/describe_tools or set HASNA_KNOWLEDGE_MCP_PROFILE=full for the complete operational inventory and legacy resources.`
   });
-  registerKnowledgeResources(server);
+  const catalog = new KnowledgeToolCatalog;
+  registerKnowledgeDiscoveryTools(rawServer, catalog, profile);
+  const server = createProfiledKnowledgeServer(rawServer, profile, catalog);
+  if (profile === "full")
+    registerKnowledgeResources(rawServer);
   registerTool(server, "ok_paths", "Knowledge workspace paths", "Show resolved workspace and store paths", {
     scope: scopeField
   }, async ({ scope }) => {
@@ -23391,13 +23692,14 @@ function buildServer() {
     model: exports_external.string().optional().describe("Embedding model ref, default openai:text-embedding-3-small"),
     dimensions: exports_external.number().optional().describe("Embedding dimensions for deterministic fake mode"),
     fake: exports_external.boolean().optional().describe("Use deterministic fake embeddings for local tests"),
-    detail: exports_external.enum(["compact", "full", "legacy"]).optional().describe("Additive response detail. Omitted/legacy preserves the historical full response; compact returns bounded previews.")
+    detail: exports_external.enum(["compact", "full", "legacy"]).optional().describe("Response detail. Omitted defaults to compact; full and legacy explicitly restore complete text.")
   }, async ({ scope, query, limit, semantic, model, dimensions, fake, detail }) => {
     const service = createKnowledgeService({ scope });
     try {
       const result = await service.search({ query, limit, semantic, modelRef: model, dimensions, fake });
-      const projected = detail ? projectKnowledgeSearchResult(result, { detail }) : result;
-      return detail === "compact" ? compactJsonText({ ok: true, ...projected }) : jsonText({ ok: true, ...projected });
+      const selectedDetail = detail ?? "compact";
+      const projected = projectKnowledgeSearchResult(result, { detail: selectedDetail });
+      return selectedDetail === "compact" ? boundedCompactJsonText({ ok: true, ...projected }) : jsonText({ ok: true, ...projected });
     } catch (error) {
       return errorText(error instanceof Error ? error.message : String(error));
     }
@@ -23410,13 +23712,14 @@ function buildServer() {
     model: exports_external.string().optional().describe("Embedding model ref, default openai:text-embedding-3-small"),
     dimensions: exports_external.number().optional().describe("Embedding dimensions for deterministic fake mode"),
     fake: exports_external.boolean().optional().describe("Use deterministic fake embeddings for local tests"),
-    detail: exports_external.enum(["compact", "full", "legacy"]).optional().describe("Additive response detail. Omitted/legacy preserves the historical context body; compact removes duplicated raw result bodies.")
+    detail: exports_external.enum(["compact", "full", "legacy"]).optional().describe("Response detail. Omitted defaults to compact; full and legacy explicitly restore complete context bodies.")
   }, async ({ scope, query, limit, semantic, model, dimensions, fake, detail }) => {
     const service = createKnowledgeService({ scope });
     try {
       const context = await service.retrieveContext({ query, limit, semantic, modelRef: model, dimensions, fake });
-      const projected = detail ? projectKnowledgeContextResult(context, { detail }) : context;
-      return detail === "compact" ? compactJsonText({ ok: true, ...projected }) : jsonText({ ok: true, ...projected });
+      const selectedDetail = detail ?? "compact";
+      const projected = projectKnowledgeContextResult(context, { detail: selectedDetail });
+      return selectedDetail === "compact" ? boundedCompactJsonText({ ok: true, ...projected }) : jsonText({ ok: true, ...projected });
     } catch (error) {
       return errorText(error instanceof Error ? error.message : String(error));
     }
@@ -24001,7 +24304,7 @@ function buildServer() {
     }
     return jsonText({ ok: true, added, skipped });
   });
-  return server;
+  return rawServer;
 }
 function printHelp() {
   console.error(`Usage: knowledge-mcp [options]
@@ -24011,6 +24314,8 @@ Runs the @hasna/knowledge MCP server (stdio by default).
 Options:
   --http            Serve MCP over Streamable HTTP (127.0.0.1)
   --port <number>   HTTP port (default: 8819, env: MCP_HTTP_PORT)
+  --mcp-profile <core|full>
+                    Tool inventory profile (default: core; env: HASNA_KNOWLEDGE_MCP_PROFILE)
   --version         Print the package version and exit (no server is started)
   -h, --help        Show this help text`);
 }

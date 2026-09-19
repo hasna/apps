@@ -269,7 +269,7 @@ describe('knowledge MCP', () => {
 
     const transport = new StdioClientTransport({
       command: 'bun',
-      args: [MCP],
+      args: [MCP, '--mcp-profile', 'full'],
       cwd: dir,
       stderr: 'pipe',
       env: {
@@ -755,7 +755,9 @@ describe('knowledge MCP', () => {
         arguments: { scope: 'project', query: 'resolver source text', semantic: true, fake: true, dimensions: 8 },
       }));
       expect(hybridSearch.results.some((entry: any) => entry.kind === 'source_chunk')).toBe(true);
-      expect(hybridSearch.results[0].text).toContain('MCP resolver source text');
+      expect(hybridSearch.detail).toBe('compact');
+      expect(hybridSearch.results[0].text).toBeUndefined();
+      expect(hybridSearch.results[0].text_preview).toContain('MCP resolver source text');
       expect(hybridSearch.counts.semantic_results).toBeGreaterThan(0);
 
       const compactHybridCall = await client.callTool({
@@ -781,7 +783,9 @@ describe('knowledge MCP', () => {
         arguments: { scope: 'project', query: 'resolver source text', semantic: true, fake: true, dimensions: 8 },
       }));
       expect(contextSearch.excerpts.length).toBeGreaterThan(0);
-      expect(contextSearch.results[0].text).toContain('MCP resolver source text');
+      expect(contextSearch.detail).toBe('compact');
+      expect(contextSearch.results[0].text).toBeUndefined();
+      expect(contextSearch.excerpts[0].text_preview).toContain('MCP resolver source text');
       expect(contextSearch.citations[0].source_uri).toBe('open-files://file/file_mcp');
 
       const compactContextCall = await client.callTool({
@@ -969,7 +973,7 @@ describe('knowledge MCP', () => {
 
     const transport = new StdioClientTransport({
       command: 'bun',
-      args: [MCP],
+      args: [MCP, '--mcp-profile', 'full'],
       cwd: dir,
       stderr: 'pipe',
       // The cloud-flip variables are stripped rather than inherited. If either is exported in

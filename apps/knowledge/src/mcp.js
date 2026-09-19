@@ -14,8 +14,17 @@ import {
 } from './client-transport.ts';
 import { parseSourceRef } from './source-ref.ts';
 import { createKnowledgeService } from './service.ts';
-import { projectKnowledgeContextResult, projectKnowledgeSearchResult } from './search-output.ts';
+import {
+  projectKnowledgeContextResult,
+  projectKnowledgeSearchResult,
+  stringifyKnowledgeCompactResponse,
+} from './search-output.ts';
 import { getStorageStatus as getDatabaseStorageStatus } from './storage.ts';
+import {
+  KnowledgeToolCatalog,
+  createProfiledKnowledgeServer,
+  resolveKnowledgeMcpProfile,
+} from './mcp-profile.ts';
 
 const storePathField = z.string().optional().describe('Path to the JSON store file');
 const scopeField = z.enum(['local', 'global', 'project']).optional().describe('Workspace scope');
@@ -26,6 +35,10 @@ function jsonText(data) {
 
 function compactJsonText(data) {
   return { content: [{ type: 'text', text: JSON.stringify(data) }] };
+}
+
+function boundedCompactJsonText(data) {
+  return { content: [{ type: 'text', text: stringifyKnowledgeCompactResponse(data) }] };
 }
 
 function errorText(message) {
@@ -117,6 +130,70 @@ function jsonResource(uri, data) {
 
 function registerTool(server, name, title, description, inputSchema, handler) {
   server.registerTool(name, { title, description, inputSchema }, handler);
+}
+
+function registerKnowledgeDiscoveryTools(server, catalog, profile) {
+  const searchSchema = {
+    query: z.string().optional().describe('Optional tool name/description filter'),
+    limit: z.number().int().positive().max(50).optional().describe('Maximum names, default 20'),
+    cursor: z.number().int().nonnegative().optional().describe('Zero-based catalog cursor'),
+  };
+  catalog.record('search_tools', 'Search the complete Knowledge MCP tool inventory by name or description.', searchSchema);
+  registerTool(
+    server,
+    'search_tools',
+    'Search Knowledge tools',
+    'Search the complete Knowledge MCP tool inventory; specialist tools require the explicit full profile.',
+    searchSchema,
+    async ({ query, limit, cursor }) => {
+      const matches = catalog.search(query);
+      const effectiveLimit = Math.min(50, Math.max(1, Math.trunc(limit ?? 20)));
+      const effectiveCursor = Math.max(0, Math.trunc(cursor ?? 0));
+      const names = matches.slice(effectiveCursor, effectiveCursor + effectiveLimit).map((entry) => entry.name);
+      const nextCursor = effectiveCursor + names.length < matches.length ? effectiveCursor + names.length : null;
+      return compactJsonText({
+        names,
+        count: names.length,
+        total: matches.length,
+        cursor: effectiveCursor,
+        next_cursor: nextCursor,
+        has_more: nextCursor !== null,
+        active_profile: profile,
+        hint: profile === 'full'
+          ? 'All returned tools are callable in the active full profile; use describe_tools for schemas.'
+          : 'Use describe_tools for schemas; restart with HASNA_KNOWLEDGE_MCP_PROFILE=full to call specialist tools.',
+      });
+    },
+  );
+
+  const describeSchema = {
+    names: z.array(z.string()).min(1).max(10).describe('One to ten exact tool names'),
+  };
+  catalog.record('describe_tools', 'Describe selected Knowledge MCP tools from the complete inventory.', describeSchema);
+  registerTool(
+    server,
+    'describe_tools',
+    'Describe Knowledge tools',
+    'Return descriptions and parameter names for selected tools from the complete inventory.',
+    describeSchema,
+    async ({ names }) => {
+      const described = catalog.describe(names);
+      return compactJsonText({
+        items: described.items.map((entry) => ({
+          ...entry,
+          active: profile === 'full' || entry.active_in_core,
+        })),
+        missing: described.missing,
+        count: described.items.length,
+        requested: names.length,
+        complete: described.missing.length === 0,
+        active_profile: profile,
+        hint: profile === 'full'
+          ? 'All described tools are callable in the active full profile.'
+          : 'Tools with active=false require HASNA_KNOWLEDGE_MCP_PROFILE=full or --mcp-profile full.',
+      });
+    },
+  );
 }
 
 function registerJsonResource(server, name, uri, title, description, read) {
@@ -771,14 +848,19 @@ function registerKnowledgeResources(server) {
   );
 }
 
-export function buildServer() {
+export function buildServer(profile = resolveKnowledgeMcpProfile()) {
   assertNoRetiredKnowledgeStorageSelector(process.env);
-  const server = new McpServer({
+  const rawServer = new McpServer({
     name: 'knowledge',
     version: pkg.version,
+  }, {
+    instructions: `Active MCP profile: ${profile}. The default core profile keeps discovery bounded; use search_tools/describe_tools or set HASNA_KNOWLEDGE_MCP_PROFILE=full for the complete operational inventory and legacy resources.`,
   });
+  const catalog = new KnowledgeToolCatalog();
+  registerKnowledgeDiscoveryTools(rawServer, catalog, profile);
+  const server = createProfiledKnowledgeServer(rawServer, profile, catalog);
 
-  registerKnowledgeResources(server);
+  if (profile === 'full') registerKnowledgeResources(rawServer);
 
   registerTool(server, 'ok_paths', 'Knowledge workspace paths', 'Show resolved workspace and store paths', {
     scope: scopeField,
@@ -1263,13 +1345,14 @@ export function buildServer() {
     model: z.string().optional().describe('Embedding model ref, default openai:text-embedding-3-small'),
     dimensions: z.number().optional().describe('Embedding dimensions for deterministic fake mode'),
     fake: z.boolean().optional().describe('Use deterministic fake embeddings for local tests'),
-    detail: z.enum(['compact', 'full', 'legacy']).optional().describe('Additive response detail. Omitted/legacy preserves the historical full response; compact returns bounded previews.'),
+    detail: z.enum(['compact', 'full', 'legacy']).optional().describe('Response detail. Omitted defaults to compact; full and legacy explicitly restore complete text.'),
   }, async ({ scope, query, limit, semantic, model, dimensions, fake, detail }) => {
     const service = createKnowledgeService({ scope });
     try {
       const result = await service.search({ query, limit, semantic, modelRef: model, dimensions, fake });
-      const projected = detail ? projectKnowledgeSearchResult(result, { detail }) : result;
-      return detail === 'compact' ? compactJsonText({ ok: true, ...projected }) : jsonText({ ok: true, ...projected });
+      const selectedDetail = detail ?? 'compact';
+      const projected = projectKnowledgeSearchResult(result, { detail: selectedDetail });
+      return selectedDetail === 'compact' ? boundedCompactJsonText({ ok: true, ...projected }) : jsonText({ ok: true, ...projected });
     } catch (error) {
       return errorText(error instanceof Error ? error.message : String(error));
     }
@@ -1283,13 +1366,14 @@ export function buildServer() {
     model: z.string().optional().describe('Embedding model ref, default openai:text-embedding-3-small'),
     dimensions: z.number().optional().describe('Embedding dimensions for deterministic fake mode'),
     fake: z.boolean().optional().describe('Use deterministic fake embeddings for local tests'),
-    detail: z.enum(['compact', 'full', 'legacy']).optional().describe('Additive response detail. Omitted/legacy preserves the historical context body; compact removes duplicated raw result bodies.'),
+    detail: z.enum(['compact', 'full', 'legacy']).optional().describe('Response detail. Omitted defaults to compact; full and legacy explicitly restore complete context bodies.'),
   }, async ({ scope, query, limit, semantic, model, dimensions, fake, detail }) => {
     const service = createKnowledgeService({ scope });
     try {
       const context = await service.retrieveContext({ query, limit, semantic, modelRef: model, dimensions, fake });
-      const projected = detail ? projectKnowledgeContextResult(context, { detail }) : context;
-      return detail === 'compact' ? compactJsonText({ ok: true, ...projected }) : jsonText({ ok: true, ...projected });
+      const selectedDetail = detail ?? 'compact';
+      const projected = projectKnowledgeContextResult(context, { detail: selectedDetail });
+      return selectedDetail === 'compact' ? boundedCompactJsonText({ ok: true, ...projected }) : jsonText({ ok: true, ...projected });
     } catch (error) {
       return errorText(error instanceof Error ? error.message : String(error));
     }
@@ -1923,7 +2007,7 @@ export function buildServer() {
     return jsonText({ ok: true, added, skipped });
   });
 
-  return server;
+  return rawServer;
 }
 
 function printHelp() {
@@ -1934,6 +2018,8 @@ Runs the @hasna/knowledge MCP server (stdio by default).
 Options:
   --http            Serve MCP over Streamable HTTP (127.0.0.1)
   --port <number>   HTTP port (default: 8819, env: MCP_HTTP_PORT)
+  --mcp-profile <core|full>
+                    Tool inventory profile (default: core; env: HASNA_KNOWLEDGE_MCP_PROFILE)
   --version         Print the package version and exit (no server is started)
   -h, --help        Show this help text`);
 }

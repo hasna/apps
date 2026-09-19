@@ -1334,12 +1334,13 @@ are keyword-only results with `kind: legacy_item` and
 `knowledge://item/<id>` source refs.
 
 Default terminal search output shows compact result rows with source refs and
-text previews. Existing `--json` behavior remains unchanged when `--detail` is
-omitted. New agent-oriented callers can use `--json --detail compact` for
-minified rows with bounded `text_preview` values, `--detail full` to request
-complete result text explicitly, or `--detail legacy` to name the historical
-response contract. Compact context output keeps bounded excerpt previews and
-removes the duplicated raw bodies from `results` and graph citations.
+text previews. Ordinary `--json` now uses the same compact projection by
+default, emits minified JSON, and enforces a deterministic 64 KiB whole-response
+ceiling. Use `--detail full` to request the complete current-schema response or
+`--detail legacy` for the historical bare contract. Compact search/context
+responses include a response-budget receipt, trim only tail rows when needed,
+keep bounded previews, and remove duplicated raw bodies from `results` and
+graph citations.
 
 `--context` returns a reranked context pack for agents: selected excerpts,
 assembled citations, freshness and permission notes, graph evidence from
@@ -1485,8 +1486,23 @@ canonical store.
 ## MCP Server
 
 ```bash
-knowledge-mcp
+knowledge-mcp                              # bounded core profile (default)
+knowledge-mcp --mcp-profile full           # complete compatibility inventory
+HASNA_KNOWLEDGE_MCP_PROFILE=full knowledge-mcp
 ```
+
+The default `core` profile exposes 18 routine tools, including
+`search_tools` and `describe_tools` for bounded discovery of the complete
+catalog. Specialist/admin tools and legacy JSON resources are registered only
+in the explicit `full` profile. This keeps `tools/list` small without removing
+compatibility: `search_tools` returns names-only pages and `describe_tools`
+reports schemas plus whether a tool is active in the current profile.
+
+`ok_search` and `knowledge_search` default to minified compact projections with
+a deterministic 64 KiB whole-response ceiling. Pass `detail=full` for the
+complete current response or `detail=legacy` for the historical contract.
+`knowledge_context_pack` remains the preferred explicitly budgeted context
+surface.
 
 The stable agent-facing MCP tools are:
 
@@ -1638,8 +1654,9 @@ Every command returns structured JSON when `--json` is passed:
 ## MCP Server
 
 ```bash
-knowledge-mcp
-knowledge-mcp --version   # prints the package version; no server is started
+knowledge-mcp                         # core profile
+knowledge-mcp --mcp-profile full      # complete tool/resource compatibility
+knowledge-mcp --version              # prints the package version; no server is started
 ```
 
 `knowledge-mcp` resolves its transport at startup through the same
