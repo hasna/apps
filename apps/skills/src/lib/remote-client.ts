@@ -60,6 +60,21 @@ export class RemoteRequestError extends Error {
   }
 }
 
+/** A hosted lifecycle refusal with only its bounded, typed error code exposed. */
+const KNOWN_SKILL_LIFECYCLE_CODES = new Set(["SKILL_ARCHIVE_PROFILE_CONFLICT", "LIFECYCLE_ROLE_REQUIRED"]);
+
+export class RemoteSkillLifecycleError extends RemoteRequestError {
+  readonly code?: string;
+
+  constructor(path: string, status: number, code?: string) {
+    super(path, status);
+    this.name = "RemoteSkillLifecycleError";
+    const safeCode = code !== undefined && KNOWN_SKILL_LIFECYCLE_CODES.has(code) ? code : undefined;
+    this.code = safeCode;
+    this.message = `Skill lifecycle update was refused (HTTP ${status}${safeCode ? `, code ${safeCode}` : ""})`;
+  }
+}
+
 /** Bounded checkout outcome; the key is caller-owned, never copied from a server error. */
 export class RemoteCreditCheckoutError extends RemoteRequestError {
   constructor(readonly code: RemoteCreditCheckoutErrorCode, status: number,
@@ -812,11 +827,16 @@ export class RemoteSkillsClient {
   }
 
   async setSkillLifecycle(slug: string, lifecycle: "active" | "archived", options: { reason?: string; replacementSlug?: string; expectedRevisionId: string }): Promise<any> {
-    const response = await this.request(`/api/v1/skills/${encodeURIComponent(slug)}/lifecycle`, {
+    const path = `/api/v1/skills/${encodeURIComponent(slug)}/lifecycle`;
+    const response = await this.request(path, {
       method: "PATCH",
       headers: { "If-Match": options.expectedRevisionId },
       body: JSON.stringify({ lifecycle, ...(options.reason ? { reason: options.reason } : {}), ...(options.replacementSlug ? { replacementSlug: options.replacementSlug } : {}) }),
     });
+    if (!response.ok) {
+      const code = await readResponseCode(response);
+      throw new RemoteSkillLifecycleError(path, response.status, code);
+    }
     return response.json();
   }
 
@@ -1021,8 +1041,14 @@ function normalizeSkillSummaryList(payload: unknown): RemoteSkillSummary[] {
 
 /** True when a 404's JSON body carries one of the given `code` values. */
 async function responseBodyCarriesCode(response: Response, codes: string[]): Promise<boolean> {
+  const code = await readResponseCode(response);
+  return code !== undefined && codes.includes(code);
+}
+
+/** Read only a bounded string `code`; never retain or render a server message/body. */
+async function readResponseCode(response: Response): Promise<string | undefined> {
   const reader = response.body?.getReader();
-  if (!reader) return false;
+  if (!reader) return undefined;
   const maximum = 8 * 1024;
   let deadline: ReturnType<typeof setTimeout>;
   const expired = new Promise<never>((_, reject) => {
@@ -1036,19 +1062,19 @@ async function responseBodyCarriesCode(response: Response, codes: string[]): Pro
       if (next.done) break;
       size += next.value.byteLength;
       // Never retain or parse an oversized chunk, even without Content-Length.
-      if (size > maximum) return false;
+      if (size > maximum) return undefined;
       chunks.push(next.value);
     }
     const bytes = new Uint8Array(size);
     let offset = 0;
     for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
     const payload: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
-    if (!payload || typeof payload !== "object" || Array.isArray(payload) || !Object.hasOwn(payload, "code")) return false;
+    if (!payload || typeof payload !== "object" || Array.isArray(payload) || !Object.hasOwn(payload, "code")) return undefined;
     const code = (payload as Record<string, unknown>).code;
-    return typeof code === "string" && codes.includes(code);
+    return typeof code === "string" && /^[A-Z][A-Z0-9_:-]{0,127}$/.test(code) ? code : undefined;
   } catch {
     // Malformed, oversized, or stalled bodies cannot establish a known code.
-    return false;
+    return undefined;
   } finally {
     clearTimeout(deadline!);
     // A broken stream's cancel hook may never settle: do not await it.

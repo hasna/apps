@@ -15,6 +15,8 @@ export type { IntegrationAgent } from "./agent-adapters.js";
 export type ContextHookEvent = "UserPromptSubmit" | "SessionStart" | "SubagentStart";
 export interface AgentRootAlias { agent: IntegrationAgent; home: string; alias: string; target: string; link: string; aliasIdentity: string; targetIdentity: string }
 export interface NativeSkillEntry { agent: string; path: string; hash: string; managed: boolean; vendor: boolean; system?: boolean; bridge?: boolean; bridgeHome?: string; rootAlias?: AgentRootAlias }
+export interface NativeMigrationTarget { agent: string; projectRoot: string; path: string; treeSha256: string }
+export interface NativeMigrationTargetManifest { schema: "hasna.skills-native-migration-targets.v1"; targets: NativeMigrationTarget[]; digest: string }
 export interface AgentConfigChange { path: string; before: string | null; after: string }
 export interface AgentIntegrationPlan { dataDir: string; profileId: string; changes: AgentConfigChange[]; nativeSkills: NativeSkillEntry[]; observedPolicy?: { path: string; before: string | null }; discoveryBefore?: AgentDiscoveryBinding[]; discoveryAfter?: AgentDiscoveryBinding[]; rootAliases?: AgentRootAlias[] }
 
@@ -105,6 +107,69 @@ function treeHash(root: string): string {
   assertSafePath(root); visit(root); return hash.digest("hex");
 }
 
+/** Parse the reviewed exact-target binding used by native migration. Paths are
+ * deliberately project-relative so a manifest cannot silently select another
+ * checkout when a project root changes. */
+export function parseNativeMigrationTargetManifest(input: string | Buffer): NativeMigrationTargetManifest {
+  const digest = sha(input);
+  let value: unknown;
+  try { value = JSON.parse(input.toString()); } catch { throw new Error("Invalid native migration target manifest JSON"); }
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid native migration target manifest");
+  const record = value as Record<string, unknown>;
+  if (record.schema !== "hasna.skills-native-migration-targets.v1" || Object.keys(record).some(key => !["schema", "targets"].includes(key))) throw new Error("Unsupported native migration target manifest schema");
+  if (!Array.isArray(record.targets) || record.targets.length === 0 || record.targets.length > 1000) throw new Error("Native migration target manifest must contain 1 to 1000 targets");
+  const targets: NativeMigrationTarget[] = [];
+  const identities = new Set<string>();
+  for (const target of record.targets) {
+    if (!target || typeof target !== "object" || Array.isArray(target)) throw new Error("Invalid native migration target");
+    const item = target as Record<string, unknown>;
+    if (Object.keys(item).some(key => !["agent", "projectRoot", "path", "treeSha256"].includes(key)) || typeof item.agent !== "string" || typeof item.projectRoot !== "string" || typeof item.path !== "string" || typeof item.treeSha256 !== "string") throw new Error("Invalid native migration target fields");
+    if (!(INTEGRATION_AGENTS as readonly string[]).includes(item.agent)) throw new Error(`Unsupported native migration target agent: ${item.agent}`);
+    const projectRoot = resolve(item.projectRoot);
+    if (!isAbsolute(item.projectRoot) || projectRoot !== item.projectRoot || !existsSync(projectRoot) || !lstatSync(projectRoot).isDirectory()) throw new Error(`Native migration target project root must be an existing absolute directory: ${item.projectRoot}`);
+    assertSafePath(projectRoot);
+    if (isAbsolute(item.path) || item.path.includes("\\") || item.path.length === 0 || item.path.includes("\0")) throw new Error(`Native migration target path must be normalized and project-relative: ${item.path}`);
+    const resolved = resolve(projectRoot, item.path), normalized = relative(projectRoot, resolved);
+    if (!normalized || normalized === ".." || normalized.startsWith(`..${sep}`) || isAbsolute(normalized) || normalized !== item.path) throw new Error(`Native migration target path escapes or is not normalized: ${item.path}`);
+    if (!/^[0-9a-f]{64}$/.test(item.treeSha256)) throw new Error(`Invalid native migration tree digest for ${item.path}`);
+    const identity = `${item.agent}\0${projectRoot}\0${normalized}`;
+    if (identities.has(identity)) throw new Error(`Duplicate native migration target: ${item.path}`);
+    identities.add(identity);
+    targets.push({ agent: item.agent, projectRoot, path: normalized, treeSha256: item.treeSha256 });
+  }
+  return { schema: "hasna.skills-native-migration-targets.v1", targets, digest };
+}
+
+/** Read a manifest without following links or opening special files, with a
+ * finite bound so a CLI cannot block on an untrusted path. */
+export function readNativeMigrationTargetManifest(path: string): NativeMigrationTargetManifest {
+  return parseNativeMigrationTargetManifest(readNativeBytes(path, 4 * 1024 * 1024));
+}
+
+/** Validate every reviewed target before any archive directory or journal is created. */
+export function selectNativeMigrationTargets(inventory: NativeSkillEntry[], manifest: NativeMigrationTargetManifest): NativeSkillEntry[] {
+  if (manifest.schema !== "hasna.skills-native-migration-targets.v1" || !/^[0-9a-f]{64}$/.test(manifest.digest) || !Array.isArray(manifest.targets) || manifest.targets.length === 0) throw new Error("Invalid native migration target manifest");
+  const identities = new Set<string>();
+  const selected: NativeSkillEntry[] = [];
+  for (const target of manifest.targets) {
+    const projectRoot = resolve(target.projectRoot), normalized = relative(projectRoot, resolve(projectRoot, target.path));
+    if (!isAbsolute(target.projectRoot) || projectRoot !== target.projectRoot || !existsSync(projectRoot) || !lstatSync(projectRoot).isDirectory()) throw new Error(`Native migration target project root must be an existing absolute directory: ${target.projectRoot}`);
+    assertSafePath(projectRoot);
+    if (isAbsolute(target.path) || target.path.includes("\\") || target.path.includes("\0") || !normalized || normalized === ".." || normalized.startsWith(`..${sep}`) || normalized !== target.path || !/^[0-9a-f]{64}$/.test(target.treeSha256)) throw new Error(`Invalid native migration target: ${target.path}`);
+    const identity = `${target.agent}\0${projectRoot}\0${normalized}`;
+    if (identities.has(identity)) throw new Error(`Duplicate native migration target: ${target.path}`);
+    identities.add(identity);
+    const expected = resolve(target.projectRoot, target.path);
+    const matches = inventory.filter(entry => entry.agent === target.agent && resolve(entry.path) === expected);
+    if (matches.length !== 1) throw new Error(`Native migration target was not found exactly once: ${target.agent} ${target.projectRoot}/${target.path}`);
+    const entry = matches[0]!;
+    if (entry.bridge || entry.system || entry.vendor) throw new Error(`Native migration target is protected or vendor-owned: ${entry.path}`);
+    if (entry.hash !== target.treeSha256 || treeHash(entry.path) !== target.treeSha256) throw new Error(`Native migration target changed after review: ${entry.path}`);
+    selected.push(entry);
+  }
+  return selected;
+}
+
 /** Native project discovery includes each ancestor; migration must inspect the same roots as hooks. */
 function projectAncestorDirectories(projects: string[]): string[] {
   const directories = new Set<string>();
@@ -118,12 +183,16 @@ function projectAncestorDirectories(projects: string[]): string[] {
   return [...directories];
 }
 
-export function inventoryNativeSkills(home = homedir(), options: { includeVendor?: boolean; guardHermes?: boolean; projectDir?: string; projectDirs?: string[]; agentRoots?: Array<{ agent: string; path: string }>; configured?: boolean; discoveryInputs?: ReviewedDiscoveryInputs; allowRootAliases?: boolean } = {}): NativeSkillEntry[] {
+export function inventoryNativeSkills(home = homedir(), options: { includeVendor?: boolean; guardHermes?: boolean; projectDir?: string; projectDirs?: string[]; agents?: readonly IntegrationAgent[]; agentRoots?: Array<{ agent: string; path: string }>; configured?: boolean; discoveryInputs?: ReviewedDiscoveryInputs; allowRootAliases?: boolean } = {}): NativeSkillEntry[] {
   const aliases = rootAliases(home, options.allowRootAliases);
-  const roots: Array<readonly [string, string]> = ROOTS.map(([agent, path]) => [agent, canonicalAgentPath(join(home, path), aliases)]);
+  const selectedAgents = options.agents ? new Set(options.agents) : undefined;
+  const rootDefinitions = selectedAgents
+    ? ROOTS.filter(([agent, path]) => selectedAgents.has(agent as IntegrationAgent) || (selectedAgents.has("hermes") && agent === "codex" && path === ".agents/skills"))
+    : ROOTS;
+  const roots: Array<readonly [string, string]> = rootDefinitions.map(([agent, path]) => [agent, canonicalAgentPath(join(home, path), aliases)]);
   const bridgePaths = Object.values(AGENT_ADAPTERS).map(adapter => canonicalAgentPath(join(home, adapter.root, CLI_BRIDGE_NAME), aliases));
   for (const project of projectAncestorDirectories([...(options.projectDirs ?? []), ...(options.projectDir ? [options.projectDir] : [])])) {
-    for (const [agent, path] of ROOTS) roots.push([agent, canonicalAgentPath(join(project, path), aliases)]);
+    for (const [agent, path] of rootDefinitions) roots.push([agent, canonicalAgentPath(join(project, path), aliases)]);
   }
   const entries: NativeSkillEntry[] = [], seen = new Set<string>();
   type Scan = { complete: boolean; hasSkills: boolean; entries: number };
@@ -326,7 +395,7 @@ export function planAgentIntegration(options: { home?: string; dataDir?: string;
     return [agent, { command, profileId }] as const;
   }));
   const discoveries = [...new Set(options.agents)].map(agent => resolveAgentDiscovery({ home, agent, reviewed: options.discoveryInputs, canonical: path => canonicalAgentPath(path, aliases) }));
-  const nativeSkills = inventoryNativeSkills(home, { includeVendor: true, guardHermes: options.agents.includes("hermes"), projectDir: options.projectDir, agentRoots: discoveries.flatMap(binding => binding.roots.map(path => ({ agent: binding.agent, path }))), allowRootAliases: options.allowRootAliases });
+  const nativeSkills = inventoryNativeSkills(home, { includeVendor: true, guardHermes: options.agents.includes("hermes"), agents: options.agents, projectDir: options.projectDir, agentRoots: discoveries.flatMap(binding => binding.roots.map(path => ({ agent: binding.agent, path }))), allowRootAliases: options.allowRootAliases });
   const changes: AgentConfigChange[] = [];
   for (const agent of [...new Set(options.agents)]) {
     if (!INTEGRATION_AGENTS.includes(agent)) throw new Error(`Unsupported agent: ${agent}`);
@@ -474,7 +543,7 @@ function writeArchiveJournal(path: string, value: unknown): void {
   }
 }
 
-export function archiveNativeSkills(inventory: NativeSkillEntry[], options: { dataDir?: string; includeUnmanaged?: boolean; includeVendor?: boolean; allowRootAliases?: boolean }): { entries: Array<{ source: string; archive: string; hash: string; discoveryOnly?: boolean }>; receiptPath?: string; rootAliases?: AgentRootAlias[] } {
+export function archiveNativeSkills(inventory: NativeSkillEntry[], options: { dataDir?: string; includeUnmanaged?: boolean; includeVendor?: boolean; allowRootAliases?: boolean; targetManifest?: NativeMigrationTargetManifest }): { entries: Array<{ source: string; archive: string; hash: string; discoveryOnly?: boolean }>; receiptPath?: string; rootAliases?: AgentRootAlias[]; targetManifest?: { schema: string; digest: string; targetCount: number } } {
   const aliases = [...new Map(inventory.filter(entry => entry.rootAlias).map(entry => [entry.rootAlias!.alias, entry.rootAlias!])).values()];
   if (aliases.length && !options.allowRootAliases) throw new Error("Native migration requires explicit allowRootAliases for agent root aliases");
   recheckRootAliases(aliases);
@@ -485,9 +554,12 @@ export function archiveNativeSkills(inventory: NativeSkillEntry[], options: { da
     const expected = adapter && entry.bridgeHome ? canonicalAgentPath(join(entry.bridgeHome, adapter.root, CLI_BRIDGE_NAME), aliases) : undefined;
     if (!expected || treeHash(entry.path) !== entry.hash || !isOwnedCliBridge(entry.path, [expected])) throw new Error(`Skills bridge changed after planning: ${entry.path}`);
   }
-  const selected = inventory.filter(entry => !entry.bridge && !entry.system && (entry.vendor ? options.includeVendor : entry.managed || options.includeUnmanaged));
+  const selected = options.targetManifest
+    ? selectNativeMigrationTargets(inventory, options.targetManifest)
+    : inventory.filter(entry => !entry.bridge && !entry.system && (entry.vendor ? options.includeVendor : entry.managed || options.includeUnmanaged));
   for (const entry of selected) if (treeHash(entry.path) !== entry.hash) throw new Error(`Native skill changed after planning: ${entry.path}`);
-  if (!selected.length) return { entries: [], ...(aliases.length ? { rootAliases: aliases } : {}) };
+  const targetManifest = options.targetManifest ? { schema: options.targetManifest.schema, digest: options.targetManifest.digest, targetCount: options.targetManifest.targets.length } : undefined;
+  if (!selected.length) return { entries: [], ...(targetManifest ? { targetManifest } : {}), ...(aliases.length ? { rootAliases: aliases } : {}) };
   const operationId = randomUUID(), archiveRoot = join(options.dataDir ?? getDataDir(), "migration", operationId, "native"), receiptPath = join(archiveRoot, "receipt.json");
   type Move = { source: string; archive: string; hash: string; discoveryOnly?: boolean; status: "planned" | "moving" | "archived" | "restored" | "recovery-required"; conflict?: string };
   const entries: Move[] = selected.map((entry, index) => ({
@@ -496,7 +568,7 @@ export function archiveNativeSkills(inventory: NativeSkillEntry[], options: { da
     hash: entry.vendor ? sha(readNativeBytes(join(entry.path, "SKILL.md"))) : entry.hash,
     ...(entry.vendor ? { discoveryOnly: true } : {}), status: "planned",
   }));
-  const journal = { version: 2, operationId, status: "planned", entries, ...(aliases.length ? { rootAliases: aliases } : {}) };
+  const journal = { version: 2, operationId, status: "planned", entries, ...(targetManifest ? { targetManifest } : {}), ...(aliases.length ? { rootAliases: aliases } : {}) };
   const moved: Move[] = [];
   const verifyArchive = (entry: Move): void => {
     assertSafePath(entry.archive);
@@ -551,7 +623,7 @@ export function archiveNativeSkills(inventory: NativeSkillEntry[], options: { da
     try { writeArchiveJournal(receiptPath, journal); } catch { /* Inspect the last durable intent before retrying. */ }
     throw new Error(`Native archive failed; inspect the recovery journal at ${receiptPath} before retrying.`, { cause: error });
   }
-  return { entries: entries.map(({ status, conflict, ...entry }) => entry), receiptPath, ...(aliases.length ? { rootAliases: aliases } : {}) };
+  return { entries: entries.map(({ status, conflict, ...entry }) => entry), receiptPath, ...(targetManifest ? { targetManifest } : {}), ...(aliases.length ? { rootAliases: aliases } : {}) };
 }
 
 /** Run before any prompt context load. Missing ownership or reappearing native
@@ -611,7 +683,7 @@ export function assertManagedAgentBridge(agent: IntegrationAgent, options: { hom
       if (JSON.stringify(current) !== JSON.stringify(discovery)) throw new Error("Configured native discovery roots changed");
     }
   } catch (error) { throw new Error(`NATIVE_SKILL_DRIFT: ${(error as Error).message}`); }
-  const inventory = inventoryNativeSkills(home, { includeVendor: true, guardHermes: agent === "hermes", projectDirs: [...roots], agentRoots: discovery.roots.map(path => ({ agent, path })), allowRootAliases: aliases.length > 0 });
+  const inventory = inventoryNativeSkills(home, { includeVendor: true, guardHermes: agent === "hermes", agents: [agent], projectDirs: [...roots], agentRoots: discovery.roots.map(path => ({ agent, path })), allowRootAliases: aliases.length > 0 });
   const unexpected = inventory.filter(entry => visible(entry) && !entry.bridge && !disabledBuiltin(entry));
   if (unexpected.length) {
     // Show filenames only: never read payloads into diagnostics. Escape control

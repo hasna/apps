@@ -71,4 +71,51 @@ describe("hosted provisioning provider credentials", () => {
     expect(typeof providers.listRoute53HostedZoneIds).toBe("function");
     expect(typeof providers.cleanupRoute53HostedZone).toBe("function");
   });
+
+  test("website readiness requires exact TLS mode, proxied records, and canonical response identity", async () => {
+    let tlsMode = "full";
+    let canonicalHost = "proof.example";
+    let publicCalls = 0;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/settings/ssl")) {
+        return Response.json({ success: true, result: { id: "ssl", value: tlsMode }, errors: [] });
+      }
+      if (url.includes("/dns_records?per_page=100&page=1")) {
+        return Response.json({
+          success: true,
+          result: [
+            { id: "apex", type: "CNAME", name: "proof.example", content: "origin.us-east-1.elb.amazonaws.com", ttl: 1, proxied: true },
+            { id: "www", type: "CNAME", name: "www.proof.example", content: "origin.us-east-1.elb.amazonaws.com", ttl: 1, proxied: true },
+          ],
+          errors: [],
+        });
+      }
+      publicCalls += 1;
+      return new Response(`<html><head><link href="https://${canonicalHost}" rel="canonical"></head></html>`, {
+        status: 200,
+        headers: { "content-type": "text/html; charset=utf-8" },
+      });
+    }) as typeof fetch;
+
+    const providers = createHostedProvisioningProviders({
+      CLOUDFLARE_API_TOKEN: "scoped-token",
+      CLOUDFLARE_ACCOUNT_ID: "account",
+      DOMAINS_REGISTRANT_SOURCE_DOMAIN: "source.example",
+    });
+    const input = {
+      hostname: "proof.example",
+      zoneId: "zone",
+      originHostname: "origin.us-east-1.elb.amazonaws.com",
+      originTlsMode: "full" as const,
+    };
+    await expect(providers.websiteOriginReady(input)).resolves.toBe(true);
+    tlsMode = "strict";
+    await expect(providers.websiteOriginReady(input)).resolves.toBe(false);
+    expect(publicCalls).toBe(1);
+    tlsMode = "full";
+    canonicalHost = "generic-waf.example";
+    await expect(providers.websiteOriginReady(input)).resolves.toBe(false);
+    expect(publicCalls).toBe(2);
+  });
 });

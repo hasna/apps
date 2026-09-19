@@ -83,7 +83,7 @@ describe("private immutable plugin receipts", () => {
     expect(readdirSync(join(root, "receipts"))).toEqual(["fixture.json"]);
   });
   test("rejects public, oversized, malformed and linked receipts", () => {
-    const path = join(root, "receipt.json"); writeFileSync(path, "{}", { mode: 0o644 });
+    const path = join(root, "receipt.json"); writeFileSync(path, "{}", { mode: 0o644 }); chmodSync(path, 0o644);
     expect(() => readPluginJson(path)).toThrow(); chmodSync(path, 0o600); writeFileSync(path, "not json");
     expect(() => readPluginJson(path)).toThrow();
     writeFileSync(path, " ".repeat(PLUGIN_PROJECTION_LIMITS.metadataBytes + 1)); expect(() => readPluginJson(path)).toThrow();

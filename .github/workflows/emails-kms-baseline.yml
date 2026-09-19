@@ -1,0 +1,40 @@
+name: emails-kms-baseline
+on:
+  workflow_dispatch:
+    inputs:
+      phase:
+        type: choice
+        options: [kms_prepare, kms_execute]
+        default: kms_prepare
+        required: true
+      ci_run_id:
+        type: string
+        required: true
+        description: Successful main push CI run containing these exact KMS controls; attempt 1 only
+      prepared_run_id:
+        type: string
+        default: ""
+        description: Exact successful preparation run for kms_execute
+      prepared_sha256:
+        type: string
+        default: ""
+        description: Reviewed SHA256 of metadata-only prepared.json
+permissions:
+  contents: read
+concurrency:
+  group: emails-search-production
+  cancel-in-progress: false
+jobs:
+  execute:
+    if: ${{ github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && github.run_attempt == 1 }}
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    uses: ./.github/workflows/emails-search-promotion-execute.yml
+    with:
+      phase: ${{ inputs.phase }}
+      source: ${{ github.sha }}
+      kms_ci_run_id: ${{ inputs.ci_run_id }}
+      prepared_run_id: ${{ inputs.prepared_run_id }}
+      prepared_sha256: ${{ inputs.prepared_sha256 }}

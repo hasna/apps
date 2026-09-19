@@ -6,7 +6,7 @@ import { type ReviewedDiscoveryInputs } from "../../lib/agent-discovery.js";
 import { normalizeHermesHookInput, assertHermesTool } from "../../lib/agent-hermes.js";
 import { parseSkillContextInput, selectedProfileId } from "./context.js";
 import { AGENT_ADAPTERS, INTEGRATION_AGENTS, normalizeAgentHookEvent } from "../../lib/agent-adapters.js";
-import { planAgentIntegration, applyAgentIntegration, inventoryNativeSkills, archiveNativeSkills, assertManagedAgentBridge, hookContextOutput, normalizeAgentHookPrompt, type IntegrationAgent } from "../../lib/agent-integration.js";
+import { planAgentIntegration, applyAgentIntegration, inventoryNativeSkills, archiveNativeSkills, assertManagedAgentBridge, hookContextOutput, normalizeAgentHookPrompt, readNativeMigrationTargetManifest, selectNativeMigrationTargets, type IntegrationAgent } from "../../lib/agent-integration.js";
 import { enrollCodexNativeHooks } from "../../lib/agent-codex-trust.js";
 import { HookDiagnosticError, hookChildError, hookFailureReason } from "../../lib/hook-diagnostics.js";
 import { readSkillSessionSnapshotIfExists, SkillSelectionError } from "../../lib/selection-cache.js";
@@ -213,6 +213,7 @@ export function registerAgentIntegration(parent: Command): void {
     .option("--project <directory>", "Also inventory a project and its ancestors (the current directory and its ancestors are always included)")
     .option("--include-unmanaged", "Archive user-authored skills as well as Skills-managed copies", false)
     .option("--include-vendor", "Retire vendor SKILL.md discovery files while preserving plugin scripts and assets", false)
+    .option("--target-manifest <file>", "Reviewed exact native migration target manifest")
     .option("--discovery-inputs <file>", "Advanced reviewed active plugin roots and source hashes")
     .option("--allow-root-aliases", "Allow home .claude/.codex aliases to existing directories within this home", false)
     .option("--apply", "Move selected skills to private archives outside agent discovery roots", false)
@@ -221,8 +222,11 @@ export function registerAgentIntegration(parent: Command): void {
     .action(async (options) => {
       try {
         const discoveryInputs: ReviewedDiscoveryInputs | undefined = options.discoveryInputs ? JSON.parse(readFileSync(options.discoveryInputs, "utf8")) : undefined;
+        if (options.targetManifest && (options.includeUnmanaged || options.includeVendor)) throw new Error("--target-manifest cannot be combined with broad native migration selectors");
+        const targetManifest = options.targetManifest ? readNativeMigrationTargetManifest(options.targetManifest) : undefined;
         const inventory = inventoryNativeSkills(undefined, { projectDirs: [process.cwd(), ...(options.project ? [options.project] : [])], includeVendor: options.includeVendor, configured: options.includeVendor, discoveryInputs, allowRootAliases: options.allowRootAliases });
-        const result = options.apply ? archiveNativeSkills(inventory, { includeUnmanaged: options.includeUnmanaged, includeVendor: options.includeVendor, allowRootAliases: options.allowRootAliases }) : { entries: [] };
+        if (targetManifest) selectNativeMigrationTargets(inventory, targetManifest);
+        const result = options.apply ? archiveNativeSkills(inventory, { includeUnmanaged: options.includeUnmanaged, includeVendor: options.includeVendor, allowRootAliases: options.allowRootAliases, targetManifest }) : { entries: [], ...(targetManifest ? { targetManifest: { schema: targetManifest.schema, digest: targetManifest.digest, targetCount: targetManifest.targets.length } } : {}) };
         if (options.json) await writeCliOutput(JSON.stringify({ applied: options.apply, inventory, ...result }));
         else await writeCliOutput(`${inventory.length} native skill(s) found; ${result.entries.length} archived with recovery receipts.${options.apply ? "" : " Use --apply to archive managed copies."}`);
       } catch (error) { console.error((error as Error).message); process.exitCode = 1; }

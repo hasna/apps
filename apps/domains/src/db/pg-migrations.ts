@@ -153,4 +153,57 @@ export const PG_MIGRATIONS: string[] = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_domain_provisioning_status ON domain_provisioning_jobs(status, updated_at)`,
   `CREATE INDEX IF NOT EXISTS idx_domain_provisioning_lease ON domain_provisioning_jobs(lease_until)`,
+  `ALTER TABLE domain_provisioning_jobs
+    DROP CONSTRAINT IF EXISTS domain_provisioning_jobs_target_check,
+    DROP CONSTRAINT IF EXISTS domain_provisioning_jobs_target_shape_check,
+    ALTER COLUMN worker_name DROP NOT NULL,
+    ADD COLUMN IF NOT EXISTS origin_hostname TEXT,
+    ADD CONSTRAINT domain_provisioning_jobs_target_check
+      CHECK (target IN ('shortlinks', 'website_origin')),
+    ADD CONSTRAINT domain_provisioning_jobs_target_shape_check
+      CHECK (
+        (target = 'shortlinks' AND worker_name IS NOT NULL AND origin_hostname IS NULL)
+        OR
+        (target = 'website_origin' AND worker_name IS NULL AND origin_hostname IS NOT NULL)
+      )`,
+  `CREATE TABLE IF NOT EXISTS domain_dns_reconciliations (
+    id TEXT PRIMARY KEY,
+    provisioning_job_id TEXT NOT NULL REFERENCES domain_provisioning_jobs(id) ON DELETE CASCADE,
+    domain_name TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL UNIQUE,
+    request_hash TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('requested','applying','ready','manual_review')),
+    records TEXT NOT NULL,
+    result TEXT,
+    error TEXT,
+    lease_token TEXT,
+    lease_until TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_domain_dns_reconciliation_job
+    ON domain_dns_reconciliations(provisioning_job_id, updated_at)`,
+  `ALTER TABLE domain_provisioning_jobs
+    DROP CONSTRAINT IF EXISTS domain_provisioning_jobs_max_price_usd_check,
+    ADD COLUMN IF NOT EXISTS acquisition_mode TEXT NOT NULL DEFAULT 'purchase',
+    ADD CONSTRAINT domain_provisioning_jobs_acquisition_mode_check
+      CHECK (acquisition_mode IN ('purchase', 'adopt')),
+    ADD CONSTRAINT domain_provisioning_jobs_price_mode_check
+      CHECK (
+        (acquisition_mode = 'purchase' AND max_price_usd > 0)
+        OR (acquisition_mode = 'adopt' AND max_price_usd = 0)
+      )`,
+  `ALTER TABLE domain_provisioning_jobs
+    ADD COLUMN IF NOT EXISTS origin_tls_mode TEXT`,
+  `UPDATE domain_provisioning_jobs
+    SET origin_tls_mode = 'strict'
+    WHERE target = 'website_origin' AND origin_tls_mode IS NULL`,
+  `ALTER TABLE domain_provisioning_jobs
+    DROP CONSTRAINT IF EXISTS domain_provisioning_jobs_target_shape_check,
+    ADD CONSTRAINT domain_provisioning_jobs_target_shape_check
+      CHECK (
+        (target = 'shortlinks' AND worker_name IS NOT NULL AND origin_hostname IS NULL AND origin_tls_mode IS NULL)
+        OR
+        (target = 'website_origin' AND worker_name IS NULL AND origin_hostname IS NOT NULL AND origin_tls_mode IN ('strict', 'full'))
+      )`,
 ];

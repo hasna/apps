@@ -364,3 +364,63 @@ Keep superseded records as history with `retired-instruction-source` (or
 these retirement markers rather than restoring embedded defaults. Generated
 files must be refreshed from the authoritative selected profile; modifying a
 local projection does not update that source.
+
+### Retire reviewed legacy prompt carriers
+
+`session apply --retire-legacy-files <review.json>` removes explicitly reviewed
+native Markdown carriers that are absent from both the new plan and the previous
+managed-file list. This is separate from `--retire-file`, which still requires
+previous managed ownership. The SDK option is `retireLegacyFiles` on
+`applySessionRender`.
+
+Before invoking it, review every clause of each old file against the canonical
+hosted replacements. Save that review as an immutable artifact and use its SHA-256
+in `coverageReviewSha256`. The digest records the operator's review; the renderer
+cannot establish semantic equivalence. Do not retire a carrier with incomplete
+coverage or unresolved provider/role/project scope. The replacement plan must
+come from a compiled hosted profile. Each replacement pin must match a selected,
+actually emitted source's ID, config ID, config version and rendered payload
+digest. An excluded source or a historical version does not satisfy this check.
+
+The review file is a JSON array:
+
+```json
+[
+  {
+    "relativePath": "rules/legacy.md",
+    "sha256": "<64 lowercase hex characters: reviewed file bytes>",
+    "coverageReviewSha256": "<64 lowercase hex characters: reviewed coverage artifact>",
+    "replacementSources": [
+      {
+        "id": "canonical-rule",
+        "configId": "immutable-config-id",
+        "configVersion": 3,
+        "renderedPayloadSha256": "<64 lowercase hex characters: selected rendered payload>"
+      }
+    ]
+  }
+]
+```
+
+Pass `--expected-manifest-sha256` with the exact previous manifest digest, preview
+with `--dry-run`, and apply the same reviewed inputs. `--force` is prohibited.
+Allowed carriers are Markdown files beneath the adapter's instruction-fragment
+directory, Claude `rules/` Markdown files, and Claude session-home `AGENTS.md`.
+The existing Claude authority guard still requires a registered matching source
+before planning or applying a migration of `AGENTS.md`; this option does not
+waive it. Entrypoints retained by the new plan use adoption/reconciliation instead.
+
+The operation refuses aliases, traversal, symlinks, nonregular files, hard links,
+other-owner files, special mode bits and non-UTF-8 bytes. It writes an owner-only
+snapshot containing each removed file's exact bytes and permissions, checks all
+file and manifest preimages before the first payload write, and uses the existing
+coordinated removal path. Unrequested files remain untouched. The manifest and
+snapshot retain `legacyRetirements` provenance, including replacement API authority
+and profile identity, without claiming the old files
+were previously managed. Ordinary refresh preserves this history.
+
+Use `session restore <snapshot> --dry-run` and then `session restore <snapshot>`
+for rollback. Restore refuses intervening file changes, including a newly created
+file at a retired path. An interrupted apply can leave partial changes; inspect its
+snapshot and actual paths before attempting recovery. Never treat a failed apply
+or a snapshot alone as successful retirement.

@@ -1,6 +1,6 @@
 {
   "name": "@hasna/instructions",
-  "version": "0.7.6",
+  "version": "0.7.7",
   "description": "AI coding agent instruction and configuration manager with fail-closed hosted clients, explicit local SQLite, native S3 backups, CLI, MCP, HTTP API, and generated SDK.",
   "type": "module",
   "main": "dist/index.js",
