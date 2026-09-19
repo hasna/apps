@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.2
+
+### Patch Changes
+
+- Create package-owned canonical project workspace directories with owner-only permissions regardless of the process umask, while preserving the existing defaults for explicitly shared paths.
+
 ## 1.2.1
 
 ### Patch Changes
