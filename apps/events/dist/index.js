@@ -1651,7 +1651,7 @@ function setPath(input, path, replacement) {
   if (last && last in cursor)
     cursor[last] = replacement;
 }
-// ../../node_modules/.bun/@hasna+contracts@1.1.0+e8014c875821e0be/node_modules/@hasna/contracts/dist/client/transport.js
+// node_modules/.bun/@hasna+contracts@1.1.0/node_modules/@hasna/contracts/dist/client/transport.js
 import { isIP as isIP2 } from "net";
 import { spawnSync } from "child_process";
 import { closeSync as closeSync2, fstatSync as fstatSync2, openSync as openSync2, readFileSync as readFileSync2 } from "fs";

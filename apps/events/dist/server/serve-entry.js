@@ -1185,9 +1185,9 @@ var package_default = {
   ],
   scripts: {
     build: "bun run build:runtime && bun run build:types",
-    "build:runtime": "rm -rf dist && bun build src/cli/index.ts --outdir dist/cli --target bun && bun build src/index.ts src/storage.ts src/signing.ts src/filter.ts src/transports.ts src/ssrf.ts src/types.ts src/commander.ts src/catalog.ts src/app-event.ts src/durable.ts src/durable-worker.ts --root src --outdir dist --target bun && bun build src/durable-spool.ts --root src --outdir dist --target node && bun build src/intake/client.ts src/server/serve-entry.ts src/server/intake-admin.ts src/mcp/intake.ts --root src --outdir dist --target bun --external pg --external @hasna/contracts/*",
+    "build:runtime": "rm -rf dist && bun build src/cli/index.ts --outdir dist/cli --target bun && bun build src/index.ts src/storage.ts src/signing.ts src/filter.ts src/transports.ts src/ssrf.ts src/types.ts src/commander.ts src/catalog.ts src/app-event.ts src/durable.ts src/durable-worker.ts --root src --outdir dist --target bun && bun build src/durable-spool.ts --root src --outdir dist --target node && bun build src/intake/client.ts src/server/serve-entry.ts src/server/intake-admin.ts src/mcp/intake.ts --root src --outdir dist --target bun --external pg --external @hasna/contracts/* && bun scripts/normalize-bun-cache-comments.ts",
     "build:types": "rm -rf types && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir types",
-    "generated-artifacts:check": 'bun run build && test -z "$(git status --porcelain --untracked-files=all -- dist types)"',
+    "generated-artifacts:check": "bun run build && bun scripts/verify-generated-artifacts.ts",
     "contract:check": "contracts repo-conformance .",
     "artifact-scan": "bun scripts/artifact-scan.ts",
     typecheck: "tsc --noEmit",

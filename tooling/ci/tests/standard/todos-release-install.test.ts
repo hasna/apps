@@ -3,6 +3,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { normalizeGeneratedJavaScript } from "../../../../apps/events/scripts/normalize-bun-cache-comments.js";
 
 const root = resolve(import.meta.dir, "../../../..");
 type Step = { name?: string; run?: string; if?: unknown; "working-directory"?: string; "continue-on-error"?: unknown };
@@ -31,7 +32,13 @@ describe("standard-adherence: Todos release dependency layout", () => {
     // files, so a preceding build cannot hide that layout drift.
     const output = mkdtempSync(join(tmpdir(), "todos-release-events-"));
     const events = join(root, "apps/events");
-    const buildRuntime = JSON.parse(readFileSync(join(events, "package.json"), "utf8")).scripts["build:runtime"] as string;
+    const eventsPackage = JSON.parse(readFileSync(join(events, "package.json"), "utf8")) as {
+      scripts: Record<string, string>;
+      dependencies: Record<string, string>;
+    };
+    const buildRuntime = eventsPackage.scripts["build:runtime"]!;
+    const contractsVersion = eventsPackage.dependencies["@hasna/contracts"]!;
+    expect(contractsVersion).toMatch(/^\d+\.\d+\.\d+$/);
     // Preserve the complete entrypoint groups: Bun's symbol naming also
     // depends on that group. Change only the destination, never the inputs.
     const buildCommands = buildRuntime.split("&&").map(command => command.trim().split(/\s+/)).filter(args => args[0] === "bun" && args[1] === "build");
@@ -52,10 +59,14 @@ describe("standard-adherence: Todos release dependency layout", () => {
           cwd: events, encoding: "utf8", timeout: 60_000, maxBuffer: 2 * 1024 * 1024,
         });
         expect({ status: build.status, error: build.error?.message, stderr: build.stderr }).toEqual({ status: 0, error: undefined, stderr: "" });
-        for (const file of group.files) {
-          const tracked = execFileSync("git", ["show", `HEAD:apps/events/dist/${file}`], { cwd: root, maxBuffer: 2 * 1024 * 1024 });
-          expect(readFileSync(join(output, file)).equals(tracked)).toBe(true);
-        }
+      }
+      // The release build runs the package-owned normalizer after every Bun
+      // entrypoint group. Apply that same final phase to the redirected output
+      // before comparing with the committed release bytes.
+      normalizeGeneratedJavaScript(output, contractsVersion);
+      for (const file of groups.flatMap(group => group.files)) {
+        const tracked = execFileSync("git", ["show", `HEAD:apps/events/dist/${file}`], { cwd: root, maxBuffer: 2 * 1024 * 1024 });
+        expect(readFileSync(join(output, file)).equals(tracked)).toBe(true);
       }
     } finally {
       rmSync(output, { recursive: true, force: true });

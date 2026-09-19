@@ -516,8 +516,10 @@ jobs:
   # (bin/, dist/ — GENERATED_PATHS in
   # apps/knowledge/scripts/verify-generated-artifacts.mjs) and the gate rebuilds it,
   # then requires `git diff --exit-code -- bin dist` to be empty. apps/events commits
-  # dist/ (13 files, plus types/) and ships `generated-artifacts:check`, which rebuilds
-  # and requires a clean `git status --porcelain` over dist/ and types/. apps/contracts
+  # 18 runtime bundles plus 29 declaration files and ships `generated-artifacts:check`,
+  # which rebuilds, enforces the exact expected-output manifest (including every
+  # package.json dist/types entrypoint), refuses unexpected ignored dist files, and
+  # requires every expected output to be tracked and byte-clean. apps/contracts
   # commits generated/deployment/v1/ and generated/todos/v1/ (shipped via the package's
   # `files` as public export subpaths) and ships `deployment:check` + `todos:check`,
   # which render the artifacts from src and byte-compare against the committed files —

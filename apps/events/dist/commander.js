@@ -1651,7 +1651,7 @@ function setPath(input, path, replacement) {
   if (last && last in cursor)
     cursor[last] = replacement;
 }
-// ../../node_modules/.bun/@hasna+contracts@1.1.0+e8014c875821e0be/node_modules/@hasna/contracts/dist/client/transport.js
+// node_modules/.bun/@hasna+contracts@1.1.0/node_modules/@hasna/contracts/dist/client/transport.js
 import { isIP as isIP2 } from "net";
 import { spawnSync } from "child_process";
 import { closeSync as closeSync2, fstatSync as fstatSync2, openSync as openSync2, readFileSync as readFileSync2 } from "fs";
@@ -3420,8 +3420,281 @@ function webhookTargetPolicyFromEnv() {
   return hosts.length > 0 ? { allowPrivateHosts: hosts } : undefined;
 }
 
+// src/cli/list-cursor.ts
+import { createHash as createHash2 } from "crypto";
+var EVENT_LIST_CURSOR_VERSION = 2;
+var EVENT_LIST_CURSOR_PREFIX = "events-list-v2:";
+var EVENT_LIST_CURSOR_MAX_CHARS = 1024;
+var DEFAULT_COMPACT_EVENT_LIST_MAX_BYTES = 32 * 1024;
+var COMPACT_EVENT_FIELD_MAX_BYTES = Object.freeze({
+  id: 256,
+  time: 64,
+  source: 128,
+  type: 128,
+  severity: 32,
+  subject: 256,
+  message: 160,
+  schemaVersion: 32
+});
+var EVENT_LIST_CURSOR_MAX_PAYLOAD_BYTES = 768;
+var CURSOR_FINGERPRINT = /^[A-Za-z0-9_-]{43}$/;
+var CANONICAL_BASE64URL = /^[A-Za-z0-9_-]+$/;
+var COMPACT_LIST_HINT = "Continue with --cursor when has_more is true; pass --full for exact, unbounded legacy event fields.";
+var CURSOR_STATE_KEYS = [
+  "before_fingerprint",
+  "before_position",
+  "filter_fingerprint",
+  "snapshot_fingerprint",
+  "snapshot_position",
+  "version"
+];
+var CURSOR_PAYLOAD_KEYS = [...CURSOR_STATE_KEYS, "integrity"].sort();
+function invalidCursor() {
+  return new Error("Invalid event list cursor");
+}
+function isNonNegativeSafeInteger(value) {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+function isCursorFingerprint(value) {
+  return typeof value === "string" && CURSOR_FINGERPRINT.test(value);
+}
+function hasExactKeys(value, expected) {
+  if (!value || typeof value !== "object" || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype)
+    return false;
+  const actual = Object.keys(value).sort();
+  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
+}
+function fingerprint(value) {
+  return createHash2("sha256").update(canonicalJson(value), "utf8").digest("base64url");
+}
+function eventFingerprint(event) {
+  return fingerprint(["hasna.events.list-event.v2", event]);
+}
+function eventSnapshotFingerprint(events) {
+  const hash = createHash2("sha256");
+  hash.update("hasna.events.list-snapshot.v2\x00", "utf8");
+  hash.update(String(events.length), "utf8");
+  hash.update("\x00", "utf8");
+  for (const event of events) {
+    hash.update(eventFingerprint(event), "ascii");
+    hash.update("\x00", "utf8");
+  }
+  return hash.digest("base64url");
+}
+function filterFingerprint(filters) {
+  return fingerprint(["hasna.events.list-filter.v2", filters.source ?? null, filters.type ?? null]);
+}
+function cursorIntegrity(state) {
+  return fingerprint(["hasna.events.list-cursor-integrity.v2", state]);
+}
+function validateCursorState(value) {
+  if (!hasExactKeys(value, CURSOR_STATE_KEYS))
+    return false;
+  return value.version === EVENT_LIST_CURSOR_VERSION && isNonNegativeSafeInteger(value.snapshot_position) && isCursorFingerprint(value.snapshot_fingerprint) && isNonNegativeSafeInteger(value.before_position) && value.before_position <= value.snapshot_position && isCursorFingerprint(value.before_fingerprint) && isCursorFingerprint(value.filter_fingerprint);
+}
+function encodeEventListCursor(state) {
+  if (!validateCursorState(state))
+    throw new Error("Event list cursor positions, version, and fingerprints are required");
+  const payload = { ...state, integrity: cursorIntegrity(state) };
+  const encoded = Buffer.from(canonicalJson(payload), "utf8").toString("base64url");
+  const cursor = `${EVENT_LIST_CURSOR_PREFIX}${encoded}`;
+  if (cursor.length > EVENT_LIST_CURSOR_MAX_CHARS)
+    throw new Error("Event list cursor exceeds its maximum encoded length");
+  return cursor;
+}
+function decodeEventListCursor(cursor, filters) {
+  if (typeof cursor !== "string" || cursor.length <= EVENT_LIST_CURSOR_PREFIX.length || cursor.length > EVENT_LIST_CURSOR_MAX_CHARS || !cursor.startsWith(EVENT_LIST_CURSOR_PREFIX))
+    throw invalidCursor();
+  const encoded = cursor.slice(EVENT_LIST_CURSOR_PREFIX.length);
+  if (!CANONICAL_BASE64URL.test(encoded))
+    throw invalidCursor();
+  let bytes;
+  let text;
+  let candidate;
+  try {
+    bytes = Buffer.from(encoded, "base64url");
+    if (bytes.length === 0 || bytes.length > EVENT_LIST_CURSOR_MAX_PAYLOAD_BYTES || bytes.toString("base64url") !== encoded)
+      throw invalidCursor();
+    text = bytes.toString("utf8");
+    if (!Buffer.from(text, "utf8").equals(bytes))
+      throw invalidCursor();
+    candidate = JSON.parse(text);
+    if (canonicalJson(candidate) !== text)
+      throw invalidCursor();
+  } catch {
+    throw invalidCursor();
+  }
+  if (!hasExactKeys(candidate, CURSOR_PAYLOAD_KEYS))
+    throw invalidCursor();
+  const state = {
+    version: candidate.version,
+    snapshot_position: candidate.snapshot_position,
+    snapshot_fingerprint: candidate.snapshot_fingerprint,
+    before_position: candidate.before_position,
+    before_fingerprint: candidate.before_fingerprint,
+    filter_fingerprint: candidate.filter_fingerprint
+  };
+  if (!validateCursorState(state) || !isCursorFingerprint(candidate.integrity))
+    throw invalidCursor();
+  if (candidate.integrity !== cursorIntegrity(state))
+    throw invalidCursor();
+  if (state.filter_fingerprint !== filterFingerprint(filters)) {
+    throw new Error("Event list cursor filter mismatch");
+  }
+  return state;
+}
+function applyFullEventLimit(events, rawLimit) {
+  if (rawLimit === undefined || rawLimit <= 0)
+    return events;
+  if (!Number.isInteger(rawLimit))
+    throw new Error(`Event full-list limit must be an integer, got ${rawLimit}`);
+  return events.slice(-rawLimit);
+}
+function eventListSnapshotPage(events, options) {
+  const limit = Math.max(1, Math.floor(options.limit));
+  let snapshotEvents = events;
+  let end = events.length;
+  let snapshotPosition = events.length - 1;
+  let snapshotId = events.at(snapshotPosition)?.id ?? null;
+  let currentCursor = null;
+  if (options.cursor) {
+    const cursor = decodeEventListCursor(options.cursor, options);
+    currentCursor = encodeEventListCursor(cursor);
+    const snapshotEvent = events.at(cursor.snapshot_position);
+    if (!snapshotEvent)
+      throw new Error("Event list cursor snapshot is no longer available");
+    snapshotEvents = events.slice(0, cursor.snapshot_position + 1);
+    if (eventSnapshotFingerprint(snapshotEvents) !== cursor.snapshot_fingerprint) {
+      throw new Error("Event list cursor snapshot is no longer available");
+    }
+    snapshotPosition = cursor.snapshot_position;
+    snapshotId = snapshotEvent.id;
+    const boundaryEvent = snapshotEvents.at(cursor.before_position);
+    if (!boundaryEvent || eventFingerprint(boundaryEvent) !== cursor.before_fingerprint) {
+      throw new Error("Event list cursor boundary is no longer available");
+    }
+    end = cursor.before_position;
+  }
+  const start = Math.max(0, end - limit);
+  const pageEvents = snapshotEvents.slice(start, end);
+  const hasMore = start > 0;
+  const nextCursor = hasMore && snapshotPosition >= 0 && pageEvents[0] ? encodeEventListCursor({
+    version: EVENT_LIST_CURSOR_VERSION,
+    snapshot_position: snapshotPosition,
+    snapshot_fingerprint: eventSnapshotFingerprint(snapshotEvents),
+    before_position: start,
+    before_fingerprint: eventFingerprint(pageEvents[0]),
+    filter_fingerprint: filterFingerprint(options)
+  }) : null;
+  return {
+    events: pageEvents,
+    count: pageEvents.length,
+    total: snapshotEvents.length,
+    cursor: currentCursor,
+    snapshot_id: snapshotId,
+    next_cursor: nextCursor,
+    has_more: hasMore
+  };
+}
+function truncateUtf8(value, maxBytes, normalizeWhitespace = false) {
+  const normalized = normalizeWhitespace ? value.replace(/\s+/g, " ").trim() : value;
+  if (Buffer.byteLength(normalized, "utf8") <= maxBytes) {
+    return { value: normalized, truncated: normalized !== value };
+  }
+  const suffix = "\u2026";
+  const budget = Math.max(0, maxBytes - Buffer.byteLength(suffix, "utf8"));
+  let bytes = 0;
+  let output = "";
+  for (const character of normalized) {
+    const characterBytes = Buffer.byteLength(character, "utf8");
+    if (bytes + characterBytes > budget)
+      break;
+    output += character;
+    bytes += characterBytes;
+  }
+  return { value: `${output}${suffix}`, truncated: true };
+}
+function compactEvent(event) {
+  const id = truncateUtf8(event.id, COMPACT_EVENT_FIELD_MAX_BYTES.id);
+  const time = truncateUtf8(event.time, COMPACT_EVENT_FIELD_MAX_BYTES.time);
+  const source = truncateUtf8(event.source, COMPACT_EVENT_FIELD_MAX_BYTES.source);
+  const type = truncateUtf8(event.type, COMPACT_EVENT_FIELD_MAX_BYTES.type);
+  const severity = truncateUtf8(event.severity, COMPACT_EVENT_FIELD_MAX_BYTES.severity);
+  const subject = event.subject === undefined ? { value: null, truncated: false } : truncateUtf8(event.subject, COMPACT_EVENT_FIELD_MAX_BYTES.subject);
+  const message = event.message === undefined ? { value: null, truncated: false } : truncateUtf8(event.message, COMPACT_EVENT_FIELD_MAX_BYTES.message, true);
+  const schemaVersion = truncateUtf8(event.schemaVersion, COMPACT_EVENT_FIELD_MAX_BYTES.schemaVersion);
+  return {
+    event: {
+      id: id.value,
+      time: time.value,
+      source: source.value,
+      type: type.value,
+      severity: severity.value,
+      subject: subject.value,
+      message: message.value,
+      schemaVersion: schemaVersion.value
+    },
+    truncated: [id, time, source, type, severity, subject, message, schemaVersion].some((field) => field.truncated)
+  };
+}
+function serializedCompactBytes(value) {
+  return Buffer.byteLength(`${JSON.stringify(value, null, 2)}
+`, "utf8");
+}
+function compactCandidate(events, options, effectiveLimit, byteLimited) {
+  const page = eventListSnapshotPage(events, { ...options, limit: effectiveLimit });
+  const compacted = page.events.map(compactEvent);
+  const snapshot = page.snapshot_id === null ? { value: null, truncated: false } : truncateUtf8(page.snapshot_id, COMPACT_EVENT_FIELD_MAX_BYTES.id);
+  const fieldsTruncated = snapshot.truncated || compacted.some((entry) => entry.truncated);
+  return {
+    events: compacted.map((entry) => entry.event),
+    count: compacted.length,
+    total: page.total,
+    limit: options.limit,
+    cursor: page.cursor,
+    snapshot_id: snapshot.value,
+    next_cursor: page.next_cursor,
+    has_more: page.has_more,
+    compact: true,
+    truncated: fieldsTruncated || byteLimited,
+    fields_truncated: fieldsTruncated,
+    byte_limited: byteLimited,
+    max_bytes: options.maxBytes,
+    hint: COMPACT_LIST_HINT
+  };
+}
+function compactEventListOutput(events, options) {
+  const limit = Math.max(1, Math.floor(options.limit));
+  const maxBytes = options.maxBytes ?? DEFAULT_COMPACT_EVENT_LIST_MAX_BYTES;
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1024) {
+    throw new Error("Compact event list maxBytes must be an integer of at least 1024 bytes");
+  }
+  const normalized = { ...options, limit, maxBytes };
+  const full = compactCandidate(events, normalized, limit, false);
+  if (serializedCompactBytes(full) <= maxBytes)
+    return full;
+  if (full.count <= 1)
+    throw new Error(`Compact event list cannot fit within ${maxBytes} bytes`);
+  let low = 1;
+  let high = full.count - 1;
+  let best = null;
+  while (low <= high) {
+    const candidateLimit = Math.floor((low + high) / 2);
+    const candidate = compactCandidate(events, normalized, candidateLimit, true);
+    if (serializedCompactBytes(candidate) <= maxBytes) {
+      best = candidate;
+      low = candidateLimit + 1;
+    } else {
+      high = candidateLimit - 1;
+    }
+  }
+  if (!best)
+    throw new Error(`Compact event list cannot fit within ${maxBytes} bytes`);
+  return best;
+}
+
 // src/commander.ts
-var DEFAULT_EVENT_LIST_LIMIT = 100;
+var DEFAULT_EVENT_LIST_LIMIT = 20;
 function parseJsonObject(value, fallback) {
   if (!value)
     return fallback;
@@ -3566,25 +3839,44 @@ function registerEventCommands(program, options) {
     }, { deliver: actionOptions.deliver, dedupe: actionOptions.dedupe });
     print(result, wantsJson(actionOptions, command), `${result.deduped ? "Deduped" : "Emitted"} ${result.event.id} to ${result.deliveries.length} channel(s)`);
   });
-  const defaultListLimit = options.defaultEventListLimit ?? DEFAULT_EVENT_LIST_LIMIT;
-  events.command("list").description("List recorded events").option("--source <source>", "Filter by source").option("--type <type>", "Filter by type").option("--limit <n>", `Limit to the most recent <n> events (default ${defaultListLimit}; use 0 for all)`, parseNumber, defaultListLimit).option("-j, --json", "Print JSON output", false).action(async (actionOptions, command) => {
-    let rows = await createClient(options).listEvents();
-    if (actionOptions.source)
-      rows = rows.filter((event) => event.source === actionOptions.source);
-    if (actionOptions.type)
-      rows = rows.filter((event) => event.type === actionOptions.type);
-    if (actionOptions.limit)
-      rows = rows.slice(-actionOptions.limit);
-    if (wantsJson(actionOptions, command)) {
-      console.log(JSON.stringify(rows, null, 2));
-      return;
+  const defaultListLimit = Math.max(1, Math.min(1000, Math.floor(options.defaultEventListLimit ?? DEFAULT_EVENT_LIST_LIMIT)));
+  events.command("list").description("List recorded events").option("--source <source>", "Filter by source").option("--type <type>", "Filter by type").option("--cursor <cursor>", "Opaque cursor returned by a previous compact page").option("--limit <n>", `Maximum compact events (default ${defaultListLimit}, max 1000)`, parseNumber).option("--full", "Return exact legacy event records; omitted limit lists all", false).option("-j, --json", "Print JSON output", false).action(async (actionOptions, command) => {
+    const json = wantsJson(actionOptions, command);
+    try {
+      if (actionOptions.full && actionOptions.cursor) {
+        throw new Error("--cursor cannot be used with --full; omit --full for paged compact output");
+      }
+      const client = createClient(options);
+      if (actionOptions.full) {
+        const rows2 = applyFullEventLimit(await client.listEvents({ source: actionOptions.source, type: actionOptions.type }), actionOptions.limit);
+        if (json)
+          return console.log(JSON.stringify(rows2, null, 2));
+        if (!rows2.length)
+          return console.log("No events recorded.");
+        for (const event of rows2)
+          console.log(`${event.time}	${event.id}	${event.source}	${event.type}	${event.severity}`);
+        return;
+      }
+      const limit = Math.max(1, Math.min(1000, Math.floor(actionOptions.limit ?? defaultListLimit)));
+      const rows = await client.listEvents({ source: actionOptions.source, type: actionOptions.type });
+      const compact = compactEventListOutput(rows, {
+        limit,
+        cursor: actionOptions.cursor,
+        source: actionOptions.source,
+        type: actionOptions.type
+      });
+      if (json)
+        return console.log(JSON.stringify(compact, null, 2));
+      if (!compact.events.length)
+        return console.log("No events recorded.");
+      for (const event of compact.events) {
+        console.log(`${event.time}	${JSON.stringify(event.id)}	${event.source}	${event.type}	${event.severity}`);
+      }
+      if (compact.next_cursor)
+        console.log(`next cursor: ${compact.next_cursor}`);
+    } catch (error) {
+      fail(error, json);
     }
-    if (!rows.length) {
-      console.log("No events recorded.");
-      return;
-    }
-    for (const event of rows)
-      console.log(`${event.time}	${event.id}	${event.source}	${event.type}	${event.severity}`);
   });
   events.command("replay").description("Replay recorded events").option("--id <id>", "Replay one event id").option("--source <source>", "Filter by source").option("--type <type>", "Filter by type").option("--cursor <cursor>", "Opaque replay cursor from a previous page").option("--limit <n>", "Maximum events to replay", parseNumber).option("--dry-run", "Preview without delivery", false).option("-j, --json", "Print JSON output", false).action(async (actionOptions, command) => {
     const result = await createClient(options).replay({
