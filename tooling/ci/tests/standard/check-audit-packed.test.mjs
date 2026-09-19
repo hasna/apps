@@ -94,6 +94,8 @@ test("audit findings and non-transient failures never retry", () => {
     expect(transientAuditStatus({ status: 1, stdout: "", stderr: `error: audit request failed (status ${status})` })).toBe(status);
   }
   expect(transientAuditStatus({ status: 1, stdout: "GHSA-3xgq-45jj-v275", stderr: "" })).toBeNull();
+  expect(transientAuditStatus({ status: 1, stdout: "GHSA-3xgq-45jj-v275", stderr: "error: audit request failed (status 503)" })).toBeNull();
+  expect(transientAuditStatus({ status: 1, stdout: "critical vulnerability found", stderr: "error: audit request failed (status 503)" })).toBeNull();
   expect(transientAuditStatus({ status: 1, stdout: "", stderr: "error: audit request failed (status 500)" })).toBeNull();
   const attempts = [];
   const result = runAuditWithRetry(
@@ -104,6 +106,21 @@ test("audit findings and non-transient failures never retry", () => {
     () => { throw new Error("must not wait"); },
   );
   expect(attempts).toHaveLength(1);
+  expect(result.status).toBe(1);
+});
+
+test("persistent transient audit outage remains a bounded failure", () => {
+  const attempts = [];
+  const waits = [];
+  const result = runAuditWithRetry(
+    () => {
+      attempts.push(1);
+      return { status: 1, stdout: "", stderr: "error: audit request failed (status 503)" };
+    },
+    (seconds) => waits.push(seconds),
+  );
+  expect(attempts).toHaveLength(3);
+  expect(waits).toEqual([2, 4]);
   expect(result.status).toBe(1);
 });
 
