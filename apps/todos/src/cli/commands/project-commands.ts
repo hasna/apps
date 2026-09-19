@@ -1528,6 +1528,32 @@ export function registerProjectCommands(program: Command) {
       // Validate before any branch: an unknown format used to reach the final
       // `else` and emit JSON regardless of what was asked for.
       opts.format = parseEnumFlag(opts.format, EXPORT_FORMAT_FLAG) ?? "json";
+      // http authority routing: the json export is GET /v1/tasks. The `md` and
+      // `bridge` formats are built from a whole-store local bridge bundle
+      // (projects + plans + comments + encryption profiles) that has no /v1
+      // equivalent, so they are refused here rather than silently emitting a
+      // bundle assembled from an empty local store.
+      const exportCloud = getTodosCloudClient();
+      if (exportCloud) {
+        if (opts.format !== "json") {
+          handleError(new Error(
+            `todos export --format ${opts.format} needs the local bridge bundle, which the hosted Todos authority does not serve. `
+            + "Use --format json for a hosted export.",
+          ));
+          return;
+        }
+        const cloudProjectId = globalOpts.project ? await cloudResolveProjectRef(exportCloud, globalOpts.project) : undefined;
+        const rows = await cloudListTasks(exportCloud, (cloudProjectId ? { project_id: cloudProjectId } : {}) as never);
+        const payload = JSON.stringify(rows, null, 2);
+        if (opts.output) {
+          const { writeFileSync } = await import("node:fs");
+          writeFileSync(resolve(opts.output), payload.endsWith("\n") ? payload : `${payload}\n`);
+          if (!globalOpts.json) console.log(chalk.green(`Export written to ${resolve(opts.output)} (${rows.length} task(s) from the hosted authority)`));
+        } else {
+          console.log(payload);
+        }
+        return;
+      }
       const projectId = autoProject(globalOpts);
       const writeOutput = async (content: string) => {
         if (opts.output) {

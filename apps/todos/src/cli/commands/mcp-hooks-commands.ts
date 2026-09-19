@@ -5,7 +5,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from "n
 import { dirname, join } from "node:path";
 import { createTask } from "../../db/tasks.js";
 import { autoProject, output, resolveTaskId, resolveTaskIdForCommand, handleError } from "../helpers.js";
-import { getTodosCloudClient, cloudRecordVerification, cloudLinkCommit, cloudFindCommit, cloudLinkRef, cloudFindRefs } from "../cloud-router.js";
+import { getTodosCloudClient, cloudRecordVerification, cloudLinkCommit, cloudFindCommit, cloudLinkRef, cloudFindRefs, cloudCreateTask, cloudResolveProjectRef, cloudResolveTaskListRef } from "../cloud-router.js";
 import { getHomeDir } from "../../lib/sync-utils.js";
 import { MCP_REGISTRABLE_CLI_AGENTS } from "../../lib/agent-adapter-docs.js";
 
@@ -395,9 +395,20 @@ exit 0
       }
       try {
         const issue = fetchGitHubIssue(parsed.owner, parsed.repo, parsed.number);
-        const projectId = opts.project || autoProject(globalOpts) || undefined;
-        const input = issueToTask(issue, { project_id: projectId, task_list_id: opts.list });
-        const task = createTask(input);
+        // http authority routing: POST /v1/tasks. The issue fetch stays local
+        // (it shells out to `gh`); only the task write moves to the authority,
+        // so an imported issue is visible to every agent instead of landing in
+        // this machine's private store.
+        const cloud = getTodosCloudClient();
+        let task;
+        if (cloud) {
+          const cloudProject = opts.project ? await cloudResolveProjectRef(cloud, opts.project) : undefined;
+          const cloudList = opts.list ? await cloudResolveTaskListRef(cloud, opts.list) : undefined;
+          task = await cloudCreateTask(cloud, issueToTask(issue, { project_id: cloudProject, task_list_id: cloudList }) as unknown as Record<string, unknown>);
+        } else {
+          const projectId = opts.project || autoProject(globalOpts) || undefined;
+          task = createTask(issueToTask(issue, { project_id: projectId, task_list_id: opts.list }));
+        }
         if (globalOpts.json) { output(task, true); return; }
         console.log(chalk.green(`Imported GH#${issue.number}: ${issue.title}`));
         console.log(`  ${chalk.dim("Task ID:")} ${task.short_id || task.id}`);
