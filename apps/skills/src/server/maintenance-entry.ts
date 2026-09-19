@@ -1,8 +1,8 @@
 import { closeSync, constants, fstatSync, lstatSync, openSync, readSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { Command } from "commander";
-import { createStore } from "../../server/store.js";
-import type { OperatorScopeEnrollmentInput } from "../../server/types.js";
+import { createStore } from "./store.js";
+import type { OperatorScopeEnrollmentInput } from "./types.js";
 
 type EnrollmentManifest = OperatorScopeEnrollmentInput & {
   operation: "enroll-publish";

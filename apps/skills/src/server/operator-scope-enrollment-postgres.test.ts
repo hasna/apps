@@ -48,7 +48,7 @@ postgresTest("operator enrollment is atomic, concurrent and readback-verifiable 
     manifestDigest: "a".repeat(64),
     operatorJobId: "job-derived",
     operatorTaskArn: "arn:aws:ecs:eu-west-1:123456789012:task/cluster/task-1",
-  } as const;
+  };
   try {
     await runMigrations(database!.url);
     await first.ensureBootstrapApiKey("pg-operator-secret", { apiKeyId: input.keyId, orgId: input.orgId, scopes: [...input.expectedScopes] });
@@ -97,7 +97,7 @@ postgresTest("operator enrollment rolls back scope mutation when audit insertion
   const input = {
     keyId: "pg-rollback-key", stationId: "station04", orgId: "pg-rollback-org", expectedScopes: ["skills:read"],
     operationId: "rollback-op", manifestDigest: "c".repeat(64), operatorJobId: "job", operatorTaskArn: "task",
-  } as const;
+  };
   const sql = await open(own.url);
   try {
     await store.ensureBootstrapApiKey("rollback-secret", { apiKeyId: input.keyId, orgId: input.orgId, scopes: [...input.expectedScopes] });
