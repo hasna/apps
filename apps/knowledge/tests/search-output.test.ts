@@ -1,7 +1,9 @@
 import { describe, expect, test } from 'bun:test';
 import {
+  KNOWLEDGE_COMPACT_RESPONSE_MAX_BYTES,
   projectKnowledgeContextResult,
   projectKnowledgeSearchResult,
+  stringifyKnowledgeCompactResponse,
 } from '../src/search-output';
 import { retrieveKnowledgeContextFromSearch } from '../src/retrieval';
 import type { HybridSearchResult } from '../src/search';
@@ -86,4 +88,54 @@ describe('knowledge compact search projections', () => {
     expect(Buffer.byteLength(JSON.stringify(compact))).toBeLessThan(8_192);
     expect(Buffer.byteLength(JSON.stringify(compact))).toBeLessThan(Buffer.byteLength(JSON.stringify(full)) * 0.25);
   });
+  test('adversarial search output is deterministically row-trimmed under the whole-response ceiling', () => {
+    const result = searchFixture('x'.repeat(100_000));
+    result.query = 'query '.repeat(20_000);
+    result.warnings = Array.from({ length: 100 }, (_, index) => `warning-${index}-${'w'.repeat(2_000)}`);
+    result.results = Array.from({ length: 300 }, (_, index) => ({
+      ...result.results[0]!,
+      id: `chunk_${String(index).padStart(4, '0')}_${'i'.repeat(1_000)}`,
+      title: `title-${index}-${'t'.repeat(2_000)}`,
+      text: `${index}:${'body '.repeat(30_000)}SEARCH_RAW_TAIL_${index}`,
+      reasons: Array.from({ length: 40 }, (_, reason) => `reason-${reason}-${'r'.repeat(500)}`),
+      source: { ...result.results[0]!.source!, uri: `open-files://file/${index}/${'u'.repeat(2_000)}` },
+    }));
+
+    const first = projectKnowledgeSearchResult(result, { detail: 'compact' }) as any;
+    const second = projectKnowledgeSearchResult(result, { detail: 'compact' }) as any;
+    const firstText = stringifyKnowledgeCompactResponse({ ok: true, ...first, message: `${result.results.length} search result(s)` });
+    const secondText = stringifyKnowledgeCompactResponse({ ok: true, ...second, message: `${result.results.length} search result(s)` });
+
+    expect(firstText).toBe(secondText);
+    expect(Buffer.byteLength(firstText)).toBeLessThanOrEqual(KNOWLEDGE_COMPACT_RESPONSE_MAX_BYTES);
+    expect(first.response_budget.complete).toBe(false);
+    expect(first.response_budget.omitted_results).toBeGreaterThan(0);
+    expect(first.results.length).toBeGreaterThan(0);
+    expect(firstText).not.toContain('SEARCH_RAW_TAIL_0');
+  });
+
+  test('adversarial context output trims duplicate evidence under the same whole-response ceiling', () => {
+    const search = searchFixture('context '.repeat(20_000));
+    search.results = Array.from({ length: 160 }, (_, index) => ({
+      ...search.results[0]!,
+      id: `context_${index}`,
+      text: `${index}:${'context body '.repeat(10_000)}CONTEXT_RAW_TAIL_${index}`,
+      title: `context title ${index}`,
+    }));
+    const context = retrieveKnowledgeContextFromSearch(search, { contextChars: 8_000 });
+    context.graph.backlinks = Array.from({ length: 400 }, (_, index) => ({
+      from_page_id: `from-${index}-${'f'.repeat(1_000)}`,
+      to_page_id: `to-${index}-${'t'.repeat(1_000)}`,
+      label: `label-${index}-${'l'.repeat(1_000)}`,
+    }));
+
+    const compact = projectKnowledgeContextResult(context, { detail: 'compact' }) as any;
+    const text = stringifyKnowledgeCompactResponse({ ok: true, ...compact, message: `${context.excerpts.length} context excerpt(s)` });
+
+    expect(Buffer.byteLength(text)).toBeLessThanOrEqual(KNOWLEDGE_COMPACT_RESPONSE_MAX_BYTES);
+    expect(compact.response_budget.complete).toBe(false);
+    expect(compact.response_budget.omitted.backlinks).toBeGreaterThan(0);
+    expect(text).not.toContain('CONTEXT_RAW_TAIL_0');
+  });
+
 });

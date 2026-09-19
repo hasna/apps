@@ -22,7 +22,12 @@ import {
 } from './client-transport';
 import { openKnowledgeDb } from './knowledge-db';
 import { createKnowledgeService } from './service';
-import { parseKnowledgeSearchDetail, projectKnowledgeContextResult, projectKnowledgeSearchResult } from './search-output';
+import {
+  parseKnowledgeSearchDetail,
+  projectKnowledgeContextResult,
+  projectKnowledgeSearchResult,
+  stringifyKnowledgeCompactResponse,
+} from './search-output';
 import { createKnowledgeProjectPanel, formatKnowledgeProjectPanel } from './project-panel';
 import {
   KNOWLEDGE_PROJECT_REGISTRATION_ROUTE,
@@ -504,7 +509,7 @@ Global Options:
   --dimensions <n>             Embedding dimensions for local/fake providers
   --semantic                   Include vector semantic results in search
   --context                    Return a reranked citation context pack for search
-  --detail <compact|full|legacy> Additive search JSON projection; omitted preserves legacy JSON
+  --detail <compact|full|legacy> Search JSON projection; omitted defaults to compact
   --max-tokens <n>             Token budget for agent context packs
   --max-bytes <n>              UTF-8 byte budget for agent context packs
   --max-items <n>              Item budget for agent context packs
@@ -716,6 +721,10 @@ function formatPaths(paths: Record<string, any>): string {
 
 function outputCompactJson(data: unknown): void {
   console.log(JSON.stringify(data));
+}
+
+function outputBoundedKnowledgeCompactJson(data: unknown): void {
+  console.log(stringifyKnowledgeCompactResponse(data));
 }
 
 function formatInventory(inventory: ReturnType<ReturnType<typeof createKnowledgeService>['inventory']>): string {
@@ -2348,8 +2357,9 @@ async function run(argv: string[]): Promise<void> {
   if (command === 'search') {
     const query = positional.slice(1).join(' ');
     if (!query) throw new Error('Usage: knowledge search <query>');
-    const detail = parseKnowledgeSearchDetail(flags.detail);
-    if (detail && !flags.json) throw new Error('--detail requires --json for knowledge search.');
+    const requestedDetail = parseKnowledgeSearchDetail(flags.detail);
+    if (requestedDetail && !flags.json) throw new Error('--detail requires --json for knowledge search.');
+    const detail = flags.json ? (requestedDetail ?? 'compact') : undefined;
     if (flags.context) {
       const context = await service.retrieveContext({
         query,
@@ -2362,7 +2372,7 @@ async function run(argv: string[]): Promise<void> {
       });
       const projected = detail ? projectKnowledgeContextResult(context, { detail }) : context;
       const contextResult = { ok: true, ...projected, message: `${context.excerpts.length} context excerpt(s)` };
-      if (flags.json && detail === 'compact') outputCompactJson(contextResult);
+      if (flags.json && detail === 'compact') outputBoundedKnowledgeCompactJson(contextResult);
       else output(flags.json || flags.verbose ? contextResult : formatContextPack(contextResult), flags.json, flags);
       return;
     }
@@ -2377,7 +2387,7 @@ async function run(argv: string[]): Promise<void> {
     });
     const projected = detail ? projectKnowledgeSearchResult(result, { detail }) : result;
     const searchResult = { ok: true, ...projected, message: `${result.results.length} search result(s)` };
-    if (flags.json && detail === 'compact') outputCompactJson(searchResult);
+    if (flags.json && detail === 'compact') outputBoundedKnowledgeCompactJson(searchResult);
     else output(flags.json || flags.verbose ? searchResult : formatSearchResults(searchResult), flags.json, flags);
     return;
   }
