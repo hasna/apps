@@ -37,7 +37,7 @@ const remoteSkillSchema = z.object({
   tags: z.array(z.string()).optional(),
   dependencies: z.array(z.string()).optional(),
   version: z.string().optional(),
-  revisionId: z.string().min(1).optional(),
+  revisionId: z.union([z.string().regex(/^[\x21-\x7e]+$/), z.null()]).optional(),
   lifecycle: z.enum(["active", "archived"]).optional(),
   availability: remoteAvailabilitySchema.optional(),
 }).passthrough().refine((skill) => skill.name || skill.slug, {
@@ -143,7 +143,7 @@ function normalizeRemoteSkill(skill: z.infer<typeof remoteSkillSchema>): SkillMe
     tags: skill.tags || ["remote"],
     dependencies: skill.dependencies,
     ...(skill.version ? { version: skill.version } : {}),
-    ...(skill.revisionId ? { revisionId: skill.revisionId } : {}),
+    ...(skill.revisionId !== undefined ? { revisionId: skill.revisionId } : {}),
     ...(skill.lifecycle ? { lifecycle: skill.lifecycle } : {}),
     availability: normalizeRemoteAvailability(skill.availability),
     source: "remote",

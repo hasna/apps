@@ -22,7 +22,7 @@ export interface SkillMeta {
   dependencies?: string[];
   version?: string;
   /** Server registry revision and lifecycle, when supplied by a remote read. */
-  revisionId?: string;
+  revisionId?: string | null;
   lifecycle?: "active" | "archived";
   /**
    * Artifact class of the skill. "executable" skills carry a runnable
