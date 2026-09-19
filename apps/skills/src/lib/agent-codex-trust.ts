@@ -18,6 +18,8 @@ type Connect = typeof connectCodexHookRpc;
 const json = (value: unknown) => JSON.stringify(value, null, 2) + "\n";
 const structure = (text: string) => JSON.parse(JSON.stringify(Bun.TOML.parse(text)));
 const eventNames = { UserPromptSubmit: ["userPromptSubmit", "user_prompt_submit"], SessionStart: ["sessionStart", "session_start"], SubagentStart: ["subagentStart", "subagent_start"] } as const;
+const makePlanDigest = (value: unknown) => createHash("sha256").update(json(value)).digest("hex");
+const safeNativeHook = (hook: any) => ({ key: hook.key, eventName: hook.eventName, handlerType: hook.handlerType, command: hook.command, matcher: hook.matcher, timeoutSec: hook.timeoutSec, async: hook.async, statusMessage: hook.statusMessage, additionalContextLimit: hook.additionalContextLimit, sourcePath: hook.sourcePath, source: hook.source, pluginId: hook.pluginId, isManaged: hook.isManaged, currentHash: hook.currentHash, enabled: hook.enabled, trustStatus: hook.trustStatus });
 
 /** Resolve an interrupted native write only after the native consumer and every
  * captured pre-write input agree. This never writes Codex state; it records a
@@ -33,8 +35,12 @@ export async function reconcileCodexNativeHooks(options: CodexNativeHookReconcil
     need(!!dir && dir.isDirectory() && !dir.isSymbolicLink() && dir.uid === process.getuid!() && (dir.mode & 0o777) === 0o700, "UNSAFE_JOURNAL");
     need(!lstatSync(join(journal, "receipt.json"), { throwIfNoEntry: false }), "RECONCILE_ALREADY_COMPLETE");
     need(lstatSync(join(journal, "stopped.json"), { throwIfNoEntry: false })?.isFile(), "RECONCILE_JOURNAL_INCOMPLETE");
+    const stoppedFile = snapshot(join(journal, "stopped.json"), true);
     const intentFile = snapshot(join(journal, "intent.json"), true), intent: any = JSON.parse(intentFile.text);
-    need(intent.version === 1 && /^[a-f0-9]{64}$/.test(intent.planDigest) && typeof intent.configPath === "string" && Array.isArray(intent.hooks) && intent.hooks.length > 0 && intent.hooks.length <= 100, "RECONCILE_INTENT_INVALID");
+    need(intent.version === 1 && /^[a-f0-9]{64}$/.test(intent.planDigest) && typeof intent.home === "string" && intent.home === home && typeof intent.configPath === "string" && /^[a-f0-9]{64}$/.test(intent.configSha256) && typeof intent.configVersion === "string" && /^[a-f0-9]{64}$/.test(intent.policySha256) && /^[a-f0-9]{64}$/.test(intent.hooksSha256) && Array.isArray(intent.declarations) && Array.isArray(intent.admitted) && Array.isArray(intent.nativeHooks) && Array.isArray(intent.hooks) && intent.hooks.length > 0 && intent.hooks.length <= 100, "RECONCILE_INTENT_INVALID");
+    const digestInput = { version: 1, home: intent.home, configPath: intent.configPath, configSha256: intent.configSha256, configVersion: intent.configVersion, policySha256: intent.policySha256, hooksSha256: intent.hooksSha256, skillsCli: intent.skillsCli, nativeVersion: intent.nativeVersion, declarations: intent.declarations, admitted: intent.admitted };
+    need(makePlanDigest(digestInput) === intent.planDigest, "RECONCILE_PLAN_CHANGED");
+    need(isDeepStrictEqual(intent.hooks, intent.admitted.filter((hook: any) => !hook.enabled || hook.trustStatus !== "trusted")), "RECONCILE_INTENT_HOOKS_CHANGED");
     const configBefore = snapshot(join(journal, "config.before.toml"), true), hooksBefore = snapshot(join(journal, "hooks.before.json"), true), policyBefore = snapshot(join(journal, "policy.before.json"), true);
     need(configBefore.sha256 === intent.beforeSha256 && hooksBefore.sha256 === intent.hooksSha256 && policyBefore.sha256 === intent.policySha256, "RECONCILE_JOURNAL_CHANGED");
     const currentConfig = snapshot(intent.configPath, true);
@@ -58,6 +64,16 @@ export async function reconcileCodexNativeHooks(options: CodexNativeHookReconcil
     const discovered = await rpc.request("hooks/list", { cwds: [home] });
     need(Array.isArray(discovered?.data) && discovered.data.length === 1 && discovered.data[0].cwd === home && !discovered.data[0].errors?.length && !discovered.data[0].warnings?.length, "RECONCILE_NATIVE_DISCOVERY_REFUSED");
     const nativeHooks = discovered.data[0].hooks as any[];
+    need(nativeHooks.length === intent.nativeHooks.length, "RECONCILE_NATIVE_HOOK_LIST_CHANGED");
+    const plannedKeys = new Set(intent.hooks.map((hook: any) => hook.key));
+    for (const expected of intent.nativeHooks) {
+      const matches = nativeHooks.filter((hook: any) => hook.key === expected.key);
+      need(matches.length === 1, "RECONCILE_NATIVE_HOOK_LIST_CHANGED");
+      const actual = safeNativeHook(matches[0]);
+      const stable = (hook: any) => { const { enabled, trustStatus, ...identity } = hook; return identity; };
+      need(isDeepStrictEqual(stable(actual), stable(expected)), "RECONCILE_NATIVE_IDENTITY_CHANGED");
+      if (!plannedKeys.has(expected.key)) need(isDeepStrictEqual(actual, expected), "RECONCILE_UNRELATED_HOOK_CHANGED");
+    }
     for (const wanted of intent.hooks) {
       const matches = nativeHooks.filter((h: any) => h.key === wanted.key || h.key === wanted.key.replace(join(home, ".codex/hooks.json"), hooksPath));
       need(matches.length === 1, "RECONCILE_NATIVE_IDENTITY_CHANGED");
@@ -67,7 +83,13 @@ export async function reconcileCodexNativeHooks(options: CodexNativeHookReconcil
     const config = await rpc.request("config/read", { includeLayers: true, cwd: home });
     const layers = config?.layers?.filter((layer: any) => layer.name?.type === "user" && layer.name.file === intent.configPath && !layer.name.profile);
     need(layers?.length === 1 && !layers[0].disabledReason && isDeepStrictEqual(layers[0].config, current), "RECONCILE_NATIVE_CONFIG_MISMATCH");
-    const receipt = { version: 1, status: "reconciled", reconciled: true, automaticRollback: false, journal, planDigest: intent.planDigest, nativeVersion: rpc.version, nativeExecutionVerified: true, configSha256: currentConfig.sha256, hooksSha256: hooksCurrent.sha256, policySha256: policyBefore.sha256, skillsCli: skillsCli.receipt, unrelatedSettingsAndCommentsPreserved: true };
+    const finalDiscovery = await rpc.request("hooks/list", { cwds: [home] });
+    need(Array.isArray(finalDiscovery?.data) && finalDiscovery.data.length === 1 && finalDiscovery.data[0].cwd === home && !finalDiscovery.data[0].errors?.length && !finalDiscovery.data[0].warnings?.length && isDeepStrictEqual((finalDiscovery.data[0].hooks as any[]).map(safeNativeHook), nativeHooks.map(safeNativeHook)), "RECONCILE_NATIVE_STATE_CHANGED");
+    const finalConfig = await rpc.request("config/read", { includeLayers: true, cwd: home });
+    const finalLayers = finalConfig?.layers?.filter((layer: any) => layer.name?.type === "user" && layer.name.file === intent.configPath && !layer.name.profile);
+    need(finalLayers?.length === 1 && isDeepStrictEqual(finalLayers[0].config, current), "RECONCILE_NATIVE_CONFIG_CHANGED");
+    unchanged(stoppedFile); unchanged(intentFile); unchanged(configBefore); unchanged(hooksBefore); unchanged(policyBefore); unchanged(policyCurrent); unchanged(hooksCurrent); unchanged(currentConfig); skillsCli.recheck(); assertManagedAgentBridge("codex", { home, dataDir, projectDir: home });
+    const receipt = { version: 1, status: "reconciled", reconciled: true, automaticRollback: false, journal, planDigest: intent.planDigest, nativeVersion: rpc.version, nativeStateVerified: true, nativeExecutionVerified: false, configSha256: currentConfig.sha256, hooksSha256: hooksCurrent.sha256, policySha256: policyBefore.sha256, skillsCli: skillsCli.receipt, unrelatedSettingsAndCommentsPreserved: true };
     save(join(journal, "receipt.json"), json(receipt));
     return receipt;
   } catch (error) {
@@ -124,7 +146,8 @@ export async function enrollCodexNativeHooks(options: CodexNativeHookTrustOption
     const preservationText = codexTrustTextWitness(configFile.text, keys);
     const checkInputs = () => { skillsCli.recheck(); assertManagedAgentBridge("codex", { home, dataDir, projectDir: home }); unchanged(policyFile); unchanged(hooksFile); unchanged(configFile); };
     checkInputs();
-    const planDigest = createHash("sha256").update(json({ version: 1, home, configPath, configSha256: configFile.sha256, configVersion: layers[0].version, policySha256: policyFile.sha256, hooksSha256: hooksFile.sha256, skillsCli: skillsCli.receipt, nativeVersion: rpc.version, declarations: expected, admitted })).digest("hex");
+    const digestInput = { version: 1, home, configPath, configSha256: configFile.sha256, configVersion: layers[0].version, policySha256: policyFile.sha256, hooksSha256: hooksFile.sha256, skillsCli: skillsCli.receipt, nativeVersion: rpc.version, declarations: expected, admitted };
+    const planDigest = makePlanDigest(digestInput);
     const baseReceipt = { planDigest, skillsCli: skillsCli.receipt, nativeVersion: rpc.version, ownedNativeProcessId: rpc.processId, agent: "codex", applied: false, planned, nativeEligible: planned.length === 0, transport: "owned-stdio-process", existingSessionsReloaded: false, nativeExecutionVerified: false };
     if (options.apply) need(options.reviewedPlanDigest === planDigest, "PLAN_CHANGED: run the dry-run again and pass its reviewed --plan-digest with --apply");
     const parent = join(dataDir, "native-hook-trust");
@@ -143,7 +166,7 @@ export async function enrollCodexNativeHooks(options: CodexNativeHookTrustOption
     save(join(journal, "config.before.toml"), configFile.bytes);
     save(join(journal, "hooks.before.json"), hooksFile.bytes);
     save(join(journal, "policy.before.json"), policyFile.bytes);
-    save(join(journal, "intent.json"), json({ version: 1, planDigest, skillsCli: skillsCli.receipt, nativeVersion: rpc.version, configPath, beforeSha256: configFile.sha256, hooksSha256: hooksFile.sha256, policySha256: policyFile.sha256, expectedVersion: layers[0].version, hooks: planned }));
+    save(join(journal, "intent.json"), json({ ...digestInput, planDigest, hooks: planned, nativeHooks: discovered.map(safeNativeHook) }));
     need(isDeepStrictEqual(admit(await list()), admitted), "NATIVE_DISCOVERY_CHANGED"); checkInputs();
     let result: any;
     try { result = await rpc.request("config/batchWrite", { edits: [{ keyPath: "hooks.state", value: Object.fromEntries(planned.map(h => [h.key, { enabled: true, trusted_hash: h.currentHash }])), mergeStrategy: "upsert" }], filePath: configPath, expectedVersion: layers[0].version, reloadUserConfig: true }); }
