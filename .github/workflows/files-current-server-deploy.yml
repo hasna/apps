@@ -1,0 +1,762 @@
+name: files-current-server-deploy
+
+# GitHub Actions discovers workflows only at the repository root. This lane
+# builds apps/files from the exact main-branch commit, scans the image before
+# AWS authentication, then resolves and verifies every production target from
+# the package-owned SSM manifest before it can push, migrate, or update ECS.
+#
+# TRIGGERING — manual only. A dispatch is accepted only on the main branch,
+# resolves the exact current origin/main tip, and requires a completed successful
+# `ci` push run for that same commit. Historical or merely ancestor commits are
+# never deployable through this lane.
+#
+# External prerequisites (not changed by this repository): the protected
+# environment's configured deploy-role trust must admit
+# repo:hasna/apps:environment:production. The role must also grant bounded
+# logs:GetLogEvents on the manifest-resolved task log group so ledger receipts
+# can return from one-shot probe tasks. Until both are updated, OIDC/evidence
+# collection fails before migration or service mutation.
+
+on:
+  workflow_dispatch: {}
+
+concurrency:
+  group: deploy-files-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  LOCAL_IMAGE: files-current-server
+  # The exact CI workflow name and file used by the manual gate. Both are
+  # checked against the Actions API so a same-named unrelated workflow cannot
+  # satisfy the deployment prerequisite.
+  REQUIRED_CI_WORKFLOW: ci
+  # The ci workflow's file, used to address it exactly on the Actions API when
+  # the manual route has to prove a ci success itself. Selecting by file path is
+  # unambiguous where a name lookup is not; the run's own `name` and `path` are
+  # then both re-checked against this pin and REQUIRED_CI_WORKFLOW.
+  CI_WORKFLOW_FILE: ci.yml
+
+jobs:
+  gate:
+    name: gate (successful ci for the exact main commit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # The gate reads git history and the repository's own Actions run history,
+    # and nothing else. It must never hold the OIDC token that the deploy job
+    # needs, so it narrows the workflow permissions: `actions: read` is what
+    # lets it ask whether ci actually passed for a commit, and `id-token` is
+    # deliberately absent so this job can never assume an AWS role.
+    permissions:
+      contents: read
+      actions: read
+    # Only a manual dispatch on main may enter the gate.
+    if: ${{ github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' }}
+    outputs:
+      proceed: ${{ steps.resolve.outputs.proceed }}
+      source_sha: ${{ steps.resolve.outputs.source_sha }}
+    steps:
+      - name: Checkout main history
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Resolve the deployable commit
+        id: resolve
+        shell: bash
+        env:
+          # The workflow's own short-lived repository token, scoped by the job
+          # permissions above to contents+actions read. No PAT, no secret.
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          git fetch --no-tags --prune origin +refs/heads/main:refs/remotes/origin/main
+          main_tip="$(git rev-parse refs/remotes/origin/main)"
+          proceed=false
+          source_sha=""
+
+          [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]] || { echo "unsupported trigger ${GITHUB_EVENT_NAME}" >&2; exit 1; }
+          [[ "${GITHUB_REF}" == "refs/heads/main" ]] || { echo "manual deploy is restricted to the main branch ref, received ${GITHUB_REF}" >&2; exit 1; }
+          [[ "${GITHUB_SHA}" =~ ^[0-9a-f]{40}$ ]] || { echo "dispatch SHA is not a full commit id" >&2; exit 1; }
+          [[ "$(git rev-parse HEAD)" == "${GITHUB_SHA}" ]] || { echo "workflow checkout is not the dispatch SHA" >&2; exit 1; }
+          [[ "${GITHUB_SHA}" == "${main_tip}" ]] || { echo "main advanced after dispatch: dispatch=${GITHUB_SHA} current=${main_tip}" >&2; exit 1; }
+          source_sha="${GITHUB_SHA}"
+          [[ -n "${GH_TOKEN:-}" ]] || { echo "manual deploy cannot verify ${REQUIRED_CI_WORKFLOW} without a repository token" >&2; exit 1; }
+          gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${CI_WORKFLOW_FILE}/runs?branch=main&event=push&status=completed&head_sha=${source_sha}&per_page=100" > "${RUNNER_TEMP}/ci-runs.json"
+          ci_success_count="$(jq --arg sha "${source_sha}" --arg name "${REQUIRED_CI_WORKFLOW}" --arg path ".github/workflows/${CI_WORKFLOW_FILE}" '[.workflow_runs[]? | select(.name == $name and .path == $path and .head_sha == $sha and .head_branch == "main" and .event == "push" and .status == "completed" and .conclusion == "success")] | length' "${RUNNER_TEMP}/ci-runs.json")"
+          [[ "${ci_success_count}" =~ ^[0-9]+$ ]] || { echo "the ${REQUIRED_CI_WORKFLOW} run query for ${source_sha} returned no readable count" >&2; exit 1; }
+          [[ "${ci_success_count}" -ge 1 ]] || { echo "manual deploy refused: no completed successful ${REQUIRED_CI_WORKFLOW} push run for exact origin/main ${source_sha}" >&2; exit 1; }
+          echo "manual deploy: ${ci_success_count} completed successful ${REQUIRED_CI_WORKFLOW} push run(s) bind ${source_sha}"
+          proceed=true
+
+          [[ "${source_sha}" =~ ^[0-9a-f]{40}$ ]] || { echo "gate did not resolve a full source commit" >&2; exit 1; }
+          {
+            printf 'source_sha=%s\n' "${source_sha}"
+            printf 'proceed=%s\n' "${proceed}"
+          } >> "${GITHUB_OUTPUT}"
+
+  deploy:
+    name: build + scan + migrate + deploy
+    needs: gate
+    if: ${{ needs.gate.outputs.proceed == 'true' }}
+    # The protected environment pins ARM64 service and migration task
+    # definitions. Build and execute the candidate on a native ARM64 runner so
+    # the image platform is proven before AWS authentication. This binding is
+    # enforced again against both live task-definition families below.
+    runs-on: ubuntu-24.04-arm
+    environment: production
+    timeout-minutes: 60
+    env:
+      AWS_REGION: ${{ vars.FILES_PROD_AWS_REGION }}
+      DEPLOY_MANIFEST: ${{ vars.FILES_PROD_DEPLOY_MANIFEST }}
+      EXPECTED_CLUSTER: ${{ vars.FILES_PROD_ECS_CLUSTER }}
+      EXPECTED_SERVICE: ${{ vars.FILES_PROD_ECS_SERVICE }}
+      EXPECTED_WEB_FAMILY: ${{ vars.FILES_PROD_WEB_TASK_FAMILY }}
+      EXPECTED_WEB_CONTAINER: ${{ vars.FILES_PROD_WEB_CONTAINER }}
+      EXPECTED_ECR_REPOSITORY: ${{ vars.FILES_PROD_ECR_REPOSITORY }}
+      EXPECTED_MIGRATION_FAMILY: ${{ vars.FILES_PROD_MIGRATION_TASK_FAMILY }}
+      EXPECTED_MIGRATION_CONTAINER: ${{ vars.FILES_PROD_MIGRATION_CONTAINER }}
+      EXPECTED_CPU_ARCHITECTURE: ${{ vars.FILES_PROD_CPU_ARCHITECTURE }}
+      FILES_CLIENT_KEY_SECRET_ID: ${{ vars.FILES_PROD_CLIENT_KEY_SECRET_ID }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: apps/files
+
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.gate.outputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify source is the gated ci-passed main commit
+        env:
+          GATED_SHA: ${{ needs.gate.outputs.source_sha }}
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "${GATED_SHA}"
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          main_tip="$(git rev-parse refs/remotes/origin/main)"
+          git merge-base --is-ancestor "${GATED_SHA}^{commit}" refs/remotes/origin/main
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            [[ "${GITHUB_REF}" == "refs/heads/main" ]] || { echo "manual deploy is restricted to the main branch ref, received ${GITHUB_REF}" >&2; exit 1; }
+            [[ "${GATED_SHA}" == "${main_tip}" ]] || { echo "manual deploy must target the exact current origin/main commit ${main_tip}, received ${GATED_SHA}" >&2; exit 1; }
+          fi
+          printf 'SOURCE_SHA=%s\n' "${GATED_SHA}" >> "${GITHUB_ENV}"
+          printf 'IMAGE_TAG=deploy-%s-%s-%s\n' "${GATED_SHA}" "${GITHUB_RUN_ID}" "${GITHUB_RUN_ATTEMPT}" >> "${GITHUB_ENV}"
+
+      - name: Validate protected deployment configuration
+        env:
+          EXPECTED_ACCOUNT_ID: ${{ secrets.FILES_PROD_AWS_ACCOUNT_ID }}
+          DEPLOY_ROLE_ARN: ${{ secrets.FILES_PROD_GHA_ROLE_ARN }}
+        run: |
+          set -Eeuo pipefail
+          require_value() { [[ -n "${!1:-}" ]] || { echo "protected deployment configuration is missing $1" >&2; exit 1; }; }
+          for name in EXPECTED_ACCOUNT_ID DEPLOY_ROLE_ARN AWS_REGION DEPLOY_MANIFEST EXPECTED_CLUSTER EXPECTED_SERVICE EXPECTED_WEB_FAMILY EXPECTED_WEB_CONTAINER EXPECTED_ECR_REPOSITORY EXPECTED_MIGRATION_FAMILY EXPECTED_MIGRATION_CONTAINER EXPECTED_CPU_ARCHITECTURE FILES_CLIENT_KEY_SECRET_ID; do
+            require_value "${name}"
+          done
+          [[ "${EXPECTED_ACCOUNT_ID}" =~ ^[0-9]{12}$ ]] || { echo "protected AWS account id is invalid" >&2; exit 1; }
+          [[ "${DEPLOY_ROLE_ARN}" =~ ^arn:aws[a-z-]*:iam::${EXPECTED_ACCOUNT_ID}:role/[A-Za-z0-9+=,.@_/-]+$ ]] || { echo "protected deploy role ARN is invalid" >&2; exit 1; }
+          [[ "${AWS_REGION}" =~ ^[a-z]{2}(-[a-z0-9]+)+-[0-9]+$ ]] || { echo "protected AWS region is invalid" >&2; exit 1; }
+          [[ "${DEPLOY_MANIFEST}" =~ ^/[A-Za-z0-9_./-]+$ ]] || { echo "protected deploy manifest path is invalid" >&2; exit 1; }
+          for value in "${EXPECTED_CLUSTER}" "${EXPECTED_SERVICE}" "${EXPECTED_WEB_FAMILY}" "${EXPECTED_WEB_CONTAINER}" "${EXPECTED_ECR_REPOSITORY}" "${EXPECTED_MIGRATION_FAMILY}" "${EXPECTED_MIGRATION_CONTAINER}"; do
+            [[ "${value}" =~ ^[A-Za-z0-9_-]+$ ]] || { echo "protected deployment identifier is invalid" >&2; exit 1; }
+          done
+          [[ "${EXPECTED_CPU_ARCHITECTURE}" == "ARM64" ]] || { echo "protected CPU architecture must match the native ARM64 runner" >&2; exit 1; }
+          [[ "${FILES_CLIENT_KEY_SECRET_ID}" =~ ^[A-Za-z0-9/_+=.@-]+$ ]] || { echo "protected Files client-key reference is invalid" >&2; exit 1; }
+
+      - name: Set up Bun for the exact migration catalog
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.3.14
+
+      - name: Build exact migration ID and checksum catalog before AWS credentials
+        run: |
+          set -Eeuo pipefail
+          bun install --frozen-lockfile --ignore-scripts
+          bun -e 'import { createHash } from "node:crypto"; import { CLOUD_MIGRATIONS } from "./src/db/cloud-migrations.ts"; const migrations=CLOUD_MIGRATIONS.map(({id,checksum})=>({id,checksum})); const catalog_digest="sha256:"+createHash("sha256").update(JSON.stringify(migrations)).digest("hex"); console.log(JSON.stringify({schema:"hasna.files.migration_catalog.v1",source_sha:process.env.SOURCE_SHA,catalog_digest,migrations}));' > migration-catalog.json
+          jq -e --arg source "${SOURCE_SHA}" '.schema == "hasna.files.migration_catalog.v1" and .source_sha == $source and (.migrations | length > 0) and ([.migrations[].id] | length == (unique | length))' migration-catalog.json >/dev/null
+          chmod 600 migration-catalog.json
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      # Build the same linux/arm64 platform declared by the live service and
+      # migration task definitions. --load is safe because this is a native
+      # ARM64 runner; an amd64 candidate would fail before credentials exist.
+      - name: Build native ARM64 image locally
+        run: |
+          set -Eeuo pipefail
+          docker buildx build \
+            --platform linux/arm64 \
+            --target runner \
+            --load \
+            --label "org.opencontainers.image.revision=${SOURCE_SHA}" \
+            --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+            --tag "${LOCAL_IMAGE}:${SOURCE_SHA}" \
+            .
+          image_id="$(docker image inspect --format '{{.Id}}' "${LOCAL_IMAGE}:${SOURCE_SHA}")"
+          [[ "${image_id}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf 'LOCAL_IMAGE_ID=%s\n' "${image_id}" >> "${GITHUB_ENV}"
+
+      - name: Verify shipped runtime and package version
+        run: |
+          set -Eeuo pipefail
+          expected_bun="$(grep -oP '(?<=oven/bun:)[0-9]+\.[0-9]+\.[0-9]+' Dockerfile | head -1)"
+          expected_version="$(node -p 'require("./package.json").version')"
+          test -n "${expected_bun}"
+          [[ "${expected_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]
+          printf 'EXPECTED_VERSION=%s\n' "${expected_version}" >> "${GITHUB_ENV}"
+          test "$(docker run --rm --entrypoint bun "${LOCAL_IMAGE}:${SOURCE_SHA}" --version)" = "${expected_bun}"
+          test "$(docker run --rm --entrypoint bun "${LOCAL_IMAGE}:${SOURCE_SHA}" dist/server/index.js --version)" = "${expected_version}"
+
+      - name: Generate local vulnerability report
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.LOCAL_IMAGE }}:${{ needs.gate.outputs.source_sha }}
+          format: json
+          output: ${{ github.workspace }}/apps/files/trivy-local.json
+          scanners: vuln
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+          ignore-unfixed: false
+          exit-code: "0"
+
+      - name: Enforce local vulnerability gate
+        id: local-scan
+        run: |
+          set -Eeuo pipefail
+          critical="$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL")] | length' trivy-local.json)"
+          high="$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "HIGH")] | length' trivy-local.json)"
+          [[ "${critical}" =~ ^[0-9]+$ && "${high}" =~ ^[0-9]+$ ]]
+          printf 'critical=%s\n' "${critical}" >> "${GITHUB_OUTPUT}"
+          printf 'high=%s\n' "${high}" >> "${GITHUB_OUTPUT}"
+          if (( critical > 0 || high > 0 )); then
+            echo "local image scan rejected the candidate: critical=${critical}, high=${high}" >&2
+            exit 1
+          fi
+
+      - name: Configure AWS credentials with GitHub OIDC
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
+        with:
+          role-to-assume: ${{ secrets.FILES_PROD_GHA_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: gha-deploy-files-${{ github.run_id }}
+          role-duration-seconds: 3600
+          mask-aws-account-id: true
+          unset-current-credentials: true
+
+      - name: Resolve manifest and fail closed on production target mismatch
+        id: manifest
+        env:
+          EXPECTED_ACCOUNT_ID: ${{ secrets.FILES_PROD_AWS_ACCOUNT_ID }}
+        run: |
+          set -Eeuo pipefail
+          actual_account="$(aws sts get-caller-identity --query Account --output text)"
+          if [[ "${actual_account}" != "${EXPECTED_ACCOUNT_ID}" ]]; then
+            echo "AWS account mismatch for protected Files deployment configuration" >&2
+            exit 1
+          fi
+
+          manifest="$(aws ssm get-parameter --name "${DEPLOY_MANIFEST}" --query Parameter.Value --output text)"
+          get_string() { jq -er "$1 | strings | select(length > 0)" <<<"${manifest}"; }
+          cluster="$(get_string '.cluster')"
+          service="$(get_string '.service')"
+          web_family="$(get_string '.web_task_family')"
+          web_container="$(get_string '.web_container')"
+          migration_family="$(get_string '.migration_task_family')"
+          migration_container="$(get_string '.migration_container')"
+          ecr_url="$(get_string '.ecr_repository_url')"
+          assign_public_ip="$(get_string '.assign_public_ip')"
+          health_url="$(get_string '.health_url')"
+          subnets="$(jq -er '.subnets | arrays | select(length > 0) | join(",")' <<<"${manifest}")"
+          security_groups="$(jq -er '.security_groups | arrays | select(length > 0) | join(",")' <<<"${manifest}")"
+
+          expected_ecr_url="${EXPECTED_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${EXPECTED_ECR_REPOSITORY}"
+          [[ "${cluster}" == "${EXPECTED_CLUSTER}" ]] || { echo "manifest cluster mismatch" >&2; exit 1; }
+          [[ "${service}" == "${EXPECTED_SERVICE}" ]] || { echo "manifest service mismatch" >&2; exit 1; }
+          [[ "${web_family}" == "${EXPECTED_WEB_FAMILY}" ]] || { echo "manifest web family mismatch" >&2; exit 1; }
+          [[ "${web_container}" == "${EXPECTED_WEB_CONTAINER}" ]] || { echo "manifest web container mismatch" >&2; exit 1; }
+          [[ "${migration_family}" == "${EXPECTED_MIGRATION_FAMILY}" ]] || { echo "manifest migration family mismatch" >&2; exit 1; }
+          [[ "${migration_container}" == "${EXPECTED_MIGRATION_CONTAINER}" ]] || { echo "manifest migration container mismatch" >&2; exit 1; }
+          [[ "${ecr_url}" == "${expected_ecr_url}" ]] || { echo "manifest ECR repository mismatch" >&2; exit 1; }
+          [[ "${web_family}" =~ ^[A-Za-z0-9_-]+$ ]]
+          [[ "${web_container}" =~ ^[A-Za-z0-9_-]+$ ]]
+          [[ "${migration_container}" =~ ^[A-Za-z0-9_-]+$ ]]
+          [[ "${assign_public_ip}" == "ENABLED" || "${assign_public_ip}" == "DISABLED" ]]
+          [[ "${subnets}" =~ ^subnet-[0-9a-f]+(,subnet-[0-9a-f]+)*$ ]]
+          [[ "${security_groups}" =~ ^sg-[0-9a-f]+(,sg-[0-9a-f]+)*$ ]]
+          [[ "${health_url}" =~ ^https://[^[:space:]]+$ ]]
+
+          {
+            printf 'account=%s\n' "${actual_account}"
+            printf 'cluster=%s\n' "${cluster}"
+            printf 'service=%s\n' "${service}"
+            printf 'web_family=%s\n' "${web_family}"
+            printf 'web_container=%s\n' "${web_container}"
+            printf 'migration_family=%s\n' "${migration_family}"
+            printf 'migration_container=%s\n' "${migration_container}"
+            printf 'ecr_url=%s\n' "${ecr_url}"
+            printf 'assign_public_ip=%s\n' "${assign_public_ip}"
+            printf 'subnets=%s\n' "${subnets}"
+            printf 'security_groups=%s\n' "${security_groups}"
+            printf 'health_url=%s\n' "${health_url}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Resolve authenticated receipt credential before mutation
+        run: |
+          set -Eeuo pipefail
+          client_key="$(aws secretsmanager get-secret-value \
+            --secret-id "${FILES_CLIENT_KEY_SECRET_ID}" \
+            --query SecretString --output text)"
+          [[ -n "${client_key}" && "${client_key}" != "None" ]] || { echo "Files client key is unavailable" >&2; exit 1; }
+          echo "::add-mask::${client_key}"
+          key_file="${RUNNER_TEMP}/files-client-api-key"
+          (umask 077; printf '%s' "${client_key}" > "${key_file}")
+          unset client_key
+          [[ "$(stat -c '%a' "${key_file}")" == "600" ]] || { echo "Files client key file is not owner-only" >&2; exit 1; }
+
+      - name: Capture rollback anchor and verify live service authority
+        id: before
+        env:
+          CLUSTER: ${{ steps.manifest.outputs.cluster }}
+          SERVICE: ${{ steps.manifest.outputs.service }}
+          WEB_FAMILY: ${{ steps.manifest.outputs.web_family }}
+          WEB_CONTAINER: ${{ steps.manifest.outputs.web_container }}
+        run: |
+          set -Eeuo pipefail
+          service_json="$(aws ecs describe-services --cluster "${CLUSTER}" --services "${SERVICE}" --output json)"
+          jq -e '.failures | length == 0' <<<"${service_json}" >/dev/null
+          jq -e '.services | length == 1' <<<"${service_json}" >/dev/null
+          jq -e '.services[0].status == "ACTIVE" and .services[0].desiredCount > 0' <<<"${service_json}" >/dev/null
+          previous_task_definition="$(jq -er '.services[0].taskDefinition' <<<"${service_json}")"
+          [[ "${previous_task_definition}" == *":task-definition/${WEB_FAMILY}:"* ]]
+
+          task_json="$(aws ecs describe-task-definition --task-definition "${previous_task_definition}" --output json)"
+          [[ "$(jq --arg c "${WEB_CONTAINER}" '[.taskDefinition.containerDefinitions[] | select(.name == $c)] | length' <<<"${task_json}")" == "1" ]]
+          [[ "$(jq -r '.taskDefinition.runtimePlatform.cpuArchitecture // ""' <<<"${task_json}")" == "${EXPECTED_CPU_ARCHITECTURE}" ]] || { echo "live service task architecture mismatch" >&2; exit 1; }
+          previous_image="$(jq -er --arg c "${WEB_CONTAINER}" '.taskDefinition.containerDefinitions[] | select(.name == $c) | .image' <<<"${task_json}")"
+          {
+            printf 'previous_task_definition=%s\n' "${previous_task_definition}"
+            printf 'previous_image=%s\n' "${previous_image}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Verify the manifest-pinned ECR repository has no reused deployment tag
+        run: |
+          set -Eeuo pipefail
+          expected_account="${{ secrets.FILES_PROD_AWS_ACCOUNT_ID }}"
+          [[ "${{ steps.manifest.outputs.ecr_url }}" == "${expected_account}.dkr.ecr.${AWS_REGION}.amazonaws.com/${EXPECTED_ECR_REPOSITORY}" ]]
+          existing="$(aws ecr batch-get-image \
+            --repository-name "${EXPECTED_ECR_REPOSITORY}" \
+            --image-ids imageTag="${IMAGE_TAG}" \
+            --query 'length(images)' --output text)"
+          [[ "${existing}" == "0" ]] || { echo "deployment tag already exists" >&2; exit 1; }
+
+      - name: Login to Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@d539f0932e70871a027e9d5a9d8fc38589180a64 # v2
+        with:
+          mask-password: true
+
+      - name: Push scanned image and resolve immutable digest
+        id: image
+        env:
+          ECR_URL: ${{ steps.manifest.outputs.ecr_url }}
+        run: |
+          set -Eeuo pipefail
+          tagged_image="${ECR_URL}:${IMAGE_TAG}"
+          docker tag "${LOCAL_IMAGE}:${SOURCE_SHA}" "${tagged_image}"
+          docker push "${tagged_image}"
+
+          remote_digest=""
+          for _ in {1..12}; do
+            remote_digest="$(aws ecr describe-images \
+              --repository-name "${EXPECTED_ECR_REPOSITORY}" \
+              --image-ids imageTag="${IMAGE_TAG}" \
+              --query 'imageDetails[0].imageDigest' --output text 2>/dev/null || true)"
+            [[ "${remote_digest}" =~ ^sha256:[0-9a-f]{64}$ ]] && break
+            sleep 5
+          done
+          [[ "${remote_digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "ECR did not return an immutable digest" >&2; exit 1; }
+          printf 'tagged_image=%s\n' "${tagged_image}" >> "${GITHUB_OUTPUT}"
+          printf 'digest=%s\n' "${remote_digest}" >> "${GITHUB_OUTPUT}"
+          printf 'digest_image=%s@%s\n' "${ECR_URL}" "${remote_digest}" >> "${GITHUB_OUTPUT}"
+
+      # The existing Files deploy role has no ECR scan-findings read grant.
+      # The credential-free local Trivy gate above is therefore the vulnerability
+      # acceptance boundary; AWS receives only that exact image and ECS is pinned
+      # to the immutable digest resolved after push.
+
+      - name: Register the digest-pinned migration task definition
+        id: migration-def
+        env:
+          IMAGE: ${{ steps.image.outputs.digest_image }}
+          MIGRATION_FAMILY: ${{ steps.manifest.outputs.migration_family }}
+          MIGRATION_CONTAINER: ${{ steps.manifest.outputs.migration_container }}
+        run: |
+          set -Eeuo pipefail
+          task_definition="$(aws ecs describe-task-definition --task-definition "${MIGRATION_FAMILY}" --query taskDefinition --output json)"
+          [[ "$(jq --arg c "${MIGRATION_CONTAINER}" '[.containerDefinitions[] | select(.name == $c)] | length' <<<"${task_definition}")" == "1" ]]
+          [[ "$(jq -r '.runtimePlatform.cpuArchitecture // ""' <<<"${task_definition}")" == "${EXPECTED_CPU_ARCHITECTURE}" ]] || { echo "migration task architecture mismatch" >&2; exit 1; }
+          replacement="$(jq --arg image "${IMAGE}" --arg c "${MIGRATION_CONTAINER}" '
+            .containerDefinitions |= map(if .name == $c then .image = $image else . end)
+            | del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy,.deregisteredAt)
+          ' <<<"${task_definition}")"
+          migration_task_definition="$(aws ecs register-task-definition --cli-input-json "${replacement}" --query taskDefinition.taskDefinitionArn --output text)"
+          [[ "${migration_task_definition}" == *":task-definition/${MIGRATION_FAMILY}:"* ]]
+          printf 'task_definition=%s\n' "${migration_task_definition}" >> "${GITHUB_OUTPUT}"
+
+      - name: Capture exact pre-migration ledger receipt
+        id: ledger-before
+        env:
+          CLUSTER: ${{ steps.manifest.outputs.cluster }}
+          MIGRATION_TASK_DEFINITION: ${{ steps.migration-def.outputs.task_definition }}
+          MIGRATION_CONTAINER: ${{ steps.manifest.outputs.migration_container }}
+          SUBNETS: ${{ steps.manifest.outputs.subnets }}
+          SECURITY_GROUPS: ${{ steps.manifest.outputs.security_groups }}
+          ASSIGN_PUBLIC_IP: ${{ steps.manifest.outputs.assign_public_ip }}
+        run: |
+          set -Eeuo pipefail
+          bash ../../tooling/deploy/files-current/ledger-probe.sh \
+            before "${CLUSTER}" "${MIGRATION_TASK_DEFINITION}" "${MIGRATION_CONTAINER}" \
+            "${SUBNETS}" "${SECURITY_GROUPS}" "${ASSIGN_PUBLIC_IP}" \
+            migration-catalog.json "${SOURCE_SHA}" ledger-before.json
+          printf 'ledger_digest=%s\n' "$(jq -er '.ledger_digest' ledger-before.json)" >> "${GITHUB_OUTPUT}"
+          printf 'pending_count=%s\n' "$(jq -er '.pending | length' ledger-before.json)" >> "${GITHUB_OUTPUT}"
+
+      - name: Run one-shot migration task on the exact digest
+        id: migration
+        continue-on-error: true
+        env:
+          CLUSTER: ${{ steps.manifest.outputs.cluster }}
+          MIGRATION_TASK_DEFINITION: ${{ steps.migration-def.outputs.task_definition }}
+          MIGRATION_CONTAINER: ${{ steps.manifest.outputs.migration_container }}
+          SUBNETS: ${{ steps.manifest.outputs.subnets }}
+          SECURITY_GROUPS: ${{ steps.manifest.outputs.security_groups }}
+          ASSIGN_PUBLIC_IP: ${{ steps.manifest.outputs.assign_public_ip }}
+          CANDIDATE_IMAGE: ${{ steps.image.outputs.digest_image }}
+        run: |
+          set -Eeuo pipefail
+          bash ../../tooling/deploy/files-current/run-migration.sh \
+            "${CLUSTER}" "${MIGRATION_TASK_DEFINITION}" "${MIGRATION_CONTAINER}" \
+            "${SUBNETS}" "${SECURITY_GROUPS}" "${ASSIGN_PUBLIC_IP}" \
+            "${CANDIDATE_IMAGE}" "${SOURCE_SHA}" \
+            migration-launch.json migration-observed.json
+
+      - name: Capture exact post-migration ledger receipt
+        id: ledger-after
+        if: ${{ always() && steps.ledger-before.outcome == 'success' && steps.migration-def.outputs.task_definition != '' }}
+        continue-on-error: true
+        env:
+          CLUSTER: ${{ steps.manifest.outputs.cluster }}
+          MIGRATION_TASK_DEFINITION: ${{ steps.migration-def.outputs.task_definition }}
+          MIGRATION_CONTAINER: ${{ steps.manifest.outputs.migration_container }}
+          SUBNETS: ${{ steps.manifest.outputs.subnets }}
+          SECURITY_GROUPS: ${{ steps.manifest.outputs.security_groups }}
+          ASSIGN_PUBLIC_IP: ${{ steps.manifest.outputs.assign_public_ip }}
+        run: |
+          set -Eeuo pipefail
+          bash ../../tooling/deploy/files-current/ledger-probe.sh \
+            after "${CLUSTER}" "${MIGRATION_TASK_DEFINITION}" "${MIGRATION_CONTAINER}" \
+            "${SUBNETS}" "${SECURITY_GROUPS}" "${ASSIGN_PUBLIC_IP}" \
+            migration-catalog.json "${SOURCE_SHA}" ledger-after.json
+
+      - name: Classify migration result and refuse uncertain state
+        id: ledger-classify
+        if: ${{ always() && steps.ledger-before.outcome == 'success' }}
+        env:
+          MIGRATION_OUTCOME: ${{ steps.migration.outcome }}
+          POST_LEDGER_OUTCOME: ${{ steps.ledger-after.outcome }}
+          MIGRATION_TASK: ${{ steps.migration.outputs.task }}
+          MIGRATION_TASK_DEFINITION: ${{ steps.migration.outputs.task_definition }}
+          MIGRATION_IMAGE: ${{ steps.migration.outputs.image }}
+          MIGRATION_IMAGE_DIGEST: ${{ steps.migration.outputs.image_digest }}
+          MIGRATION_EXIT_CODE: ${{ steps.migration.outputs.exit_code }}
+        run: |
+          set -Eeuo pipefail
+          pre_digest="$(jq -er '.ledger_digest' ledger-before.json)"
+          schema_advanced=unknown
+          post_digest=""
+          post_pending=-1
+          if [[ "${POST_LEDGER_OUTCOME}" == "success" && -f ledger-after.json ]]; then
+            post_digest="$(jq -er '.ledger_digest' ledger-after.json)"
+            post_pending="$(jq -er '.pending | length' ledger-after.json)"
+            if [[ "${pre_digest}" == "${post_digest}" ]]; then schema_advanced=false; else schema_advanced=true; fi
+          fi
+          printf 'schema_advanced=%s\n' "${schema_advanced}" >> "${GITHUB_OUTPUT}"
+          printf 'pre_ledger_digest=%s\n' "${pre_digest}" >> "${GITHUB_OUTPUT}"
+          printf 'post_ledger_digest=%s\n' "${post_digest}" >> "${GITHUB_OUTPUT}"
+
+          if [[ "${MIGRATION_OUTCOME}" == "success" && "${MIGRATION_EXIT_CODE}" == "0" && "${POST_LEDGER_OUTCOME}" == "success" && "${post_pending}" == "0" ]]; then
+            exit 0
+          fi
+
+          launch="$(if [[ -f migration-launch.json ]]; then jq -c . migration-launch.json; else printf 'null'; fi)"
+          observed="$(if [[ -f migration-observed.json ]]; then jq -c . migration-observed.json; else printf 'null'; fi)"
+          if [[ "${POST_LEDGER_OUTCOME}" == "success" && -f ledger-after.json ]]; then
+            jq -n \
+              --slurpfile before ledger-before.json \
+              --slurpfile after ledger-after.json \
+              --argjson launch "${launch}" \
+              --argjson observed "${observed}" \
+              --arg source_sha "${SOURCE_SHA}" \
+              --arg migration_outcome "${MIGRATION_OUTCOME}" \
+              --arg schema_advanced "${schema_advanced}" \
+              --arg task "${MIGRATION_TASK}" \
+              --arg task_definition "${MIGRATION_TASK_DEFINITION}" \
+              --arg image "${MIGRATION_IMAGE}" \
+              --arg image_digest "${MIGRATION_IMAGE_DIGEST}" \
+              --arg exit_code "${MIGRATION_EXIT_CODE}" \
+              '{schema:"hasna.files.migration_uncertain_state.v1",status:"RECONCILIATION_REQUIRED",source_sha:$source_sha,migration:{outcome:$migration_outcome,task:$task,task_definition:$task_definition,image:$image,image_digest:$image_digest,exit_code:$exit_code,launch:$launch,observed:$observed},schema_advanced:(if $schema_advanced == "true" then true elif $schema_advanced == "false" then false else null end),pre_ledger:$before[0],post_ledger:$after[0]}' \
+              > uncertain-state.json
+          else
+            jq -n \
+              --slurpfile before ledger-before.json \
+              --argjson launch "${launch}" \
+              --argjson observed "${observed}" \
+              --arg source_sha "${SOURCE_SHA}" \
+              --arg migration_outcome "${MIGRATION_OUTCOME}" \
+              --arg schema_advanced "${schema_advanced}" \
+              --arg task "${MIGRATION_TASK}" \
+              --arg task_definition "${MIGRATION_TASK_DEFINITION}" \
+              --arg image "${MIGRATION_IMAGE}" \
+              --arg image_digest "${MIGRATION_IMAGE_DIGEST}" \
+              --arg exit_code "${MIGRATION_EXIT_CODE}" \
+              --arg post_ledger_outcome "${POST_LEDGER_OUTCOME}" \
+              '{schema:"hasna.files.migration_uncertain_state.v1",status:"RECONCILIATION_REQUIRED",source_sha:$source_sha,migration:{outcome:$migration_outcome,task:$task,task_definition:$task_definition,image:$image,image_digest:$image_digest,exit_code:$exit_code,launch:$launch,observed:$observed},schema_advanced:(if $schema_advanced == "true" then true elif $schema_advanced == "false" then false else null end),pre_ledger:$before[0],post_ledger:{outcome:$post_ledger_outcome,ledger_state:"unavailable"}}' \
+              > uncertain-state.json
+          fi
+          chmod 600 uncertain-state.json
+          echo "::error title=Files migration state requires reconciliation::No service update was attempted; inspect the metadata-only uncertain-state receipt."
+          exit 1
+
+      - name: Register digest-pinned task definition and update service
+        id: deploy
+        env:
+          IMAGE: ${{ steps.image.outputs.digest_image }}
+          CLUSTER: ${{ steps.manifest.outputs.cluster }}
+          SERVICE: ${{ steps.manifest.outputs.service }}
+          WEB_FAMILY: ${{ steps.manifest.outputs.web_family }}
+          WEB_CONTAINER: ${{ steps.manifest.outputs.web_container }}
+          PREVIOUS_TASK_DEFINITION: ${{ steps.before.outputs.previous_task_definition }}
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          set -Eeuo pipefail
+          task_definition="$(aws ecs describe-task-definition --task-definition "${PREVIOUS_TASK_DEFINITION}" --query taskDefinition --output json)"
+          [[ "$(jq -r '.taskDefinitionArn' <<<"${task_definition}")" == "${PREVIOUS_TASK_DEFINITION}" ]]
+          [[ "$(jq -r '.family' <<<"${task_definition}")" == "${WEB_FAMILY}" ]]
+          [[ "$(jq --arg c "${WEB_CONTAINER}" '[.containerDefinitions[] | select(.name == $c)] | length' <<<"${task_definition}")" == "1" ]]
+          replacement="$(jq --arg image "${IMAGE}" --arg digest "${IMAGE_DIGEST}" --arg source "${SOURCE_SHA}" --arg c "${WEB_CONTAINER}" '
+            def upsert_env($items; $name; $value):
+              (($items // []) | map(select(.name != $name)) + [{name:$name,value:$value}]);
+            .containerDefinitions |= map(
+              if .name == $c then
+                .image = $image
+                | .environment = upsert_env(.environment; "HASNA_FILES_DEPLOYMENT_ENVIRONMENT"; "production")
+                | .environment = upsert_env(.environment; "HASNA_FILES_DEPLOY_SOURCE_COMMIT"; $source)
+                | .environment = upsert_env(.environment; "HASNA_FILES_DEPLOY_IMAGE_DIGEST"; $digest)
+              else . end
+            )
+            | del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy,.deregisteredAt)
+          ' <<<"${task_definition}")"
+          deployed_task_definition="$(aws ecs register-task-definition --cli-input-json "${replacement}" --query taskDefinition.taskDefinitionArn --output text)"
+          [[ "${deployed_task_definition}" == *":task-definition/${WEB_FAMILY}:"* ]]
+          printf 'deployed_task_definition=%s\n' "${deployed_task_definition}" >> "${GITHUB_OUTPUT}"
+          # Last possible read before mutation: a concurrent deploy invalidates
+          # this run rather than letting a mutable family tip become its base.
+          bash ../../tooling/deploy/files-current/assert-service-anchor.sh \
+            "${CLUSTER}" "${SERVICE}" "${PREVIOUS_TASK_DEFINITION}"
+          printf 'service_mutated=true\n' >> "${GITHUB_OUTPUT}"
+          aws ecs update-service \
+            --cluster "${CLUSTER}" \
+            --service "${SERVICE}" \
+            --task-definition "${deployed_task_definition}" \
+            --deployment-configuration 'deploymentCircuitBreaker={enable=true,rollback=false}' >/dev/null
+          aws ecs wait services-stable --cluster "${CLUSTER}" --services "${SERVICE}"
+          bash ../../tooling/deploy/files-current/verify-ecs-rollout.sh "${CLUSTER}" "${SERVICE}" "${deployed_task_definition}"
+
+      - name: Verify exact live task definition, digest, and health
+        id: verify
+        env:
+          IMAGE: ${{ steps.image.outputs.digest_image }}
+          CLUSTER: ${{ steps.manifest.outputs.cluster }}
+          SERVICE: ${{ steps.manifest.outputs.service }}
+          WEB_CONTAINER: ${{ steps.manifest.outputs.web_container }}
+          HEALTH_URL: ${{ steps.manifest.outputs.health_url }}
+          DEPLOYED_TASK_DEFINITION: ${{ steps.deploy.outputs.deployed_task_definition }}
+        run: |
+          set -Eeuo pipefail
+          verified=false
+          for _ in {1..30}; do
+            service_json="$(aws ecs describe-services --cluster "${CLUSTER}" --services "${SERVICE}" --output json)"
+            primary_count="$(jq '[.services[0].deployments[] | select(.status == "PRIMARY")] | length' <<<"${service_json}")"
+            primary_task_definition="$(jq -r '.services[0].deployments[] | select(.status == "PRIMARY") | .taskDefinition' <<<"${service_json}")"
+            rollout_state="$(jq -r '.services[0].deployments[] | select(.status == "PRIMARY") | .rolloutState // "UNKNOWN"' <<<"${service_json}")"
+            running="$(jq -r '.services[0].runningCount' <<<"${service_json}")"
+            desired="$(jq -r '.services[0].desiredCount' <<<"${service_json}")"
+            if [[ "${primary_count}" == "1" && "${primary_task_definition}" == "${DEPLOYED_TASK_DEFINITION}" && "${rollout_state}" == "COMPLETED" && "${running}" == "${desired}" && "${desired}" -gt 0 ]]; then
+              verified=true
+              break
+            fi
+            sleep 10
+          done
+          [[ "${verified}" == "true" ]] || { echo "ECS did not converge on the deployed task definition" >&2; exit 1; }
+
+          deployed_definition="$(aws ecs describe-task-definition --task-definition "${DEPLOYED_TASK_DEFINITION}" --output json)"
+          deployed_image="$(jq -er --arg c "${WEB_CONTAINER}" '.taskDefinition.containerDefinitions[] | select(.name == $c) | .image' <<<"${deployed_definition}")"
+          deployed_architecture="$(jq -r '.taskDefinition.runtimePlatform.cpuArchitecture // ""' <<<"${deployed_definition}")"
+          [[ "${deployed_image}" == "${IMAGE}" ]] || { echo "live task definition image digest mismatch" >&2; exit 1; }
+          [[ "${deployed_architecture}" == "${EXPECTED_CPU_ARCHITECTURE}" ]] || { echo "deployed task architecture mismatch" >&2; exit 1; }
+          deployed_environment="$(jq -er --arg c "${WEB_CONTAINER}" '[.taskDefinition.containerDefinitions[] | select(.name == $c) | .environment[]? | select(.name == "HASNA_FILES_DEPLOYMENT_ENVIRONMENT") | .value] | if length == 1 then .[0] else error("deployment environment env missing or duplicated") end' <<<"${deployed_definition}")"
+          deployed_source_commit="$(jq -er --arg c "${WEB_CONTAINER}" '[.taskDefinition.containerDefinitions[] | select(.name == $c) | .environment[]? | select(.name == "HASNA_FILES_DEPLOY_SOURCE_COMMIT") | .value] | if length == 1 then .[0] else error("source identity env missing or duplicated") end' <<<"${deployed_definition}")"
+          deployed_image_digest="$(jq -er --arg c "${WEB_CONTAINER}" '[.taskDefinition.containerDefinitions[] | select(.name == $c) | .environment[]? | select(.name == "HASNA_FILES_DEPLOY_IMAGE_DIGEST") | .value] | if length == 1 then .[0] else error("image identity env missing or duplicated") end' <<<"${deployed_definition}")"
+          [[ "${deployed_environment}" == "production" ]] || { echo "deployed environment identity mismatch" >&2; exit 1; }
+          [[ "${deployed_source_commit}" == "${SOURCE_SHA}" ]] || { echo "deployed source identity mismatch" >&2; exit 1; }
+          [[ "${deployed_image_digest}" == "${IMAGE##*@}" ]] || { echo "deployed image identity mismatch" >&2; exit 1; }
+          ready_url="${HEALTH_URL%/health}/ready"
+          bash ../../tooling/deploy/files-current/verify-readiness.sh \
+            "${ready_url}" "${EXPECTED_VERSION}" "${SOURCE_SHA}" "${IMAGE}" readiness-direct.json
+          bash ../../tooling/deploy/files-current/verify-readiness.sh \
+            "https://api.hasna.com/files/ready" "${EXPECTED_VERSION}" "${SOURCE_SHA}" "${IMAGE}" readiness-canonical.json
+          key_file="${RUNNER_TEMP}/files-client-api-key"
+          bash ../../tooling/deploy/files-current/verify-canonical-data-plane.sh \
+            "https://api.hasna.com/files" "${key_file}" "${FILES_CLIENT_KEY_SECRET_ID}" data-plane-canonical.json
+
+          jq -n \
+            --arg source_sha "${SOURCE_SHA}" \
+            --arg image_tag "${IMAGE_TAG}" \
+            --arg image_digest "${{ steps.image.outputs.digest }}" \
+            --arg image "${IMAGE}" \
+            --arg account "${{ steps.manifest.outputs.account }}" \
+            --arg cluster "${CLUSTER}" \
+            --arg service "${SERVICE}" \
+            --arg previous_task_definition "${{ steps.before.outputs.previous_task_definition }}" \
+            --arg previous_image "${{ steps.before.outputs.previous_image }}" \
+            --arg migration_task_definition "${{ steps.migration.outputs.task_definition }}" \
+            --arg migration_task "${{ steps.migration.outputs.task }}" \
+            --arg migration_image "${{ steps.migration.outputs.image }}" \
+            --arg migration_image_digest "${{ steps.migration.outputs.image_digest }}" \
+            --arg schema_advanced "${{ steps.ledger-classify.outputs.schema_advanced }}" \
+            --slurpfile ledger_before ledger-before.json \
+            --slurpfile ledger_after ledger-after.json \
+            --slurpfile migration_launch migration-launch.json \
+            --slurpfile migration_observed migration-observed.json \
+            --slurpfile readiness_direct readiness-direct.json \
+            --slurpfile readiness_canonical readiness-canonical.json \
+            --slurpfile data_plane_canonical data-plane-canonical.json \
+            --arg deployed_task_definition "${DEPLOYED_TASK_DEFINITION}" \
+            --arg deployed_image "${deployed_image}" \
+            --arg health_url "${HEALTH_URL}" \
+            --arg run_id "${GITHUB_RUN_ID}" \
+            --arg architecture "${EXPECTED_CPU_ARCHITECTURE}" \
+            '{schema:"hasna.files.production_deploy.v1",source_sha:$source_sha,image_tag:$image_tag,image_digest:$image_digest,image:$image,architecture:$architecture,account:$account,cluster:$cluster,service:$service,rollback:{task_definition:$previous_task_definition,image:$previous_image},migration:{task_definition:$migration_task_definition,task:$migration_task,image:$migration_image,image_digest:$migration_image_digest,exit_code:0,schema_advanced:($schema_advanced == "true"),ledger_before:$ledger_before[0],ledger_after:$ledger_after[0],launch:$migration_launch[0],observed:$migration_observed[0]},deployed:{task_definition:$deployed_task_definition,image:$deployed_image,architecture:$architecture,health_url:$health_url,readiness:{direct:$readiness_direct[0],canonical:$readiness_canonical[0]},canonical_data_plane:$data_plane_canonical[0]},github_run_id:$run_id}' \
+            > deploy-evidence.json
+
+      - name: Emit RECONCILIATION_REQUIRED after a post-migration deployment failure
+        if: ${{ failure() && steps.deploy.outputs.service_mutated == 'true' && steps.ledger-classify.outputs.schema_advanced == 'true' }}
+        env:
+          CLUSTER: ${{ steps.manifest.outputs.cluster }}
+          SERVICE: ${{ steps.manifest.outputs.service }}
+          CANDIDATE_TASK_DEFINITION: ${{ steps.deploy.outputs.deployed_task_definition }}
+          CANDIDATE_IMAGE: ${{ steps.image.outputs.digest_image }}
+          PREVIOUS_TASK_DEFINITION: ${{ steps.before.outputs.previous_task_definition }}
+          PREVIOUS_IMAGE: ${{ steps.before.outputs.previous_image }}
+        run: |
+          set -Eeuo pipefail
+          service_json="$(aws ecs describe-services --cluster "${CLUSTER}" --services "${SERVICE}" --output json)"
+          deployments="$(jq -c '[.services[0].deployments[] | {status,rolloutState:(.rolloutState // "UNKNOWN"),taskDefinition,desiredCount,runningCount,pendingCount}]' <<<"${service_json}")"
+          jq -n \
+            --arg source_sha "${SOURCE_SHA}" \
+            --arg cluster "${CLUSTER}" \
+            --arg service "${SERVICE}" \
+            --arg candidate_task_definition "${CANDIDATE_TASK_DEFINITION}" \
+            --arg candidate_image "${CANDIDATE_IMAGE}" \
+            --arg previous_task_definition "${PREVIOUS_TASK_DEFINITION}" \
+            --arg previous_image "${PREVIOUS_IMAGE}" \
+            --slurpfile ledger_before ledger-before.json \
+            --slurpfile ledger_after ledger-after.json \
+            --slurpfile migration_launch migration-launch.json \
+            --slurpfile migration_observed migration-observed.json \
+            --argjson deployments "${deployments}" \
+            '{schema:"hasna.files.deployment_reconciliation_required.v1",status:"RECONCILIATION_REQUIRED",reason:"service_failure_after_schema_advance",source_sha:$source_sha,cluster:$cluster,service:$service,candidate:{task_definition:$candidate_task_definition,image:$candidate_image},previous:{task_definition:$previous_task_definition,image:$previous_image,compatibility:"unproven_against_advanced_schema"},ledger_before:$ledger_before[0],ledger_after:$ledger_after[0],migration:{launch:$migration_launch[0],observed:$migration_observed[0]},observed_deployments:$deployments,automatic_rollback_performed:false}' \
+            > reconciliation-required.json
+          chmod 600 reconciliation-required.json
+          echo "::error title=Files recovery review required::Schema advanced; automatic rollback to the unproven previous binary is forbidden."
+
+      - name: Restore rollback anchor only when the ledger did not advance
+        id: rollback
+        if: ${{ failure() && steps.deploy.outputs.service_mutated == 'true' && steps.ledger-classify.outputs.schema_advanced == 'false' }}
+        env:
+          CLUSTER: ${{ steps.manifest.outputs.cluster }}
+          SERVICE: ${{ steps.manifest.outputs.service }}
+          CANDIDATE_TASK_DEFINITION: ${{ steps.deploy.outputs.deployed_task_definition }}
+          CANDIDATE_IMAGE: ${{ steps.image.outputs.digest_image }}
+          PREVIOUS_TASK_DEFINITION: ${{ steps.before.outputs.previous_task_definition }}
+          PREVIOUS_IMAGE: ${{ steps.before.outputs.previous_image }}
+        run: |
+          set -Eeuo pipefail
+          bash ../../tooling/deploy/files-current/restore-service-anchor.sh \
+            "${CLUSTER}" "${SERVICE}" \
+            "${CANDIDATE_TASK_DEFINITION}" "${PREVIOUS_TASK_DEFINITION}" \
+            "${SOURCE_SHA}" "${CANDIDATE_IMAGE}" "${PREVIOUS_IMAGE}" \
+            rollback-receipt.json reconciliation-required.json
+
+      - name: Remove authenticated receipt credential
+        if: ${{ always() }}
+        run: |
+          set -Eeuo pipefail
+          key_file="${RUNNER_TEMP}/files-client-api-key"
+          if [[ -f "${key_file}" ]]; then
+            chmod 600 "${key_file}"
+            printf '' > "${key_file}"
+            rm -f "${key_file}"
+          fi
+
+      - name: Upload deployment evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: files-production-deploy-${{ github.run_id }}
+          path: |
+            apps/files/trivy-local.json
+            apps/files/migration-catalog.json
+            apps/files/ledger-before.json
+            apps/files/ledger-after.json
+            apps/files/migration-launch.json
+            apps/files/migration-observed.json
+            apps/files/readiness-direct.json
+            apps/files/readiness-canonical.json
+            apps/files/data-plane-canonical.json
+            apps/files/uncertain-state.json
+            apps/files/reconciliation-required.json
+            apps/files/rollback-receipt.json
+            apps/files/deploy-evidence.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Publish deployment summary
+        if: ${{ always() }}
+        run: |
+          set -Eeuo pipefail
+          {
+            echo "## Files production deployment"
+            echo
+            echo "- source SHA: \`${SOURCE_SHA:-unverified}\`"
+            echo "- architecture: \`${EXPECTED_CPU_ARCHITECTURE}\`"
+            echo "- immutable tag: \`${IMAGE_TAG:-not-created}\`"
+            echo "- image digest: \`${{ steps.image.outputs.digest || 'not-pushed' }}\`"
+            echo "- local critical/high: \`${{ steps.local-scan.outputs.critical || 'not-run' }}/${{ steps.local-scan.outputs.high || 'not-run' }}\`"
+            echo "- previous task definition: \`${{ steps.before.outputs.previous_task_definition || 'not-read' }}\`"
+            echo "- migration task: \`${{ steps.migration.outputs.task || 'not-run' }}\`"
+            echo "- pre/post ledger digest: \`${{ steps.ledger-classify.outputs.pre_ledger_digest || 'not-read' }}\` / \`${{ steps.ledger-classify.outputs.post_ledger_digest || 'not-read' }}\`"
+            echo "- schema advanced: \`${{ steps.ledger-classify.outputs.schema_advanced || 'unknown' }}\`"
+            echo "- deployed task definition: \`${{ steps.deploy.outputs.deployed_task_definition || 'not-deployed' }}\`"
+            echo "- reconciliation receipt: \`${{ steps.ledger-classify.outcome == 'failure' && 'uncertain-state.json' || (steps.deploy.outcome == 'failure' && steps.ledger-classify.outputs.schema_advanced == 'true' && 'reconciliation-required.json' || (steps.rollback.outcome == 'failure' && 'reconciliation-required.json' || 'not-required')) }}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
