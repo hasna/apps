@@ -379,6 +379,9 @@ export function buildOpenApiSpec(version: string): OpenApiDoc {
             last_provider_status: { type: "string" },
             registration_submitted_at: { type: "string" },
             nameservers_submitted_at: { type: "string" },
+            delegation_dns_preserved_count: { type: "integer", minimum: 0 },
+            delegation_dns_preserved_sha256: { type: "string", pattern: "^[0-9a-f]{64}$" },
+            delegation_dns_preserved_at: { type: "string" },
           },
         },
         DomainProvisioningJob: {
@@ -394,7 +397,7 @@ export function buildOpenApiSpec(version: string): OpenApiDoc {
             years: { type: "integer" },
             auto_renew: { type: "boolean" },
             acquisition_mode: { type: "string", enum: ["purchase", "adopt"] },
-            registrar: { type: "string" },
+            registrar: { type: "string", enum: ["route53", "brandsight"] },
             dns_provider: { type: "string" },
             target: { type: "string" },
             worker_name: { anyOf: [{ type: "string" }, { type: "null" }] },

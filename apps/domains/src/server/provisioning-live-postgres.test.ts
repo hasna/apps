@@ -198,5 +198,45 @@ describeLive("Domains provisioning against live PostgreSQL", () => {
     expect(persisted).toEqual({ origin_tls_mode: "full" });
     const conflicting = { ...websiteInput, origin_tls_mode: "strict" as const };
     await expect(left.reserve(conflicting, provisioningRequestHash(conflicting))).rejects.toMatchObject({ status: 409 });
+
+    const ownedName = `owned-${suffix}.example`;
+    const owned = await portfolio.createDomain({
+      name: ownedName,
+      registrar: "Brandsight",
+      status: "active",
+      auto_renew: true,
+      nameservers: ["ns05.gcd-dns.com", "ns06.gcd-dns.com"],
+    });
+    await expect(left.getPortfolioRegistration(ownedName)).resolves.toMatchObject({
+      id: owned.id,
+      status: "active",
+      registrar: "Brandsight",
+      auto_renew: true,
+      nameservers: ["ns05.gcd-dns.com", "ns06.gcd-dns.com"],
+    });
+    const adoption: DomainProvisioningRequest = {
+      ...request(ownedName, `domains-adopt-${suffix}`),
+      max_price_usd: 0,
+      years: 1,
+      auto_renew: true,
+      acquisition_mode: "adopt",
+      registrar: "brandsight",
+      target: "website_origin",
+      worker_name: null,
+      origin_hostname: "origin.us-east-1.elb.amazonaws.com",
+      origin_tls_mode: "full",
+    };
+    const adopted = await left.reserveAdoption(adoption, provisioningRequestHash(adoption), {
+      registrar: "Brandsight",
+      auto_renew: true,
+      nameservers: ["ns05.gcd-dns.com", "ns06.gcd-dns.com"],
+    });
+    expect(adopted).toMatchObject({
+      domain_id: owned.id,
+      acquisition_mode: "adopt",
+      registrar: "brandsight",
+      max_price_usd: 0,
+      status: "registered",
+    });
   });
 });

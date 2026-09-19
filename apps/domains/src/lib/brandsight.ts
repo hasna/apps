@@ -175,6 +175,65 @@ export function getConfig(): BrandsightConfig {
 
 const BRANDSIGHT_BASE = "https://api.brandsight.com/v1";
 const BRANDSIGHT_DOMAIN_BASE = "https://api.godaddy.com/v2";
+const BRANDSIGHT_DOMAIN_MAX_RESPONSE_BYTES = 1_048_576;
+
+function brandsightDomainTimeoutMs(): number {
+  const raw = process.env["DOMAINS_PROVIDER_HTTP_TIMEOUT_MS"]?.trim();
+  if (!raw) return 30_000;
+  const timeout = Number(raw);
+  if (!Number.isSafeInteger(timeout) || timeout < 1 || timeout > 120_000) {
+    throw new BrandsightApiError("DOMAINS_PROVIDER_HTTP_TIMEOUT_MS must be an integer between 1 and 120000");
+  }
+  return timeout;
+}
+
+async function boundedDomainResponseText(response: Response, signal: AbortSignal): Promise<string> {
+  const declaredLength = response.headers.get("content-length");
+  if (declaredLength !== null) {
+    const parsed = Number(declaredLength);
+    if (Number.isFinite(parsed) && parsed > BRANDSIGHT_DOMAIN_MAX_RESPONSE_BYTES) {
+      throw new BrandsightApiError(
+        `Brandsight Domain API response exceeds ${BRANDSIGHT_DOMAIN_MAX_RESPONSE_BYTES} bytes`,
+        response.status,
+      );
+    }
+  }
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const abort = () => void reader.cancel("Brandsight Domain API request aborted");
+  if (signal.aborted) abort();
+  signal.addEventListener("abort", abort, { once: true });
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      if (signal.aborted) throw signal.reason;
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      total += value.byteLength;
+      if (total > BRANDSIGHT_DOMAIN_MAX_RESPONSE_BYTES) {
+        await reader.cancel();
+        throw new BrandsightApiError(
+          `Brandsight Domain API response exceeds ${BRANDSIGHT_DOMAIN_MAX_RESPONSE_BYTES} bytes`,
+          response.status,
+        );
+      }
+      chunks.push(value);
+    }
+  } finally {
+    signal.removeEventListener("abort", abort);
+    reader.releaseLock();
+  }
+  if (signal.aborted) throw signal.reason;
+  const joined = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    joined.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(joined);
+}
 
 function allowDemoStubs(): boolean {
   return process.env["BRANDSIGHT_DEMO_STUBS"] === "1" || process.env["BRANDSIGHT_ALLOW_STUBS"] === "1";
@@ -295,14 +354,15 @@ async function domainApiRequest<T>(
 ): Promise<T> {
   const cfg = requireDomainConfig(config);
   const fetchFn = _fetchFn || globalThis.fetch;
+  const signal = AbortSignal.timeout(brandsightDomainTimeoutMs());
   const response = await fetchFn(`${domainBaseUrl(cfg)}${path}`, {
     method,
     headers: domainHeaders(cfg),
     body: body ? JSON.stringify(body) : undefined,
-    signal: AbortSignal.timeout(30000),
+    signal,
   });
 
-  const text = await response.text();
+  const text = await boundedDomainResponseText(response, signal);
   if (!response.ok) {
     throw new BrandsightApiError(
       `Brandsight Domain API ${method} ${path} failed with status ${response.status}`,
@@ -721,6 +781,9 @@ export async function getDnsRecords(domain: string, config?: BrandsightConfig): 
       cfg,
     );
     if (!Array.isArray(batch) || batch.length === 0) break;
+    if (records.length + batch.length > 5_000) {
+      throw new BrandsightApiError("Brandsight DNS record inventory exceeds the 5000-record safety bound");
+    }
     records.push(...batch);
     if (batch.length < limit) break;
     // `offset` is documented as "Number of results to skip for pagination" -- a

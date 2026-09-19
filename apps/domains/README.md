@@ -310,7 +310,7 @@ The hosted provisioning API is the production authority for availability, regist
 - `POST /v1/provisioning/by-name/:name/dns-reconcile` — idempotently reconcile 1–20 exact TXT, CNAME, or MX records after provider readback.
 - `POST /v1/provisioning/:id/advance` — bounded operator recovery; the server worker normally advances jobs automatically.
 
-Every purchase requires an explicit total-charge ceiling (`max_price_usd`), `auto_renew`, and idempotency key. The service rechecks availability and the total multi-year price immediately before registrar submission. An ambiguous registration submission enters `manual_review` and is never retried automatically, preventing duplicate purchases. Adoption requires registrar ownership readback plus an existing portfolio row; target changes conflict instead of silently repointing a domain. Ready jobs return a provider-neutral `result` with an opaque zone reference, nameservers, web records, and the target check time.
+Every purchase requires an explicit total-charge ceiling (`max_price_usd`), `auto_renew`, and idempotency key. The service rechecks availability and the total multi-year price immediately before registrar submission. An ambiguous registration submission enters `manual_review` and is never retried automatically, preventing duplicate purchases. Adoption requires registrar ownership readback plus an existing portfolio row; target changes conflict instead of silently repointing a domain. Route 53 and Brandsight portfolio registrations keep their registrar provenance. Before changing nameservers, the worker preflights the requested origin TLS mode, copies supported registrar DNS groups (A, AAAA, CAA, CNAME, MX, delegated NS, and TXT) into Cloudflare, reads them back exactly, and records a stable checkpoint. Unsupported or lossy DNS shapes enter `manual_review`; MX, TXT, CAA, and unrelated groups are never discarded to make a web route pass. A registrar readback also reconciles an applied-but-timed-out nameserver update without repeating it. Ready jobs return a provider-neutral `result` with an opaque zone reference, nameservers, web records, and the target check time.
 
 Before registration, the durable job records the exact set of matching public Route 53 hosted-zone IDs. Cleanup can target only one newly appeared zone, and only when its current record set is exactly the apex NS/SOA pair, its delegation set matches those NS records, the registrar has delegated elsewhere, and Cloudflare is authoritative. Cleanup never deletes record sets; a concurrent record addition makes Route 53 reject the final zone deletion safely.
 
@@ -319,7 +319,8 @@ Hosted provisioning runtime requirements:
 - AWS task-role permissions for Route 53 Domains registration/status/delegation and safe hosted-zone cleanup.
 - `DOMAINS_REGISTRANT_SOURCE_DOMAIN` naming an existing Route 53 domain whose registrant contact can be reused in-process; contact data is never accepted from or returned to API clients.
 - `CLOUDFLARE_ACCOUNT_ID` plus `CLOUDFLARE_API_TOKEN`, scoped to zone management, DNS writes, Cloudflare's `Zone Settings Write` permission for the explicit SSL-mode readback contract, and the configured target bindings. Hosted provisioning deliberately rejects Cloudflare global API key/email authentication.
-- Optional `DOMAINS_PROVIDER_HTTP_TIMEOUT_MS` (default `30000`, maximum `120000`) and `DOMAINS_PROVIDER_MAX_RESPONSE_BYTES` (default `1048576`, maximum `4194304`) bound each Cloudflare request and response.
+- `BRANDSIGHT_API_KEY`, `BRANDSIGHT_API_SECRET`, and `BRANDSIGHT_CUSTOMER_ID` when an existing Brandsight / GoDaddy Corporate Domains portfolio registration is adopted. A new adoption request with missing credentials fails before reserving a hosted job or creating a Cloudflare zone.
+- Optional `DOMAINS_PROVIDER_HTTP_TIMEOUT_MS` (default `30000`, maximum `120000`) bounds Cloudflare and Brandsight Domain API requests. `DOMAINS_PROVIDER_MAX_RESPONSE_BYTES` (default `1048576`, maximum `4194304`) bounds Cloudflare responses; Brandsight Domain API responses have a fixed 1 MiB bound.
 - Optional `DOMAINS_PROVISIONING_INTERVAL_MS` (default `5000`) for the durable background worker.
 - Optional `DOMAINS_PROVISIONING_MAX_ATTEMPTS` (default `17280`) bounds consecutive polls within one state; successful state transitions reset the counter so normal registrar/DNS/certificate waits do not consume the whole job budget.
 
@@ -377,7 +378,7 @@ SDK throws — it never degrades to an anonymous client or to local data.
 | `CLOUDFLARE_API_TOKEN` | Cloudflare API token |
 | `CLOUDFLARE_API_KEY`, `CLOUDFLARE_EMAIL` | Cloudflare global key fallback |
 | `CLOUDFLARE_ACCOUNT_ID` | Cloudflare account ID for zone creation |
-| `DOMAINS_PROVIDER_HTTP_TIMEOUT_MS` | Cloudflare request timeout in milliseconds, `1`–`120000` (default `30000`) |
+| `DOMAINS_PROVIDER_HTTP_TIMEOUT_MS` | Cloudflare and Brandsight Domain API request timeout in milliseconds, `1`–`120000` (default `30000`) |
 | `DOMAINS_PROVIDER_MAX_RESPONSE_BYTES` | Cloudflare response-size limit in bytes, `1`–`4194304` (default `1048576`) |
 | `NAMECHEAP_API_KEY` | Namecheap API key |
 | `NAMECHEAP_USERNAME` | Namecheap account username |

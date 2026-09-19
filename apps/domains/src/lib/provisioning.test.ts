@@ -9,6 +9,8 @@ import {
   type DomainProvisioningProviders,
   type DomainProvisioningRequest,
   type DomainProvisioningStore,
+  type PortfolioDomainRegistration,
+  RegistrarActionRequiredError,
   type RegisteredDomainDetail,
 } from "./provisioning.js";
 
@@ -16,6 +18,7 @@ class MemoryStore implements DomainProvisioningStore {
   jobs = new Map<string, DomainProvisioningJob>();
   dns = new Map<string, DomainDnsReconciliation>();
   ready: Array<{ job: DomainProvisioningJob; detail: RegisteredDomainDetail }> = [];
+  portfolio = new Map<string, PortfolioDomainRegistration>();
 
   async reserve(request: DomainProvisioningRequest, requestHash: string): Promise<DomainProvisioningJob> {
     const existing = [...this.jobs.values()].find((job) => job.idempotency_key === request.idempotency_key || job.name === request.name);
@@ -49,6 +52,18 @@ class MemoryStore implements DomainProvisioningStore {
   async getByName(name: string): Promise<DomainProvisioningJob | null> {
     const job = [...this.jobs.values()].find((candidate) => candidate.name === name);
     return job ? structuredClone(job) : null;
+  }
+
+  async getPortfolioRegistration(name: string): Promise<PortfolioDomainRegistration | null> {
+    const configured = this.portfolio.get(name);
+    if (configured) return structuredClone(configured);
+    return {
+      id: `portfolio-${name}`,
+      status: "active",
+      registrar: "AWS Route 53",
+      auto_renew: false,
+      nameservers: ["amy.ns.cloudflare.com", "bob.ns.cloudflare.com"],
+    };
   }
 
   async listRunnable(limit: number): Promise<DomainProvisioningJob[]> {
@@ -169,6 +184,10 @@ function providers(overrides: Partial<DomainProvisioningProviders> = {}): Domain
     ensureCloudflareZone: async () => ({ id: "cf-zone", status: "active", nameservers: ["amy.ns.cloudflare.com", "bob.ns.cloudflare.com"] }),
     updateNameservers: async () => ({ operationId: "ns-op" }),
     resolvePublicNameservers: async () => ["bob.ns.cloudflare.com.", "amy.ns.cloudflare.com."],
+    preserveRegistrarDnsBeforeDelegation: async () => ({
+      count: 0,
+      sha256: "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e77378aeeaebd7c6c1e9d8",
+    }),
     bindWorkerDomain: async () => {},
     workerDomainReady: async () => true,
     ensureWebsiteOriginTls: async ({ requestedMode }) => ({ mode: requestedMode, changed: true, downgradeRefused: false }),
@@ -684,5 +703,311 @@ describe("DomainProvisioningService", () => {
       name: "owned.example", idempotency_key: "adopt-owned-002",
       target: "website_origin", origin_hostname: "different.us-east-1.elb.amazonaws.com",
     })).rejects.toThrow("different provisioning intent");
+  });
+
+  test("adopts a Brandsight domain without purchase and preserves registrar DNS before delegation", async () => {
+    const store = new MemoryStore();
+    store.portfolio.set("owned.example", {
+      id: "portfolio-owned",
+      status: "active",
+      registrar: "Brandsight",
+      auto_renew: true,
+      nameservers: ["ns05.gcd-dns.com", "ns06.gcd-dns.com"],
+    });
+    let purchases = 0;
+    let delegated = false;
+    let preservationCalls = 0;
+    let nameserverUpdates = 0;
+    let route53Cleanup = 0;
+    const service = new DomainProvisioningService(store, providers({
+      submitRegistration: async () => { purchases++; return { operationId: "must-not-run" }; },
+      getDomainDetail: async (name, registrar) => {
+        expect(name).toBe("owned.example");
+        expect(registrar).toBe("brandsight");
+        return {
+          registrar: "Brandsight",
+          auto_renew: true,
+          nameservers: delegated
+            ? ["amy.ns.cloudflare.com", "bob.ns.cloudflare.com"]
+            : ["ns05.gcd-dns.com", "ns06.gcd-dns.com"],
+        };
+      },
+      resolvePublicNameservers: async () => delegated
+        ? ["amy.ns.cloudflare.com", "bob.ns.cloudflare.com"]
+        : ["ns05.gcd-dns.com", "ns06.gcd-dns.com"],
+      preserveRegistrarDnsBeforeDelegation: async (input) => {
+        preservationCalls++;
+        expect(input).toEqual({ hostname: "owned.example", zoneId: "cf-zone", registrar: "brandsight" });
+        return { count: 3, sha256: "a".repeat(64) };
+      },
+      updateNameservers: async (name, nameservers, registrar) => {
+        nameserverUpdates++;
+        expect({ name, nameservers, registrar }).toEqual({
+          name: "owned.example",
+          nameservers: ["amy.ns.cloudflare.com", "bob.ns.cloudflare.com"],
+          registrar: "brandsight",
+        });
+        delegated = true;
+        return { operationId: "brandsight:completed:owned.example", completed: true };
+      },
+      cleanupRoute53HostedZone: async () => { route53Cleanup++; return true; },
+    }), { now: () => new Date("2026-09-19T14:00:00.000Z") });
+
+    let job = await service.adopt({
+      name: "owned.example",
+      idempotency_key: "adopt-brandsight-owned-001",
+      target: "website_origin",
+      origin_hostname: "news-origin.us-east-1.elb.amazonaws.com",
+      origin_tls_mode: "full",
+    });
+    expect(job.registrar).toBe("brandsight");
+    expect(job.acquisition_mode).toBe("adopt");
+    expect(job.max_price_usd).toBe(0);
+    for (let i = 0; i < 6; i++) job = await service.advance(job.id);
+    expect(job.status).toBe("ready");
+    expect(purchases).toBe(0);
+    expect(preservationCalls).toBe(2);
+    expect(nameserverUpdates).toBe(1);
+    expect(route53Cleanup).toBe(0);
+    expect(job.provider_state).toMatchObject({
+      delegation_dns_preserved_count: 3,
+      delegation_dns_preserved_sha256: "a".repeat(64),
+      delegation_dns_preserved_at: "2026-09-19T14:00:00.000Z",
+      nameserver_operation_id: "brandsight:completed:owned.example",
+    });
+  });
+
+  test("preserves the existing Route 53 adoption path with the same checkpoint and async operation", async () => {
+    const store = new MemoryStore();
+    let delegated = false;
+    let preservationCalls = 0;
+    let nameserverUpdates = 0;
+    const service = new DomainProvisioningService(store, providers({
+      getDomainDetail: async (_name, registrar) => ({
+        registrar: "AWS Route 53",
+        nameservers: delegated
+          ? ["amy.ns.cloudflare.com", "bob.ns.cloudflare.com"]
+          : ["ns-1.awsdns.example", "ns-2.awsdns.example"],
+      }),
+      resolvePublicNameservers: async () => delegated
+        ? ["amy.ns.cloudflare.com", "bob.ns.cloudflare.com"]
+        : ["ns-1.awsdns.example", "ns-2.awsdns.example"],
+      preserveRegistrarDnsBeforeDelegation: async (input) => {
+        preservationCalls++;
+        expect(input.registrar).toBe("route53");
+        return { count: 2, sha256: "b".repeat(64) };
+      },
+      updateNameservers: async (_name, _nameservers, registrar) => {
+        nameserverUpdates++;
+        expect(registrar).toBe("route53");
+        return { operationId: "ns-op" };
+      },
+      getOperationStatus: async (operationId) => {
+        expect(operationId).toBe("ns-op");
+        delegated = true;
+        return { status: "SUCCESSFUL" };
+      },
+    }));
+    let job = await service.adopt({
+      name: "owned.example",
+      idempotency_key: "adopt-route53-owned-001",
+      target: "shortlinks",
+      worker_name: "hasna-link-router",
+    });
+    for (let i = 0; i < 6; i++) job = await service.advance(job.id);
+    expect(job.status).toBe("ready");
+    expect(job.registrar).toBe("route53");
+    expect(preservationCalls).toBe(2);
+    expect(nameserverUpdates).toBe(1);
+    expect(job.provider_state.delegation_dns_preserved_sha256).toBe("b".repeat(64));
+  });
+
+  test("recovers an applied-then-timed-out Brandsight nameserver change without a second PUT", async () => {
+    const store = new MemoryStore();
+    store.portfolio.set("owned.example", {
+      id: "portfolio-owned",
+      status: "active",
+      registrar: "Brandsight",
+      auto_renew: false,
+      nameservers: ["ns05.gcd-dns.com", "ns06.gcd-dns.com"],
+    });
+    let registrarApplied = false;
+    let nameserverUpdates = 0;
+    const service = new DomainProvisioningService(store, providers({
+      getDomainDetail: async () => ({
+        registrar: "Brandsight",
+        nameservers: registrarApplied
+          ? ["amy.ns.cloudflare.com", "bob.ns.cloudflare.com"]
+          : ["ns05.gcd-dns.com", "ns06.gcd-dns.com"],
+      }),
+      resolvePublicNameservers: async () => ["ns05.gcd-dns.com", "ns06.gcd-dns.com"],
+      preserveRegistrarDnsBeforeDelegation: async () => ({ count: 2, sha256: "c".repeat(64) }),
+      updateNameservers: async () => {
+        nameserverUpdates++;
+        registrarApplied = true;
+        throw new Error("response lost after registrar commit");
+      },
+    }));
+    let job = await service.adopt({
+      name: "owned.example",
+      idempotency_key: "adopt-brandsight-timeout-001",
+      target: "website_origin",
+      origin_hostname: "news-origin.us-east-1.elb.amazonaws.com",
+      origin_tls_mode: "full",
+    });
+    for (let i = 0; i < 4; i++) job = await service.advance(job.id);
+    expect(job.status).toBe("zone_ready");
+    expect(job.error).toContain("response lost after registrar commit");
+    expect(nameserverUpdates).toBe(1);
+    job = await service.advance(job.id);
+    expect(job.status).toBe("delegated");
+    expect(job.provider_state.last_provider_status).toBe("REGISTRAR_NAMESERVERS_ALREADY_DELEGATED");
+    expect(nameserverUpdates).toBe(1);
+  });
+
+  test("parks an adopted domain before delegation when DNS preservation is unsupported", async () => {
+    const store = new MemoryStore();
+    store.portfolio.set("owned.example", {
+      id: "portfolio-owned",
+      status: "active",
+      registrar: "Brandsight",
+      auto_renew: false,
+      nameservers: ["ns05.gcd-dns.com", "ns06.gcd-dns.com"],
+    });
+    let nameserverUpdates = 0;
+    const service = new DomainProvisioningService(store, providers({
+      getDomainDetail: async () => ({
+        registrar: "Brandsight",
+        nameservers: ["ns05.gcd-dns.com", "ns06.gcd-dns.com"],
+      }),
+      resolvePublicNameservers: async () => ["ns05.gcd-dns.com", "ns06.gcd-dns.com"],
+      preserveRegistrarDnsBeforeDelegation: async () => {
+        throw new RegistrarActionRequiredError("registrar DNS record type 'ALIAS' cannot be preserved automatically");
+      },
+      updateNameservers: async () => { nameserverUpdates++; return { operationId: "must-not-run" }; },
+    }));
+    let job = await service.adopt({
+      name: "owned.example",
+      idempotency_key: "adopt-preservation-refusal-001",
+      target: "website_origin",
+      origin_hostname: "news-origin.us-east-1.elb.amazonaws.com",
+      origin_tls_mode: "full",
+    });
+    job = await service.advance(job.id);
+    expect(job.status).toBe("zone_ready");
+    job = await service.advance(job.id);
+    expect(job.status).toBe("zone_ready");
+    job = await service.advance(job.id);
+    expect(job.status).toBe("manual_review");
+    expect(job.error).toContain("cannot be preserved");
+    expect(nameserverUpdates).toBe(0);
+  });
+
+  test("does not reread or rewrite registrar DNS when public delegation already matches", async () => {
+    const store = new MemoryStore();
+    store.portfolio.set("owned.example", {
+      id: "portfolio-owned",
+      status: "active",
+      registrar: "Brandsight",
+      auto_renew: false,
+      nameservers: ["amy.ns.cloudflare.com", "bob.ns.cloudflare.com"],
+    });
+    let preservationCalls = 0;
+    let nameserverUpdates = 0;
+    const service = new DomainProvisioningService(store, providers({
+      getDomainDetail: async () => ({
+        registrar: "Brandsight",
+        nameservers: ["amy.ns.cloudflare.com", "bob.ns.cloudflare.com"],
+      }),
+      preserveRegistrarDnsBeforeDelegation: async () => {
+        preservationCalls++;
+        return { count: 0, sha256: "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e77378aeeaebd7c6c1e9d8" };
+      },
+      updateNameservers: async () => { nameserverUpdates++; return { operationId: "must-not-run" }; },
+    }));
+    let job = await service.adopt({
+      name: "owned.example",
+      idempotency_key: "adopt-already-delegated-001",
+      target: "website_origin",
+      origin_hostname: "news-origin.us-east-1.elb.amazonaws.com",
+      origin_tls_mode: "full",
+    });
+    job = await service.advance(job.id);
+    job = await service.advance(job.id);
+    expect(job.status).toBe("delegated");
+    expect(preservationCalls).toBe(0);
+    expect(nameserverUpdates).toBe(0);
+  });
+
+  test("refuses weaker Full mode before copying DNS or changing Brandsight nameservers", async () => {
+    for (const observed of ["strict", "origin_pull"] as const) {
+      const store = new MemoryStore();
+      store.portfolio.set("owned.example", {
+        id: "portfolio-owned",
+        status: "active",
+        registrar: "Brandsight",
+        auto_renew: false,
+        nameservers: ["ns05.gcd-dns.com", "ns06.gcd-dns.com"],
+      });
+      let dnsCopies = 0;
+      let nameserverUpdates = 0;
+      const service = new DomainProvisioningService(store, providers({
+        getDomainDetail: async () => ({
+          registrar: "Brandsight",
+          nameservers: ["ns05.gcd-dns.com", "ns06.gcd-dns.com"],
+        }),
+        resolvePublicNameservers: async () => ["ns05.gcd-dns.com", "ns06.gcd-dns.com"],
+        ensureWebsiteOriginTls: async () => ({
+          mode: observed,
+          changed: false,
+          downgradeRefused: true,
+        }),
+        preserveRegistrarDnsBeforeDelegation: async () => {
+          dnsCopies++;
+          return { count: 1, sha256: "a".repeat(64) };
+        },
+        updateNameservers: async () => {
+          nameserverUpdates++;
+          return { operationId: "must-not-run" };
+        },
+      }));
+      let job = await service.adopt({
+        name: "owned.example",
+        idempotency_key: `adopt-tls-refusal-${observed}`,
+        target: "website_origin",
+        origin_hostname: "news-origin.us-east-1.elb.amazonaws.com",
+        origin_tls_mode: "full",
+      });
+      job = await service.advance(job.id);
+      job = await service.advance(job.id);
+      expect(job.status).toBe("manual_review");
+      expect(job.error).toContain(observed);
+      expect(job.provider_state.origin_tls_mode_configured).toBe(observed);
+      expect(dnsCopies).toBe(0);
+      expect(nameserverUpdates).toBe(0);
+    }
+  });
+
+  test("rejects an unsupported portfolio registrar before provider I/O", async () => {
+    const store = new MemoryStore();
+    store.portfolio.set("owned.example", {
+      id: "portfolio-owned",
+      status: "active",
+      registrar: "Unsupported Registrar",
+      auto_renew: false,
+      nameservers: [],
+    });
+    let providerReads = 0;
+    const service = new DomainProvisioningService(store, providers({
+      getDomainDetail: async () => { providerReads++; return null; },
+    }));
+    await expect(service.adopt({
+      name: "owned.example",
+      idempotency_key: "adopt-unsupported-registrar-001",
+      target: "website_origin",
+      origin_hostname: "news-origin.us-east-1.elb.amazonaws.com",
+    })).rejects.toThrow("not supported");
+    expect(providerReads).toBe(0);
+    expect(store.jobs.size).toBe(0);
   });
 });

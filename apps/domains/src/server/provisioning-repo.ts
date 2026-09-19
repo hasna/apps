@@ -7,6 +7,8 @@ import {
   type DomainProvisioningProviderState,
   type DomainProvisioningRequest,
   type DomainProvisioningStore,
+  type PortfolioDomainRegistration,
+  type ProvisioningRegistrar,
   type ProvisioningStatus,
   type RegisteredDomainDetail,
   type HostedDnsRecord,
@@ -88,7 +90,7 @@ function rowToJob(row: ProvisioningRow): DomainProvisioningJob {
     years: Number(row.years),
     auto_renew: Boolean(row.auto_renew),
     acquisition_mode: row.acquisition_mode as "purchase" | "adopt",
-    registrar: row.registrar as "route53",
+    registrar: row.registrar as ProvisioningRegistrar,
     dns_provider: row.dns_provider as "cloudflare",
     target: row.target as "shortlinks" | "website_origin",
     worker_name: row.worker_name,
@@ -294,6 +296,20 @@ export class DomainsProvisioningRepo implements DomainProvisioningStore {
       [name],
     );
     return row ? rowToJob(row) : null;
+  }
+
+  async getPortfolioRegistration(name: string): Promise<PortfolioDomainRegistration | null> {
+    const domain = await this.domains.getDomainByName(name);
+    if (!domain || !domain.registrar) return null;
+    return {
+      id: domain.id,
+      status: domain.status,
+      registrar: domain.registrar,
+      registered_at: domain.registered_at ?? undefined,
+      expires_at: domain.expires_at ?? undefined,
+      auto_renew: domain.auto_renew,
+      nameservers: [...domain.nameservers],
+    };
   }
 
   async listRunnable(limit: number): Promise<DomainProvisioningJob[]> {
