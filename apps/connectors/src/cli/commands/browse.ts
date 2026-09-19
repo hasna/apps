@@ -13,8 +13,10 @@ import {
   removeConnector,
 } from "../../lib/installer.js";
 import { getAuthStatus } from "../../server/auth.js";
+import pkg from "../../../package.json" with { type: "json" };
 import {
   DEFAULT_COMPACT_LIMIT,
+  compactConnector,
   firstNonEmptyLines,
   pageItems,
   parseNonNegativeInt,
@@ -24,6 +26,7 @@ import {
 type ListOptions = {
   category?: string;
   all: boolean;
+  full: boolean;
   installed: boolean;
   brief: boolean;
   limit?: string;
@@ -32,6 +35,52 @@ type ListOptions = {
   json: boolean;
   verbose: boolean;
 };
+
+type ConnectorListEnvelope<T> = {
+  connectors: T[];
+  count: number;
+  total: number;
+  limit: number;
+  cursor: number;
+  next_cursor: number | null;
+  has_more: boolean;
+  compact: boolean;
+  catalog_version: string;
+  hint: string;
+};
+
+function boundedJsonPage<T>(
+  source: T[],
+  options: { offset: number; requestedLimit: number | undefined },
+): ReturnType<typeof pageItems<T>> {
+  const requested = options.requestedLimit ?? DEFAULT_COMPACT_LIMIT;
+  if (requested > 100) {
+    throw new Error("--limit may not exceed 100 in bounded JSON mode; use --full for a larger legacy array.");
+  }
+  return pageItems(source, { offset: options.offset, limit: Math.max(1, requested) });
+}
+
+function jsonEnvelope<T>(
+  page: { total: number; offset: number; limit: number | null; nextOffset: number | null },
+  connectors: T[],
+  compact: boolean,
+): ConnectorListEnvelope<T> {
+  const next = page.nextOffset;
+  return {
+    connectors,
+    count: connectors.length,
+    total: page.total,
+    limit: page.limit ?? connectors.length,
+    cursor: page.offset,
+    next_cursor: next,
+    has_more: next !== null,
+    compact,
+    catalog_version: pkg.version,
+    hint: next === null
+      ? "Use --verbose for full fields in a bounded page, or --full for the legacy array."
+      : `Continue with --cursor ${next}; use --verbose for full fields in a bounded page, or --full for the legacy array.`,
+  };
+}
 
 function printConnectorRows(connectors: typeof CONNECTORS, options: { includeCategory?: boolean; verbose?: boolean } = {}) {
   const nameWidth = 22;
@@ -82,7 +131,8 @@ export function registerCommands(program: Command): void {
     .command("list")
     .alias("ls")
     .option("-c, --category <category>", "Filter by category")
-    .option("-a, --all", "Show all available connectors", false)
+    .option("-a, --all", "Show all available connectors (legacy full JSON when combined with --json)", false)
+    .option("--full", "Return the legacy bare JSON array (optionally with --limit/--offset)", false)
     .option("-i, --installed", "Show only installed connectors", false)
     .option("-b, --brief", "Output only connector names", false)
     .option("--limit <n>", "Limit results")
@@ -97,66 +147,82 @@ export function registerCommands(program: Command): void {
       const parsedCursor = parseNonNegativeInt(options.cursor, "--cursor");
       if (parsedLimit.error || parsedOffset.error || parsedCursor.error) {
         const error = parsedLimit.error || parsedOffset.error || parsedCursor.error || "Invalid pagination options";
-        if (options.json) {
-          console.log(JSON.stringify({ error }));
-        } else {
-          console.log(chalk.red(error));
-        }
+        if (options.json) console.log(JSON.stringify({ error }));
+        else console.log(chalk.red(error));
         process.exit(1);
         return;
       }
+
       const limit = parsedLimit.value;
       const offset = parsedCursor.value ?? parsedOffset.value ?? 0;
-      const jsonLimit = limit === undefined ? undefined : Math.max(1, Math.floor(limit));
-      const page = <T>(items: T[]): T[] => {
-        if (jsonLimit === undefined) return items.slice(offset);
-        return items.slice(offset, offset + jsonLimit);
+      const fullJson = options.json && (options.full || options.all);
+      const legacyPage = <T>(items: T[]): T[] => {
+        const effectiveLimit = limit === undefined ? undefined : Math.max(1, Math.floor(limit));
+        return effectiveLimit === undefined
+          ? items.slice(offset)
+          : items.slice(offset, offset + effectiveLimit);
+      };
+      const emitJson = <T, U, V = U>(
+        items: T[],
+        project: (item: T) => U,
+        compact: boolean,
+        fullProject: (item: T) => V = project as unknown as (item: T) => V,
+      ): void => {
+        if (fullJson) {
+          console.log(JSON.stringify(legacyPage(items).map(fullProject)));
+          return;
+        }
+        try {
+          const page = boundedJsonPage(items, { offset, requestedLimit: limit });
+          console.log(JSON.stringify(jsonEnvelope(page, page.items.map(project), compact)));
+        } catch (error) {
+          console.log(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
+          process.exit(1);
+        }
+      };
+      const connectorProjection = (connector: (typeof CONNECTORS)[number]) =>
+        options.verbose ? connector : compactConnector(connector, 120);
+
+      const resolveCategory = (): (typeof CATEGORIES)[number] | null => {
+        if (!options.category) return null;
+        return CATEGORIES.find((category) => category.toLowerCase() === options.category!.toLowerCase()) ?? null;
       };
 
-      // --brief: output only connector names
+      // --brief: output only connector names, still paged unless --all is explicit.
       if (options.brief) {
+        let names: string[];
         if (options.installed) {
-          const installed = page(getInstalledConnectors());
-          if (options.json) {
-            console.log(JSON.stringify(installed));
-          } else {
-            for (const name of installed) console.log(name);
-          }
+          names = getInstalledConnectors();
         } else if (options.category) {
-          const requestedCategory = options.category;
-          const category = CATEGORIES.find(c => c.toLowerCase() === requestedCategory.toLowerCase());
-          if (!category) { console.error(`Unknown category: ${requestedCategory}`); process.exit(1); return; }
-          const names = page(getConnectorsByCategory(category).map(c => c.name));
-          if (options.json) { console.log(JSON.stringify(names)); } else { for (const n of names) console.log(n); }
+          const category = resolveCategory();
+          if (!category) {
+            if (options.json) console.log(JSON.stringify({ error: `Unknown category: ${options.category}` }));
+            else console.error(`Unknown category: ${options.category}`);
+            process.exit(1);
+            return;
+          }
+          names = getConnectorsByCategory(category).map((connector) => connector.name);
         } else {
-          const names = page(CONNECTORS.map(c => c.name));
-          if (options.json) { console.log(JSON.stringify(names)); } else { for (const n of names) console.log(n); }
+          names = CONNECTORS.map((connector) => connector.name);
+        }
+        if (options.json) {
+          emitJson(names, (name) => name, true);
+        } else {
+          const page = pageItems(names, {
+            offset,
+            limit: limit ?? (options.all ? undefined : DEFAULT_COMPACT_LIMIT),
+          });
+          for (const name of page.items) console.log(name);
+          if (page.nextOffset !== null) console.log(chalk.dim(`More names: connectors list --brief --cursor ${page.nextOffset}`));
         }
         return;
       }
 
       if (options.installed) {
         const installedSource = getInstalledConnectors();
-        const installedPage = pageItems(installedSource, {
-          offset,
-          limit: limit ?? (options.verbose || options.all ? undefined : DEFAULT_COMPACT_LIMIT),
-        });
-        const installed = options.json ? page(installedSource) : installedPage.items;
-
-        if (installed.length === 0) {
-          if (options.json) {
-            console.log(JSON.stringify([]));
-          } else {
-            console.log(chalk.dim("No connectors installed"));
-          }
-          return;
-        }
-
-        const statuses = installed.map((name) => {
+        const statusFor = (name: string) => {
           const meta = getConnector(name);
           const auth = getAuthStatus(name);
-
-          // Compute expiry label for OAuth connectors
           let expiryLabel: string | null = null;
           let expired = false;
           if (auth.type === "oauth" && auth.tokenExpiry) {
@@ -166,15 +232,9 @@ export function registerCommands(program: Command): void {
               expired = true;
             } else {
               const minutes = Math.floor(remaining / 60_000);
-              if (minutes < 60) {
-                expiryLabel = `Expires ${minutes}m`;
-              } else {
-                const hours = Math.floor(minutes / 60);
-                expiryLabel = `Expires ${hours}h`;
-              }
+              expiryLabel = minutes < 60 ? `Expires ${minutes}m` : `Expires ${Math.floor(minutes / 60)}h`;
             }
           }
-
           return {
             name,
             category: meta?.category || "Unknown",
@@ -185,24 +245,30 @@ export function registerCommands(program: Command): void {
             tokenExpiry: auth.tokenExpiry || null,
             hasRefreshToken: auth.hasRefreshToken || false,
           };
-        });
+        };
 
         if (options.json) {
-          console.log(JSON.stringify(statuses, null, 2));
+          emitJson(installedSource, statusFor, false);
           return;
         }
 
-        // Compute column widths
-        const nameWidth = Math.max(6, ...statuses.map((s) => s.name.length)) + 2;
-        const catWidth = Math.max(10, ...statuses.map((s) => s.category.length)) + 2;
-        const authWidth = 10;
+        const installedPage = pageItems(installedSource, {
+          offset,
+          limit: limit ?? (options.verbose || options.all ? undefined : DEFAULT_COMPACT_LIMIT),
+        });
+        const statuses = installedPage.items.map(statusFor);
+        if (statuses.length === 0) {
+          console.log(chalk.dim("No connectors installed"));
+          return;
+        }
 
+        const nameWidth = Math.max(6, ...statuses.map((status) => status.name.length)) + 2;
+        const catWidth = Math.max(10, ...statuses.map((status) => status.category.length)) + 2;
+        const authWidth = 10;
         const installedTitle = installedPage.limit === null
           ? `Installed connectors (${installedSource.length})`
-          : `Installed connectors (showing ${installed.length} of ${installedSource.length})`;
+          : `Installed connectors (showing ${statuses.length} of ${installedSource.length})`;
         console.log(chalk.bold(`\n${installedTitle}:\n`));
-
-        // Header
         console.log(
           `  ${chalk.dim("Name".padEnd(nameWidth))}` +
           `${chalk.dim("Category".padEnd(catWidth))}` +
@@ -210,77 +276,52 @@ export function registerCommands(program: Command): void {
           `${chalk.dim("Status")}`
         );
         console.log(chalk.dim(`  ${"─".repeat(nameWidth + catWidth + authWidth + 24)}`));
-
-        for (const s of statuses) {
-          const authTypeLabel =
-            s.authType === "oauth" ? "OAuth" :
-            s.authType === "apikey" ? "API Key" :
-            "Bearer";
-
-          let statusLabel: string;
-          if (s.configured && s.expired) {
-            statusLabel = chalk.yellow("⚠ Token expired");
-          } else if (s.configured) {
-            statusLabel = chalk.green("✓ Configured");
-          } else {
-            statusLabel = chalk.red("✗ Needs auth");
-          }
-
-          // Append expiry info for configured OAuth connectors
-          let expiryStr = "";
-          if (s.expiryLabel && s.configured && !s.expired) {
-            expiryStr = `   ${chalk.dim(s.expiryLabel)}`;
-          }
-
-          console.log(
-            `  ${chalk.cyan(s.name.padEnd(nameWidth))}` +
-            `${s.category.padEnd(catWidth)}` +
-            `${authTypeLabel.padEnd(authWidth)}` +
-            `${statusLabel}${expiryStr}`
-          );
+        for (const status of statuses) {
+          const authTypeLabel = status.authType === "oauth" ? "OAuth" : status.authType === "apikey" ? "API Key" : "Bearer";
+          const statusLabel = status.configured && status.expired
+            ? chalk.yellow("⚠ Token expired")
+            : status.configured
+              ? chalk.green("✓ Configured")
+              : chalk.red("✗ Needs auth");
+          const expiry = status.expiryLabel && status.configured && !status.expired ? `   ${chalk.dim(status.expiryLabel)}` : "";
+          console.log(`  ${chalk.cyan(status.name.padEnd(nameWidth))}${status.category.padEnd(catWidth)}${authTypeLabel.padEnd(authWidth)}${statusLabel}${expiry}`);
         }
-
         console.log();
         printPaginationHint("connectors list --installed", installedSource.length, installedPage.nextOffset);
         return;
       }
 
       if (options.category) {
-        const requestedCategory = options.category;
-        const category = CATEGORIES.find(
-          (c) => c.toLowerCase() === requestedCategory.toLowerCase()
-        );
+        const category = resolveCategory();
         if (!category) {
           if (options.json) {
-            console.log(JSON.stringify({ error: `Unknown category: ${requestedCategory}` }));
+            console.log(JSON.stringify({ error: `Unknown category: ${options.category}` }));
             process.exit(1);
           }
-          console.log(chalk.red(`Unknown category: ${requestedCategory}`));
+          console.log(chalk.red(`Unknown category: ${options.category}`));
           console.log(chalk.dim(`Available: ${CATEGORIES.join(", ")}`));
           return;
         }
         const connectors = getConnectorsByCategory(category);
+        if (options.json) {
+          emitJson(connectors, connectorProjection, !options.verbose, (connector) => connector);
+          return;
+        }
         const humanPage = pageItems(connectors, {
           offset,
           limit: limit ?? (options.verbose || options.all ? undefined : DEFAULT_COMPACT_LIMIT),
         });
-        const pagedConnectors = options.json ? page(connectors) : humanPage.items;
-        if (options.json) {
-          console.log(JSON.stringify(pagedConnectors));
-          return;
-        }
         const title = humanPage.limit === null
           ? `${category} (${connectors.length})`
-          : `${category} (showing ${pagedConnectors.length} of ${connectors.length})`;
+          : `${category} (showing ${humanPage.items.length} of ${connectors.length})`;
         console.log(chalk.bold(`\n${title}:\n`));
-        printConnectorRows(pagedConnectors, { verbose: options.verbose });
+        printConnectorRows(humanPage.items, { verbose: options.verbose });
         printPaginationHint(`connectors list --category "${category}"`, connectors.length, humanPage.nextOffset);
         return;
       }
 
-      // Show all
       if (options.json) {
-        console.log(JSON.stringify(page(CONNECTORS)));
+        emitJson(CONNECTORS, connectorProjection, !options.verbose, (connector) => connector);
         return;
       }
 
@@ -289,12 +330,11 @@ export function registerCommands(program: Command): void {
           offset,
           limit: limit ?? (options.verbose || options.all ? undefined : DEFAULT_COMPACT_LIMIT),
         });
-        const connectors = humanPage.items;
         const title = humanPage.limit === null
           ? `Available connectors (${CONNECTORS.length})`
-          : `Available connectors (showing ${connectors.length} of ${CONNECTORS.length})`;
+          : `Available connectors (showing ${humanPage.items.length} of ${CONNECTORS.length})`;
         console.log(chalk.bold(`\n${title}:\n`));
-        printConnectorRows(connectors, { includeCategory: true, verbose: options.verbose });
+        printConnectorRows(humanPage.items, { includeCategory: true, verbose: options.verbose });
         printPaginationHint("connectors list", CONNECTORS.length, humanPage.nextOffset);
         return;
       }
