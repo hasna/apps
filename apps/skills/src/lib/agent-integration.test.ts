@@ -37,6 +37,50 @@ test("a Claude hook plan does not inspect unrelated Codex plugin roots", () => {
   expect(() => inventoryNativeSkills(f.home)).toThrow("symlink");
 });
 
+test("Claude planning and guarded loading exclude another agent's populated vendor cache alias", () => {
+  const f = fixture(), cache = join(f.home, ".codex", "plugins", "cache", "bundled", "browser");
+  const version = join(cache, "1.0.0"), skill = join(version, "skills", "browse", "SKILL.md");
+  put(skill, "Synthetic Codex vendor instructions\n");
+  symlinkSync(version, join(cache, "latest"), "dir");
+  const plan = planAgentIntegration({ ...f, agents: ["claude"] });
+  expect(plan.nativeSkills).toEqual([]);
+  applyAgentIntegration(plan);
+  expect(() => assertManagedAgentBridge("claude", { ...f, projectDir: f.home })).not.toThrow();
+  expect(() => inventoryNativeSkills(f.home, { includeVendor: true, agents: ["codex"] })).toThrow("symlink");
+  expect(() => inventoryNativeSkills(f.home, { includeVendor: true })).toThrow("symlink");
+  expect(readFileSync(skill, "utf8")).toBe("Synthetic Codex vendor instructions\n");
+});
+
+test("selected-agent inventory retains its vendor skills and excludes other vendor surfaces", () => {
+  const f = fixture(), claude = join(f.home, ".claude", "plugins", "synced", "review");
+  const gemini = join(f.home, ".gemini", "extensions", "extension", "skills", "search");
+  put(join(claude, "SKILL.md"), "Synthetic Claude vendor instructions\n");
+  put(join(gemini, "SKILL.md"), "Synthetic Gemini vendor instructions\n");
+  const selected = inventoryNativeSkills(f.home, { includeVendor: true, agents: ["claude"] });
+  expect(selected.map(entry => entry.path)).toEqual([claude]);
+  expect(selected[0]).toMatchObject({ agent: "claude", vendor: true });
+  expect(inventoryNativeSkills(f.home, { includeVendor: true }).map(entry => entry.path)).toEqual([claude, gemini]);
+});
+
+test("selected-agent inventory limits configured discovery before reading other agent settings", () => {
+  const f = fixture();
+  put(join(f.home, ".codex", "config.toml"), "invalid = [\n");
+  expect(inventoryNativeSkills(f.home, { configured: true, agents: ["claude"] })).toEqual([]);
+  expect(inventoryNativeSkills(f.home, { configured: true, includeVendor: true, agents: [] })).toEqual([]);
+  expect(() => inventoryNativeSkills(f.home, { configured: true, agents: ["codex"] })).toThrow("Invalid native discovery configuration");
+  expect(() => inventoryNativeSkills(f.home, { configured: true })).toThrow("Invalid native discovery configuration");
+});
+
+test("selected-agent inventory limits explicit roots while keeping selected root safety", () => {
+  const f = fixture(), claude = join(f.home, "claude-extra"), codex = join(f.home, "codex-extra");
+  put(join(claude, "SKILL.md"), "Synthetic selected instructions\n");
+  symlinkSync(claude, codex, "dir");
+  const agentRoots = [{ agent: "claude", path: claude }, { agent: "codex", path: codex }];
+  expect(inventoryNativeSkills(f.home, { agents: ["claude"], agentRoots }).map(entry => entry.path)).toEqual([claude]);
+  expect(() => inventoryNativeSkills(f.home, { agents: ["codex"], agentRoots })).toThrow("symlink");
+  expect(() => inventoryNativeSkills(f.home, { agentRoots })).toThrow("symlink");
+});
+
 test("native drift identifies bounded escaped paths without exposing document contents", () => {
   const f = fixture(); applyAgentIntegration(planAgentIntegration({ ...f, agents: ["claude"] }));
   const projectDir = join(f.home, ...Array.from({ length: 5 }, () => "long-parent".repeat(18)));
