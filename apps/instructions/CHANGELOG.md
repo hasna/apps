@@ -1,3 +1,9 @@
+## 0.7.8
+
+### Patch Changes
+
+- Create the Codex configuration directory with owner-only permissions during MCP installation, independent of the process umask.
+
 ## 0.7.7
 
 ### Patch Changes

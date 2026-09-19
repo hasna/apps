@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { dirname } from "node:path";
@@ -61,12 +61,19 @@ describe("mcp install/uninstall parity", () => {
     const home = makeTempRoot("mcp-codex-");
     const dbPath = join(home, "instructions.db");
 
-    const installed = runCli(["mcp", "install", "--codex"], home, dbPath);
+    const previousUmask = process.umask(0o002);
+    let installed: ReturnType<typeof runCli>;
+    try {
+      installed = runCli(["mcp", "install", "--codex"], home, dbPath);
+    } finally {
+      process.umask(previousUmask);
+    }
     expect(installed.status).toBe(0);
     expect(installed.stdout).toContain("Installed into Codex");
 
     const configPath = join(home, ".codex", "config.toml");
     expect(existsSync(configPath)).toBe(true);
+    expect(statSync(join(home, ".codex")).mode & 0o777).toBe(0o700);
     expect(readFileSync(configPath, "utf-8")).toContain("[mcp_servers.configs]");
 
     // Idempotent second install.
