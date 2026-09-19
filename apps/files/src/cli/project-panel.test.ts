@@ -48,7 +48,7 @@ function seedCliProject(): NodeJS.ProcessEnv {
   expect(projectCreate.exitCode).toBe(0);
   const projectId = stdout(projectCreate).match(/Project created: (\S+)/)?.[1];
   expect(projectId).toBeDefined();
-  const files = JSON.parse(stdout(run(["list", "--json"], env))) as Array<{ id: string; name: string }>;
+  const files = JSON.parse(stdout(run(["list", "--json", "--full"], env))) as Array<{ id: string; name: string }>;
   const file = files.find((entry) => entry.name === "potential-contract.pdf");
   expect(file).toBeDefined();
   expect(run(["projects", "add", projectId!, file!.id], env).exitCode).toBe(0);
