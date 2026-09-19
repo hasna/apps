@@ -102,6 +102,42 @@ export interface PullRequestRecord extends PullRequest {
   repo: string | null;
 }
 
+/**
+ * An issue row as stored in the local `issues` table.
+ *
+ * Deliberately NOT the pull request shape (issue detection brief §3.2): no
+ * merged/diff/merge-gate fields, `state` is only open|closed, and GitHub's
+ * `stateReason` is carried separately. `updated_at` is nullable in storage but
+ * is required in every synced node, because a node without it cannot take part
+ * in watermark arithmetic.
+ */
+export interface Issue {
+  id: number;
+  repo_id: number;
+  number: number;
+  title: string;
+  state: "open" | "closed";
+  /** GitHub `IssueStateReason`: COMPLETED | NOT_PLANNED | REOPENED | DUPLICATE | null. */
+  state_reason: string | null;
+  author: string;
+  created_at: string;
+  updated_at: string | null;
+  closed_at: string | null;
+  url: string;
+  gh_owner: string | null;
+  gh_repo: string | null;
+}
+
+/**
+ * An issue as returned by the listing surface: the stored row plus the GitHub
+ * identity (`org`/`repo`) resolved from the issue's own URL, since the same
+ * repository is routinely checked out more than once locally.
+ */
+export interface IssueRecord extends Issue {
+  org: string | null;
+  repo: string | null;
+}
+
 export interface Agent {
   id: string;
   name: string;

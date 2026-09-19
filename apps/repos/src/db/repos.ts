@@ -8,12 +8,15 @@ import type {
   Remote,
   PullRequest,
   PullRequestRecord,
+  Issue,
+  IssueRecord,
   SearchResult,
   RepoStats,
   ListOptions,
 } from "../types/index.js";
 import { sanitizeRemoteIdentity } from "../lib/remote-identity.js";
 import { resolvePullRequestOrigin } from "../lib/pr-identity.js";
+import { resolveIssueOrigin } from "../lib/issue-identity.js";
 import { classifyCheckout } from "../lib/checkout-health.js";
 import { canonicalPath } from "../lib/path-identity.js";
 import { KNOWN_REPO_FK_TABLES, classifyRegistryPath } from "./registry-prune.js";
@@ -1488,6 +1491,190 @@ export function searchPullRequests(query: string, limit = 20): Array<PullRequest
     ORDER BY pr.created_at DESC
     LIMIT ?
   `).all(buildFtsQuery(query), limit) as Array<PullRequest & { repo_name: string }>;
+}
+
+// ── Issues ──
+//
+// Issue detection storage (issue visibility track A). Strictly additive: no
+// function in this section is called by the PR sync, the audit->fix->close
+// pipeline, or pr-monitor. Rows are upserted per local checkout exactly like
+// pull_requests, and de-duplicated on read by the issue's own URL.
+
+export interface ListIssueOptions extends ListOptions {
+  repo_id?: number;
+  state?: string;
+  author?: string;
+  /** GitHub owner, resolved from each issue's own URL — not the local repo's org. */
+  org?: string;
+  /** GitHub repository name, resolved from each issue's own URL. */
+  repo_name?: string;
+  /** Return one row per local checkout instead of one row per issue. */
+  duplicates?: boolean;
+  /** Sort key: newest created (default) or most recently updated. */
+  orderBy?: "created" | "updated";
+}
+
+/**
+ * Rank rows that describe the same issue so the most trustworthy copy wins.
+ * Mirrors `PR_RANK_ORDER` and its reasoning (see the comment on that constant);
+ * the only issue-specific differences are the URL `/issues/` segment in rule 1
+ * and the absence of merged_at in the timestamp fallback. `updated_at` still
+ * outranks state because an issue can be REOPENED, so preferring a terminal
+ * `closed` copy would keep reporting a reopened issue as closed.
+ */
+const ISSUE_RANK_ORDER = `
+  CASE WHEN url IS NOT NULL AND owner_remote IS NOT NULL
+         AND url LIKE 'https://' || replace(replace(owner_remote, '\\', '\\\\'), '_', '\\_') || '/issues/%'
+         ESCAPE '\\' THEN 0 ELSE 1 END,
+  COALESCE(updated_at, closed_at, created_at, '') DESC,
+  CASE WHEN state = 'open' THEN 1 ELSE 0 END,
+  ${derivedCheckoutRankSql("owner_path")},
+  id ASC`;
+
+/** Partition on the issue's own URL, stable across every local checkout. */
+const ISSUE_IDENTITY = `CASE WHEN url IS NOT NULL AND url <> '' THEN lower(url) ELSE 'row:' || id END`;
+
+function buildIssueQuery(opts: ListIssueOptions): { cte: string; params: any[]; stateFilter: string; stateParams: any[] } {
+  const { repo_id, state, author, org, repo_name, duplicates } = opts;
+  const params: any[] = [];
+  const where: string[] = [];
+
+  if (repo_id) { where.push("i.repo_id = ?"); params.push(repo_id); }
+  if (author) { where.push("i.author LIKE ?"); params.push(`%${author}%`); }
+  if (org) { where.push("i.gh_owner = ? COLLATE NOCASE"); params.push(org); }
+  if (repo_name) { where.push("i.gh_repo = ? COLLATE NOCASE"); params.push(repo_name); }
+
+  const whereClause = where.length > 0 ? `WHERE ${where.join(" AND ")}` : "";
+
+  // State filtering happens after de-duplication for the same reason it does
+  // for pull requests: filtering first would keep a stale `open` copy and
+  // discard the newer `closed` row that supersedes it.
+  const stateFilter = state ? "WHERE state = ?" : "";
+  const stateParams = state ? [state] : [];
+
+  const cte = duplicates
+    ? `WITH candidate AS (
+         SELECT i.*, r.remote_url AS owner_remote, r.org AS owner_org,
+                r.name AS owner_name, r.path AS owner_path
+         FROM issues i LEFT JOIN repos r ON r.id = i.repo_id
+         ${whereClause}
+       ), ranked AS (SELECT candidate.*, 1 AS rn FROM candidate)`
+    : `WITH candidate AS (
+         SELECT i.*, r.remote_url AS owner_remote, r.org AS owner_org,
+                r.name AS owner_name, r.path AS owner_path
+         FROM issues i LEFT JOIN repos r ON r.id = i.repo_id
+         ${whereClause}
+       ), ranked AS (
+         SELECT candidate.*,
+           ROW_NUMBER() OVER (PARTITION BY ${ISSUE_IDENTITY} ORDER BY ${ISSUE_RANK_ORDER}) AS rn
+         FROM candidate
+       )`;
+
+  return { cte, params, stateFilter, stateParams };
+}
+
+function toIssueRecord(row: any): IssueRecord {
+  const { owner_remote, owner_org, owner_name, owner_path, rn, gh_owner, gh_repo, ...issue } = row;
+  return {
+    ...(issue as Issue),
+    org: gh_owner ?? null,
+    repo: gh_repo ?? null,
+  };
+}
+
+export function listIssues(opts: ListIssueOptions = {}): IssueRecord[] {
+  const db = getDb();
+  const { limit = 50, offset = 0, orderBy } = opts;
+  const { cte, params, stateFilter, stateParams } = buildIssueQuery(opts);
+  const order = orderBy === "updated"
+    ? "COALESCE(updated_at, created_at) DESC, id DESC"
+    : "created_at DESC, id DESC";
+
+  return (db
+    .query(`${cte}
+      SELECT * FROM (SELECT * FROM ranked WHERE rn = 1) ${stateFilter}
+      ORDER BY ${order} LIMIT ? OFFSET ?`)
+    .all(...params, ...stateParams, limit, offset) as any[]).map(toIssueRecord);
+}
+
+/** Total issues matching a filter, ignoring limit/offset. */
+export function countIssues(opts: ListIssueOptions = {}): number {
+  const db = getDb();
+  const { cte, params, stateFilter, stateParams } = buildIssueQuery(opts);
+  const row = db
+    .query(`${cte}
+      SELECT COUNT(*) AS c FROM (SELECT * FROM ranked WHERE rn = 1) ${stateFilter}`)
+    .get(...params, ...stateParams) as { c: number };
+  return row.c;
+}
+
+/** Numbers of every issue stored for a repo record, used for new-issue counts. */
+export function listIssueNumbers(repo_id: number): number[] {
+  const db = getDb();
+  return (db
+    .query("SELECT number FROM issues WHERE repo_id = ? ORDER BY number")
+    .all(repo_id) as Array<{ number: number }>).map((row) => row.number);
+}
+
+/**
+ * An issue as supplied by a sync. Deliberately not the PR input shape: no
+ * merged/diff/merge-gate fields, and `state` is only open|closed.
+ */
+export interface IssueInput {
+  repo_id: number;
+  number: number;
+  title: string;
+  state: "open" | "closed";
+  author: string;
+  created_at: string;
+  updated_at: string | null;
+  state_reason?: string | null;
+  closed_at?: string | null;
+  url?: string | null;
+}
+
+export function bulkInsertIssues(issues: IssueInput[]): number {
+  const db = getDb();
+  // Upsert, never INSERT OR REPLACE: REPLACE deletes and re-inserts the row,
+  // which changes its rowid. Overlap re-reads (the watermark's inclusive 1-hour
+  // boundary) are idempotent precisely because this is an upsert keyed
+  // (repo_id, number).
+  const stmt = db.query(`INSERT INTO issues
+    (repo_id, number, title, state, state_reason, author, created_at, updated_at, closed_at, url, gh_owner, gh_repo)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(repo_id, number) DO UPDATE SET
+      title = excluded.title, state = excluded.state, state_reason = excluded.state_reason,
+      author = excluded.author, created_at = excluded.created_at, updated_at = excluded.updated_at,
+      closed_at = excluded.closed_at, url = excluded.url,
+      gh_owner = excluded.gh_owner, gh_repo = excluded.gh_repo`);
+  const repoLookup = db.query("SELECT remote_url, org FROM repos WHERE id = ?");
+  const repoCache = new Map<number, { remote_url: string | null; org: string | null }>();
+  const repoFor = (id: number) => {
+    let row = repoCache.get(id);
+    if (!row) {
+      row = (repoLookup.get(id) as { remote_url: string | null; org: string | null } | null)
+        ?? { remote_url: null, org: null };
+      repoCache.set(id, row);
+    }
+    return row;
+  };
+
+  let count = 0;
+  const tx = db.transaction(() => {
+    for (const issue of issues) {
+      const owner = repoFor(issue.repo_id);
+      const origin = resolveIssueOrigin(issue.url, owner.remote_url, owner.org);
+      stmt.run(
+        issue.repo_id, issue.number, issue.title, issue.state,
+        issue.state_reason ?? null, issue.author, issue.created_at, issue.updated_at,
+        issue.closed_at ?? null, issue.url ?? null,
+        origin.org, origin.repo,
+      );
+      count++;
+    }
+  });
+  tx();
+  return count;
 }
 
 // ── Unified Search ──

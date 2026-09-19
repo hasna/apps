@@ -16,6 +16,8 @@ import {
   listTags,
   listPullRequests,
   countPullRequests,
+  listIssues,
+  countIssues,
   countRepos,
   getRepoByRemote,
   searchAll,
@@ -59,6 +61,7 @@ import {
 import { printError, printJson, printJsonLine, printLine } from "./stdout.js";
 import { decodeRepoListCursor, encodeRepoListCursor } from "../lib/repo-list-cursor.js";
 import { syncGithubPRs, syncAllGithubPRs, fetchRepoMetadata } from "../lib/github.js";
+import { syncGithubIssues, syncAllGithubIssues, issueSyncDigestFromResults } from "../lib/github-issues.js";
 import { runPrMonitor } from "../lib/pr-monitor-run.js";
 import { enumerateGithubRepoCatalog } from "../lib/github-catalog.js";
 import { getActivityHeatmap, getContributorStats, getStaleRepos, getRecentActivity } from "../lib/analytics.js";
@@ -1734,6 +1737,64 @@ program
     }
   });
 
+// ── Issues ──
+program
+  .command("issues")
+  .description("List issues synced from GitHub")
+  .option("--repo <name>", "Filter by local repo record")
+  .option("--org <org>", "Filter by GitHub owner, resolved from each issue's URL")
+  .option("--repo-name <name>", "Filter by GitHub repository name, resolved from each issue's URL")
+  .option("--state <state>", "Filter: open, closed")
+  .option("--author <author>", "Filter by author")
+  .option("--duplicates", "Emit one row per local checkout instead of one row per issue")
+  .option("-n, --limit <n>", "Max results (default: 20 human, 50 JSON)")
+  .option("-o, --offset <n>", "Skip first N results", "0")
+  .option("--cursor <n>", "Pagination cursor from a previous page")
+  .option("--verbose", "Show author, dates, and URL")
+  .option("--json", "Output as JSON")
+  .action((opts) => {
+    let repo_id: number | undefined;
+    if (opts.repo) {
+      const repo = requireRepo(opts.repo);
+      repo_id = repo.id;
+    }
+    const limit = resolveLimit(opts, COMPACT_LIMIT, 50);
+    const offset = resolveOffset(opts);
+    const filter = {
+      repo_id,
+      state: opts.state,
+      author: opts.author,
+      org: opts.org,
+      repo_name: opts.repoName,
+      duplicates: Boolean(opts.duplicates),
+    };
+    const issues = listIssues({ ...filter, limit, offset });
+    const total = countIssues(filter);
+    if (opts.json) {
+      printJson(issues);
+      warnIfTruncated({ shown: issues.length, total, limit, offset, noun: "issue(s)" });
+    } else {
+      for (const issue of issues) {
+        const stateColor = issue.state === "open" ? chalk.green : chalk.red;
+        const slug = issue.org && issue.repo ? `${issue.org}/${issue.repo}` : "";
+        console.log(`  ${stateColor(`[${issue.state}]`)} ${slug}#${issue.number} ${compactText(issue.title, opts.verbose ? 160 : 100)}`);
+        if (opts.verbose) {
+          const reason = issue.state_reason ? ` reason ${issue.state_reason}` : "";
+          console.log(chalk.dim(`    by ${issue.author} created ${day(issue.created_at)} updated ${day(issue.updated_at)}${reason}${issue.url ? ` ${issue.url}` : ""}`));
+        }
+      }
+      printCompactHint({
+        count: issues.length,
+        noun: "issue(s)",
+        limit,
+        offset,
+        pageable: true,
+        verbose: opts.verbose,
+        detail: `${total} match this filter. Filter with --org, --repo, --repo-name, --state, or --author`,
+      });
+    }
+  });
+
 program
   .command("pr-monitor")
   .description("Classify open pull requests and emit state/event deltas (pr-monitor watch)")
@@ -2031,6 +2092,75 @@ program
           console.log(chalk.yellow(`  ${result.errors.length} errors (repos without GitHub remote)`));
         }
       }
+    }
+  });
+
+// ── Issue sync (read-only detection ingest) ──
+program
+  .command("sync-issues")
+  .description("Sync issues from GitHub (read-only detection ingest with page and watermark guards)")
+  .option("--repo <name>", "Sync specific repo")
+  .option("--org <org>", "Sync repos for a specific org")
+  .option("--state <state>", "Issue states to fetch: open, closed, all", "all")
+  .option("-n, --limit <n>", "Max issues to fetch per repo (0 = no local cap)", "500")
+  .option("--page-size <n>", "GraphQL page size (max 100)", "100")
+  .option("--overlap-minutes <n>", "Inclusive re-read window subtracted from the watermark", "60")
+  .option("--max-repos <n>", "Max distinct remotes to sync")
+  .option("--json", "Output as JSON")
+  .addHelpText("after", "\nGuard policy: a non-empty errors[], a null node, or an unusable pageInfo fails the page, stops that repo's traversal, and leaves its watermark unchanged. \"0 new\" is only printed for a sealed, untruncated run; anything else reports degraded. Read-only: this verb never writes to GitHub.")
+  .action((opts) => {
+    const state = String(opts.state ?? "all").toLowerCase();
+    if (state !== "open" && state !== "closed" && state !== "all") {
+      printError(`sync-issues: --state must be open, closed, or all (got ${opts.state})`);
+      process.exit(1);
+    }
+    const limit = intFlag(opts.limit, "--limit", 0);
+    const pageSize = intFlag(opts.pageSize, "--page-size", 1);
+    const overlapMs = intFlag(opts.overlapMinutes, "--overlap-minutes", 0) * 60_000;
+    const maxRepos = optionalIntFlag(opts.maxRepos, "--max-repos", 1);
+    try {
+      if (opts.repo) {
+        const result = syncGithubIssues(opts.repo, { state, limit, pageSize, overlapMs });
+        const digest = issueSyncDigestFromResults([result]);
+        if (opts.json) {
+          printJsonLine(result);
+          if (!digest.reportable) process.exitCode = 1;
+          return;
+        }
+        console.log(digest.reportable ? chalk.green(`✓ ${digest.line}`) : chalk.yellow(`⚠ ${digest.line}`));
+        for (const entry of result.incomplete) {
+          console.log(chalk.yellow(`  incomplete: ${entry.repo} — ${entry.reason}${entry.detail ? ` (${entry.detail})` : ""}`));
+        }
+        for (const anomaly of result.anomalies) console.log(chalk.yellow(`  anomaly: ${anomaly}`));
+        console.log(chalk.dim(`  ${result.repo_name}: ${result.synced} issue(s) over ${result.pages_fetched} page(s), ${result.rows_written} row(s) across ${result.checkouts} checkout(s); watermark ${result.watermark_advanced ? "advanced" : "unchanged"}${result.watermark ? ` → ${result.watermark}` : ""}`));
+        if (!digest.reportable) process.exitCode = 1;
+        return;
+      }
+      const result = syncAllGithubIssues({
+        org: opts.org,
+        state,
+        limit,
+        pageSize,
+        overlapMs,
+        maxRepos,
+        onProgress: opts.json ? undefined : (msg: string) => console.log(chalk.dim(msg)),
+      });
+      const digest = issueSyncDigestFromResults(result.results, result.truncated);
+      if (opts.json) {
+        printJsonLine(result);
+        if (!digest.reportable) process.exitCode = 1;
+        return;
+      }
+      console.log(digest.reportable ? chalk.green(`✓ ${digest.line}`) : chalk.yellow(`⚠ ${digest.line}`));
+      for (const entry of result.incomplete) {
+        console.log(chalk.yellow(`  incomplete: ${entry.repo} — ${entry.reason}${entry.detail ? ` (${entry.detail})` : ""}`));
+      }
+      for (const anomaly of result.anomalies) console.log(chalk.yellow(`  anomaly: ${anomaly}`));
+      console.log(chalk.dim(`  ${result.repos_synced}/${result.repos_checked} remote(s) synced, ${result.total_synced} issue(s), ${result.total_rows_written} row(s), skipped ${result.skipped.length}, errors ${result.errors.length}${result.stopped_early ? ", stopped early on a rate limit" : ""}`));
+      if (!digest.reportable) process.exitCode = 1;
+    } catch (err: any) {
+      printError(`sync-issues: ${err.message}`);
+      process.exit(1);
     }
   });
 
