@@ -16,6 +16,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import { buildPrepublishTestEnv } from "../../../scripts/prepublish-local-test.mjs";
 import { startV1Stub, type V1Stub } from "../../test-support/v1-stub.js";
 
 type TerminalState =
@@ -43,6 +44,7 @@ const PRIVATE_SENTINELS = [
   "CC_PRIVATE_SENTINEL",
   "BCC_PRIVATE_SENTINEL",
   "REPLY_PRIVATE_SENTINEL",
+  "PARENT_PRIVATE_SENTINEL",
   "SUBJECT_PRIVATE_SENTINEL",
   "BODY_PRIVATE_SENTINEL",
   "HTML_PRIVATE_SENTINEL",
@@ -53,13 +55,18 @@ const PRIVATE_SENTINELS = [
 
 const tempDirs: string[] = [];
 let stub: V1Stub;
+let testHome: string;
 
 function cliEnv(): NodeJS.ProcessEnv {
-  const { EMAILS_DB_PATH: _ignoredDbPath, HASNA_EMAILS_LOCAL: _ignoredLocalOptIn, ...environment } = process.env;
   return {
-    ...environment,
+    ...buildPrepublishTestEnv(process.env, testHome),
+    HASNA_HOME: join(testHome, ".hasna"),
+    EMAILS_HOME: join(testHome, ".emails"),
+    HASNA_EMAILS_HOME: join(testHome, ".hasna", "emails"),
+    HASNA_STATION: `controlled-send-${crypto.randomUUID()}`,
     HASNA_EMAILS_API_URL: stub.baseUrl,
     HASNA_EMAILS_API_KEY: stub.apiKey,
+    EMAILS_CLIENT_ENV_LOADED: "1",
     NO_COLOR: "1",
   };
 }
@@ -77,13 +84,13 @@ function runCli(args: string[]) {
   };
 }
 
-function spawnCli(args: string[]) {
+function spawnCli(args: string[], apiUrl?: string) {
   return {
     args,
     process: Bun.spawn({
       cmd: ["bun", "src/cli/index.tsx", ...args],
       cwd: process.cwd(),
-      env: cliEnv(),
+      env: { ...cliEnv(), ...(apiUrl ? { HASNA_EMAILS_API_URL: apiUrl } : {}) },
       stdout: "pipe",
       stderr: "pipe",
     }),
@@ -157,12 +164,16 @@ function safeReceiptKeys(receipt: SafeReceipt): string[] {
 }
 
 beforeAll(async () => {
-  stub = await startV1Stub();
+  stub = await startV1Stub({ openapi: true });
 });
 
 afterAll(() => stub.stop());
 
 beforeEach(async () => {
+  testHome = privateDir("emails-controlled-send-home-");
+  for (const name of ["config", "data", "cache", "state", "tmp"]) {
+    mkdirSync(join(testHome, name), { mode: 0o700 });
+  }
   await stub.reset();
   stub.applyEnv();
 });
@@ -170,6 +181,145 @@ beforeEach(async () => {
 afterEach(() => {
   stub.clearEnv();
   for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
+type ContractMode = "supported" | "missing" | "old" | "wrong-type" | "malformed" | "unavailable" | "unreachable";
+
+async function withReplyContract(
+  mode: ContractMode,
+  action: (apiUrl: string, calls: string[], authorizations: string[]) => Promise<void>,
+): Promise<void> {
+  const calls: string[] = [];
+  const authorizations: string[] = [];
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(request) {
+      const path = new URL(request.url).pathname;
+      calls.push(`${request.method} ${path}`);
+      authorizations.push(request.headers.get("authorization") ?? "");
+      if (path === "/v1/openapi.json") {
+        if (mode === "missing") return Response.json({ error: "not found" }, { status: 404 });
+        if (mode === "unavailable") return Response.json({ error: "unavailable" }, { status: 503 });
+        if (mode === "malformed") return new Response("invalid JSON", { headers: { "content-type": "application/json" } });
+        const contract = await (await fetch(`${stub.baseUrl}${path}`)).json();
+        const properties = contract.paths["/v1/messages/send"].post.requestBody.content["application/json"].schema.properties;
+        if (mode === "old") delete properties.reply_to_message_id;
+        if (mode === "wrong-type") properties.reply_to_message_id = { type: "number" };
+        return Response.json(contract);
+      }
+      return fetch(new Request(`${stub.baseUrl}${path}`, request));
+    },
+  });
+  const apiUrl = `http://127.0.0.1:${server.port}`;
+  if (mode === "unreachable") server.stop(true);
+  try { await action(apiUrl, calls, authorizations); }
+  finally { server.stop(true); }
+}
+
+async function invokeControlled(
+  files: ReturnType<typeof fixture>,
+  apiUrl: string,
+  operation: "apply" | "readback" = "apply",
+  receiptPath = files.receiptPath,
+) {
+  const child = spawnCli([
+    "send-controlled", operation, "--descriptor", files.descriptorPath,
+    "--request-id", files.requestId, "--receipt", receiptPath,
+  ], apiUrl);
+  const [exitCode, stdout, stderr] = await Promise.all([
+    child.process.exited,
+    new Response(child.process.stdout).text(),
+    new Response(child.process.stderr).text(),
+  ]);
+  assertNoPrivateSentinel(stdout + stderr + readFileSync(receiptPath, "utf8"));
+  return { exitCode, stdout, stderr, receipt: parseReceipt(receiptPath) };
+}
+
+describe("controlled threaded replies", () => {
+  it("passes the exact typed parent and reviewed envelope once, then replays the same key", async () => {
+    const files = fixture({ reply_to_message_id: "parent-PARENT_PRIVATE_SENTINEL" });
+    await withReplyContract("supported", async (apiUrl, calls, authorizations) => {
+      const first = await invokeControlled(files, apiUrl);
+      expect(first.exitCode, first.stderr).toBe(0);
+      const replay = await invokeControlled(files, apiUrl, "apply", files.secondReceiptPath);
+      expect(replay.receipt).toMatchObject({
+        terminal_state: "idempotent_replay", message_id: first.receipt.message_id,
+      });
+      expect(calls).toEqual([
+        "GET /v1/openapi.json", "POST /v1/messages/send",
+        "GET /v1/openapi.json", "POST /v1/messages/send",
+      ]);
+      expect(authorizations).toEqual(Array(4).fill(`Bearer ${stub.apiKey}`));
+      const requests = await stub.sendRequests();
+      expect(requests).toHaveLength(2);
+      expect(requests[1]).toEqual(requests[0]);
+      expect(requests[0]).toEqual({
+        from: files.descriptor.from, to: files.descriptor.to,
+        cc: files.descriptor.cc, bcc: files.descriptor.bcc,
+        reply_to: files.descriptor.reply_to, reply_to_message_id: "parent-PARENT_PRIVATE_SENTINEL",
+        subject: files.descriptor.subject, text: "BODY_PRIVATE_SENTINEL", html: files.descriptor.html,
+        attachments: [{ filename: "synthetic.txt", content_type: "text/plain", content: Buffer.from("ATTACHMENT_CONTENT_PRIVATE_SENTINEL").toString("base64") }],
+        idempotency_key: files.descriptor.idempotency_key,
+      });
+      expect(await stub.sendStats()).toEqual({ providerCalls: 1 });
+      expect(await stub.list("messages")).toHaveLength(1);
+    });
+  });
+
+  for (const mode of ["missing", "old", "wrong-type", "malformed", "unavailable", "unreachable"] as const) {
+    it(`refuses ${mode} reply capability before any send request`, async () => {
+      const files = fixture({ reply_to_message_id: "parent-PARENT_PRIVATE_SENTINEL" });
+      await withReplyContract(mode, async (apiUrl, calls) => {
+        const result = await invokeControlled(files, apiUrl);
+        expect(result.exitCode).toBe(1);
+        expect(result.receipt).toMatchObject({ terminal_state: "rejected", provider_result_state: "not_attempted", message_id: null });
+        expect(calls).toEqual(mode === "unreachable" ? [] : ["GET /v1/openapi.json"]);
+        expect(await stub.sendRequests()).toHaveLength(0);
+        expect(await stub.sendStats()).toEqual({ providerCalls: 0 });
+      });
+    });
+  }
+
+  it("validates typed parent values and rejects invented transport headers before API contact", async () => {
+    const invalid = [null, 1, {}, [], "", " ", "p".repeat(257), "parent\r\nBcc: hidden@example.test", "parent\u202e", "parent\ud800"];
+    await withReplyContract("supported", async (apiUrl, calls) => {
+      for (const value of invalid) {
+        const result = await invokeControlled(fixture({ reply_to_message_id: value }), apiUrl);
+        expect(result.receipt).toMatchObject({ terminal_state: "rejected", provider_result_state: "not_attempted" });
+      }
+      for (const field of ["headers", "in_reply_to", "references"]) {
+        const result = await invokeControlled(fixture({ reply_to_message_id: "parent", [field]: "<invented@example.test>" }), apiUrl);
+        expect(result.receipt.terminal_state).toBe("rejected");
+      }
+      expect(calls).toEqual([]);
+      expect(await stub.sendRequests()).toHaveLength(0);
+    });
+  }, 15_000); // 13 isolated CLI subprocesses; bound the adversarial matrix without the 5s suite default.
+
+  it("readback needs only identity after body files disappear and reply capability is unavailable", async () => {
+    const files = fixture({ reply_to_message_id: "parent-PARENT_PRIVATE_SENTINEL" });
+    await withReplyContract("supported", async (apiUrl) => {
+      expect((await invokeControlled(files, apiUrl)).exitCode).toBe(0);
+    });
+    rmSync(files.descriptor.text_file);
+    rmSync(files.descriptor.attachments[0]!.path);
+    await withReplyContract("unavailable", async (apiUrl, calls) => {
+      const result = await invokeControlled(files, apiUrl, "readback", files.readbackReceiptPath);
+      expect(result.exitCode, result.stderr).toBe(0);
+      expect(result.receipt.terminal_state).toBe("sent");
+      expect(calls).toEqual(["POST /v1/messages/send-intents/lookup"]);
+      expect(await stub.sendRequests()).toHaveLength(1);
+      expect(await stub.sendStats()).toEqual({ providerCalls: 1 });
+    });
+  });
+
+  it("ordinary controlled sends do not acquire a reply capability dependency", async () => {
+    await withReplyContract("missing", async (apiUrl, calls) => {
+      expect((await invokeControlled(fixture(), apiUrl)).exitCode).toBe(0);
+      expect(calls).toEqual(["POST /v1/messages/send"]);
+    });
+  });
 });
 
 describe("emails send-controlled", () => {

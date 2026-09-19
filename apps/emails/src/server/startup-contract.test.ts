@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { routeModulesFor } from "./api-routes.js";
@@ -108,6 +108,38 @@ describe("server startup contract", () => {
     expect(result.exitCode).not.toBe(0);
     expect(combined).toContain("MAILERY_MODE");
     expect(combined).toContain("removed Mailery/cloud runtime");
+  });
+
+  it("refuses missing database/local intent before opening storage or binding a listener", async () => {
+    const reservation = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("reserved") });
+    const port = reservation.port;
+    reservation.stop(true);
+    const home = mkdtempSync(join(tmpdir(), "emails-serve-fail-closed-"));
+    const databasePath = join(home, "must-not-exist.sqlite");
+    try {
+      const result = Bun.spawnSync({
+        cmd: ["bun", "src/server/index.ts", "--host", "127.0.0.1", "--port", String(port)],
+        cwd: join(import.meta.dir, "..", ".."),
+        env: {
+          PATH: process.env["PATH"] ?? "",
+          HOME: home,
+          USERPROFILE: home,
+          HASNA_EMAILS_DB_PATH: databasePath,
+          AWS_EC2_METADATA_DISABLED: "true",
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const combined = new TextDecoder().decode(result.stdout) + new TextDecoder().decode(result.stderr);
+      expect(result.exitCode).not.toBe(0);
+      expect(combined).toContain("EMAILS_DATABASE_URL");
+      expect(combined).toContain("HASNA_EMAILS_LOCAL");
+      expect(existsSync(databasePath)).toBe(false);
+      expect(existsSync(join(home, ".hasna"))).toBe(false);
+      await expect(fetch(`http://127.0.0.1:${port}/`, { signal: AbortSignal.timeout(100) })).rejects.toThrow();
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 
   it("selects the service from storage configuration, never from a deployment word", () => {

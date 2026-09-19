@@ -73,6 +73,7 @@ interface ControlledSendPayload {
   cc?: string[];
   bcc?: string[];
   reply_to?: string;
+  reply_to_message_id?: string;
   subject: string;
   text?: string;
   html?: string;
@@ -284,6 +285,7 @@ function parseDescriptorIdentity(bytes: Buffer, expectedRequestId: string): Cont
     "html_file",
     "idempotency_key",
     "reply_to",
+    "reply_to_message_id",
     "request_id",
     "subject",
     "text",
@@ -334,6 +336,12 @@ async function parseSendPayload(identity: ControlledDescriptorIdentity): Promise
   const replyTo = record["reply_to"] === undefined
     ? undefined
     : wellFormedString(record["reply_to"], "$.reply_to", 320);
+  const replyParent = record["reply_to_message_id"] === undefined
+    ? undefined
+    : wellFormedString(record["reply_to_message_id"], "$.reply_to_message_id", 256);
+  if (replyParent !== undefined && !replyParent.trim()) {
+    throw schemaError("$.reply_to_message_id", "must be a nonempty parent message identifier");
+  }
   const text = await bodySource(record, "text", "text_file");
   const html = await bodySource(record, "html", "html_file");
   if (text === undefined && html === undefined) {
@@ -391,12 +399,29 @@ async function parseSendPayload(identity: ControlledDescriptorIdentity): Promise
     ...(cc.length ? { cc } : {}),
     ...(bcc.length ? { bcc } : {}),
     ...(replyTo ? { reply_to: replyTo } : {}),
+    ...(replyParent !== undefined ? { reply_to_message_id: replyParent } : {}),
     subject,
     ...(text !== undefined ? { text } : {}),
     ...(html !== undefined ? { html } : {}),
     ...(attachments?.length ? { attachments } : {}),
     idempotency_key: identity.idempotencyKey,
   };
+}
+
+function requireThreadedReplySupport(): void {
+  let response;
+  try {
+    response = selfHostedApiRequest("GET", "/openapi.json");
+  } catch {
+    // This read happens before the send request. Its failure cannot imply an
+    // uncertain provider outcome, and must never cause an unthreaded fallback.
+    throw new ControlledDescriptorError("threaded reply support could not be verified; no message was sent");
+  }
+  const field = ["paths", "/v1/messages/send", "post", "requestBody", "content", "application/json", "schema", "properties", "reply_to_message_id"]
+    .reduce<unknown>((value, key) => isRecord(value) ? value[key] : undefined, response.json);
+  if (response.status !== 200 || !isRecord(field) || field["type"] !== "string") {
+    throw new ControlledDescriptorError("the Emails API needs an update to support threaded replies; no message was sent");
+  }
 }
 
 function safeMessageId(payload: unknown): string | null {
@@ -704,6 +729,7 @@ export async function executeControlledSend(
       outcome = readbackOutcome(response.status, response.json);
     } else {
       const payload = await parseSendPayload(identity);
+      if (payload.reply_to_message_id !== undefined) requireThreadedReplySupport();
       const response = selfHostedApiRequest("POST", "/messages/send", payload);
       outcome = sendOutcome(response.status, response.json);
     }

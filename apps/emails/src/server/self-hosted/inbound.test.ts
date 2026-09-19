@@ -733,6 +733,58 @@ describe("Emails self-hosted inbound messages", () => {
     expect((await conflict!.json()).retry_safe).toBe(false);
   });
 
+  it("binds reply idempotency to the exact parent record even when RFC evidence is identical", async () => {
+    const d = deps();
+    const getMessage = d.store.getMessage.bind(d.store);
+    const parent = {
+      direction: "inbound", from_addr: "external@example.com", to_addrs: ["me@example.com"],
+      cc_addrs: [], subject: "Topic", message_id: "<actual-parent@example.net>",
+      in_reply_to: null, headers: { References: "<actual-root@example.net>" },
+    };
+    d.store.getMessage = async (id) => id === "parent-a" || id === "parent-b"
+      ? { ...parent, id } as Awaited<ReturnType<typeof getMessage>>
+      : getMessage(id);
+    const sent: Array<Parameters<typeof d.sender.send>[0]> = [];
+    d.sender = { provider: "ses", send: async (input) => { sent.push(input); return "provider-once"; } };
+    const send = (parentId: string) => handleSelfHostedRequest(d, new Request("http://svc/v1/messages/send", {
+      method: "POST", headers: { "Content-Type": "application/json", "x-api-key": writeToken() },
+      body: JSON.stringify({ from: "me@example.com", to: ["external@example.com"], subject: "Re: Topic",
+        text: "Reply", reply_to_message_id: parentId, idempotency_key: "same-reply-key" }),
+    }));
+    const first = await send("parent-a");
+    expect(first?.status).toBe(202);
+    const firstBody = await first!.json();
+    const replay = await send("parent-a");
+    expect(replay?.status).toBe(200);
+    expect(await replay!.json()).toMatchObject({ idempotent_replay: true, provider_message_id: "provider-once", message: { id: firstBody.message.id } });
+    const conflict = await send("parent-b");
+    expect(conflict?.status).toBe(409);
+    expect((await conflict!.json()).retry_safe).toBe(false);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.headers).toMatchObject({
+      "In-Reply-To": "<actual-parent@example.net>",
+      References: "<actual-root@example.net> <actual-parent@example.net>",
+    });
+  });
+
+  it("a typed reply does not bypass recipient validation before intent reservation", async () => {
+    const d = deps();
+    let reservations = 0, sends = 0;
+    const reserve = d.store.reserveSendIntent.bind(d.store);
+    d.store.reserveSendIntent = async (input) => { reservations++; return reserve(input); };
+    d.sender = { provider: "ses", send: async () => { sends++; return "must-not-send"; } };
+    for (const recipients of [{ to: ["bad"] }, { cc: ["bad"] }, { bcc: ["bad\r\nBcc: hidden@example.com"] }]) {
+      const response = await handleSelfHostedRequest(d, new Request("http://svc/v1/messages/send", {
+        method: "POST", headers: { "Content-Type": "application/json", "x-api-key": writeToken() },
+        body: JSON.stringify({ from: "me@example.com", to: ["external@example.com"], subject: "Re: Topic",
+          text: "Reply", reply_to_message_id: "parent", idempotency_key: "invalid-recipient-key", ...recipients }),
+      }));
+      expect(response?.status).toBe(400);
+    }
+    expect(reservations).toBe(0);
+    expect(sends).toBe(0);
+  });
+
   it("marks an expired sending lease uncertain instead of replaying the provider", async () => {
     const d = deps();
     const reserve = d.store.reserveSendIntent.bind(d.store);
