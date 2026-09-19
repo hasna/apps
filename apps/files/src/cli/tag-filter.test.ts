@@ -195,5 +195,7 @@ async function runCli(args: string[], env: Record<string, string>) {
 }
 
 function parseIds(stdout: string): string[] {
-  return (JSON.parse(stdout) as Array<{ id: string }>).map((file) => file.id);
+  const value = JSON.parse(stdout) as Array<{ id: string }> | { items: Array<{ id: string }> };
+  const files = Array.isArray(value) ? value : value.items;
+  return files.map((file) => file.id);
 }

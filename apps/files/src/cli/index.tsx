@@ -36,6 +36,7 @@ import {
   filePageJson,
   normalizeFileOutputMaxBytes,
   parseFileDetail,
+  resolveFilePageOffset,
   validateFileProjection,
   type FileOutputField,
 } from "../lib/compact-output.js";
@@ -798,25 +799,29 @@ program
   .option("-t, --tag <tag>", "Filter by tag")
   .option("-e, --ext <ext>", "Filter by extension")
   .option("--scope <scope>", "Search scope: all, metadata, content", "all")
-  .option("-l, --limit <n>", "Max results", "20")
-  .option("--offset <n>", "Offset", "0")
-  .option("--json", "Output the backward-compatible full JSON array")
-  .option("--agent-json", "Output a token-bounded receipt-bearing JSON page")
-  .option("--all", "With --agent-json, exhaust the whole query within hard safety bounds")
-  .option("--detail <detail>", "With --agent-json, row detail: compact or full")
-  .option("--fields <fields>", "With --agent-json, comma-separated fields (id is always included)")
-  .option("--pretty", "With --agent-json, pretty-print output (one line by default)")
-  .option("--max-bytes <n>", "With compact agent JSON, maximum response bytes (default 32768)")
+  .option("-l, --limit <n>", "Max results (default 20)")
+  .option("--offset <n>", "Zero-based offset; cannot be combined with --cursor")
+  .option("--cursor <cursor>", "Opaque next_cursor from a previous compact page")
+  .option("--json", "Output a token-bounded compact JSON page")
+  .option("--agent-json", "Deprecated alias for --json compact page output")
+  .option("--full", "With --json, return the legacy full-record bare array")
+  .option("--all", "With compact JSON, exhaust the whole query within hard safety bounds")
+  .option("--detail <detail>", "With compact JSON, row detail: compact or full")
+  .option("--fields <fields>", "With compact JSON, comma-separated fields (id is always included)")
+  .option("--pretty", "With compact JSON, pretty-print output (one line by default)")
+  .option("--max-bytes <n>", "With compact JSON, maximum response bytes (default 32768)")
   .action(async (query: string, opts: {
     source?: string;
     machine?: string;
     tag?: string;
     ext?: string;
     scope: string;
-    limit: string;
-    offset: string;
+    limit?: string;
+    offset?: string;
+    cursor?: string;
     json?: boolean;
     agentJson?: boolean;
+    full?: boolean;
     all?: boolean;
     detail?: string;
     fields?: string;
@@ -824,35 +829,61 @@ program
     maxBytes?: string;
   }) => {
     if (opts.json && opts.agentJson) {
-      console.error(chalk.red("--json and --agent-json are mutually exclusive"));
+      console.error(chalk.red("--json and --agent-json are aliases; pass only one"));
       process.exit(1);
     }
-    if (!opts.agentJson && (opts.all || opts.detail !== undefined || opts.fields !== undefined || opts.pretty || opts.maxBytes !== undefined)) {
-      console.error(chalk.red("--all, --detail, --fields, --pretty, and --max-bytes require --agent-json"));
+    const pageJson = Boolean(opts.json || opts.agentJson);
+    if (opts.full && (!opts.json || opts.agentJson)) {
+      console.error(chalk.red("--full is the legacy compatibility escape and requires --json (not --agent-json)"));
       process.exit(1);
     }
+    if (!pageJson && (opts.all || opts.detail !== undefined || opts.fields !== undefined || opts.pretty || opts.maxBytes !== undefined || opts.cursor !== undefined)) {
+      console.error(chalk.red("--all, --detail, --fields, --pretty, --max-bytes, and --cursor require --json"));
+      process.exit(1);
+    }
+    if (opts.full && (opts.all || opts.detail !== undefined || opts.fields !== undefined || opts.pretty || opts.maxBytes !== undefined || opts.cursor !== undefined)) {
+      console.error(chalk.red("--full cannot be combined with compact page controls; use --limit/--offset with the legacy array"));
+      process.exit(1);
+    }
+
     let limit: number;
+    let explicitOffset: number | undefined;
     let offset: number;
     let scope: SearchScope;
+    const continuation = {
+      kind: "search" as const,
+      query: {
+        query,
+        source_id: opts.source ?? null,
+        machine_id: opts.machine ?? null,
+        tag: opts.tag ?? null,
+        ext: opts.ext ?? null,
+        search_scope: opts.scope,
+      },
+    };
     try {
-      limit = parseIntFlag(opts.limit, "limit", { min: 1 });
-      offset = parseIntFlag(opts.offset, "offset", { min: 0 });
+      limit = opts.limit === undefined ? 20 : parseIntFlag(opts.limit, "limit", { min: 1 });
+      explicitOffset = opts.offset === undefined ? undefined : parseIntFlag(opts.offset, "offset", { min: 0 });
       scope = parseSearchScope(opts.scope);
+      continuation.query.search_scope = scope;
+      offset = resolveFilePageOffset(opts.cursor, explicitOffset, continuation);
     } catch (e) {
       console.error(chalk.red((e as Error).message));
       process.exit(1);
     }
 
+    const compactPage = pageJson && !opts.full;
     let detail;
     let fields: FileOutputField[] | undefined;
     let maxBytes: number | undefined;
     try {
-      detail = opts.agentJson ? parseFileDetail(opts.detail) : "full";
-      fields = opts.agentJson ? validateFileProjection(detail, opts.fields, "search") : undefined;
-      if (opts.agentJson && !opts.all && limit > FILES_API_MAX_PAGE_SIZE) {
-        throw new Error(`JSON page limit must be <= ${FILES_API_MAX_PAGE_SIZE}; paginate with --offset`);
+      detail = compactPage ? parseFileDetail(opts.detail) : "full";
+      fields = compactPage ? validateFileProjection(detail, opts.fields, "search") : undefined;
+      if (compactPage && !opts.all && limit > FILES_API_MAX_PAGE_SIZE) {
+        throw new Error(`JSON page limit must be <= ${FILES_API_MAX_PAGE_SIZE}; continue with --cursor or --offset`);
       }
-      if (opts.all && offset !== 0) throw new Error("--all requires --offset 0 so completeness covers the whole query");
+      if (opts.all && opts.cursor !== undefined) throw new Error("--all cannot be combined with --cursor");
+      if (opts.all && offset !== 0) throw new Error("--all requires offset 0 so completeness covers the whole query");
       if (opts.all && detail !== "compact") throw new Error("--all requires compact detail for bounded exhaustive output");
       if (detail === "full" && opts.maxBytes !== undefined) {
         throw new Error("--max-bytes cannot be combined with --detail full");
@@ -865,6 +896,7 @@ program
       console.error(chalk.red((e as Error).message));
       process.exit(1);
     }
+
     const readSearchPage = (pageLimit: number, pageOffset: number) => store().searchFiles(query, {
       source_id: opts.source,
       machine_id: opts.machine,
@@ -874,12 +906,12 @@ program
       offset: pageOffset,
       search_scope: scope,
     });
-    const results = opts.agentJson
+    const results = compactPage
       ? opts.all
         ? await fetchAllFileRows(readSearchPage)
         : await fetchFilePageRows(readSearchPage, limit, offset)
       : await readSearchPage(limit, offset);
-    if (opts.agentJson) {
+    if (compactPage) {
       const page = buildFilePage(results, {
         limit: opts.all ? MAX_ALL_FILE_ROWS : limit,
         offset,
@@ -889,14 +921,15 @@ program
         pretty: opts.pretty,
         trailingNewline: true,
         all: opts.all,
+        continuation,
       });
       if (opts.all && page._meta.byte_limited) {
-        throw new Error(`Exhaustive search output exceeds max_bytes=${maxBytes}; use paginated --agent-json output`);
+        throw new Error(`Exhaustive search output exceeds max_bytes=${maxBytes}; use paginated --json output`);
       }
       await writeStdoutLine(filePageJson(page, opts.pretty));
       return;
     }
-    if (opts.json) {
+    if (opts.json && opts.full) {
       await writeStdoutLine(JSON.stringify(results, null, 2));
       return;
     }
@@ -910,7 +943,6 @@ program
     }
     console.log(chalk.dim(`\n${results.length} result(s)`));
   });
-
 program
   .command("context-pack [file-ids...]")
   .description("Build a bounded, cited context pack for explicit files or open-files refs")
@@ -1152,41 +1184,81 @@ program
   .option("-e, --ext <ext>", "Filter by extension")
   .option("-c, --collection <id>", "Filter by collection ID")
   .option("-p, --project <id>", "Filter by project ID")
-  .option("-l, --limit <n>", "Max results", "50")
-  .option("--offset <n>", "Offset", "0")
+  .option("-l, --limit <n>", "Max results (default 20 for compact JSON, 50 otherwise)")
+  .option("--offset <n>", "Zero-based offset; cannot be combined with --cursor")
+  .option("--cursor <cursor>", "Opaque next_cursor from a previous compact page")
   .option("--after <date>", "Modified after date (YYYY-MM-DD)")
   .option("--before <date>", "Modified before date (YYYY-MM-DD)")
   .option("--min-size <size>", "Minimum size (e.g. 1mb, 500kb, 1024)")
   .option("--max-size <size>", "Maximum size (e.g. 100mb)")
   .option("--sort <field>", "Sort by: name, size, date (default: date)")
   .option("--asc", "Sort ascending (default: descending)")
-  .option("--json", "Output the backward-compatible full JSON array")
-  .option("--agent-json", "Output a token-bounded receipt-bearing JSON page")
-  .option("--all", "With --agent-json, exhaust the whole query within hard safety bounds")
-  .option("--detail <detail>", "With --agent-json, row detail: compact or full")
-  .option("--fields <fields>", "With --agent-json, comma-separated fields (id is always included)")
-  .option("--pretty", "With --agent-json, pretty-print output (one line by default)")
-  .option("--max-bytes <n>", "With compact agent JSON, maximum response bytes (default 32768)")
+  .option("--json", "Output a token-bounded compact JSON page")
+  .option("--agent-json", "Deprecated alias for --json compact page output")
+  .option("--full", "With --json, return the legacy full-record bare array")
+  .option("--all", "With compact JSON, exhaust the whole query within hard safety bounds")
+  .option("--detail <detail>", "With compact JSON, row detail: compact or full")
+  .option("--fields <fields>", "With compact JSON, comma-separated fields (id is always included)")
+  .option("--pretty", "With compact JSON, pretty-print output (one line by default)")
+  .option("--max-bytes <n>", "With compact JSON, maximum response bytes (default 32768)")
   .action(async (opts: {
     source?: string; machine?: string; tag?: string; ext?: string;
-    collection?: string; project?: string; limit: string; offset: string;
+    collection?: string; project?: string; limit?: string; offset?: string; cursor?: string;
     after?: string; before?: string; minSize?: string; maxSize?: string;
-    sort?: string; asc?: boolean; json?: boolean; agentJson?: boolean; all?: boolean; detail?: string;
+    sort?: string; asc?: boolean; json?: boolean; agentJson?: boolean; full?: boolean; all?: boolean; detail?: string;
     fields?: string; pretty?: boolean; maxBytes?: string;
   }) => {
     if (opts.json && opts.agentJson) {
-      console.error(chalk.red("--json and --agent-json are mutually exclusive"));
+      console.error(chalk.red("--json and --agent-json are aliases; pass only one"));
       process.exit(1);
     }
-    if (!opts.agentJson && (opts.all || opts.detail !== undefined || opts.fields !== undefined || opts.pretty || opts.maxBytes !== undefined)) {
-      console.error(chalk.red("--all, --detail, --fields, --pretty, and --max-bytes require --agent-json"));
+    const pageJson = Boolean(opts.json || opts.agentJson);
+    if (opts.full && (!opts.json || opts.agentJson)) {
+      console.error(chalk.red("--full is the legacy compatibility escape and requires --json (not --agent-json)"));
       process.exit(1);
     }
+    if (!pageJson && (opts.all || opts.detail !== undefined || opts.fields !== undefined || opts.pretty || opts.maxBytes !== undefined || opts.cursor !== undefined)) {
+      console.error(chalk.red("--all, --detail, --fields, --pretty, --max-bytes, and --cursor require --json"));
+      process.exit(1);
+    }
+    if (opts.full && (opts.all || opts.detail !== undefined || opts.fields !== undefined || opts.pretty || opts.maxBytes !== undefined || opts.cursor !== undefined)) {
+      console.error(chalk.red("--full cannot be combined with compact page controls; use --limit/--offset with the legacy array"));
+      process.exit(1);
+    }
+
+    const compactPage = pageJson && !opts.full;
     let limit: number;
+    let explicitOffset: number | undefined;
     let offset: number;
+    let minSize: number | undefined;
+    let maxSize: number | undefined;
+    const sort = (opts.sort as "name" | "size" | "date") ?? "date";
+    const sortDir = opts.asc ? "asc" as const : "desc" as const;
+    const continuation = {
+      kind: "list" as const,
+      query: {
+        source_id: opts.source ?? null,
+        machine_id: opts.machine ?? null,
+        tag: opts.tag ?? null,
+        ext: opts.ext ?? null,
+        collection_id: opts.collection ?? null,
+        project_id: opts.project ?? null,
+        after: opts.after ?? null,
+        before: opts.before ?? null,
+        min_size: null as number | null,
+        max_size: null as number | null,
+        sort,
+        sort_dir: sortDir,
+      },
+    };
     try {
-      limit = parseIntFlag(opts.limit, "limit", { min: 1 });
-      offset = parseIntFlag(opts.offset, "offset", { min: 0 });
+      limit = opts.limit === undefined ? (compactPage ? 20 : 50) : parseIntFlag(opts.limit, "limit", { min: 1 });
+      explicitOffset = opts.offset === undefined ? undefined : parseIntFlag(opts.offset, "offset", { min: 0 });
+      minSize = opts.minSize ? parseSize(opts.minSize) : undefined;
+      maxSize = opts.maxSize ? parseSize(opts.maxSize) : undefined;
+      continuation.query.min_size = minSize ?? null;
+      continuation.query.max_size = maxSize ?? null;
+      offset = resolveFilePageOffset(opts.cursor, explicitOffset, continuation);
     } catch (e) {
       console.error(chalk.red((e as Error).message));
       process.exit(1);
@@ -1196,12 +1268,13 @@ program
     let fields: FileOutputField[] | undefined;
     let maxBytes: number | undefined;
     try {
-      detail = opts.agentJson ? parseFileDetail(opts.detail) : "full";
-      fields = opts.agentJson ? validateFileProjection(detail, opts.fields, "list") : undefined;
-      if (opts.agentJson && !opts.all && limit > FILES_API_MAX_PAGE_SIZE) {
-        throw new Error(`JSON page limit must be <= ${FILES_API_MAX_PAGE_SIZE}; paginate with --offset`);
+      detail = compactPage ? parseFileDetail(opts.detail) : "full";
+      fields = compactPage ? validateFileProjection(detail, opts.fields, "list") : undefined;
+      if (compactPage && !opts.all && limit > FILES_API_MAX_PAGE_SIZE) {
+        throw new Error(`JSON page limit must be <= ${FILES_API_MAX_PAGE_SIZE}; continue with --cursor or --offset`);
       }
-      if (opts.all && offset !== 0) throw new Error("--all requires --offset 0 so completeness covers the whole query");
+      if (opts.all && opts.cursor !== undefined) throw new Error("--all cannot be combined with --cursor");
+      if (opts.all && offset !== 0) throw new Error("--all requires offset 0 so completeness covers the whole query");
       if (opts.all && detail !== "compact") throw new Error("--all requires compact detail for bounded exhaustive output");
       if (detail === "full" && opts.maxBytes !== undefined) {
         throw new Error("--max-bytes cannot be combined with --detail full");
@@ -1215,9 +1288,6 @@ program
       process.exit(1);
     }
 
-    // The Store routes to the on-box db or the authoritative cloud /v1/files
-    // endpoint. JSON reads one continuation row so has_more is evidence, not a
-    // guess; the probe row is never emitted.
     const readListPage = (pageLimit: number, pageOffset: number) => store().listFiles({
       source_id: opts.source,
       machine_id: opts.machine,
@@ -1229,17 +1299,17 @@ program
       offset: pageOffset,
       after: opts.after,
       before: opts.before,
-      min_size: opts.minSize ? parseSize(opts.minSize) : undefined,
-      max_size: opts.maxSize ? parseSize(opts.maxSize) : undefined,
-      sort: (opts.sort as "name" | "size" | "date") ?? "date",
-      sort_dir: opts.asc ? "asc" : "desc",
+      min_size: minSize,
+      max_size: maxSize,
+      sort,
+      sort_dir: sortDir,
     });
-    const files = opts.agentJson
+    const files = compactPage
       ? opts.all
         ? await fetchAllFileRows(readListPage)
         : await fetchFilePageRows(readListPage, limit, offset)
       : await readListPage(limit, offset);
-    if (opts.agentJson) {
+    if (compactPage) {
       const page = buildFilePage(files, {
         limit: opts.all ? MAX_ALL_FILE_ROWS : limit,
         offset,
@@ -1249,14 +1319,15 @@ program
         pretty: opts.pretty,
         trailingNewline: true,
         all: opts.all,
+        continuation,
       });
       if (opts.all && page._meta.byte_limited) {
-        throw new Error(`Exhaustive list output exceeds max_bytes=${maxBytes}; use paginated --agent-json output`);
+        throw new Error(`Exhaustive list output exceeds max_bytes=${maxBytes}; use paginated --json output`);
       }
       await writeStdoutLine(filePageJson(page, opts.pretty));
       return;
     }
-    if (opts.json) {
+    if (opts.json && opts.full) {
       await writeStdoutLine(JSON.stringify(files, null, 2));
       return;
     }
@@ -1267,7 +1338,6 @@ program
     }
     console.log(chalk.dim(`\n${files.length} file(s)`));
   });
-
 // ─── tag ────────────────────────────────────────────────────────────────────
 
 program
