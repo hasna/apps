@@ -317,8 +317,8 @@ describe("registry: the written inventory of hosted apps", () => {
     expect(calendar.baseUrl).toBe(defaultBaseUrlFor("calendar"));
     expect(calendar.probePath).toBe(KEY_PROBE_PATH);
     expect(calendar.keyCheck).toBe("probe");
-    // todos is pinned to its origin hostname until hasna/apps#1512.
-    expect(registry.find((a) => a.app === "todos")!.baseUrl).toBe("https://todos.hasna.xyz");
+    // todos now inherits the canonical api.hasna.com path-prefixed gateway default.
+    expect(registry.find((a) => a.app === "todos")!.baseUrl).toBe("https://api.hasna.com/todos");
   });
 
   test("every key secret uses the registered app namespace", () => {

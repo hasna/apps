@@ -144,6 +144,6 @@ describe("plan and task-list MCP tools in local mode", () => {
     setEnv({ HASNA_TODOS_LOCAL: "1", HOME: isolatedHome() });
     const result = await captureTools().get("list_projects")!.handler({});
     expect(result.isError).toBeUndefined();
-    expect(result.content[0].text).toBe("No projects found.");
+    expect(JSON.parse(result.content[0].text)).toMatchObject({ projects: [], count: 0, total: 0, has_more: false });
   });
 });

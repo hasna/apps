@@ -31,12 +31,12 @@ The unconfigured case now **denies**. The posture is resolved once at startup
 
 | Configuration | Posture | `/api/*` + `/mcp` | `/v1` | `/health` `/ready` `/version` `/openapi.json` |
 | --- | --- | --- | --- | --- |
-| `HASNA_TODOS_SERVER_API_KEY` set, or ≥1 stored key | `enforce` | credential required | authenticated | public |
+| PostgreSQL DSN + `HASNA_TODOS_SERVER_API_KEY`, or explicit local mode + a server/stored key | `enforce` | credential required | authenticated only on the PostgreSQL posture | public |
 | a remote database URL is configured, no local key | `local-plane-disabled` | `404 LOCAL_PLANE_DISABLED` | authenticated | public |
-| loopback bind + explicit `--allow-anonymous` | `anonymous-loopback` | anonymous, loopback peers only | authenticated | public |
+| `HASNA_TODOS_LOCAL=1` + loopback bind + explicit `--allow-anonymous` | `anonymous-loopback` | anonymous, loopback peers only | unavailable (local-only process) | public |
 | anything else | **refuses to start** (exit 1) | — | — | — |
 
-`--allow-anonymous` / `TODOS_ALLOW_ANONYMOUS=1` is **refused** for any non-loopback
+`--allow-anonymous` / `TODOS_ALLOW_ANONYMOUS=1` additionally requires `HASNA_TODOS_LOCAL=1` (or `TODOS_LOCAL=1`) to select SQLite, and is **refused** for any non-loopback
 bind host, and even when active a request is only served anonymously if its raw
 transport peer address is loopback (the check deliberately ignores
 `x-forwarded-for`, so `TODOS_TRUST_PROXY=1` cannot be used to spoof a loopback peer).
@@ -98,8 +98,8 @@ Related hardening worth applying in the same revision (pre-existing, not fixed h
 | CLI / SDK against `/v1` with an API key | `/v1` with a key | unchanged — `/v1` was never affected |
 | `todos-mcp` (stdio, the default for MCP clients) | local SQLite, no HTTP | unchanged |
 | `todos-mcp --http` | anonymous `todos-serve` started from the MCP bin | **refused (exit 2)** — the MCP bin is stdio-only; run `todos-serve` for `/mcp` and apply the rows below |
-| `todos serve` / `todos-serve`, no key, loopback | anonymous | **breaking** — add `--allow-anonymous` (or `TODOS_ALLOW_ANONYMOUS=1`), or mint a key with `todos api-keys create "<name>"` |
-| `todos serve --host 0.0.0.0`, no key | anonymous, off-box | **refuses to start** — set `HASNA_TODOS_SERVER_API_KEY` |
+| `todos serve` / `todos-serve`, no key, loopback | refuses | **breaking** — set `HASNA_TODOS_LOCAL=1` and add `--allow-anonymous`, or set the local opt-in and mint a key with `todos api-keys create "<name>"` |
+| `todos serve --host 0.0.0.0`, no key | anonymous, off-box | **refuses to start** — configure the PostgreSQL DSN for hosted use; local-only mode cannot bind anonymously off-box |
 | Load-balancer / container health checks (`/ready`) | public | unchanged (pre-auth) |
 | Hosted `/mcp`, hosted `/api/*` | anonymous | `404 LOCAL_PLANE_DISABLED` unless `HASNA_TODOS_SERVER_API_KEY` is provisioned |
 

@@ -157,7 +157,8 @@ Rollback is a flip back, accepting that rows written to the cloud during the
 3. Flip env back on all machines via config-sync:
 
    ```
-   # remove HASNA_TODOS_DATABASE_URL to restore the sqlite backend
+   # remove HASNA_TODOS_DATABASE_URL and explicitly set HASNA_TODOS_LOCAL=1
+   # to restore the local-only sqlite backend
    # optionally re-enable HASNA_TODOS_SHADOW=1 to resume mirroring
    ```
 

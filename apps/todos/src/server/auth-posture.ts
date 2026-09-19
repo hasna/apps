@@ -195,8 +195,8 @@ export function authNotConfiguredMessage(host: string | undefined): string {
     `Fix ONE of the following, then restart:`,
     `  1. Set the server credential:        export ${AUTH_ENV_VAR}=<key>   (or pass --api-key <key>)`,
     `  2. Mint a stored key:                todos api-keys create "<caller name>"`,
-    `  3. Local dev only, loopback bind:    todos serve --allow-anonymous`,
-    `                                       (or ${ALLOW_ANONYMOUS_ENV_VAR}=1; refused unless the bind host is loopback)`,
+    `  3. Local dev only, loopback bind:    HASNA_TODOS_LOCAL=1 todos serve --allow-anonymous`,
+    `                                       (or set HASNA_TODOS_LOCAL=1 with ${ALLOW_ANONYMOUS_ENV_VAR}=1; refused unless the bind host is loopback)`,
     ``,
     `Never use option 3 with --host 0.0.0.0 or any other off-box bind.`,
   ].join("\n");

@@ -1265,7 +1265,7 @@ class PostgresJsonRecordStore {
     }
     // Incident 724667 / HP-00083 (2026-08-22): PATCH /tasks/{id} (and every
     // other guarded task write) returned HTTP 500 in bursts — measured 83
-    // failures at 17:50-17:59Z and 83+ at 19:30-19:32Z on todos.hasna.xyz,
+    // failures at 17:50-17:59Z and 83+ at 19:30-19:32Z on the production service,
     // each surfacing `PostgresError: canceling statement due to lock timeout`
     // (SQLSTATE 55P03): the `todos_app` role's 5s `lock_timeout` canceled the
     // advisory-lock statement or the guarded write while another transaction

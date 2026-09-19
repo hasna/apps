@@ -149,9 +149,7 @@
     },
     {
       "app": "todos",
-      "source": "monorepo",
-      "baseUrl": "https://todos.hasna.xyz",
-      "notes": "Stays on the origin hostname until hasna/apps#1512 puts it behind the gateway."
+      "source": "monorepo"
     },
     {
       "app": "trash",

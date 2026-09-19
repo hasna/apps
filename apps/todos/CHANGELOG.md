@@ -1660,7 +1660,7 @@ skip auth`, so a server started without `TODOS_API_KEY` and without a stored key
 ### Security
 
 - Remove internal production-infrastructure identifiers from the published open-source package. The managed database cluster name and the AWS Secrets Manager runtime path are no longer hardcoded in `src/storage/config.ts`; they are now supplied at runtime by the private hosting wrapper via `HASNA_TODOS_RDS_CLUSTER` and `HASNA_TODOS_RDS_RUNTIME_PATH`, and resolve to `null` when unset (no baked-in defaults).
-- Scrub the internal cloud domain (`*.hasna.xyz`) from source comments, the `union-backfill` script default endpoint, and test fixtures; compose the private billing host in the headless outbound-boundary allowlist from parts so it is not shipped as a plaintext literal (the outbound guard still blocks it).
+- Scrub retired internal origin-domain literals from source comments, the `union-backfill` script default endpoint, and test fixtures; keep private origin topology out of published package text while preserving the outbound guard.
 - Replace the real fleet machine identifier and private Tailscale/LAN addresses in the README machine-topology example with neutral placeholders.
 
 ### Changed

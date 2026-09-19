@@ -83,6 +83,6 @@ describe("MCP plan/task-list tools fail closed with a typed error over stdio", (
   it("a tool with a real local path still answers locally in the same session", async () => {
     const result = await client.callTool({ name: "list_projects", arguments: {} });
     expect(result.isError).toBeFalsy();
-    expect((result as { content: { text: string }[] }).content[0]!.text).toBe("No projects found.");
+    expect(JSON.parse((result as { content: { text: string }[] }).content[0]!.text)).toMatchObject({ projects: [], count: 0, total: 0, has_more: false });
   });
 });

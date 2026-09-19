@@ -35,6 +35,8 @@ import { registerWorkflowPrompts } from "./tools/workflow-prompts.js";
 
 let db: ReturnType<typeof getDatabase>;
 const ROUTING_ENV_KEYS = [
+  "HASNA_TODOS_LOCAL",
+  "TODOS_LOCAL",
   "HASNA_TODOS_STORAGE_MODE",
   "TODOS_STORAGE_MODE",
   "HASNA_TODOS_API_URL",
@@ -99,6 +101,7 @@ beforeEach(() => {
     delete process.env[key];
   }
   resetConfig();
+  process.env["HASNA_TODOS_LOCAL"] = "1";
   process.env["TODOS_DB_PATH"] = ":memory:";
   resetDatabase();
   db = getDatabase();

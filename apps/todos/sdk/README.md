@@ -15,7 +15,10 @@ bun add @hasna/todos-sdk
 ```typescript
 import { TodosClient } from "@hasna/todos-sdk";
 
-const client = new TodosClient({ baseUrl: "http://localhost:19427" });
+const client = new TodosClient({
+  baseUrl: process.env.HASNA_TODOS_API_URL ?? "https://api.hasna.com/todos",
+  apiKey: process.env.HASNA_TODOS_API_KEY,
+});
 
 // Register your agent
 await client.init({ name: "my-agent", role: "agent" });
@@ -49,8 +52,8 @@ client, full fleet credential chain behind it.
 
 | Setting | Option | Environment variable | Default |
 | --- | --- | --- | --- |
-| Authority | `baseUrl` | `HASNA_TODOS_API_URL` | `https://api.hasna.com/todos` with a credential, `http://localhost:19427` without one |
-| Credential | `apiKey` | `HASNA_TODOS_API_KEY` | none |
+| Authority | `baseUrl` | `HASNA_TODOS_API_URL` | `https://api.hasna.com/todos` when a credential resolves |
+| Credential | `apiKey` | `HASNA_TODOS_API_KEY` | none; hosted calls fail closed without one |
 
 **A credential means hosted.** When a key resolves and nothing names an
 authority, the authority is the fleet gateway — the same answer the
@@ -66,27 +69,33 @@ export HASNA_TODOS_API_URL=https://api.hasna.com/todos
 export HASNA_TODOS_API_KEY=…
 ```
 
-### Local mode
+### Hosted fail-closed and explicit local mode
 
-When **neither** an authority **nor** a credential is configured, the client
-targets a `todos-serve` running on this machine at `http://localhost:19427` and
-sends no credential. That is a supported mode, not a fallback from failure — and
-because a client quietly reading an empty local store while you believe you are
-on the fleet is the worst outcome of all, it prints one line to stderr saying so:
+The supported default is the hosted gateway. Supply a credential explicitly or
+through `HASNA_TODOS_API_KEY`; do not treat an absent credential as permission to
+read a localhost store. Hosted clients fail closed when authentication is
+missing or rejected rather than switching datasets.
 
+Local development remains available only through an explicit selector or by
+naming the local server directly:
+
+```bash
+export HASNA_TODOS_LOCAL=1
 ```
-todos-sdk: LOCAL mode — no HASNA_TODOS_API_URL and no HASNA_TODOS_API_KEY resolved; reading and
-writing the local todos-serve at http://localhost:19427, not the hosted fleet. …
+
+```typescript
+const local = new TodosClient({ baseUrl: "http://localhost:19427" });
 ```
 
-The line is printed once per process, and `__resetTodosLocalModeNotice()` is
-exported so a test can observe it more than once.
+Start that server with its own explicit local storage opt-in:
 
-**Local mode requires that BOTH are absent.** A resolved credential with no
-authority is a hosted client aimed at the gateway, not a local one: your fleet
-key is never sent to an unauthenticated `todos-serve` on the box just because no
-URL was named. Setting only `baseUrl` / `HASNA_TODOS_API_URL` uses that
-authority with no credential.
+```bash
+HASNA_TODOS_LOCAL=1 todos-serve --allow-anonymous
+```
+
+Never reuse a hosted fleet credential for the local server. A credential with no
+authority selects `https://api.hasna.com/todos`; the client never redirects it to
+localhost.
 
 ## OpenAI / Anthropic Tool Schemas
 

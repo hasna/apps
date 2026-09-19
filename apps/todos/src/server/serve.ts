@@ -22,6 +22,8 @@ import * as handlers from "./routes.js";
 import { env } from "../lib/env.js";
 import { resolveRequestClientIp, resolveTrustProxy, trustedProxiesFromEnv } from "./client-ip.js";
 import { resolveRateLimitMax } from "./rate-limit-config.js";
+import { isTodosLocalOptIn } from "../lib/local-opt-in.js";
+import { resolveServerStorageMode } from "./storage-posture.js";
 
 export const SECURITY_HEADERS: Record<string, string> = {
   "X-Content-Type-Options": "nosniff",
@@ -213,6 +215,10 @@ export interface StartServerOptions {
  * closed with the documented refusal.
  */
 function hasGeneratedApiKeysSafely(): boolean {
+  // A stored SQLite key is relevant only after the operator explicitly selected
+  // local-only server mode. Merely finding a database file must never turn an
+  // otherwise production-intent process into a SQLite service.
+  if (!isTodosLocalOptIn(process.env)) return false;
   try {
     const dbPath = getDatabasePath();
     if (!existsSync(dbPath)) return false;
@@ -261,6 +267,12 @@ export async function startServer(port: number, options?: StartServerOptions): P
   } else {
     console.log(describeAuthPosture(authPosture));
   }
+
+  // Storage intent is independent from authentication. A server credential may
+  // authorize requests, but it cannot silently select SQLite when production
+  // forgot its database URL. Hosted Postgres or explicit local-only mode are
+  // the only two accepted postures.
+  const storageMode = resolveServerStorageMode(process.env);
 
   // Initialize the store. `todos-serve` is an explicit storage handle — it IS
   // the local server — so it opens the resolved path instead of letting the
@@ -361,10 +373,11 @@ export async function startServer(port: number, options?: StartServerOptions): P
       // ── Service surface probes (unauthenticated): /health /ready /version ──
       if ((path === "/health" || path === "/ready" || path === "/version") && method === "GET") {
         const { getPackageVersion } = await import("../lib/package-version.js");
-        const { isPostgresBackendConfigured, pingCloud } = await import("./cloud.js");
+        const { pingCloud } = await import("./cloud.js");
         // `mode` keeps its historical remote|local wire values (deployed smoke
-        // checks assert them); `backend` is the canonical two-arm answer.
-        const backend = isPostgresBackendConfigured() ? "postgresql" : "sqlite";
+        // checks assert them); `backend` is the canonical two-arm answer. The
+        // startup posture is fixed and already failed closed before binding.
+        const backend = storageMode;
         const mode = backend === "postgresql" ? "remote" : "local";
         const version = getPackageVersion();
         if (path === "/version") {
