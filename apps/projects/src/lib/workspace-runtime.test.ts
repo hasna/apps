@@ -1,7 +1,21 @@
-import { describe, expect, test } from "bun:test";
-import { applyWorkspaceTmux } from "./workspace-runtime.js";
+import { afterEach, describe, expect, test } from "bun:test";
+import { lstatSync, mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { applyWorkspaceTmux, prepareWorkspaceDirectory } from "./workspace-runtime.js";
 import { createSession, restartSession, withTmuxCommandRunnerForTest } from "./tmux.js";
 import type { Workspace } from "../types/workspace.js";
+
+const savedHome = process.env.HOME;
+const savedProjectsHome = process.env.HASNA_PROJECTS_HOME;
+const savedUmask = process.umask();
+
+afterEach(() => {
+  process.env.HOME = savedHome;
+  if (savedProjectsHome === undefined) delete process.env.HASNA_PROJECTS_HOME;
+  else process.env.HASNA_PROJECTS_HOME = savedProjectsHome;
+  process.umask(savedUmask);
+});
 
 function workspace(slug = "runtime-project"): Workspace {
   return {
@@ -103,6 +117,63 @@ function createTmuxMock(initial: Record<string, string[]> = {}, options: TmuxMoc
 }
 
 describe("workspace tmux runtime", () => {
+  test("creates canonical workspace ancestors owner-only under a group-friendly umask", async () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-private-workspace-"));
+    try {
+      process.env.HASNA_PROJECTS_HOME = join(root, "projects");
+      process.umask(0o002);
+      const project = workspace("private-runtime");
+      project.id = "wks_private_runtime";
+      project.primary_path = join(root, "projects", "workspaces", project.id);
+
+      prepareWorkspaceDirectory(project, { createDirectory: true, recordEvents: false });
+
+      for (const path of [join(root, "projects"), join(root, "projects", "workspaces"), project.primary_path]) {
+        expect(statSync(path).mode & 0o777).toBe(0o700);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("leaves an existing canonical symlink untouched", () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-private-symlink-"));
+    try {
+      process.env.HASNA_PROJECTS_HOME = join(root, "projects");
+      const target = join(root, "target");
+      const link = join(root, "projects", "workspaces", "wks_symlink_runtime");
+      mkdirSync(target, { recursive: true, mode: 0o700 });
+      mkdirSync(join(root, "projects", "workspaces"), { recursive: true, mode: 0o700 });
+      symlinkSync(target, link);
+      const project = workspace("symlink-runtime");
+      project.id = "wks_symlink_runtime";
+      project.primary_path = link;
+
+      prepareWorkspaceDirectory(project, { createDirectory: true, recordEvents: false });
+
+      expect(lstatSync(link).isSymbolicLink()).toBe(true);
+      expect(statSync(target).mode & 0o777).toBe(0o700);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps user-supplied shared paths on platform defaults", () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-shared-workspace-"));
+    try {
+      process.umask(0o002);
+      const project = workspace("shared-runtime");
+      project.id = "wks_shared_runtime";
+      project.primary_path = join(root, "shared");
+
+      prepareWorkspaceDirectory(project, { createDirectory: true, recordEvents: false });
+
+      expect(statSync(project.primary_path).mode & 0o777).toBe(0o775);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("creates a missing session with 01 and 02 windows", () => {
     const tmux = createTmuxMock();
     const result = withTmuxCommandRunnerForTest(tmux.runner, () => applyWorkspaceTmux(workspace(), {

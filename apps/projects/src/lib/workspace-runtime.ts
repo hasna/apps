@@ -12,6 +12,7 @@ import {
 } from "./tmux.js";
 import { recordWorkspaceEvent } from "../db/workspaces.js";
 import type { EventSource, JsonObject, TmuxProfile, TmuxProfileWindow, Workspace } from "../types/workspace.js";
+import { isProjectWorkspaceStorePath } from "./project-store-paths.js";
 
 export const PROJECT_MARKER_FILENAME = ".project.json";
 export const LEGACY_WORKSPACE_MARKER_FILENAME = ".workspace.json";
@@ -96,6 +97,18 @@ function workspacePath(workspace: Pick<Workspace, "primary_path" | "slug">): str
   return resolve(workspace.primary_path);
 }
 
+/**
+ * Canonical project workspaces are private harness roots.  Pass an explicit
+ * owner-only mode when creating them so the result is independent of umask.
+ * User-supplied paths can intentionally be shared, so they keep the platform
+ * default permissions.
+ */
+function workspaceMkdirOptions(workspace: Workspace): { recursive: true; mode?: number } {
+  return isProjectWorkspaceStorePath(workspace.id, workspace.primary_path)
+    ? { recursive: true, mode: 0o700 }
+    : { recursive: true };
+}
+
 function renderTemplate(template: string, values: Record<string, string | null | undefined>): string {
   return template.replace(/\{([a-zA-Z0-9_]+)\}/g, (_match, key: string) => values[key] ?? "");
 }
@@ -131,7 +144,7 @@ export function writeWorkspaceMarker(workspace: Workspace, options: PrepareWorks
   if (options.dryRun) {
     return { type: "workspace_marker", target: markerPath, status: "planned" };
   }
-  mkdirSync(path, { recursive: true });
+  mkdirSync(path, workspaceMkdirOptions(workspace));
   writeFileSync(markerPath, JSON.stringify(buildWorkspaceMarker(workspace), null, 2) + "\n", "utf-8");
   const action: WorkspaceRuntimeAction = { type: "workspace_marker", target: markerPath, status: "completed" };
   if (options.recordEvents !== false) {
@@ -174,12 +187,12 @@ export function prepareWorkspaceDirectory(
       actions.push({ type: "mkdir", target: path, status: "planned" });
     } else if (options.requireAbsentDirectory) {
       if (existsSync(path)) throw new Error(`Project directory already exists: ${path}`);
-      mkdirSync(path);
+      mkdirSync(path, isProjectWorkspaceStorePath(workspace.id, workspace.primary_path) ? { mode: 0o700 } : {});
       actions.push({ type: "mkdir", target: path, status: "completed" });
     } else if (existsSync(path)) {
       actions.push({ type: "mkdir", target: path, status: "skipped", message: "Directory already exists" });
     } else {
-      mkdirSync(path, { recursive: true });
+      mkdirSync(path, workspaceMkdirOptions(workspace));
       actions.push({ type: "mkdir", target: path, status: "completed" });
     }
   }
