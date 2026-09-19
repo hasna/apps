@@ -590,7 +590,7 @@ jobs:
           # apply, or deployment invalidates this run instead of being silently
           # overwritten by a candidate derived from the stale rollback anchor.
           current_service="$(aws ecs describe-services --cluster "${CLUSTER}" --services "${SERVICE}" --output json)"
-          jq -e '.failures | length == 0 and (.services | length == 1)' <<<"${current_service}" >/dev/null
+          jq -e '(.failures | length == 0) and (.services | length == 1)' <<<"${current_service}" >/dev/null
           current_task_definition="$(jq -er '.services[0].taskDefinition' <<<"${current_service}")"
           [[ "${current_task_definition}" == "${PREVIOUS_TASK_DEFINITION}" ]] || {
             echo "shortlinks service anchor changed during deployment; refusing to overwrite ${current_task_definition}" >&2
