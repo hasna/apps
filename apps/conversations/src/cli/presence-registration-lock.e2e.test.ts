@@ -78,7 +78,7 @@ function presenceOf(agent: string): PresenceRow {
   const result = runCli(["agents", "list", "--json"]);
   expect(result.exitCode).toBe(0);
 
-  const rows = JSON.parse(result.stdout) as PresenceRow[];
+  const rows = JSON.parse(result.stdout).agents as PresenceRow[];
   const row = rows.find((r) => r.agent.toLowerCase() === agent.toLowerCase());
   if (!row) throw new Error(`no presence row for "${agent}" in ${result.stdout}`);
   return row;

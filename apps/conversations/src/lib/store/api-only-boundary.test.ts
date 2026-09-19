@@ -22,7 +22,7 @@ test("saved API CLI credentials work without copying or recreating databases", a
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(req) {
     if (req.headers.get("x-api-key") !== token) return Response.json({ error: "unauthorized" }, { status: 401 });
     requests++;
-    if (new URL(req.url).pathname === "/v1/agents") return Response.json({ agents: [{ name: "shared-agent", online: false }] });
+    if (new URL(req.url).pathname === "/v1/agents") return Response.json({ agents: [{ id: "shared-agent-id", agent: "shared-agent", session_id: null, role: "agent", project_id: null, status: "offline", last_seen_at: "2026-09-19T00:00:00.000Z", created_at: "2026-09-19T00:00:00.000Z", online: false, metadata: null }] });
     return Response.json({ error: "unexpected route" }, { status: 404 });
   }});
   const legacy = join(home, ".hasna/conversations");
@@ -40,7 +40,7 @@ test("saved API CLI credentials work without copying or recreating databases", a
   try {
     const success = await run();
     expect(success.code, success.stderr).toBe(0);
-    expect(JSON.parse(success.stdout)[0].name).toBe("shared-agent");
+    expect(JSON.parse(success.stdout).agents[0].agent).toBe("shared-agent");
     expect(requests).toBeGreaterThan(0);
     const before = requests;
     for (const key of ["HASNA_CONVERSATIONS_DB_PATH", "CONVERSATIONS_DB_PATH"]) {

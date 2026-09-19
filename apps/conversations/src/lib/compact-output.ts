@@ -1,6 +1,8 @@
 import type {
   AgentPresence,
   ChannelInfo,
+  ChannelMember,
+  ChannelNotificationSubscription,
   Message,
   ProjectInfo,
   SearchResult,
@@ -10,11 +12,13 @@ import type {
   TaskInfo,
 } from "../types.js";
 import { takeWindow } from "./message-window.js";
+import type { SortDescriptor } from "./list-order.js";
 
 export const DEFAULT_COMPACT_LIMIT = 10;
 export const DEFAULT_PREVIEW_CHARS = 160;
 export const MAX_COMPACT_LIMIT = 100;
 export const DEFAULT_SEARCH_MAX_BYTES = 48 * 1024;
+export const DEFAULT_COLLECTION_MAX_BYTES = 48 * 1024;
 
 export interface OutputWindow {
   limit: number;
@@ -269,26 +273,137 @@ export function summarizeProject(project: ProjectInfo, maxChars = DEFAULT_PREVIE
 
 export function summarizeAgent(agent: AgentPresence) {
   return {
-    agent: agent.agent,
-    role: agent.role,
-    status: agent.status,
+    agent: previewText(agent.agent, 96),
+    session_id: agent.session_id ? previewText(agent.session_id, 96) : null,
+    role: previewText(agent.role, 64),
+    status: previewText(agent.status, 96),
     online: agent.online,
-    project_id: agent.project_id,
+    project_id: agent.project_id ? previewText(agent.project_id, 96) : null,
     last_seen_at: agent.last_seen_at,
+  };
+}
+
+export function summarizeChannelMember(member: ChannelMember) {
+  return {
+    channel: previewText(member.channel, 96),
+    agent: previewText(member.agent, 96),
+    joined_at: member.joined_at,
+  };
+}
+
+export function summarizeChannelSubscription(subscription: ChannelNotificationSubscription) {
+  return {
+    channel: previewText(subscription.channel, 96),
+    agent: previewText(subscription.agent, 96),
+    created_at: subscription.created_at,
+    preview_chars: subscription.preview_chars,
+    since_message_id: subscription.since_message_id,
   };
 }
 
 export function summarizeSession(session: Session) {
   const participantLimit = 8;
   return {
-    session_id: session.session_id,
-    participants: session.participants.slice(0, participantLimit),
+    session_id: previewText(session.session_id, 96),
+    participants: session.participants.slice(0, participantLimit).map((participant) => previewText(participant, 96)),
     participant_count: session.participants.length,
     participants_truncated: session.participants.length > participantLimit,
     last_message_at: session.last_message_at,
     message_count: session.message_count,
     unread_count: session.unread_count,
   };
+}
+
+
+
+export interface CompactCollectionEnvelope<T> {
+  [key: string]: unknown;
+  count: number;
+  total: number;
+  limit: number;
+  cursor: number;
+  next_cursor: number | null;
+  has_more: boolean;
+  limit_capped: boolean;
+  max_bytes: number;
+  byte_length: number;
+  compact: true;
+  sort: SortDescriptor;
+  hint: string;
+}
+
+/**
+ * Build a minified, row- and UTF-8-byte-bounded collection page. The cursor
+ * advances by exactly the rows disclosed, including when the byte ceiling
+ * trims a requested page, so following next_cursor cannot skip records.
+ */
+export function buildCompactCollectionEnvelope<T, S>(opts: {
+  collection: string;
+  items: T[];
+  summarize: (item: T) => S;
+  limit?: unknown;
+  cursor?: unknown;
+  defaultLimit?: number;
+  maxLimit?: number;
+  maxBytes?: number;
+  sort: SortDescriptor;
+  hint: string;
+}): CompactCollectionEnvelope<S> {
+  if (!/^[a-z][a-z0-9_]*$/.test(opts.collection)) {
+    throw new Error(`Invalid compact collection key: ${JSON.stringify(opts.collection)}`);
+  }
+  const window = resolveOutputWindow({
+    limit: opts.limit,
+    cursor: opts.cursor,
+    defaultLimit: opts.defaultLimit ?? DEFAULT_COMPACT_LIMIT,
+    maxLimit: opts.maxLimit ?? MAX_COMPACT_LIMIT,
+  });
+  const maxBytes = Math.max(1024, Math.min(
+    Math.floor(opts.maxBytes ?? DEFAULT_COLLECTION_MAX_BYTES),
+    DEFAULT_COLLECTION_MAX_BYTES,
+  ));
+  const total = opts.items.length;
+  const start = Math.min(window.offset, total);
+  const selected = opts.items.slice(start, start + window.limit).map(opts.summarize);
+  const rows = [...selected];
+
+  const build = (): CompactCollectionEnvelope<S> => {
+    const nextOffset = start + rows.length;
+    const hasMore = nextOffset < total;
+    const envelope: CompactCollectionEnvelope<S> = {
+      [opts.collection]: [...rows],
+      count: rows.length,
+      total,
+      limit: window.limit,
+      cursor: window.offset,
+      next_cursor: hasMore ? nextOffset : null,
+      has_more: hasMore,
+      limit_capped: window.limitCapped,
+      max_bytes: maxBytes,
+      byte_length: 0,
+      compact: true,
+      sort: opts.sort,
+      hint: opts.hint,
+    };
+    // byte_length includes its own decimal representation. Recompute until the
+    // serialized size stabilizes (normally two iterations).
+    for (let index = 0; index < 4; index += 1) {
+      const next = Buffer.byteLength(JSON.stringify(envelope), "utf8");
+      if (next === envelope.byte_length) break;
+      envelope.byte_length = next;
+    }
+    return envelope;
+  };
+
+  let envelope = build();
+  while (envelope.byte_length > maxBytes && rows.length > 0) {
+    rows.pop();
+    envelope = build();
+  }
+  if (envelope.byte_length > maxBytes || (rows.length === 0 && start < total)) {
+    throw new Error(`Compact ${opts.collection} envelope cannot advance within max_bytes (${maxBytes}).`);
+  }
+  return envelope;
 }
 
 export function compactCollection<T>(items: T[], opts: {

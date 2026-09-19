@@ -21,7 +21,7 @@ import type { IncidentProjectionRequestV1, IncidentProjectorContext } from "../t
 
 export const SCENARIO_CONTEXT: IncidentProjectorContext = {
   tenant_id: "incident-equivalence-tenant",
-  authority_id: "todos.hasna.xyz:v1",
+  authority_id: "todos-authority:v1",
 };
 
 export const SCENARIO_INCIDENT_ID = "22222222-2222-4222-8222-222222222222";

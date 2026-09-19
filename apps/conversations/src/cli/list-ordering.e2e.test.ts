@@ -182,11 +182,11 @@ describe("item 3 — --limit is honoured by the JSON listing verbs", () => {
     // review of the sibling fix.
     const members = runCli(["channel", "members", "ord-alpha", "--json", "--limit", "1"]);
     expect(members.exitCode).toBe(0);
-    expect(JSON.parse(members.stdout).length).toBeLessThanOrEqual(1);
+    expect(JSON.parse(members.stdout)).toMatchObject({ count: 1, limit: 1, compact: true });
 
     const sessions = runCli(["sessions", "--json", "--limit", "1"]);
     expect(sessions.exitCode).toBe(0);
-    expect(JSON.parse(sessions.stdout).length).toBeLessThanOrEqual(1);
+    expect(JSON.parse(sessions.stdout)).toMatchObject({ count: 1, limit: 1, compact: true });
   }, CASE_TIMEOUT_MS);
 
   test("channel list --json --limit above the terminal cap is clamped to 100", () => {
@@ -207,17 +207,21 @@ describe("item 3 — --limit is honoured by the JSON listing verbs", () => {
     for (const limit of [1, 2]) {
       const res = runCli(["agents", "list", "--json", "--limit", String(limit)]);
       expect(res.exitCode).toBe(0);
-      const rows = JSON.parse(res.stdout);
-      expect(Array.isArray(rows)).toBe(true);
-      expect(rows).toHaveLength(limit);
+      const page = JSON.parse(res.stdout);
+      expect(page).toMatchObject({ count: limit, limit, compact: true });
+      expect(page.agents).toHaveLength(limit);
     }
   }, CASE_TIMEOUT_MS);
 
-  test("agents list --json without --limit still returns the complete set", () => {
+  test("agents list --json defaults to a bounded page and --full preserves the array", () => {
     const res = runCli(["agents", "list", "--json"]);
     expect(res.exitCode).toBe(0);
-    const rows = JSON.parse(res.stdout);
-    expect(rows.length).toBeGreaterThanOrEqual(2);
+    const page = JSON.parse(res.stdout);
+    expect(page).toMatchObject({ limit: 10, cursor: 0, compact: true });
+    expect(page.agents.length).toBeLessThanOrEqual(10);
+    const full = JSON.parse(runCli(["agents", "list", "--json", "--full"]).stdout);
+    expect(Array.isArray(full)).toBe(true);
+    expect(full.length).toBeGreaterThanOrEqual(2);
   }, CASE_TIMEOUT_MS);
 
   test("a truncated JSON listing discloses continuation in-band", () => {

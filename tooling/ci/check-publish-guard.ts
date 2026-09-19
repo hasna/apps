@@ -147,7 +147,6 @@ const INTERNAL_PATTERNS: Array<{ name: string; re: RegExp; contentRe?: RegExp }>
  * fleet-alignment PR (W6 for todos; the member lane otherwise).
  */
 export const CONTENT_EXCEPTIONS: Array<{ member: string; entry: RegExp; pattern: string; reason: string }> = [
-  { member: "conversations", entry: /^dist\/lib\/store\/status-location\.d\.ts$/, pattern: "hasna-xyz-domain", reason: "doc comment names the `<app>.hasna.xyz` origin as the pre-#1512 todos exception; scrub with the status-location rewrite." },
   { member: "economy", entry: /^dist\/lib\/api-display-url\.d\.ts$/, pattern: "hasna-xyz-domain", reason: "doc comment names the `<app>.hasna.xyz` origin as the pre-#1512 todos exception; scrub with the api-display-url rewrite." },
   { member: "secrets", entry: /^dist\/api-display-url\.d\.ts$/, pattern: "hasna-xyz-domain", reason: "doc comment names the `<app>.hasna.xyz` origin as the pre-#1512 todos exception; scrub with the api-display-url rewrite." },
   { member: "telephony", entry: /^src\/lib\/request-origin\.ts$/, pattern: "hasna-xyz-domain", reason: "packed source comment explains forwarded-origin recovery with a `<app>.hasna.xyz` example; reword to the gateway form." },

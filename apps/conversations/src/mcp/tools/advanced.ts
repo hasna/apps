@@ -506,7 +506,7 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string, too
     return { content: [{ type: "text" as const, text: JSON.stringify({
       items, count: items.length, total: matches.length, cursor, next_cursor: nextCursor,
       has_more: nextCursor !== null, complete_inventory: true,
-      hint: "Restart with HASNA_CONVERSATIONS_MCP_PROFILE=full to make specialist tools callable.",
+      hint: "Restart with a composable specialist profile (for example core,tasks) or full to make discovered tools callable.",
     }) }] };
   });
 
@@ -519,7 +519,7 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string, too
     return { content: [{ type: "text" as const, text: JSON.stringify({
       ...described, count: described.items.length, requested: names.length,
       complete: described.missing.length === 0,
-      hint: "Restart with HASNA_CONVERSATIONS_MCP_PROFILE=full to make specialist tools callable.",
+      hint: "Restart with a composable specialist profile (for example core,tasks) or full to make discovered tools callable.",
     }) }] };
   });
 

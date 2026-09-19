@@ -13,12 +13,11 @@ type Env = Record<string, string | undefined>;
  * bare base URL and never the origin alone (which no longer even identifies
  * the app behind the shared gateway).
  *
- * Normalization is intentionally limited to the gateway form. Legacy origins
- * (`https://<app>.hasna.xyz`, allowed for todos until hasna/apps#1512 ships)
- * and custom endpoints keep the caller's existing display behavior
- * (`loggableUrl`, which redacts down to scheme/host/port): this returns `null`
- * for anything that is not `https://api.hasna.com/<app>` or the
- * already-resolved `https://api.hasna.com/<app>/v1`.
+ * Normalization is intentionally limited to the shared gateway form. Custom
+ * endpoints keep the caller's existing display behavior (`loggableUrl`, which
+ * redacts down to scheme/host/port): this returns `null` for anything that is
+ * not `https://api.hasna.com/<app>` or the already-resolved
+ * `https://api.hasna.com/<app>/v1`.
  */
 export function gatewayApiV1Root(raw: string | null | undefined): string | null {
   if (typeof raw !== "string") return null;

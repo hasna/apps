@@ -15,8 +15,8 @@ import {
 } from "../../lib/identity.js";
 import { emitCliError } from "../cli-error.js";
 import { isAgentConflict, normalizeAgentName } from "../../lib/agent-names.js";
-import { windowItems } from "../../lib/compact-output.js";
-import { getCliWindow, printCompactFooter, printJsonDisclosure, windowJsonList } from "../compact.js";
+import { buildCompactCollectionEnvelope, summarizeAgent, windowItems } from "../../lib/compact-output.js";
+import { getCliWindow, printCompactFooter, windowJsonList } from "../compact.js";
 import { printErrorLine, printJson, printJsonLine, printLine } from "../../lib/stdout.js";
 
 type PresenceView = {
@@ -74,7 +74,9 @@ export function registerAgentCommands(program: Command): void {
     .option("--online", "Only show online agents")
     .option("--limit <n>", "Max agents to show", parseInt)
     .option("--cursor <n>", "Skip first N agents for pagination", parseInt)
-    .option("-j, --json", "Output as JSON")
+    .option("-j, --json", "Output bounded compact JSON")
+    .option("--full", "Return the legacy full-record JSON array")
+    .option("--all", "Alias for --full")
     .action(async (opts) => {
       // Roster discovery must NOT require an identity. This is the command a
       // fresh seat runs to see which names are taken BEFORE claiming one, and
@@ -97,15 +99,20 @@ export function registerAgentCommands(program: Command): void {
       const page = windowItems(agentsList, window);
 
       if (opts.json) {
-        const listing = windowJsonList(agentsList, opts);
-        printJson(listing.rows);
-        printJsonDisclosure({
-          shown: listing.rows.length,
-          total: listing.page.total,
-          hasMore: listing.bounded && listing.page.hasMore,
-          nextCursor: listing.page.nextCursor,
-          sort,
-        });
+        if (opts.full || opts.all) {
+          const listing = windowJsonList(agentsList, opts.all ? {} : opts);
+          printJson(listing.rows);
+        } else {
+          printJsonLine(buildCompactCollectionEnvelope({
+            collection: "agents",
+            items: agentsList,
+            summarize: summarizeAgent,
+            limit: opts.limit,
+            cursor: opts.cursor,
+            sort,
+            hint: "Continue with next_cursor; pass --full or --all for the legacy full-record array.",
+          }));
+        }
       } else {
         if (agentsList.length === 0) {
           printLine(chalk.dim("No agents found."));

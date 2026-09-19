@@ -203,3 +203,43 @@ describe("bounded channel inventory JSON", () => {
     expect(JSON.parse(full.stdout).length).toBeGreaterThanOrEqual(12);
   }, 20_000);
 });
+
+describe("bounded secondary collection JSON", () => {
+  function expectCompact(result: ReturnType<typeof runCli>, key: string) {
+    expect(result.exitCode, result.stderr).toBe(0);
+    const payload = JSON.parse(result.stdout) as Record<string, any>;
+    expect(payload).toMatchObject({ compact: true, cursor: 0, max_bytes: 48 * 1024 });
+    expect(Array.isArray(payload[key])).toBe(true);
+    expect(payload.count).toBe(payload[key].length);
+    expect(payload.byte_length).toBe(Buffer.byteLength(result.stdout.trim(), "utf8"));
+    expect(payload.byte_length).toBeLessThanOrEqual(48 * 1024);
+    expect(result.stdout).toBe(`${JSON.stringify(payload)}\n`);
+    if (payload.has_more) expect(payload.next_cursor).toBe(payload.count);
+    else expect(payload.next_cursor).toBeNull();
+    return payload;
+  }
+
+  test("agents, sessions, members and subscriptions are minified pages with explicit array escapes", () => {
+    const owner = "collection-contract-owner";
+    for (const channel of ["collection-contract-a", "collection-contract-b"]) {
+      expect(runCli(["channel", "create", channel], owner).exitCode).toBe(0);
+      expect(runCli(["channel", "join", channel], "collection-contract-member").exitCode).toBe(0);
+      expect(runCli(["channel", "subscribe", channel], owner).exitCode).toBe(0);
+      expect(runCli(["channel", "send", channel, `message for ${channel}`], owner).exitCode).toBe(0);
+    }
+
+    const agents = expectCompact(runCli(["agents", "list", "--json", "--limit", "1"], owner), "agents");
+    const sessions = expectCompact(runCli(["sessions", "--json", "--limit", "1"], owner), "sessions");
+    const members = expectCompact(runCli(["channel", "members", "collection-contract-a", "--json", "--limit", "1"], owner), "members");
+    const subscriptions = expectCompact(runCli(["channel", "subscriptions", "--json", "--limit", "1"], owner), "subscriptions");
+    expect(agents.has_more).toBe(true);
+    expect(sessions.has_more).toBe(true);
+    expect(members.has_more).toBe(true);
+    expect(subscriptions.has_more).toBe(true);
+
+    expect(Array.isArray(JSON.parse(runCli(["agents", "list", "--json", "--full"], owner).stdout))).toBe(true);
+    expect(Array.isArray(JSON.parse(runCli(["sessions", "--json", "--all"], owner).stdout))).toBe(true);
+    expect(Array.isArray(JSON.parse(runCli(["channel", "members", "collection-contract-a", "--json", "--full"], owner).stdout))).toBe(true);
+    expect(Array.isArray(JSON.parse(runCli(["channel", "subscriptions", "--json", "--all"], owner).stdout))).toBe(true);
+  }, 30_000);
+});

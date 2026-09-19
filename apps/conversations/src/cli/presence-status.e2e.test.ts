@@ -44,7 +44,7 @@ describe("CLI agent presence status staleness (e2e)", () => {
 
     const listing = runCli(["agents", "list", "-j"]);
     expect(listing.exitCode).toBe(0);
-    const rows = JSON.parse(listing.stdout) as Array<Record<string, string | boolean>>;
+    const rows = JSON.parse(listing.stdout).agents as Array<Record<string, string | boolean>>;
     const byName = new Map(rows.map((row) => [row.agent, row]));
     expect(byName.get("stale-list-agent")).toMatchObject({ status: "offline", online: false });
     expect(byName.get("fresh-list-agent")).toMatchObject({ status: "online", online: true });
@@ -63,7 +63,7 @@ describe("CLI agent presence status staleness (e2e)", () => {
     expect(dryJson).toMatchObject({ candidates: 1, reaped: 0, agents: ["reap-cli-single"] });
 
     const afterDry = runCli(["agents", "list", "-j"]);
-    expect(JSON.parse(afterDry.stdout).some((row: { agent: string }) => row.agent === "reap-cli-single")).toBe(true);
+    expect(JSON.parse(afterDry.stdout).agents.some((row: { agent: string }) => row.agent === "reap-cli-single")).toBe(true);
 
     const applied = runCli(["agents", "reap-stale", "--apply", "-j"]);
     expect(applied.exitCode).toBe(0);
@@ -76,7 +76,7 @@ describe("CLI agent presence status staleness (e2e)", () => {
     expect(archived[0]).toMatchObject({ agent: "reap-cli-single", session_id: "sess-reap-cli-single", status: "online" });
 
     const afterApply = runCli(["agents", "list", "-j"]);
-    const remaining = JSON.parse(afterApply.stdout) as Array<{ agent: string }>;
+    const remaining = JSON.parse(afterApply.stdout).agents as Array<{ agent: string }>;
     expect(remaining.some((row) => row.agent === "reap-cli-single")).toBe(false);
     expect(remaining.some((row) => row.agent === "reap-cli-active")).toBe(true);
   });

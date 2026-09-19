@@ -2,14 +2,14 @@ import type { Command } from "commander";
 import { getStore } from "../../lib/store/index.js";
 import chalk from "chalk";
 import { resolveIdentity } from "../../lib/identity.js";
-import { windowItems } from "../../lib/compact-output.js";
+import { buildCompactCollectionEnvelope, summarizeSession, windowItems } from "../../lib/compact-output.js";
 import { storeStatusLocation, type StoreStatusLocation } from "../../lib/store/status-location.js";
 import { checkForUpdate } from "../../lib/version-check.js";
-import { getCliWindow, printCompactFooter, printJsonDisclosure, windowJsonList } from "../compact.js";
+import { getCliWindow, printCompactFooter, windowJsonList } from "../compact.js";
 import { SESSION_LIST_ORDER } from "../../lib/list-order.js";
 import { emitCliError } from "../cli-error.js";
 import { parseMessageReference } from "../../lib/message-reference.js";
-import { printErrorLine, printJson, printLine } from "../../lib/stdout.js";
+import { printErrorLine, printJson, printJsonLine, printLine } from "../../lib/stdout.js";
 
 export function registerAnalyticsCommands(program: Command): void {
   // ---- graph ----
@@ -310,22 +310,29 @@ export function registerAnalyticsCommands(program: Command): void {
     .option("--agent <id>", "Filter sessions involving this agent")
     .option("--limit <n>", "Max sessions to show", parseInt)
     .option("--cursor <n>", "Skip first N sessions for pagination", parseInt)
-    .option("-j, --json", "Output as JSON")
+    .option("-j, --json", "Output bounded compact JSON")
+    .option("--full", "Return the legacy full-record JSON array")
+    .option("--all", "Alias for --full")
     .action(async (opts) => {
       const sessions = await getStore().listSessions(opts.agent);
       const window = getCliWindow({ limit: opts.limit, cursor: opts.cursor });
       const page = windowItems(sessions, window);
 
       if (opts.json) {
-        const listing = windowJsonList(sessions, opts);
-        printJson(listing.rows);
-        printJsonDisclosure({
-          shown: listing.rows.length,
-          total: listing.page.total,
-          hasMore: listing.bounded && listing.page.hasMore,
-          nextCursor: listing.page.nextCursor,
-          sort: SESSION_LIST_ORDER,
-        });
+        if (opts.full || opts.all) {
+          const listing = windowJsonList(sessions, opts.all ? {} : opts);
+          printJson(listing.rows);
+        } else {
+          printJsonLine(buildCompactCollectionEnvelope({
+            collection: "sessions",
+            items: sessions,
+            summarize: summarizeSession,
+            limit: opts.limit,
+            cursor: opts.cursor,
+            sort: SESSION_LIST_ORDER,
+            hint: "Continue with next_cursor; pass --full or --all for the legacy full-record array.",
+          }));
+        }
       } else {
         if (sessions.length === 0) {
           printLine(chalk.dim("No sessions found."));

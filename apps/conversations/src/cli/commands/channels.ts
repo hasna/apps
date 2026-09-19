@@ -3,7 +3,7 @@ import { getStore } from "../../lib/store/index.js";
 import chalk from "chalk";
 // Reads/writes route through getStore(): ApiStore (HTTP API) or LocalStore.
 import { resolveIdentity } from "../../lib/identity.js";
-import { previewText, summarizeChannel, windowItems } from "../../lib/compact-output.js";
+import { buildCompactCollectionEnvelope, previewText, summarizeChannel, summarizeChannelMember, summarizeChannelSubscription, windowItems } from "../../lib/compact-output.js";
 import { assertNoSensitiveContent } from "../../lib/content-safety.js";
 import { getCliWindow, pageFromQuery, printCompactFooter, printJsonDisclosure, queryLimitFor, warnIfPageFull, windowJsonList } from "../compact.js";
 import { CHANNEL_MEMBER_ORDER, CHANNEL_SUBSCRIPTION_AGENT_ORDER } from "../../lib/list-order.js";
@@ -804,7 +804,9 @@ export function registerChannelCommands(program: Command): void {
     .option("--channel <name>", "Filter by channel")
     .option("--limit <n>", "Max subscriptions to show", parseInt)
     .option("--cursor <n>", "Skip first N subscriptions for pagination", parseInt)
-    .option("-j, --json", "Output as JSON")
+    .option("-j, --json", "Output bounded compact JSON")
+    .option("--full", "Return the legacy full-record JSON array")
+    .option("--all", "Alias for --full")
     .action(async (opts) => {
       const agent = resolveIdentity(opts.from).trim();
       if (!agent) {
@@ -820,15 +822,20 @@ export function registerChannelCommands(program: Command): void {
       const page = windowItems(subscriptions, window);
 
       if (opts.json) {
-        const listing = windowJsonList(subscriptions, opts);
-        printJson(listing.rows);
-        printJsonDisclosure({
-          shown: listing.rows.length,
-          total: listing.page.total,
-          hasMore: listing.bounded && listing.page.hasMore,
-          nextCursor: listing.page.nextCursor,
-          sort: CHANNEL_SUBSCRIPTION_AGENT_ORDER,
-        });
+        if (opts.full || opts.all) {
+          const listing = windowJsonList(subscriptions, opts.all ? {} : opts);
+          printJson(listing.rows);
+        } else {
+          printJsonLine(buildCompactCollectionEnvelope({
+            collection: "subscriptions",
+            items: subscriptions,
+            summarize: summarizeChannelSubscription,
+            limit: opts.limit,
+            cursor: opts.cursor,
+            sort: CHANNEL_SUBSCRIPTION_AGENT_ORDER,
+            hint: "Continue with next_cursor; pass --full or --all for the legacy full-record array.",
+          }));
+        }
       } else if (subscriptions.length === 0) {
         printLine(chalk.dim(`No notification subscriptions for ${agent}.`));
       } else {
@@ -853,7 +860,9 @@ export function registerChannelCommands(program: Command): void {
     .argument("<channel>", "Channel name")
     .option("--limit <n>", "Max members to show", parseInt)
     .option("--cursor <n>", "Skip first N members for pagination", parseInt)
-    .option("-j, --json", "Output as JSON")
+    .option("-j, --json", "Output bounded compact JSON")
+    .option("--full", "Return the legacy full-record JSON array")
+    .option("--all", "Alias for --full")
     .action(async (channelName, opts) => {
       const channelArg = typeof channelName === "string" ? channelName.trim() : "";
       if (!channelArg) {
@@ -869,15 +878,20 @@ export function registerChannelCommands(program: Command): void {
       const page = windowItems(members, window);
 
       if (opts.json) {
-        const listing = windowJsonList(members, opts);
-        printJson(listing.rows);
-        printJsonDisclosure({
-          shown: listing.rows.length,
-          total: listing.page.total,
-          hasMore: listing.bounded && listing.page.hasMore,
-          nextCursor: listing.page.nextCursor,
-          sort: CHANNEL_MEMBER_ORDER,
-        });
+        if (opts.full || opts.all) {
+          const listing = windowJsonList(members, opts.all ? {} : opts);
+          printJson(listing.rows);
+        } else {
+          printJsonLine(buildCompactCollectionEnvelope({
+            collection: "members",
+            items: members,
+            summarize: summarizeChannelMember,
+            limit: opts.limit,
+            cursor: opts.cursor,
+            sort: CHANNEL_MEMBER_ORDER,
+            hint: "Continue with next_cursor; pass --full or --all for the legacy full-record array.",
+          }));
+        }
       } else {
         if (members.length === 0) {
           printLine(chalk.dim(`No members in #${channelArg}.`));
