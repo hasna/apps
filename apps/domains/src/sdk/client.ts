@@ -3,13 +3,23 @@
 
 export interface Error { "error": string; "reason"?: string }
 
-export interface HealthResponse { "status": string; "version": string; "mode": string; "latencyMs"?: number }
+export interface HealthResponse { "status": string; "version": string; "latencyMs"?: number }
 
-export interface ReadyResponse { "status": string; "version": string; "mode": string; "pendingMigrations"?: Array<string> }
+export interface ReadyResponse { "status": string; "version": string; "pendingMigrations"?: Array<string> }
 
-export interface VersionResponse { "status": string; "version": string; "mode": string }
+export interface VersionResponse { "status": string; "version": string }
 
 export interface DeleteResult { "id": string; "deleted": boolean }
+
+export interface AvailabilityInput { "name": string }
+
+export interface AvailabilityQuote { "name": string; "available": boolean; "price_usd"?: number; "currency"?: string; "is_premium"?: boolean }
+
+export interface DomainProvisioningRequest { "name": string; "max_price_usd": number; "years": number; "auto_renew": boolean; "registrar"?: "route53"; "dns_provider"?: "cloudflare"; "target"?: "shortlinks"; "worker_name"?: string }
+
+export interface DomainProvisioningProviderState { "quoted_price_usd"?: number; "currency"?: string; "registration_operation_id"?: string; "nameserver_operation_id"?: string; "cloudflare_zone_id"?: string; "cloudflare_nameservers"?: Array<string>; "route53_zone_ids_before_registration"?: Array<string>; "route53_hosted_zone_id"?: string; "route53_hosted_zone_cleaned"?: boolean; "worker_domain_bound"?: boolean; "last_provider_status"?: string; "registration_submitted_at"?: string; "nameservers_submitted_at"?: string }
+
+export interface DomainProvisioningJob { "id": string; "domain_id": string; "name": string; "idempotency_key": string; "request_hash": string; "status": "requested" | "quoted" | "registration_submitting" | "registration_submitted" | "registered" | "zone_ready" | "nameservers_submitted" | "delegated" | "worker_bound" | "ready" | "manual_review" | "failed"; "max_price_usd": number; "years": number; "auto_renew": boolean; "registrar": string; "dns_provider": string; "target": string; "worker_name": string; "provider_state": DomainProvisioningProviderState; "attempts": number; "error"?: string | null; "lease_until"?: string | null; "created_at": string; "updated_at": string }
 
 export interface Domain { "id": string; "name": string; "registrar"?: string | null; "status": string; "registered_at"?: string | null; "expires_at"?: string | null; "auto_renew": boolean; "is_premium": boolean; "premium_price"?: number | null; "standard_price"?: number | null; "purchase_price"?: number | null; "purchase_date"?: string | null; "nameservers"?: Array<string>; "whois"?: Record<string, unknown>; "ssl_expires_at"?: string | null; "ssl_issuer"?: string | null; "notes"?: string | null; "metadata"?: Record<string, unknown>; "created_at": string; "updated_at": string }
 
@@ -69,7 +79,14 @@ export class DomainsClient {
     const url = new URL(this.baseUrl + path);
     if (opts.query) {
       for (const [key, value] of Object.entries(opts.query)) {
-        if (value !== undefined && value !== null) url.searchParams.set(key, String(value));
+        if (value === undefined || value === null) continue;
+        if (Array.isArray(value)) {
+          for (const item of value) {
+            if (item !== undefined && item !== null) url.searchParams.append(key, String(item));
+          }
+        } else {
+          url.searchParams.set(key, String(value));
+        }
       }
     }
     const headers: Record<string, string> = { Accept: "application/json", ...this.baseHeaders, ...(opts.init?.headers as Record<string, string> | undefined) };
@@ -101,6 +118,15 @@ export class DomainsClient {
     async getReady(init?: RequestInit): Promise<ReadyResponse> {
       return this.request("GET", `/ready`, {
         body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Check live registrar availability and current price. */
+    async checkDomainAvailability(body: AvailabilityInput, init?: RequestInit): Promise<AvailabilityQuote> {
+      return this.request("POST", `/v1/availability`, {
+        body,
         query: undefined,
         init,
       });
@@ -200,6 +226,33 @@ export class DomainsClient {
     async createOffer(id: string, body: CreateOfferInput, init?: RequestInit): Promise<DomainOffer> {
       return this.request("POST", `/v1/domains/${encodeURIComponent(String(id))}/offers`, {
         body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Reserve, cap the total charge, purchase, delegate and bind a domain through the hosted Domains authority. */
+    async requestDomainProvisioning(body: DomainProvisioningRequest, init?: RequestInit): Promise<DomainProvisioningJob> {
+      return this.request("POST", `/v1/provisioning`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Read a domain provisioning job. */
+    async getDomainProvisioning(id: string, init?: RequestInit): Promise<DomainProvisioningJob> {
+      return this.request("GET", `/v1/provisioning/${encodeURIComponent(String(id))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Advance one idempotent hosted provisioning step (operator recovery path). */
+    async advanceDomainProvisioning(id: string, init?: RequestInit): Promise<DomainProvisioningJob> {
+      return this.request("POST", `/v1/provisioning/${encodeURIComponent(String(id))}/advance`, {
+        body: undefined,
         query: undefined,
         init,
       });

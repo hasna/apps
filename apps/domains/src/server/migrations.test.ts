@@ -136,3 +136,16 @@ describe("domains migration ledger legacy acknowledgment (O15-00671 / O15-00758 
     await expect(ledger.migrate()).rejects.toThrow(/rogue_unknown_0001.*not recognized/);
   });
 });
+
+
+test("declares the durable provisioning ledger with financial idempotency and lease controls", () => {
+  const sql = buildMigrations().map((migration) => migration.sql).join("\n");
+  expect(sql).toContain("CREATE TABLE IF NOT EXISTS domain_provisioning_jobs");
+  expect(sql).toContain("domain_name TEXT NOT NULL UNIQUE");
+  expect(sql).toContain("idempotency_key TEXT NOT NULL UNIQUE");
+  expect(sql).toContain("max_price_usd DOUBLE PRECISION NOT NULL CHECK (max_price_usd > 0)");
+  expect(sql).toContain("registration_submitting");
+  expect(sql).toContain("manual_review");
+  expect(sql).toContain("lease_token TEXT");
+  expect(sql).toContain("lease_until TEXT");
+});
