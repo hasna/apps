@@ -43,7 +43,11 @@ async function withHeldPort<T>(fn: (port: number) => Promise<T>): Promise<T> {
 }
 
 /** Run the serve entry to completion; a process still alive after 15s is killed (a non-zero exit). */
-async function runServe(args: string[], dataDir: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+async function runServe(
+  args: string[],
+  dataDir: string,
+  overrides: NodeJS.ProcessEnv = {},
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     HASNA_FILES_DATA_DIR: dataDir,
@@ -51,6 +55,10 @@ async function runServe(args: string[], dataDir: string): Promise<{ stdout: stri
   };
   delete env.HASNA_FILES_DATABASE_URL;
   delete env.FILES_DATABASE_URL;
+  delete env.HASNA_FILES_DEPLOYMENT_ENVIRONMENT;
+  delete env.HASNA_FILES_DEPLOY_SOURCE_COMMIT;
+  delete env.HASNA_FILES_DEPLOY_IMAGE_DIGEST;
+  Object.assign(env, overrides);
   const proc = Bun.spawn({
     cmd: ["bun", "run", serveEntry, ...args],
     cwd: repoRoot,
@@ -92,6 +100,23 @@ test("files-serve --help exits before probing or binding a port", async () => {
     expect(result.stdout).toContain("-V, --version");
     expect(result.stdout).not.toContain("in use");
     expect(result.stderr).toBe("");
+  });
+  expect(existsSync(join(dataDir, "files.db"))).toBe(false);
+});
+
+
+test("production identity without PostgreSQL fails before binding or creating SQLite", async () => {
+  const dataDir = makeDataDir();
+  await withHeldPort(async (port) => {
+    const result = await runServe(["--port", String(port)], dataDir, {
+      HASNA_FILES_DEPLOYMENT_ENVIRONMENT: "production",
+      HASNA_FILES_DEPLOY_SOURCE_COMMIT: "a".repeat(40),
+      HASNA_FILES_DEPLOY_IMAGE_DIGEST: `sha256:${"b".repeat(64)}`,
+    });
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stdout).not.toContain("files-serve running");
+    expect(result.stdout).not.toContain("in use");
+    expect(result.stderr).toContain("production deployment requires PostgreSQL configuration");
   });
   expect(existsSync(join(dataDir, "files.db"))).toBe(false);
 });
