@@ -186,6 +186,7 @@ function projectAncestorDirectories(projects: string[]): string[] {
 export function inventoryNativeSkills(home = homedir(), options: { includeVendor?: boolean; guardHermes?: boolean; projectDir?: string; projectDirs?: string[]; agents?: readonly IntegrationAgent[]; agentRoots?: Array<{ agent: string; path: string }>; configured?: boolean; discoveryInputs?: ReviewedDiscoveryInputs; allowRootAliases?: boolean } = {}): NativeSkillEntry[] {
   const aliases = rootAliases(home, options.allowRootAliases);
   const selectedAgents = options.agents ? new Set(options.agents) : undefined;
+  const includesAgent = (agent: string) => !selectedAgents || selectedAgents.has(agent as IntegrationAgent);
   const rootDefinitions = selectedAgents
     ? ROOTS.filter(([agent, path]) => selectedAgents.has(agent as IntegrationAgent) || (selectedAgents.has("hermes") && agent === "codex" && path === ".agents/skills"))
     : ROOTS;
@@ -268,12 +269,12 @@ export function inventoryNativeSkills(home = homedir(), options: { includeVendor
   }
   for (const [agent, path] of roots) scanRoot(agent, path);
   if (options.includeVendor) {
-    for (const agent of ["codex", "claude"]) scanRoot(agent, canonicalAgentPath(join(home, `.${agent}`, "plugins", "cache"), aliases), true, true);
-    scanRoot("claude", canonicalAgentPath(join(home, ".claude", "plugins", "synced"), aliases), true);
-    scanRoot("gemini", join(home, ".gemini", "extensions"), true);
+    for (const agent of ["codex", "claude"].filter(includesAgent)) scanRoot(agent, canonicalAgentPath(join(home, `.${agent}`, "plugins", "cache"), aliases), true, true);
+    if (includesAgent("claude")) scanRoot("claude", canonicalAgentPath(join(home, ".claude", "plugins", "synced"), aliases), true);
+    if (includesAgent("gemini")) scanRoot("gemini", join(home, ".gemini", "extensions"), true);
   }
-  const configured = options.configured ? INTEGRATION_AGENTS.flatMap(agent => resolveAgentDiscovery({ home, agent, reviewed: options.discoveryInputs, canonical: path => canonicalAgentPath(path, aliases) }).roots.map(path => ({ agent, path }))) : [];
-  for (const root of [...(options.agentRoots ?? []), ...configured]) scanRoot(root.agent, canonicalAgentPath(root.path, aliases), true);
+  const configured = options.configured ? INTEGRATION_AGENTS.filter(includesAgent).flatMap(agent => resolveAgentDiscovery({ home, agent, reviewed: options.discoveryInputs, canonical: path => canonicalAgentPath(path, aliases) }).roots.map(path => ({ agent, path }))) : [];
+  for (const root of [...(options.agentRoots ?? []), ...configured]) if (includesAgent(root.agent)) scanRoot(root.agent, canonicalAgentPath(root.path, aliases), true);
   recheckRootAliases(aliases);
   return entries;
 }
