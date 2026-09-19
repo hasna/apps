@@ -50,8 +50,8 @@ afterAll(() => {
 });
 
 describe("agents JSON output", () => {
-  test("emits complete parseable JSON for a large unbounded listing", async () => {
-    const result = await runCli();
+  test("emits complete parseable JSON for a large listing", async () => {
+    const result = await runCli("agents", "--limit", String(AGENT_COUNT + 1));
     expect(result.exitCode).toBe(0);
     expect(result.stderr).not.toContain("error:");
     expect(Buffer.byteLength(result.stdout)).toBeGreaterThan(327_680);
