@@ -242,8 +242,13 @@ export interface ProvisioningWorkerOptions {
 
 const TERMINAL = new Set<ProvisioningStatus>(["ready", "manual_review", "failed"]);
 
-function requestHash(request: DomainProvisioningRequest): string {
-  return createHash("sha256").update(JSON.stringify({
+function hashProvisioningIntent(value: Record<string, unknown>): string {
+  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
+
+/** Current canonical hash for a normalized provisioning request. */
+export function provisioningRequestHash(request: DomainProvisioningRequest): string {
+  return hashProvisioningIntent({
     auto_renew: request.auto_renew,
     acquisition_mode: request.acquisition_mode,
     dns_provider: request.dns_provider,
@@ -255,7 +260,39 @@ function requestHash(request: DomainProvisioningRequest): string {
     origin_hostname: request.origin_hostname,
     ...(request.target === "website_origin" ? { origin_tls_mode: request.origin_tls_mode } : {}),
     years: request.years,
-  })).digest("hex");
+  });
+}
+
+/**
+ * Accept a stored request hash only when it is either the current canonical
+ * hash or the exact pre-origin-fields hash used by legacy Shortlinks purchase
+ * jobs. The caller-supplied current hash must itself be canonical, so an
+ * arbitrary mismatched hash cannot use this compatibility path.
+ */
+export function provisioningRequestHashMatches(
+  storedHash: string,
+  currentHash: string,
+  request: DomainProvisioningRequest,
+): boolean {
+  if (storedHash === currentHash) return true;
+  if (currentHash !== provisioningRequestHash(request)) return false;
+  if (
+    request.acquisition_mode !== "purchase" ||
+    request.target !== "shortlinks" ||
+    request.origin_hostname !== null ||
+    request.origin_tls_mode !== null
+  ) return false;
+  const legacyHash = hashProvisioningIntent({
+    auto_renew: request.auto_renew,
+    dns_provider: request.dns_provider,
+    max_price_usd: request.max_price_usd,
+    name: request.name,
+    registrar: request.registrar,
+    target: request.target,
+    worker_name: request.worker_name,
+    years: request.years,
+  });
+  return storedHash === legacyHash;
 }
 
 function dnsRecordName(value: unknown, domain: string): string {
@@ -485,7 +522,7 @@ export class DomainProvisioningService {
       throw new Error("use the adoption endpoint for acquisition_mode=adopt");
     }
     const normalized = normalizeRequest(input);
-    return this.store.reserve(normalized, requestHash(normalized));
+    return this.store.reserve(normalized, provisioningRequestHash(normalized));
   }
 
   async adopt(input: {
@@ -515,7 +552,7 @@ export class DomainProvisioningService {
       acquisition_mode: "adopt",
       max_price_usd: 0,
     };
-    const hash = requestHash(request);
+    const hash = provisioningRequestHash(request);
     if (await this.store.getByName(request.name)) {
       return this.store.reserveAdoption(request, hash, { nameservers: [] });
     }

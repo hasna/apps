@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import {
   DomainProvisioningService,
+  provisioningRequestHash,
+  provisioningRequestHashMatches,
   type DomainProvisioningJob,
   type DomainDnsReconciliation,
   type DomainProvisioningProviders,
@@ -361,6 +364,32 @@ describe("DomainProvisioningService", () => {
     expect(() => new DomainProvisioningService(store, providers(), { batchSize: 0 })).toThrow("batchSize");
     expect(() => new DomainProvisioningService(store, providers(), { leaseMs: -1 })).toThrow("leaseMs");
     expect(() => new DomainProvisioningService(store, providers(), { maxAttempts: 1.5 })).toThrow("maxAttempts");
+  });
+
+  test("accepts the exact legacy Shortlinks purchase hash only for the same canonical intent", () => {
+    const normalized: DomainProvisioningRequest = {
+      ...(request({ name: "proof.example" }) as DomainProvisioningRequest),
+      acquisition_mode: "purchase",
+    };
+    const legacyHash = createHash("sha256").update(JSON.stringify({
+      auto_renew: normalized.auto_renew,
+      dns_provider: normalized.dns_provider,
+      max_price_usd: normalized.max_price_usd,
+      name: normalized.name,
+      registrar: normalized.registrar,
+      target: normalized.target,
+      worker_name: normalized.worker_name,
+      years: normalized.years,
+    })).digest("hex");
+    const currentHash = provisioningRequestHash(normalized);
+    expect(legacyHash).not.toBe(currentHash);
+    expect(provisioningRequestHashMatches(legacyHash, currentHash, normalized)).toBe(true);
+    expect(provisioningRequestHashMatches("not-a-real-hash", currentHash, normalized)).toBe(false);
+    expect(provisioningRequestHashMatches(legacyHash, "not-canonical", normalized)).toBe(false);
+    expect(provisioningRequestHashMatches(legacyHash, provisioningRequestHash({
+      ...normalized,
+      years: 2,
+    }), { ...normalized, years: 2 })).toBe(false);
   });
 
   test("idempotency keys are stable and explicit purchase choices are required", async () => {
