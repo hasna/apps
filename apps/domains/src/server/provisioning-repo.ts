@@ -27,6 +27,7 @@ interface ProvisioningRow {
   target: string;
   worker_name: string | null;
   origin_hostname: string | null;
+  origin_tls_mode: string | null;
   provider_state: string;
   attempts: number | string;
   error: string | null;
@@ -90,6 +91,7 @@ function rowToJob(row: ProvisioningRow): DomainProvisioningJob {
     target: row.target as "shortlinks" | "website_origin",
     worker_name: row.worker_name,
     origin_hostname: row.origin_hostname,
+    origin_tls_mode: row.origin_tls_mode as DomainProvisioningRequest["origin_tls_mode"],
     provider_state: parseProviderState(row.provider_state),
     attempts: Number(row.attempts),
     error: row.error,
@@ -151,9 +153,9 @@ export class DomainsProvisioningRepo implements DomainProvisioningStore {
         `INSERT INTO domain_provisioning_jobs (
            id, domain_id, domain_name, idempotency_key, request_hash, status,
            max_price_usd, years, auto_renew, acquisition_mode, registrar, dns_provider, target,
-           worker_name, origin_hostname, provider_state, attempts, error, lease_token, lease_until,
+           worker_name, origin_hostname, origin_tls_mode, provider_state, attempts, error, lease_token, lease_until,
            created_at, updated_at
-         ) VALUES ($1,$2,$3,$4,$5,'requested',$6,$7,$8,$9,$10,$11,$12,$13,$14,'{}',0,NULL,NULL,NULL,$15,$16)
+         ) VALUES ($1,$2,$3,$4,$5,'requested',$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'{}',0,NULL,NULL,NULL,$16,$17)
          RETURNING *`,
         [
           id,
@@ -170,6 +172,7 @@ export class DomainsProvisioningRepo implements DomainProvisioningStore {
           request.target,
           request.worker_name,
           request.origin_hostname,
+          request.origin_tls_mode,
           now,
           now,
         ],
@@ -221,13 +224,16 @@ export class DomainsProvisioningRepo implements DomainProvisioningStore {
         `INSERT INTO domain_provisioning_jobs (
            id, domain_id, domain_name, idempotency_key, request_hash, status,
            max_price_usd, years, auto_renew, acquisition_mode, registrar, dns_provider, target,
-           worker_name, origin_hostname, provider_state, attempts, error, lease_token, lease_until,
+           worker_name, origin_hostname, origin_tls_mode, provider_state, attempts, error, lease_token, lease_until,
            created_at, updated_at
-         ) VALUES ($1,$2,$3,$4,$5,'registered',0,1,$6,'adopt',$7,$8,$9,$10,$11,$12,0,NULL,NULL,NULL,$13,$14)
+         ) VALUES ($1,$2,$3,$4,$5,'registered',0,1,$6,'adopt',$7,$8,$9,$10,$11,$12,$13,0,NULL,NULL,NULL,$14,$15)
          RETURNING *`,
-        [crypto.randomUUID(), domain.id, request.name, request.idempotency_key, requestHash,
+        [
+          crypto.randomUUID(), domain.id, request.name, request.idempotency_key, requestHash,
           detail.auto_renew ?? request.auto_renew, request.registrar, request.dns_provider,
-          request.target, request.worker_name, request.origin_hostname, JSON.stringify(providerState), now, now],
+          request.target, request.worker_name, request.origin_hostname, request.origin_tls_mode,
+          JSON.stringify(providerState), now, now,
+        ],
       );
       return rowToJob(row!);
     } catch (error) {

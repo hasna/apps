@@ -145,6 +145,7 @@ function request(overrides: Partial<DomainProvisioningRequest> = {}): Partial<Do
     target: "shortlinks",
     worker_name: "hasna-link-router",
     origin_hostname: null,
+    origin_tls_mode: null,
     ...overrides,
   };
 }
@@ -167,6 +168,7 @@ function providers(overrides: Partial<DomainProvisioningProviders> = {}): Domain
     resolvePublicNameservers: async () => ["bob.ns.cloudflare.com.", "amy.ns.cloudflare.com."],
     bindWorkerDomain: async () => {},
     workerDomainReady: async () => true,
+    ensureWebsiteOriginTls: async ({ requestedMode }) => ({ mode: requestedMode, changed: true, downgradeRefused: false }),
     configureWebsiteOrigin: async ({ hostname, originHostname }) => [
       { type: "CNAME", name: hostname, value: originHostname, proxied: true, ttl: 1 },
       { type: "CNAME", name: `www.${hostname}`, value: originHostname, proxied: true, ttl: 1 },
@@ -342,6 +344,7 @@ describe("DomainProvisioningService", () => {
     const store = new MemoryStore();
     const service = new DomainProvisioningService(store, providers());
     const first = await service.request(request());
+    expect(first.request_hash).toBe("3b1faf93cde0a9c975d958a05aae7c7993b1573e2283581c65253f44604cf3e1");
     const second = await service.request(request({ name: "proof.example" }));
     expect(second.id).toBe(first.id);
     await expect(service.request(request({ auto_renew: undefined }))).rejects.toThrow("auto_renew");
@@ -367,8 +370,10 @@ describe("DomainProvisioningService", () => {
       target: "website_origin",
       worker_name: null,
       origin_hostname: "News-Origin-123.us-east-1.elb.amazonaws.com.",
+      origin_tls_mode: "full",
     }));
     expect(job.origin_hostname).toBe("news-origin-123.us-east-1.elb.amazonaws.com");
+    expect(job.origin_tls_mode).toBe("full");
     expect((await service.getByName("PROOF.EXAMPLE"))?.id).toBe(job.id);
     for (let i = 0; i < 8; i++) job = await service.advance(job.id);
     expect(job.status).toBe("ready");
@@ -388,6 +393,7 @@ describe("DomainProvisioningService", () => {
         { type: "CNAME", name: "proof.example", value: "news-origin-123.us-east-1.elb.amazonaws.com", proxied: true, ttl: 1 },
         { type: "CNAME", name: "www.proof.example", value: "news-origin-123.us-east-1.elb.amazonaws.com", proxied: true, ttl: 1 },
       ],
+      origin_tls_mode: "full",
       checked_at: "2026-09-19T10:00:00.000Z",
     });
   });
@@ -427,6 +433,7 @@ describe("DomainProvisioningService", () => {
       expect(websiteBindings).toBe(1);
       const { publicProvisioningJob } = await import("./provisioning.js");
       expect(current && publicProvisioningJob(current).result).toMatchObject({
+        origin_tls_mode: "strict",
         web_records: [
           { name: "proof.example", value: "scheduled-origin.us-east-1.elb.amazonaws.com" },
           { name: "www.proof.example", value: "scheduled-origin.us-east-1.elb.amazonaws.com" },
@@ -448,6 +455,12 @@ describe("DomainProvisioningService", () => {
     }
     await expect(service.request(request({ target: "website_origin", origin_hostname: "lb.us-east-1.elb.amazonaws.com" }))).rejects.toThrow("worker_name");
     await expect(service.request(request({ origin_hostname: "lb.us-east-1.elb.amazonaws.com" }))).rejects.toThrow("origin_hostname");
+    await expect(service.request(request({ origin_tls_mode: "full" }))).rejects.toThrow("origin_tls_mode");
+    await expect(service.request(request({
+      target: "website_origin", worker_name: null,
+      origin_hostname: "one.us-east-1.elb.amazonaws.com",
+      origin_tls_mode: "flexible" as never,
+    }))).rejects.toThrow("strict or full");
     const first = await service.request(request({
       target: "website_origin", worker_name: null,
       origin_hostname: "one.us-east-1.elb.amazonaws.com",
@@ -457,6 +470,37 @@ describe("DomainProvisioningService", () => {
       target: "website_origin", worker_name: null,
       origin_hostname: "two.us-east-1.elb.amazonaws.com",
     }))).rejects.toThrow("conflicting provisioning request");
+  });
+
+  test("binds origin TLS mode into idempotency and refuses a strict-to-full downgrade before DNS", async () => {
+    const store = new MemoryStore();
+    let dnsWrites = 0;
+    const service = new DomainProvisioningService(store, providers({
+      ensureWebsiteOriginTls: async ({ requestedMode }) => ({
+        mode: "strict",
+        changed: false,
+        downgradeRefused: requestedMode === "full",
+      }),
+      configureWebsiteOrigin: async () => {
+        dnsWrites += 1;
+        return [];
+      },
+    }), { now: () => new Date("2026-09-19T10:01:00.000Z") });
+    let job = await service.request(request({
+      target: "website_origin", worker_name: null,
+      origin_hostname: "one.us-east-1.elb.amazonaws.com",
+      origin_tls_mode: "full",
+    }));
+    await expect(service.request(request({
+      target: "website_origin", worker_name: null,
+      origin_hostname: "one.us-east-1.elb.amazonaws.com",
+      origin_tls_mode: "strict",
+    }))).rejects.toThrow("conflicting provisioning request");
+    for (let i = 0; i < 7; i++) job = await service.advance(job.id);
+    expect(job.status).toBe("manual_review");
+    expect(job.error).toContain("refused to weaken");
+    expect(job.provider_state.origin_tls_mode_configured).toBe("strict");
+    expect(dnsWrites).toBe(0);
   });
 
   test("durably reconciles only bounded SES-compatible DNS records with conflict-safe replay", async () => {

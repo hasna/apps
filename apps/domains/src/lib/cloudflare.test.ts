@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { bindWorkerCustomDomain, createCloudflareProvider, getZone, workerCustomDomainReady } from "./cloudflare.js";
+import {
+  bindWorkerCustomDomain,
+  createCloudflareProvider,
+  ensureZoneOriginTlsMode,
+  getZone,
+  workerCustomDomainReady,
+} from "./cloudflare.js";
 import type { Domain } from "../db/domains.js";
 
 const originalFetch = globalThis.fetch;
@@ -82,6 +88,50 @@ describe("Cloudflare API bounds", () => {
     await expect(getZone("proof.example", { apiToken: "token", accountId: "account" }))
       .rejects.toThrow("between 1 and 4194304");
     expect(calls).toBe(0);
+  });
+});
+
+describe("Cloudflare zone origin TLS", () => {
+  it("sets one explicit TLS mode and requires exact GET readback", async () => {
+    const calls: Array<{ method: string; url: string; body?: unknown }> = [];
+    let mode = "flexible";
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const method = init?.method ?? "GET";
+      const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+      calls.push({ method, url: String(input), ...(body ? { body } : {}) });
+      if (method === "PATCH") mode = String((body as { value: string }).value);
+      return Response.json({ success: true, result: { id: "ssl", value: mode }, errors: [] });
+    }) as typeof fetch;
+
+    await expect(ensureZoneOriginTlsMode("zone/one", "strict", { apiToken: "token", accountId: "account" }))
+      .resolves.toEqual({ mode: "strict", changed: true, downgradeRefused: false });
+    expect(calls).toEqual([
+      { method: "GET", url: "https://api.cloudflare.com/client/v4/zones/zone%2Fone/settings/ssl" },
+      { method: "PATCH", url: "https://api.cloudflare.com/client/v4/zones/zone%2Fone/settings/ssl", body: { value: "strict" } },
+      { method: "GET", url: "https://api.cloudflare.com/client/v4/zones/zone%2Fone/settings/ssl" },
+    ]);
+  });
+
+  it("refuses strict-to-full without a PATCH", async () => {
+    const methods: string[] = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      methods.push(init?.method ?? "GET");
+      return Response.json({ success: true, result: { id: "ssl", value: "strict" }, errors: [] });
+    }) as typeof fetch;
+
+    await expect(ensureZoneOriginTlsMode("zone", "full", { apiToken: "token", accountId: "account" }))
+      .resolves.toEqual({ mode: "strict", changed: false, downgradeRefused: true });
+    expect(methods).toEqual(["GET"]);
+  });
+
+  it("fails when the provider readback does not match the requested mode", async () => {
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => Response.json({
+      success: true,
+      result: { id: "ssl", value: init?.method === "PATCH" ? "strict" : "flexible" },
+      errors: [],
+    })) as typeof fetch;
+    await expect(ensureZoneOriginTlsMode("zone", "full", { apiToken: "token", accountId: "account" }))
+      .rejects.toThrow("readback is flexible, expected full");
   });
 });
 

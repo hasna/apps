@@ -17,6 +17,7 @@ export const PROVISIONING_STATUSES = [
 ] as const;
 
 export type ProvisioningStatus = (typeof PROVISIONING_STATUSES)[number];
+export type OriginTlsMode = "strict" | "full";
 
 export interface DomainProvisioningRequest {
   name: string;
@@ -30,6 +31,7 @@ export interface DomainProvisioningRequest {
   target: "shortlinks" | "website_origin";
   worker_name: string | null;
   origin_hostname: string | null;
+  origin_tls_mode: OriginTlsMode | null;
 }
 
 export interface ProvisionedWebRecord {
@@ -44,6 +46,7 @@ export interface DomainProvisioningResult {
   zone_ref: string;
   nameservers: string[];
   web_records: ProvisionedWebRecord[];
+  origin_tls_mode: OriginTlsMode | null;
   checked_at: string;
 }
 
@@ -95,6 +98,8 @@ export interface DomainProvisioningProviderState {
   route53_hosted_zone_cleaned?: boolean;
   worker_domain_bound?: boolean;
   website_origin_configured?: boolean;
+  origin_tls_mode_configured?: OriginTlsMode;
+  origin_tls_mode_checked_at?: string;
   web_records?: ProvisionedWebRecord[];
   target_checked_at?: string;
   last_provider_status?: string;
@@ -194,10 +199,15 @@ export interface DomainProvisioningProviders {
     zoneId: string;
     originHostname: string;
   }): Promise<ProvisionedWebRecord[]>;
+  ensureWebsiteOriginTls(input: {
+    zoneId: string;
+    requestedMode: OriginTlsMode;
+  }): Promise<{ mode: OriginTlsMode; changed: boolean; downgradeRefused: boolean }>;
   websiteOriginReady(input: {
     hostname: string;
     zoneId: string;
     originHostname: string;
+    originTlsMode: OriginTlsMode;
   }): Promise<boolean>;
   reconcileDnsRecords(input: {
     hostname: string;
@@ -239,6 +249,7 @@ function requestHash(request: DomainProvisioningRequest): string {
     target: request.target,
     worker_name: request.worker_name,
     origin_hostname: request.origin_hostname,
+    ...(request.target === "website_origin" ? { origin_tls_mode: request.origin_tls_mode } : {}),
     years: request.years,
   })).digest("hex");
 }
@@ -339,9 +350,13 @@ function normalizeRequest(input: Partial<DomainProvisioningRequest>): DomainProv
   }
   let workerName: string | null = null;
   let originHostname: string | null = null;
+  let originTlsMode: OriginTlsMode | null = null;
   if (target === "shortlinks") {
     if (input.origin_hostname !== undefined && input.origin_hostname !== null) {
       throw new Error("origin_hostname is only valid for target=website_origin");
+    }
+    if (input.origin_tls_mode !== undefined && input.origin_tls_mode !== null) {
+      throw new Error("origin_tls_mode is only valid for target=website_origin");
     }
     workerName = String(input.worker_name ?? "hasna-link-router").trim();
     if (!/^[A-Za-z0-9_-]{1,64}$/.test(workerName)) throw new Error("invalid worker_name");
@@ -350,6 +365,11 @@ function normalizeRequest(input: Partial<DomainProvisioningRequest>): DomainProv
       throw new Error("worker_name is only valid for target=shortlinks");
     }
     originHostname = normalizeWebsiteOriginHostname(input.origin_hostname);
+    const requestedTlsMode = input.origin_tls_mode ?? "strict";
+    if (requestedTlsMode !== "strict" && requestedTlsMode !== "full") {
+      throw new Error("origin_tls_mode must be strict or full");
+    }
+    originTlsMode = requestedTlsMode;
   }
   return {
     name,
@@ -363,6 +383,7 @@ function normalizeRequest(input: Partial<DomainProvisioningRequest>): DomainProv
     target,
     worker_name: workerName,
     origin_hostname: originHostname,
+    origin_tls_mode: originTlsMode,
   };
 }
 
@@ -466,6 +487,7 @@ export class DomainProvisioningService {
     target?: unknown;
     worker_name?: unknown;
     origin_hostname?: unknown;
+    origin_tls_mode?: unknown;
   }): Promise<DomainProvisioningJob> {
     const normalized = normalizeRequest({
       name: input.name as string,
@@ -478,6 +500,7 @@ export class DomainProvisioningService {
       target: input.target as DomainProvisioningRequest["target"] | undefined,
       worker_name: input.worker_name as string | null | undefined,
       origin_hostname: input.origin_hostname as string | null | undefined,
+      origin_tls_mode: input.origin_tls_mode as OriginTlsMode | null | undefined,
     });
     const request: DomainProvisioningRequest = {
       ...normalized,
@@ -737,8 +760,24 @@ export class DomainProvisioningService {
         }
         let targetState: DomainProvisioningProviderState;
         if (job.target === "website_origin") {
-          if (!job.origin_hostname) {
-            return update({ status: "manual_review", error: "website origin hostname is missing", ...clearLease });
+          if (!job.origin_hostname || !job.origin_tls_mode) {
+            return update({ status: "manual_review", error: "website origin configuration is missing", ...clearLease });
+          }
+          const tls = await this.providers.ensureWebsiteOriginTls({
+            zoneId: zone.id,
+            requestedMode: job.origin_tls_mode,
+          });
+          if (tls.downgradeRefused) {
+            return update({
+              status: "manual_review",
+              error: "refused to weaken existing Cloudflare strict origin TLS mode to full",
+              provider_state: {
+                ...job.provider_state,
+                origin_tls_mode_configured: tls.mode,
+                origin_tls_mode_checked_at: this.now().toISOString(),
+              },
+              ...clearLease,
+            });
           }
           const webRecords = await this.providers.configureWebsiteOrigin({
             hostname: job.name,
@@ -747,6 +786,8 @@ export class DomainProvisioningService {
           });
           targetState = {
             website_origin_configured: true,
+            origin_tls_mode_configured: tls.mode,
+            origin_tls_mode_checked_at: this.now().toISOString(),
             web_records: webRecords,
           };
         } else {
@@ -776,13 +817,14 @@ export class DomainProvisioningService {
         if (!zoneId) return update({ status: "manual_review", error: "Cloudflare zone id is missing", ...clearLease });
         let ready: boolean;
         if (job.target === "website_origin") {
-          if (!job.origin_hostname) {
-            return update({ status: "manual_review", error: "website origin hostname is missing", ...clearLease });
+          if (!job.origin_hostname || !job.origin_tls_mode) {
+            return update({ status: "manual_review", error: "website origin configuration is missing", ...clearLease });
           }
           ready = await this.providers.websiteOriginReady({
             hostname: job.name,
             zoneId,
             originHostname: job.origin_hostname,
+            originTlsMode: job.origin_tls_mode,
           });
         } else {
           if (!job.worker_name) {
@@ -919,16 +961,21 @@ export function publicProvisioningJob(job: DomainProvisioningJob): PublicDomainP
   const checkedAt = job.provider_state.target_checked_at;
   const nameservers = job.provider_state.cloudflare_nameservers;
   const webRecords = job.provider_state.web_records;
+  const configuredTlsMode = job.provider_state.origin_tls_mode_configured;
   const result =
     job.status === "ready" &&
     zoneRef &&
     checkedAt &&
     Array.isArray(nameservers) &&
-    (job.target === "shortlinks" || Array.isArray(webRecords))
+    (job.target === "shortlinks" || (
+      Array.isArray(webRecords) &&
+      configuredTlsMode === job.origin_tls_mode
+    ))
       ? {
           zone_ref: `zone:${createHash("sha256").update(zoneRef).digest("hex").slice(0, 24)}`,
           nameservers: [...nameservers],
           web_records: job.target === "website_origin" ? [...(webRecords ?? [])] : [],
+          origin_tls_mode: job.target === "website_origin" ? configuredTlsMode! : null,
           checked_at: checkedAt,
         }
       : null;

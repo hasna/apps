@@ -218,7 +218,7 @@ describe("domains-serve app", () => {
       request_hash: "hash", status: "requested" as const, max_price_usd: 5, years: 1, auto_renew: false,
       acquisition_mode: "purchase" as const,
       registrar: "route53" as const, dns_provider: "cloudflare" as const, target: "shortlinks" as const,
-      worker_name: "hasna-link-router", origin_hostname: null, provider_state: {}, attempts: 0, error: null, lease_token: null,
+      worker_name: "hasna-link-router", origin_hostname: null, origin_tls_mode: null, provider_state: {}, attempts: 0, error: null, lease_token: null,
       lease_until: null, created_at: "2026-09-19T00:00:00.000Z", updated_at: "2026-09-19T00:00:00.000Z",
     };
     const provisioning = {
@@ -265,10 +265,11 @@ describe("domains-serve app", () => {
     expect((await byName.json() as any).id).toBe(job.id);
     const adopted = await app.handle(new Request("http://x/v1/provisioning/adopt", {
       method: "POST", headers: { ...headers, "idempotency-key": "adopt-proof-001" },
-      body: JSON.stringify({ name: "proof.click", target: "website_origin", origin_hostname: "origin.us-east-1.elb.amazonaws.com" }),
+      body: JSON.stringify({ name: "proof.click", target: "website_origin", origin_hostname: "origin.us-east-1.elb.amazonaws.com", origin_tls_mode: "full" }),
     }));
     expect(adopted.status).toBe(202);
     expect((await adopted.json() as any).acquisition_mode).toBe("adopt");
+    expect((calls.find((call) => call.op === "adopt")!.value as any).origin_tls_mode).toBe("full");
     const dns = await app.handle(new Request(`http://x/v1/provisioning/by-name/${job.name}/dns-reconcile`, {
       method: "POST", headers: { ...headers, "idempotency-key": "dns-proof-001" },
       body: JSON.stringify({ records: [{ type: "TXT", name: "_amazonses.proof.click", value: "token", ttl: 300 }] }),

@@ -193,4 +193,17 @@ export const PG_MIGRATIONS: string[] = [
         (acquisition_mode = 'purchase' AND max_price_usd > 0)
         OR (acquisition_mode = 'adopt' AND max_price_usd = 0)
       )`,
+  `ALTER TABLE domain_provisioning_jobs
+    ADD COLUMN IF NOT EXISTS origin_tls_mode TEXT`,
+  `UPDATE domain_provisioning_jobs
+    SET origin_tls_mode = 'strict'
+    WHERE target = 'website_origin' AND origin_tls_mode IS NULL`,
+  `ALTER TABLE domain_provisioning_jobs
+    DROP CONSTRAINT IF EXISTS domain_provisioning_jobs_target_shape_check,
+    ADD CONSTRAINT domain_provisioning_jobs_target_shape_check
+      CHECK (
+        (target = 'shortlinks' AND worker_name IS NOT NULL AND origin_hostname IS NULL AND origin_tls_mode IS NULL)
+        OR
+        (target = 'website_origin' AND worker_name IS NULL AND origin_hostname IS NOT NULL AND origin_tls_mode IN ('strict', 'full'))
+      )`,
 ];

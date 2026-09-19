@@ -42,6 +42,13 @@ export interface CloudflareRecord {
   proxied?: boolean;
 }
 
+export type CloudflareOriginTlsMode = "strict" | "full";
+
+interface CloudflareZoneSetting {
+  id: string;
+  value: string;
+}
+
 // ─── Config ──────────────────────────────────────────────────────────────────
 
 export function getConfig(): CloudflareConfig {
@@ -71,7 +78,7 @@ function positiveBoundedEnv(name: string, fallback: number, maximum: number): nu
   return value;
 }
 
-async function boundedResponseText(
+export async function boundedResponseText(
   response: Response,
   maxBytes: number,
   signal: AbortSignal,
@@ -242,6 +249,49 @@ export async function ensureZone(
 
 export async function deleteZone(zoneId: string, config?: CloudflareConfig): Promise<void> {
   await cfFetch(`/zones/${zoneId}`, { method: "DELETE", config });
+}
+
+/** Read the zone's current edge-to-origin TLS mode. */
+export async function getZoneOriginTlsMode(
+  zoneId: string,
+  config?: CloudflareConfig,
+): Promise<string> {
+  const setting = await cfFetch<CloudflareZoneSetting>(
+    `/zones/${encodeURIComponent(zoneId)}/settings/ssl`,
+    { config },
+  );
+  if (setting.id !== "ssl" || typeof setting.value !== "string" || !setting.value.trim()) {
+    throw new Error("Cloudflare returned an invalid zone SSL setting");
+  }
+  return setting.value.trim().toLowerCase();
+}
+
+/**
+ * Apply one explicit zone TLS intent and read it back. A zone already using
+ * strict mode is never silently weakened to full mode.
+ */
+export async function ensureZoneOriginTlsMode(
+  zoneId: string,
+  requested: CloudflareOriginTlsMode,
+  config?: CloudflareConfig,
+): Promise<{ mode: CloudflareOriginTlsMode; changed: boolean; downgradeRefused: boolean }> {
+  const current = await getZoneOriginTlsMode(zoneId, config);
+  if (current === "strict" && requested === "full") {
+    return { mode: "strict", changed: false, downgradeRefused: true };
+  }
+  let changed = false;
+  if (current !== requested) {
+    await cfFetch<CloudflareZoneSetting>(
+      `/zones/${encodeURIComponent(zoneId)}/settings/ssl`,
+      { method: "PATCH", body: { value: requested }, config },
+    );
+    changed = true;
+  }
+  const readback = await getZoneOriginTlsMode(zoneId, config);
+  if (readback !== requested) {
+    throw new Error(`Cloudflare zone SSL setting readback is ${readback}, expected ${requested}`);
+  }
+  return { mode: requested, changed, downgradeRefused: false };
 }
 
 // ─── DNS Records ─────────────────────────────────────────────────────────────

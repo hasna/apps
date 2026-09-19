@@ -11,8 +11,11 @@ import {
 } from "../lib/route53.js";
 import {
   bindWorkerCustomDomain,
+  boundedResponseText,
   ensureZone,
+  ensureZoneOriginTlsMode,
   getZone,
+  getZoneOriginTlsMode,
   listRecords,
   reconcileRecords,
   upsertRecord,
@@ -120,6 +123,10 @@ export function createHostedProvisioningProviders(
       return workerCustomDomainReady(input.hostname, input.zoneId, input.workerName, cloudflareConfig);
     },
 
+    ensureWebsiteOriginTls(input) {
+      return ensureZoneOriginTlsMode(input.zoneId, input.requestedMode, cloudflareConfig);
+    },
+
     async configureWebsiteOrigin(input) {
       const records = [input.hostname, `www.${input.hostname}`].map((name) => ({
         type: "CNAME" as const,
@@ -141,6 +148,9 @@ export function createHostedProvisioningProviders(
     },
 
     async websiteOriginReady(input) {
+      if (await getZoneOriginTlsMode(input.zoneId, cloudflareConfig) !== input.originTlsMode) {
+        return false;
+      }
       const records = await listRecords(input.zoneId, cloudflareConfig);
       const names = new Set([input.hostname, `www.${input.hostname}`]);
       const matching = records.filter((record) =>
@@ -151,13 +161,23 @@ export function createHostedProvisioningProviders(
       );
       if (matching.length !== names.size) return false;
       try {
+        const signal = AbortSignal.timeout(10_000);
         const response = await fetch(`https://${input.hostname}/`, {
           method: "GET",
           redirect: "error",
-          signal: AbortSignal.timeout(10_000),
+          signal,
           headers: { "user-agent": "hasna-domains-provisioning/1" },
         });
-        return response.status >= 200 && response.status < 400;
+        if (response.status !== 200 || !/^text\/html(?:;|$)/iu.test(response.headers.get("content-type") ?? "")) {
+          return false;
+        }
+        const body = await boundedResponseText(response, 1_048_576, signal);
+        const escapedHost = input.hostname.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+        const canonical = new RegExp(
+          `<link\\b(?=[^>]*\\brel=["'][^"']*\\bcanonical\\b[^"']*["'])(?=[^>]*\\bhref=["']https://${escapedHost}/?["'])[^>]*>`,
+          "iu",
+        );
+        return canonical.test(body);
       } catch {
         return false;
       }
