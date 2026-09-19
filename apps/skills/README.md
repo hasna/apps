@@ -271,6 +271,15 @@ Vendor file restoration uses an exclusive hard link to preserve concurrent files
 Do not retry an interrupted operation until its journal and both paths have been
 reconciled; a failed final journal write may leave the earlier durable intent.
 
+For a reviewed migration that must retire one exact native copy, pass
+`--target-manifest <file>`. The JSON manifest uses schema
+`hasna.skills-native-migration-targets.v1` and binds each target to an agent,
+an existing absolute `projectRoot`, a normalized project-relative `path`, and
+the complete directory `treeSha256`. Exact-target mode refuses broad selector
+flags, protected or vendor entries, missing or ambiguous paths, symlinks,
+digest drift, and writes a manifest digest into the recovery journal. Every
+inventory entry outside the manifest remains untouched.
+
 `skills hook agents --json` reports the supported adapters and coverage limits.
 Claude and Codex have lifecycle context hooks; Gemini uses `BeforeAgent`, and
 OpenCode uses its awaited message plugin. Cursor receives selected context at
@@ -758,7 +767,7 @@ of app folders, and `XDG_CONFIG_HOME` is not consulted at all.
 | `skills sessions show <id> --json` | | Inspect one session's exact profile revision and receipt hash without loading payloads |
 | `skills sessions reconcile <id> --from-profile <id> --from-revision <rev> --receipt-sha256 <sha> --selection-profile <id> --profile-revision <rev>` | | Plan an explicit migration of one live session; `--apply --plan-digest <digest> --plan-issued-at <time> --plan-expires-at <time>` (within five minutes) preserves its old receipt and applies the reviewed replacement |
 | `skills hook agents --json` | | Report maintained adapters and explicit coverage limits |
-| `skills migrate native` | | Inventory native copies; `--apply` archives managed copies, with explicit `--include-unmanaged` and `--include-vendor` retirement options |
+| `skills migrate native` | | Inventory native copies; `--apply` archives managed copies, with explicit `--include-unmanaged`, `--include-vendor`, or reviewed `--target-manifest` selection |
 | `skills pull --all --selection-profile <id>` | | With CLI loading active, refresh the selected profile into the verified cache |
 | `skills sync --selection-profile <id> [--check] [--station <id>]` | | Sync or check the selected profile/cache; optionally record station state |
 | `skills station-state <id>` | | Read a station's sync receipt in the authenticated workspace |
