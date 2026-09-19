@@ -8,9 +8,8 @@
  * the origin alone (which no longer even identifies the app behind the shared
  * gateway).
  *
- * Normalization is intentionally limited to the gateway form. Legacy origins
- * (`https://<app>.hasna.xyz`, allowed for todos until hasna/apps#1512 ships)
- * and legacy/custom endpoints keep the caller's existing display behavior:
+ * Normalization is intentionally limited to the shared gateway form. Other
+ * legacy or custom endpoints keep the caller's existing display behavior:
  * this helper returns `null` for anything that is not
  * `https://api.hasna.com/<app>` or the already-resolved
  * `https://api.hasna.com/<app>/v1`.
