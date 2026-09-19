@@ -5,7 +5,9 @@ import chalk from "chalk";
 import { createInterface } from "readline";
 import { getAuthConfig, getAuthIdentity, saveAuthConfig, clearAuthConfig, getApiUrl, getAuthFilePath } from "../../lib/auth-store.js";
 import { resolveSkillsFleet, resolveSkillsConnection, SkillsFleetCredentialError, SKILLS_API_KEY_ENV, SKILLS_API_URL_ENV } from "../../lib/fleet-credentials.js";
-import { RemoteSkillsClient } from "../../lib/remote-client.js";
+import { RemoteSkillsClient, validateSkillPublishScopeInput } from "../../lib/remote-client.js";
+import { NameInputError, readCode } from "./customer-verification.js";
+import { workspaceContext } from "../../lib/remote-workspace-selection.js";
 import type { RemoteSkillsAccess } from "../../lib/remote-permissions.js";
 
 
@@ -492,17 +494,35 @@ export function registerAuth(parent: Command) {
       catch (error) { writeCommandError(error, "Failed to revoke API key", options.json); }
     });
   keys.command("add-publish-scope").argument("<key-id>").requiredOption("--expected-scopes <csv>", "Current comma-separated scopes; stale values are refused")
+    .option("--email <email>", "Owner/admin account email for ephemeral reauthentication")
+    .option("--code-stdin", "Read a fresh six-digit code from stdin; never argv")
+    .option("--user-id <id>", "Exact verified owner/admin user ID for ephemeral reauthentication")
+    .option("--membership-id <id>", "Exact verified workspace membership ID for ephemeral reauthentication")
+    .option("--organization-id <id>", "Exact expected organization ID for ephemeral reauthentication")
     .option("--json", "Output as JSON", false)
     .description("Add skills:publish to one existing key without minting or rotating it")
-    .action(async (id: string, options: { expectedScopes: string; json: boolean }) => {
+    .action(async (id: string, options: { expectedScopes: string; email?: string; codeStdin?: boolean; userId?: string; membershipId?: string; organizationId?: string; json: boolean }) => {
       try {
-        const connection = await resolveSkillsConnection();
-        if (!connection) throw new Error("A hosted Skills credential is required for key scope administration");
-        const identity = await apiRequest("/api/auth/whoami", { headers: { Authorization: `Bearer ${connection.apiKey}` } }, connection.apiOrigin);
-        const identityOrg = recordField(identity.organization);
-        const orgId = stringField(identityOrg?.id);
-        if (!orgId) throw new Error("The Skills authority did not return a tenant identity; refusing key scope administration");
-        const result = await new RemoteSkillsClient(connection.apiKey, connection.apiOrigin).addSkillPublishScope(id, options.expectedScopes.split(",").map((scope) => scope.trim()).filter(Boolean), orgId);
+        const fresh = options.email !== undefined || options.codeStdin || options.userId !== undefined || options.membershipId !== undefined || options.organizationId !== undefined;
+        let result: Record<string, unknown>;
+        if (fresh) {
+          if (!options.email?.includes("@") || !options.codeStdin || !options.userId || !options.membershipId || !options.organizationId)
+            throw new NameInputError("Ephemeral scope administration requires --email, --code-stdin, --user-id, --membership-id and --organization-id.");
+          const expectedScopes = options.expectedScopes.split(",").map((scope) => scope.trim()).filter(Boolean);
+          const input = validateSkillPublishScopeInput(id, expectedScopes, options.organizationId);
+          const context = workspaceContext({ userId: options.userId, membershipId: options.membershipId });
+          const origin = getApiUrl("Add Skills publication scope with ephemeral owner verification", { ...process.env });
+          const code = await readCode();
+          result = await new RemoteSkillsAuthClient(origin).addSkillPublishScope(options.email, code, input.keyId, input.expectedScopes, input.expectedOrgId, context);
+        } else {
+          const connection = await resolveSkillsConnection();
+          if (!connection) throw new Error("A hosted Skills credential is required for key scope administration");
+          const identity = await apiRequest("/api/auth/whoami", { headers: { Authorization: `Bearer ${connection.apiKey}` } }, connection.apiOrigin);
+          const identityOrg = recordField(identity.organization);
+          const orgId = stringField(identityOrg?.id);
+          if (!orgId) throw new Error("The Skills authority did not return a tenant identity; refusing key scope administration");
+          result = await new RemoteSkillsClient(connection.apiKey, connection.apiOrigin).addSkillPublishScope(id, options.expectedScopes.split(",").map((scope) => scope.trim()).filter(Boolean), orgId);
+        }
         if (options.json || !isTTY) console.log(JSON.stringify(result, null, 2));
         else console.log(chalk.green(`Added skills:publish to ${id}; scopes read back from the server.`));
       } catch (error) { writeCommandError(error, "Failed to add Skills publication scope", options.json); }

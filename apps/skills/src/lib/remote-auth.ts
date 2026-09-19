@@ -4,11 +4,11 @@ import { invitationInput, type ListRemoteWorkspaceInvitations, type IssueRemoteW
   type ResendRemoteWorkspaceInvitation, type RevokeRemoteWorkspaceInvitation, type AcceptRemoteWorkspaceInvitation } from "./remote-invitations.js";
 import { workspaceLeaveInput, type LeaveRemoteWorkspace } from "./remote-workspace-leave.js";
 import { workspaceContext, workspaceExpectedUserId, parseWorkspaceLogin,
-  type RemoteWorkspaceContext, type RemoteWorkspaceSession, type RemoteAccountWorkspaceDiscovery } from "./remote-workspace-selection.js";
+  type RemoteWorkspaceContext, type RemoteWorkspaceSession, type RemoteAccountWorkspaceDiscovery, WorkspaceIdentityMismatchError } from "./remote-workspace-selection.js";
 import { readBoundedResponse } from "./remote-files.js";
 import { workspaceMembersQuery, type RemoteWorkspaceMembersOptions } from "./remote-workspace.js";
 import { workspaceMemberRoleInput, workspaceMemberRemovalInput, type SetRemoteWorkspaceMemberRole, type RemoveRemoteWorkspaceMember } from "./remote-workspace.js";
-import { RemoteSkillsClient } from "./remote-client.js";
+import { RemoteSkillsClient, validateSkillPublishScopeInput } from "./remote-client.js";
 import { normalizeSkillsApiOrigin, skillsApiRequestUrl } from "./fleet-credentials.js";
 import { customerNamePatch, type UpdateRemoteProfile, type UpdateRemoteWorkspace } from "./remote-profile.js";
 
@@ -193,6 +193,23 @@ export class RemoteSkillsAuthClient {
   }
   async listApiKeys(email: string, code: string, context?: RemoteWorkspaceContext) { return (await this.sessionClient(email, code, context)).listApiKeys(); }
   async revokeApiKey(email: string, code: string, keyId: string, context?: RemoteWorkspaceContext) { return (await this.sessionClient(email, code, context)).revokeApiKey(keyId); }
+  /** Add only the publication scope through an ephemeral owner/admin workspace session.
+   * The selected workspace is verified before the CAS request; no profile or API key is saved.
+   */
+  async addSkillPublishScope(
+    email: string,
+    code: string,
+    keyId: string,
+    expectedScopes: string[],
+    expectedOrgId: string,
+    context: RemoteWorkspaceContext,
+  ) {
+    const input = validateSkillPublishScopeInput(keyId, expectedScopes, expectedOrgId);
+    const target = workspaceContext(context);
+    const session = await this.switchWorkspace(email, code, target);
+    if (session.organization.id !== input.expectedOrgId) throw new WorkspaceIdentityMismatchError();
+    return new RemoteSkillsClient(session.token, this.apiOrigin).addSkillPublishScope(input.keyId, input.expectedScopes, input.expectedOrgId);
+  }
   /** Reauthentication is ephemeral: it never replaces a saved key or profile. */
   async updateProfile(email: string, code: string, input: UpdateRemoteProfile, context?: RemoteWorkspaceContext) {
     const body = customerNamePatch(input, "displayName");
