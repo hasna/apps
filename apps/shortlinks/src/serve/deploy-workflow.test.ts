@@ -67,6 +67,8 @@ describe("Shortlinks production deployment workflow", () => {
     const updateService = workflow.indexOf("aws ecs update-service", mutationReceipt);
     expect(register).toBeGreaterThan(0);
     expect(anchorRead).toBeGreaterThan(register);
+    expect(workflow).toContain("jq -e '(.failures | length == 0) and (.services | length == 1)'");
+    expect(workflow).not.toContain("jq -e '.failures | length == 0 and (.services | length == 1)'");
     expect(anchorCompare).toBeGreaterThan(anchorRead);
     expect(mutationReceipt).toBeGreaterThan(anchorCompare);
     expect(updateService).toBeGreaterThan(mutationReceipt);
