@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import chalk from "chalk";
 import { getMemory } from "../../db/memories.js";
-import { outputJson, makeHandleError, resolveMemoryId, type GlobalOpts } from "../helpers.js";
+import { outputJson, outputJsonAndExit, makeHandleError, resolveMemoryId, type GlobalOpts } from "../helpers.js";
 import { redactMemoryForOutput } from "../../lib/redact.js";
 
 export function registerWhenToUseCommand(program: Command): void {
@@ -10,7 +10,7 @@ export function registerWhenToUseCommand(program: Command): void {
   program
     .command("when-to-use <memory_id>")
     .description("Show the when_to_use guidance for a memory")
-    .action((memoryId: string) => {
+    .action(async (memoryId: string) => {
       try {
         const globalOpts = program.opts<GlobalOpts>();
         const resolvedId = resolveMemoryId(memoryId);
@@ -18,11 +18,12 @@ export function registerWhenToUseCommand(program: Command): void {
 
         if (!memory) {
           if (globalOpts.json) {
-            outputJson({ error: `Memory not found: ${memoryId}` });
+            await outputJsonAndExit({ error: `Memory not found: ${memoryId}` }, 1);
           } else {
             console.error(chalk.red(`Memory not found: ${memoryId}`));
           }
-          process.exit(1);
+          if (!globalOpts.json) process.exit(1);
+          return;
         }
 
         // Read-path redaction (todos e12c7659): this verb was missed by the

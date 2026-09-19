@@ -130,29 +130,26 @@ export function resolveEntityArg(nameOrId: string, type?: EntityType): Entity {
 // ============================================================================
 
 export function outputJson(data: unknown): void {
-  // CLI error paths intentionally call process.exit immediately after this
-  // helper. Bun discards pending pipe data on an explicit exit, even when the
-  // descriptor write itself completed. Defer that exit until the stream write
-  // callback fires, preserving the caller's status without duplicating output.
-  pendingJsonWrites += 1;
-  process.stdout.write(`${JSON.stringify(data, null, 2)}\n`, () => {
-    pendingJsonWrites -= 1;
-    if (pendingJsonWrites === 0 && requestedExitCode !== undefined) {
-      realProcessExit(requestedExitCode);
-    }
-  });
+  process.stdout.write(`${JSON.stringify(data, null, 2)}\n`);
 }
 
-let pendingJsonWrites = 0;
-let requestedExitCode: number | undefined;
-const realProcessExit = process.exit.bind(process);
-process.exit = ((code = 0) => {
-  if (pendingJsonWrites > 0) {
-    requestedExitCode = typeof code === "number" ? code : 0;
-    return undefined as never;
-  }
-  return realProcessExit(code);
-}) as typeof process.exit;
+/** Emit terminal JSON and preserve the requested exit status after drain. */
+export function outputJsonAndExit(data: unknown, code: number): Promise<never> {
+  const payload = `${JSON.stringify(data, null, 2)}\n`;
+  return new Promise<never>((resolve) => {
+    let settled = false;
+    const finish = (exitCode: number): void => {
+      if (settled) return;
+      settled = true;
+      process.stdout.off("error", onError);
+      process.exit(exitCode);
+      resolve(undefined as never);
+    };
+    const onError = (): void => finish(1);
+    process.stdout.once("error", onError);
+    process.stdout.write(payload, () => finish(code));
+  });
+}
 
 export const DEFAULT_COMPACT_LIMIT = 20;
 export const DEFAULT_SEARCH_LIMIT = 10;

@@ -31,6 +31,7 @@ import type {
 } from "../../types/index.js";
 import {
   outputJson,
+  outputJsonAndExit,
   makeHandleError,
   resolveMemoryId,
   type GlobalOpts,
@@ -534,18 +535,19 @@ export function registerCrudCommands(program: Command): void {
     .option("-c, --category <cat>", "New category")
     .option("--scope <scope>", "New scope")
     .option("--status <status>", "New status: active, archived, expired")
-    .action((id: string, opts) => {
+    .action(async (id: string, opts) => {
       try {
         const globalOpts = program.opts<GlobalOpts>();
         const resolvedId = resolveMemoryId(id);
         const existing = getMemory(resolvedId);
         if (!existing) {
           if (globalOpts.json) {
-            outputJson({ error: `Memory not found: ${id}` });
+            await outputJsonAndExit({ error: `Memory not found: ${id}` }, 1);
           } else {
             console.error(chalk.red(`Memory not found: ${id}`));
           }
-          process.exit(1);
+          if (!globalOpts.json) process.exit(1);
+          return;
         }
 
         const updateInput: {
@@ -660,7 +662,7 @@ export function registerCrudCommands(program: Command): void {
     .option("--agent <agent>", "Filter by agent ID")
     .option("--project <project>", "Filter by project ID")
     .option("--all", "Delete ALL matching memories (no disambiguation needed)")
-    .action((keyOrId: string, opts: { scope?: string; agent?: string; project?: string; all?: boolean }) => {
+    .action(async (keyOrId: string, opts: { scope?: string; agent?: string; project?: string; all?: boolean }) => {
       try {
         const globalOpts = program.opts<GlobalOpts>();
 
@@ -698,11 +700,12 @@ export function registerCrudCommands(program: Command): void {
             return;
           }
           if (globalOpts.json) {
-            outputJson({ error: `No memory found: ${keyOrId}` });
+            await outputJsonAndExit({ error: `No memory found: ${keyOrId}` }, 1);
           } else {
             console.error(chalk.red(`No memory found: ${keyOrId}`));
           }
-          process.exit(1);
+          if (!globalOpts.json) process.exit(1);
+          return;
         }
 
         if (matches.length === 1) {

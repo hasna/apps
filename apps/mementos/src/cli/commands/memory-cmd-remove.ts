@@ -3,7 +3,7 @@ import chalk from "chalk";
 import { getDatabase, resolvePartialId } from "../../db/database.js";
 import { isApiMode } from "../../db/api-mode.js";
 import { deleteMemory, getMemoryByKey } from "../../db/memories.js";
-import { outputJson, type GlobalOpts } from "../helpers.js";
+import { outputJson, outputJsonAndExit, type GlobalOpts } from "../helpers.js";
 
 export function registerRemoveCommand(program: Command): void {
   program
@@ -11,7 +11,7 @@ export function registerRemoveCommand(program: Command): void {
     .description("Remove/delete a memory by name or ID (alias for memory forget)")
     .option("--agent <id>", "Agent ID")
     .option("--scope <scope>", "Filter by scope (when looking up by key)")
-    .action((nameOrId: string, opts: { agent?: string; scope?: string }) => {
+    .action(async (nameOrId: string, opts: { agent?: string; scope?: string }) => {
       const globalOpts = program.opts<GlobalOpts>();
       const agentId = opts.agent || globalOpts.agent;
 
@@ -34,11 +34,12 @@ export function registerRemoveCommand(program: Command): void {
 
       if (!id) {
         if (globalOpts.json) {
-          outputJson({ error: `Memory not found: ${nameOrId}` });
+          await outputJsonAndExit({ error: `Memory not found: ${nameOrId}` }, 1);
         } else {
           console.error(chalk.red(`Memory not found: ${nameOrId}`));
         }
-        process.exit(1);
+        if (!globalOpts.json) process.exit(1);
+        return;
       }
 
       const deleted = deleteMemory(id);
@@ -50,11 +51,12 @@ export function registerRemoveCommand(program: Command): void {
         }
       } else {
         if (globalOpts.json) {
-          outputJson({ error: `Memory not found: ${nameOrId}` });
+          await outputJsonAndExit({ error: `Memory not found: ${nameOrId}` }, 1);
         } else {
           console.error(chalk.red(`Memory not found: ${nameOrId}`));
         }
-        process.exit(1);
+        if (!globalOpts.json) process.exit(1);
+        return;
       }
     });
 }

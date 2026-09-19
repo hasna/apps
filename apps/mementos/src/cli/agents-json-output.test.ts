@@ -13,8 +13,8 @@ const CLI_ENV = isolatedStoreEnv(DB_PATH);
 const AGENT_COUNT = 1_200;
 const DESCRIPTION = "fixture-agent-description-" + "x".repeat(700);
 
-async function runCli(): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-  const proc = Bun.spawn(["bun", "run", CLI_PATH, "--json", "agents"], {
+async function runCli(...args: string[]): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  const proc = Bun.spawn(["bun", "run", CLI_PATH, "--json", ...(args.length > 0 ? args : ["agents"])], {
     env: CLI_ENV,
     stdout: "pipe",
     stderr: "pipe",
@@ -27,7 +27,7 @@ async function runCli(): Promise<{ stdout: string; stderr: string; exitCode: num
 }
 
 async function runLargeJsonWithExplicitExit(): Promise<{ stdout: string; exitCode: number }> {
-  const script = `import { outputJson } from ${JSON.stringify(HELPERS_PATH)}; outputJson(Array.from({ length: 12000 }, (_, i) => ({ id: i, value: "x".repeat(700) }))); process.exit(23);`;
+  const script = `import { outputJsonAndExit } from ${JSON.stringify(HELPERS_PATH)}; await outputJsonAndExit(Array.from({ length: 12000 }, (_, i) => ({ id: i, value: "x".repeat(700) })), 23);`;
   const proc = Bun.spawn(["bun", "-e", script], { stdout: "pipe", stderr: "pipe" });
   const stdout = await new Response(proc.stdout).text();
   return { stdout, exitCode: await proc.exited };
@@ -54,11 +54,18 @@ describe("agents JSON output", () => {
     const result = await runCli();
     expect(result.exitCode).toBe(0);
     expect(result.stderr).not.toContain("error:");
-    expect(Buffer.byteLength(result.stdout)).toBeGreaterThan(128_000);
+    expect(Buffer.byteLength(result.stdout)).toBeGreaterThan(327_680);
     const rows = JSON.parse(result.stdout) as Array<{ name: string }>;
     expect(rows).toHaveLength(AGENT_COUNT);
     expect(rows[0]?.name).toBe("json-output-agent-0000");
     expect(rows.at(-1)?.name).toBe("json-output-agent-1199");
+  }, 60_000);
+
+  test("preserves a real CLI nonzero status with complete JSON error output", async () => {
+    const result = await runCli("agent-update", "missing-agent-id", "--name", "updated-name");
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).not.toContain("error:");
+    expect(JSON.parse(result.stdout)).toEqual({ error: "Agent not found: missing-agent-id" });
   }, 60_000);
 
   test("completes a large JSON write before an explicit nonzero exit", async () => {
