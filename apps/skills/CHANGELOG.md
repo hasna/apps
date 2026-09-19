@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.9.0
+
+### Minor Changes
+
+- 7d10c3c: Add an owner-guarded hosted skill archive lifecycle. Archived catalog rows leave ordinary discovery, profile selection and cloud execution while immutable version metadata and bundle reads remain available; lifecycle writes use exact revision CAS and refuse active profile references.
+- 13cc764: Add a tenant-bound, reviewed pure cloud execution contract with metadata eligibility through the API, CLI, MCP and SDK. Freeze adapter and entrypoint identity, validate bounded input/output, and enforce credential-free Linux execution with inherited-descriptor closure and owned descendant cleanup. Preserve existing PDF admissions.
+
+### Patch Changes
+
+- f624fbf: Preserve Python runtime metadata when importing legacy executable skills and reject mismatched `.py` runtime declarations during preparation.
+
 ## 0.8.12
 
 ### Patch Changes
