@@ -108,6 +108,11 @@ export interface ApiPrincipal {
   scopes: string[];
 }
 
+export type ApiKeyScopeUpdateResult =
+  | { kind: "updated"; scopes: string[] }
+  | { kind: "not_found" }
+  | { kind: "stale"; scopes: string[] };
+
 export interface ServerRunRecord {
   id: string;
   orgId: string;
@@ -392,6 +397,13 @@ export interface SkillsProductStore {
    */
   verifyConnectivity?(): Promise<void>;
   authenticateApiKeyHash(hash: string): Promise<ApiPrincipal | null>;
+  /** Guarded metadata-only scope admission for an existing key. */
+  updateApiKeyScopes?(
+    actor: ApiPrincipal,
+    keyId: string,
+    expectedScopes: string[],
+    addScopes: string[],
+  ): Promise<ApiKeyScopeUpdateResult>;
   ensureBootstrapApiKey?(token: string, principal?: Partial<ApiPrincipal>): Promise<void>;
   createRun(input: CreateRunInput): Promise<ServerRunRecord>;
   listRuns(principal: ApiPrincipal, limit: number): Promise<ServerRunRecord[]>;

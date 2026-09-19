@@ -306,6 +306,33 @@ export class RemoteSkillsClient {
     return this.capabilities;
   }
 
+  /** Add the single supported publication scope to an existing key, metadata only. */
+  async addSkillPublishScope(keyId: string, expectedScopes: string[], expectedOrgId: string): Promise<Record<string, unknown>> {
+    if (!/^[A-Za-z0-9_-]+$/.test(keyId)) throw new Error("Invalid API key id");
+    if (!/^[A-Za-z0-9_-]{1,256}$/.test(expectedOrgId)) throw new Error("Invalid expected organization id");
+    if (!Array.isArray(expectedScopes) || expectedScopes.length > 32 || expectedScopes.some((scope) => typeof scope !== "string" || scope.length > 128 || !/^(?:\*|[a-z][a-z0-9_-]*:(?:\*|[a-z][a-z0-9_-]*))$/.test(scope)) || new Set(expectedScopes).size !== expectedScopes.length) throw new Error("Invalid expected API key scopes");
+    const path = `/api/v1/admin/keys/${encodeURIComponent(keyId)}/scopes`;
+    const response = await this.request(path, { method: "PATCH", body: JSON.stringify({ expected_scopes: expectedScopes, add_scopes: ["skills:publish"] }) });
+    if (!response.ok) throw new RemoteRequestError(path, response.status);
+    let value: unknown;
+    try { value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(await readBoundedResponse(response, 64 * 1024))); }
+    catch { throw new Error("Invalid API key scope update response"); }
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid API key scope update response");
+    const body = value as Record<string, unknown>;
+    const returnedId = body.keyId;
+    const orgId = body.orgId;
+    const scopes = body.scopes;
+    if (returnedId !== keyId || typeof orgId !== "string" || !orgId || (expectedOrgId !== undefined && orgId !== expectedOrgId) || !Array.isArray(scopes) || scopes.some((scope) => typeof scope !== "string") || body.updated !== true) {
+      throw new Error("Invalid API key scope update response");
+    }
+    const returnedScopes = scopes as string[];
+    const expectedResult = expectedScopes.includes("skills:publish") ? expectedScopes : [...expectedScopes, "skills:publish"];
+    if (returnedScopes.length !== expectedResult.length || expectedResult.some((scope, index) => returnedScopes[index] !== scope)) {
+      throw new Error("API key scope update response did not preserve the expected scopes");
+    }
+    return { keyId, orgId, scopes: [...returnedScopes], updated: true };
+  }
+
   /** Quote first and fail closed when the caller has not approved the required credits. */
   async submitQuotedRun(slug: string, input: Record<string, unknown> = {}, args: string[] = [], approval: RemoteRunApproval = {}): Promise<RemoteSkillRunContract> {
     runQuoteReceipt(approval.quoteReceipt);
