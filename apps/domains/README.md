@@ -199,7 +199,7 @@ MCP list-style tools follow the same gradual disclosure model. Defaults return c
 
 MCP provider sync tools return count/error summaries by default; pass `verbose: true` only when an agent needs provider-specific arrays or full sync diagnostics.
 
-Prefer the `domains` CLI over raw registrar CLIs for Route 53 availability, registration status, local portfolio updates, and DNS delegation. The CLI applies configured defaults, records outcomes in the local portfolio DB, and keeps behavior consistent across providers.
+Prefer the `domains` CLI over raw registrar CLIs for Route 53 availability, registration status, hosted portfolio updates, and DNS delegation. The CLI applies configured defaults, records outcomes through the authenticated shared Domains API, and keeps behavior consistent across providers.
 
 Desired DNS state files are JSON:
 

@@ -1,6 +1,6 @@
 # CLI Reference
 
-`domains` manages the local or cloud-backed portfolio, registrar integrations,
+`domains` manages the authenticated hosted portfolio, registrar integrations,
 DNS providers, and related diagnostics. Run `domains <command> --help` for the
 full option list for any command.
 
@@ -26,11 +26,11 @@ The authority follows the same ladder (`HASNA_DOMAINS_API_URL`, the Keychain
 selects a backend. A data command with no resolvable credential exits non-zero
 with the canonical env pair named; it never opens the default local database.
 
-Local SQLite is an explicit opt-in: set `HASNA_DOMAINS_DB_PATH` /
-`HASNA_DOMAINS_DIR` (or their legacy aliases) to name the database, with no
-authority or credential configured in the environment. Every local run prints
-one `LOCAL mode` line on stderr. `domains doctor` reports which store resolved,
-where the URL and key came from, and which tier supplied the key.
+Local SQLite selection is retired. `HASNA_DOMAINS_DB_PATH`,
+`HASNA_DOMAINS_DIR`, `DOMAINS_DB_PATH`, `DOMAINS_DIR`, and the exact-app home
+selectors are rejected rather than selecting a second portfolio. `domains
+doctor` reports the resolved hosted authority and credential source without
+exposing the credential.
 
 ## Command loading
 
@@ -50,7 +50,7 @@ DOMAINS_ENABLE_EXTRAS=1 domains --help
 | Command | Subcommands | Purpose |
 |---|---|---|
 | `domains domain` | `list`, `get`, `add`, `update`, `delete`, `search`, `expiring`, `stats`, `whois`, `export`, `check`, `sync`, `premium`, `offer`, `status`, `emails`, `link-email`, `renew`, `buy`, `setup` | Portfolio lifecycle, registrar actions, acquisition tracking, and email links |
-| `domains dns` | `plan`, `diff`, `apply`, `list`, `add`, `update`, `remove`, `check-propagation`, `export`, `import`, `discover-subdomains`, `validate`, `pull`, `push` | Local and provider DNS records, desired state, and diagnostics |
+| `domains dns` | `plan`, `diff`, `apply`, `list`, `add`, `update`, `remove`, `check-propagation`, `export`, `import`, `discover-subdomains`, `validate`, `pull`, `push` | Hosted portfolio and provider DNS records, desired state, and diagnostics |
 | `domains zone` | `list`, `create`, `info`, `delete` | Provider-agnostic hosted zones |
 | `domains ssl` | `check`, `expiring` | Certificate inspection and expiry tracking |
 | `domains alert` | `set`, `list`, `remove` | Expiry, SSL-expiry, and DNS-change alerts |
@@ -60,9 +60,9 @@ DOMAINS_ENABLE_EXTRAS=1 domains --help
 | `domains renew` | — | Renew through an explicit or auto-detected registrar |
 | `domains check` | — | Check availability through a registrar provider |
 | `domains config` | `show`, `set`, `unset` | Defaults and registrant contact configuration |
-| `domains doctor` | — | Redacted database and provider diagnostics |
+| `domains doctor` | — | Redacted hosted authority, credential, storage, and provider diagnostics |
 | `domains mcp` | `install`, `uninstall`, `status` | Claude Code MCP configuration |
-| `domains serve` | — | Unauthenticated local-development HTTP server |
+| `domains serve` | — | Authenticated PostgreSQL HTTP API; requires a server DSN and signing key |
 | `domains db` | `migrate`, `status` | Owner-role cloud Postgres migrations |
 | `domains r53` | `check`, `buy`, `status`, `domains`, `domain-info`, `zone-create`, `zones`, `zone-info`, `zone-delete`, `records`, `record-set`, `record-rm`, `records-import`, `sync`, `full-setup` | Explicit AWS Route 53 Domains and hosted-zone operations |
 | `domains extras` | — | Show available and enabled optional groups |

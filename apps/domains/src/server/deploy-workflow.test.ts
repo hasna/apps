@@ -5,6 +5,7 @@ import { join } from "node:path";
 const root = join(import.meta.dir, "..", "..", "..", "..");
 const workflow = readFileSync(join(root, ".github", "workflows", "deploy-domains.yml"), "utf8");
 const livePg = readFileSync(join(root, ".github", "workflows", "domains-live-postgres.yml"), "utf8");
+const restoreScript = readFileSync(join(root, "tooling", "deploy", "domains", "restore-service-anchor.sh"), "utf8");
 
 describe("Domains production deployment workflow", () => {
   test("resolves every production target from validated protected configuration", () => {
@@ -63,7 +64,30 @@ describe("Domains production deployment workflow", () => {
     expect(workflow).toContain("schema_advanced == 'false'");
     expect(workflow).toContain("assert-service-anchor.sh");
     expect(workflow).toContain("restore-service-anchor.sh");
-    expect(workflow).toContain("automatic_rollback_performed:false");
+    expect(workflow).toContain("emit-reconciliation-required.sh");
+    const reconciliation = workflow.slice(
+      workflow.indexOf("Emit durable RECONCILIATION_REQUIRED after any post-advance failure"),
+      workflow.indexOf("Upload deployment evidence"),
+    );
+    expect(reconciliation).toContain("always() && failure() && steps.ledger-classify.outputs.schema_advanced == 'true'");
+    expect(reconciliation).not.toContain("service_mutated == 'true'");
+    expect(reconciliation).toContain("SERVICE_MUTATED: ${{ steps.deploy.outputs.service_mutated }}");
+  });
+
+
+  test("rollback uncertainty is trapped from update-service through final verification", () => {
+    const trap = restoreScript.indexOf("trap on_rollback_terminal_error ERR");
+    const update = restoreScript.indexOf("aws ecs update-service");
+    const wait = restoreScript.indexOf("aws ecs wait services-stable");
+    const finalVerify = restoreScript.indexOf("FINAL_TASK_DEFINITION");
+    const clear = restoreScript.lastIndexOf("trap - ERR");
+    expect(trap).toBeGreaterThan(0);
+    expect(update).toBeGreaterThan(trap);
+    expect(wait).toBeGreaterThan(update);
+    expect(finalVerify).toBeGreaterThan(wait);
+    expect(clear).toBeGreaterThan(finalVerify);
+    expect(restoreScript).toContain('RECONCILIATION_REASON="rollback_execution_uncertain"');
+    expect(restoreScript).toContain('AUTOMATIC_ROLLBACK_PERFORMED="unknown"');
   });
 
   test("proves canonical readiness and an authenticated single-/v1 provisioning read", () => {

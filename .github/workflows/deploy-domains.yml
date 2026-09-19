@@ -679,37 +679,6 @@ jobs:
             '{schema:"hasna.domains.production_deploy.v1",source_sha:$source_sha,image_tag:$image_tag,image_digest:$image_digest,image:$image,architecture:$architecture,account:$account,cluster:$cluster,service:$service,rollback:{task_definition:$previous_task_definition,image:$previous_image},migration:{task_definition:$migration_task_definition,task:$migration_task,image:$migration_image,image_digest:$migration_image_digest,exit_code:0,schema_advanced:($schema_advanced == "true"),ledger_before:$ledger_before[0],ledger_after:$ledger_after[0],launch:$migration_launch[0],observed:$migration_observed[0]},deployed:{task_definition:$deployed_task_definition,image:$deployed_image,architecture:$architecture,health_url:$health_url,readiness:{direct:$readiness_direct[0],canonical:$readiness_canonical[0]},canonical_data_plane:$data_plane_canonical[0]},github_run_id:$run_id}' \
             > deploy-evidence.json
 
-      - name: Emit RECONCILIATION_REQUIRED after a post-migration deployment failure
-        if: ${{ failure() && steps.deploy.outputs.service_mutated == 'true' && steps.ledger-classify.outputs.schema_advanced == 'true' }}
-        env:
-          CLUSTER: ${{ steps.manifest.outputs.cluster }}
-          SERVICE: ${{ steps.manifest.outputs.service }}
-          CANDIDATE_TASK_DEFINITION: ${{ steps.deploy.outputs.deployed_task_definition }}
-          CANDIDATE_IMAGE: ${{ steps.image.outputs.digest_image }}
-          PREVIOUS_TASK_DEFINITION: ${{ steps.before.outputs.previous_task_definition }}
-          PREVIOUS_IMAGE: ${{ steps.before.outputs.previous_image }}
-        run: |
-          set -Eeuo pipefail
-          service_json="$(aws ecs describe-services --cluster "${CLUSTER}" --services "${SERVICE}" --output json)"
-          deployments="$(jq -c '[.services[0].deployments[] | {status,rolloutState:(.rolloutState // "UNKNOWN"),taskDefinition,desiredCount,runningCount,pendingCount}]' <<<"${service_json}")"
-          jq -n \
-            --arg source_sha "${SOURCE_SHA}" \
-            --arg cluster "${CLUSTER}" \
-            --arg service "${SERVICE}" \
-            --arg candidate_task_definition "${CANDIDATE_TASK_DEFINITION}" \
-            --arg candidate_image "${CANDIDATE_IMAGE}" \
-            --arg previous_task_definition "${PREVIOUS_TASK_DEFINITION}" \
-            --arg previous_image "${PREVIOUS_IMAGE}" \
-            --slurpfile ledger_before ledger-before.json \
-            --slurpfile ledger_after ledger-after.json \
-            --slurpfile migration_launch migration-launch.json \
-            --slurpfile migration_observed migration-observed.json \
-            --argjson deployments "${deployments}" \
-            '{schema:"hasna.domains.deployment_reconciliation_required.v1",status:"RECONCILIATION_REQUIRED",reason:"service_failure_after_schema_advance",source_sha:$source_sha,cluster:$cluster,service:$service,candidate:{task_definition:$candidate_task_definition,image:$candidate_image},previous:{task_definition:$previous_task_definition,image:$previous_image,compatibility:"unproven_against_advanced_schema"},ledger_before:$ledger_before[0],ledger_after:$ledger_after[0],migration:{launch:$migration_launch[0],observed:$migration_observed[0]},observed_deployments:$deployments,automatic_rollback_performed:false}' \
-            > reconciliation-required.json
-          chmod 600 reconciliation-required.json
-          echo "::error title=Domains recovery review required::Schema advanced; automatic rollback to the unproven previous binary is forbidden."
-
       - name: Restore rollback anchor only when the ledger did not advance
         id: rollback
         if: ${{ failure() && steps.deploy.outputs.service_mutated == 'true' && steps.ledger-classify.outputs.schema_advanced == 'false' }}
@@ -738,6 +707,31 @@ jobs:
             printf '' > "${key_file}"
             rm -f "${key_file}"
           fi
+
+      - name: Emit durable RECONCILIATION_REQUIRED after any post-advance failure
+        id: reconcile-advanced
+        if: ${{ always() && failure() && steps.ledger-classify.outputs.schema_advanced == 'true' }}
+        env:
+          CLUSTER: ${{ steps.manifest.outputs.cluster }}
+          SERVICE: ${{ steps.manifest.outputs.service }}
+          SOURCE_SHA: ${{ env.SOURCE_SHA }}
+          CANDIDATE_TASK_DEFINITION: ${{ steps.deploy.outputs.deployed_task_definition }}
+          CANDIDATE_IMAGE: ${{ steps.image.outputs.digest_image }}
+          PREVIOUS_TASK_DEFINITION: ${{ steps.before.outputs.previous_task_definition }}
+          PREVIOUS_IMAGE: ${{ steps.before.outputs.previous_image }}
+          SERVICE_MUTATED: ${{ steps.deploy.outputs.service_mutated }}
+          SCHEMA_ADVANCED: "true"
+          DEPLOY_OUTCOME: ${{ steps.deploy.outcome }}
+          VERIFY_OUTCOME: ${{ steps.verify.outcome }}
+          AUTOMATIC_ROLLBACK_PERFORMED: "false"
+          LEDGER_BEFORE_FILE: ledger-before.json
+          LEDGER_AFTER_FILE: ledger-after.json
+          MIGRATION_LAUNCH_FILE: migration-launch.json
+          MIGRATION_OBSERVED_FILE: migration-observed.json
+        run: |
+          set -Eeuo pipefail
+          bash ../../tooling/deploy/domains/emit-reconciliation-required.sh reconciliation-required.json
+          echo "::error title=Domains recovery review required::Schema advanced; automatic rollback is forbidden and the observed service/task state requires reconciliation."
 
       - name: Upload deployment evidence
         if: ${{ always() }}
@@ -778,7 +772,7 @@ jobs:
             echo "- pre/post ledger digest: \`${{ steps.ledger-classify.outputs.pre_ledger_digest || 'not-read' }}\` / \`${{ steps.ledger-classify.outputs.post_ledger_digest || 'not-read' }}\`"
             echo "- schema advanced: \`${{ steps.ledger-classify.outputs.schema_advanced || 'unknown' }}\`"
             echo "- deployed task definition: \`${{ steps.deploy.outputs.deployed_task_definition || 'not-deployed' }}\`"
-            echo "- reconciliation receipt: \`${{ steps.ledger-classify.outcome == 'failure' && 'uncertain-state.json' || (steps.deploy.outcome == 'failure' && steps.ledger-classify.outputs.schema_advanced == 'true' && 'reconciliation-required.json' || (steps.rollback.outcome == 'failure' && 'reconciliation-required.json' || 'not-required')) }}\`"
+            echo "- reconciliation receipt: \`${{ steps.ledger-classify.outcome == 'failure' && 'uncertain-state.json' || (steps.reconcile-advanced.outcome == 'success' && 'reconciliation-required.json' || (steps.rollback.outcome == 'failure' && 'reconciliation-required.json' || 'not-required')) }}\`"
           } >> "${GITHUB_STEP_SUMMARY}"
 
   provision_key:

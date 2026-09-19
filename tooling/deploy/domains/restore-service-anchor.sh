@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 if [ "$#" -ne 9 ]; then
   echo "usage: $0 <cluster> <service> <candidate-task-definition> <previous-task-definition> <source-sha> <candidate-image> <previous-image> <rollback.json> <reconciliation.json>" >&2
@@ -49,6 +51,36 @@ fi
 # The immediately preceding read is the ECS control plane's available CAS
 # boundary: only this run's exact candidate may be replaced by its captured
 # predecessor. A different current task definition is never overwritten.
+#
+# From the instant update-service is invoked, every terminal error is uncertain:
+# ECS may have accepted the write even when the client, waiter, or verification
+# command failed. Install the trap BEFORE invoking it and retain bounded service
+# plus task state rather than returning with no durable evidence.
+ROLLBACK_UPDATE_STARTED=false
+on_rollback_terminal_error() {
+  local status=$?
+  trap - ERR
+  if [ "$ROLLBACK_UPDATE_STARTED" = "true" ]; then
+    RECONCILIATION_REASON="rollback_execution_uncertain" \
+    CLUSTER="$CLUSTER" \
+    SERVICE="$SERVICE" \
+    SOURCE_SHA="$SOURCE_SHA" \
+    CANDIDATE_TASK_DEFINITION="$CANDIDATE_TASK_DEFINITION" \
+    CANDIDATE_IMAGE="$CANDIDATE_IMAGE" \
+    PREVIOUS_TASK_DEFINITION="$PREVIOUS_TASK_DEFINITION" \
+    PREVIOUS_IMAGE="$PREVIOUS_IMAGE" \
+    SERVICE_MUTATED="true" \
+    SCHEMA_ADVANCED="false" \
+    DEPLOY_OUTCOME="rollback_update_started" \
+    VERIFY_OUTCOME="uncertain" \
+    AUTOMATIC_ROLLBACK_PERFORMED="unknown" \
+      bash "$SCRIPT_DIR/emit-reconciliation-required.sh" "$RECONCILIATION_OUT" || true
+  fi
+  exit "$status"
+}
+trap on_rollback_terminal_error ERR
+
+ROLLBACK_UPDATE_STARTED=true
 aws ecs update-service \
   --cluster "$CLUSTER" \
   --service "$SERVICE" \
@@ -56,7 +88,10 @@ aws ecs update-service \
 aws ecs wait services-stable --cluster "$CLUSTER" --services "$SERVICE"
 FINAL_JSON="$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" --output json)"
 FINAL_TASK_DEFINITION="$(jq -er '.services[0].taskDefinition' <<<"$FINAL_JSON")"
-[[ "$FINAL_TASK_DEFINITION" == "$PREVIOUS_TASK_DEFINITION" ]] || { echo "rollback did not restore the previous task definition" >&2; exit 1; }
+if [ "$FINAL_TASK_DEFINITION" != "$PREVIOUS_TASK_DEFINITION" ]; then
+  echo "rollback did not restore the previous task definition" >&2
+  false
+fi
 
 jq -n \
   --arg source_sha "$SOURCE_SHA" \
@@ -69,3 +104,4 @@ jq -n \
   '{schema:"hasna.domains.rollback_receipt.v1",source_sha:$source_sha,cluster:$cluster,service:$service,candidate:{task_definition:$candidate_task_definition,image:$candidate_image},restored:{task_definition:$previous_task_definition,image:$previous_image},automatic_rollback_performed:true,cas_anchor_verified:true}' \
   > "$ROLLBACK_OUT"
 chmod 600 "$ROLLBACK_OUT"
+trap - ERR
