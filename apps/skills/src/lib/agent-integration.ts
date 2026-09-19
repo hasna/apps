@@ -186,7 +186,9 @@ function projectAncestorDirectories(projects: string[]): string[] {
 export function inventoryNativeSkills(home = homedir(), options: { includeVendor?: boolean; guardHermes?: boolean; projectDir?: string; projectDirs?: string[]; agents?: readonly IntegrationAgent[]; agentRoots?: Array<{ agent: string; path: string }>; configured?: boolean; discoveryInputs?: ReviewedDiscoveryInputs; allowRootAliases?: boolean } = {}): NativeSkillEntry[] {
   const aliases = rootAliases(home, options.allowRootAliases);
   const selectedAgents = options.agents ? new Set(options.agents) : undefined;
-  const rootDefinitions = selectedAgents ? ROOTS.filter(([agent]) => selectedAgents.has(agent as IntegrationAgent)) : ROOTS;
+  const rootDefinitions = selectedAgents
+    ? ROOTS.filter(([agent, path]) => selectedAgents.has(agent as IntegrationAgent) || (selectedAgents.has("hermes") && agent === "codex" && path === ".agents/skills"))
+    : ROOTS;
   const roots: Array<readonly [string, string]> = rootDefinitions.map(([agent, path]) => [agent, canonicalAgentPath(join(home, path), aliases)]);
   const bridgePaths = Object.values(AGENT_ADAPTERS).map(adapter => canonicalAgentPath(join(home, adapter.root, CLI_BRIDGE_NAME), aliases));
   for (const project of projectAncestorDirectories([...(options.projectDirs ?? []), ...(options.projectDir ? [options.projectDir] : [])])) {
