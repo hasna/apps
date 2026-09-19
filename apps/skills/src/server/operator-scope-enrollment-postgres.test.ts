@@ -47,7 +47,7 @@ postgresTest("operator enrollment is atomic, concurrent and readback-verifiable 
     operationId: "pg-operation-1",
     manifestDigest: "a".repeat(64),
     operatorJobId: "job-derived",
-    operatorTaskArn: "arn:aws:ecs:eu-west-1:123456789012:task/cluster/task-1",
+    operatorTaskArn: "task-1",
   };
   try {
     await runMigrations(database!.url);
