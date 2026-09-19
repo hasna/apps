@@ -784,6 +784,15 @@ export class RemoteSkillsClient {
     return this.request(`/api/v1/skills/${encodeURIComponent(slug)}`, { method: "DELETE" });
   }
 
+  async setSkillLifecycle(slug: string, lifecycle: "active" | "archived", options: { reason?: string; replacementSlug?: string; expectedRevisionId: string }): Promise<any> {
+    const response = await this.request(`/api/v1/skills/${encodeURIComponent(slug)}/lifecycle`, {
+      method: "PATCH",
+      headers: { "If-Match": options.expectedRevisionId },
+      body: JSON.stringify({ lifecycle, ...(options.reason ? { reason: options.reason } : {}), ...(options.replacementSlug ? { replacementSlug: options.replacementSlug } : {}) }),
+    });
+    return response.json();
+  }
+
   async downloadSkillBundle(slug: string): Promise<Response> {
     return this.request(`/api/v1/skills/${encodeURIComponent(slug)}/bundle`, { method: "GET" });
   }

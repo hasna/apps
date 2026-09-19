@@ -9,7 +9,7 @@ import { REVISION_ID_PATTERN } from "../lib/revision.js";
 import { isValidSkillVersion, SKILL_VERSION_RULE } from "../lib/skill-version.js";
 import type { ArtifactStorage } from "./artifact-storage.js";
 import type { SkillsServerConfig } from "./config.js";
-import { SkillRevisionConflictError, SkillVersionExistsError, type ApiPrincipal, type PublishSkillInput, type ServerPin, type ServerSkillRecord, type ServerSkillVersion, type SkillsProductStore } from "./types.js";
+import { SkillRevisionConflictError, SkillVersionExistsError, type ApiPrincipal, type PublishSkillInput, type ServerPin, type ServerSkillRecord, type ServerSkillVersion, type SkillLifecyclePatch, type SkillsProductStore } from "./types.js";
 
 /**
  * Slug grammar, matching normalizePortableSkillName() in src/lib/portable-skills.ts.
@@ -60,6 +60,13 @@ export class SkillRequestError extends Error {
   }
 }
 
+export function skillLifecyclePatch(body: Record<string, unknown>): SkillLifecyclePatch {
+  if (body.lifecycle !== "active" && body.lifecycle !== "archived") throw new SkillRequestError(400, "INVALID_LIFECYCLE", "lifecycle must be active or archived");
+  if (body.reason !== undefined && (typeof body.reason !== "string" || body.reason.length > 512)) throw new SkillRequestError(400, "INVALID_LIFECYCLE", "reason must be at most 512 characters");
+  if (body.replacementSlug !== undefined && (typeof body.replacementSlug !== "string" || !SLUG_PATTERN.test(body.replacementSlug))) throw new SkillRequestError(400, "INVALID_LIFECYCLE", "replacementSlug must be a valid skill slug");
+  return { lifecycle: body.lifecycle, ...(body.reason ? { reason: body.reason } : {}), ...(body.replacementSlug ? { replacementSlug: body.replacementSlug } : {}) };
+}
+
 /** SkillMeta shape for a published row, so a client can treat both kinds alike. */
 export function publishedSkillMeta(record: ServerSkillRecord): SkillMeta {
   return {
@@ -102,6 +109,10 @@ export function publishedPayload(record: ServerSkillRecord, opts: { alreadyPubli
     // which revision it holds, and a guarded write names one of these.
     revisionId: record.revisionId,
     revisionNumber: record.revisionNumber,
+    lifecycle: record.lifecycle,
+    ...(record.archivedAt ? { archivedAt: record.archivedAt } : {}),
+    ...(record.archiveReason ? { archiveReason: record.archiveReason } : {}),
+    ...(record.replacementSlug ? { replacementSlug: record.replacementSlug } : {}),
   };
 }
 
@@ -174,6 +185,7 @@ export async function tombstoneStatus(
 /** List only records belonging to the authenticated organization. */
 export async function listMergedSkills(store: SkillsProductStore, principal: ApiPrincipal): Promise<Record<string, unknown>[]> {
   return (await store.listSkills(principal))
+    .filter((record) => record.lifecycle === "active")
     .sort((a, b) => a.slug.localeCompare(b.slug))
     .map((record) => publishedPayload(record));
 }
@@ -214,6 +226,7 @@ export async function listMergedSkillsByTag(
   tag: string,
 ): Promise<Record<string, unknown>[]> {
   return (await store.listSkillsByTag(principal, tag))
+    .filter((record) => record.lifecycle === "active")
     .sort((a, b) => a.slug.localeCompare(b.slug))
     .map((record) => publishedPayload(record));
 }

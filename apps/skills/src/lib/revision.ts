@@ -34,6 +34,9 @@ export interface RevisionContent {
   skillMd?: string;
   bundleSha256?: string;
   bundleByteSize?: number;
+  lifecycle?: "active" | "archived";
+  archiveReason?: string;
+  replacementSlug?: string;
 }
 
 export function revisionIdOf(content: RevisionContent): string {
@@ -49,6 +52,9 @@ export function revisionIdOf(content: RevisionContent): string {
     skillMd: content.skillMd ?? null,
     bundleSha256: content.bundleSha256 ?? null,
     bundleByteSize: content.bundleByteSize ?? null,
+    lifecycle: content.lifecycle ?? "active",
+    archiveReason: content.archiveReason ?? null,
+    replacementSlug: content.replacementSlug ?? null,
   });
   return createHash("sha256").update(canonical).digest("hex");
 }

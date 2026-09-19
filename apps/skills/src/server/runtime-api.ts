@@ -252,6 +252,7 @@ export async function handleRuntimeApiRequest(
         return refusal("IDEMPOTENCY_KEY_REQUIRED", 400);
       const skill = await service.productStore.getSkill(principal, id);
       if (!skill || skill.tombstonedAt) return refusal("SKILL_NOT_FOUND", 404);
+      if (skill.lifecycle === "archived") return refusal("SKILL_ARCHIVED", 410);
       const version = await service.productStore.getSkillVersion(
         principal,
         id,

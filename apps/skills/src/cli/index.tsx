@@ -123,10 +123,11 @@ registerPortableSkillCommands(program);
 const { registerSchedule } = await import("./commands/schedule.js");
 registerSchedule(program);
 
-const { registerRegistry, registerPull, registerVersions } = await import("./commands/registry.js");
+const { registerRegistry, registerPull, registerVersions, registerLifecycle } = await import("./commands/registry.js");
 registerRegistry(program);
 registerPull(program);
 registerVersions(program);
+registerLifecycle(program);
 
 const { registerPublish } = await import("./commands/publish.js");
 registerPublish(program);

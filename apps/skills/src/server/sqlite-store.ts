@@ -36,11 +36,12 @@ import type {
   ServerSkillBundle,
   ServerSkillVersion,
   ServerSkillRecord,
+  SkillLifecyclePatch,
   SkillsProductStore,
   StoreBackendInfo,
   UpdateSkillPatch,
 } from "./types.js";
-import { SkillRevisionConflictError, SkillVersionExistsError, StaleLeaseGenerationError } from "./types.js";
+import { SkillLifecycleConflictError, SkillRevisionConflictError, SkillVersionExistsError, StaleLeaseGenerationError } from "./types.js";
 import { revisionIdOfRecord } from "../lib/revision.js";
 
 export interface SqliteStoreOptions {
@@ -702,6 +703,28 @@ export class SqliteSkillsStore implements SkillsProductStore {
     return row ? rowToSkill(row) : null;
   }
 
+  async setSkillLifecycle(principal: ApiPrincipal, slug: string, patch: SkillLifecyclePatch, expectedRevisionId?: string) {
+    const current = await this.getSkill(principal, slug);
+    if (!current || current.tombstonedAt) return null;
+    if (expectedRevisionId !== current.revisionId) throw new SkillRevisionConflictError(slug, expectedRevisionId, current.revisionId);
+    if (patch.lifecycle === "archived" && current.lifecycle !== "archived") {
+      const profiles = await this.selectionStore.profilesReferencingSkill(principal, slug);
+      if (profiles.length) throw new SkillLifecycleConflictError(slug, profiles);
+    }
+    const next = { ...current, lifecycle: patch.lifecycle, updatedAt: nowIso(), ...(patch.lifecycle === "archived" ? { archivedAt: current.archivedAt ?? nowIso(), ...(patch.reason ? { archiveReason: patch.reason } : {}), ...(patch.replacementSlug ? { replacementSlug: patch.replacementSlug } : {}) } : {}) };
+    if (patch.lifecycle === "active") { delete next.archivedAt; delete next.archiveReason; delete next.replacementSlug; }
+    return this.db.transaction(() => {
+      const row = this.get("UPDATE skills_registry SET lifecycle=?, archived_at=?, archive_reason=?, replacement_slug=?, revision_id=?, revision_number=revision_number+1, updated_at=? WHERE org_id=? AND slug=? AND tombstoned_at IS NULL AND revision_id=? RETURNING *", [next.lifecycle, next.archivedAt ?? null, next.archiveReason ?? null, next.replacementSlug ?? null, revisionIdOfRecord(next), next.updatedAt, principal.orgId, slug, current.revisionId]);
+      if (!row) throw new SkillRevisionConflictError(slug, expectedRevisionId, this.getSkillSync(principal, slug)?.revisionId ?? null);
+      return rowToSkill(row);
+    })();
+  }
+
+  private getSkillSync(principal: ApiPrincipal, slug: string): ServerSkillRecord | null {
+    const row = this.get("SELECT * FROM skills_registry WHERE org_id=? AND slug=? LIMIT 1", [principal.orgId, slug]);
+    return row ? rowToSkill(row) : null;
+  }
+
   async updateSkill(principal: ApiPrincipal, slug: string, patch: UpdateSkillPatch, expectedRevisionId?: string): Promise<ServerSkillRecord | null> {
     const current = await this.getSkill(principal, slug);
     if (!current || current.tombstonedAt) return null;
@@ -863,7 +886,7 @@ export class SqliteSkillsStore implements SkillsProductStore {
     // other read path in this store.
     await this.purgeExpiredTombstones(principal);
     return this.all(
-      "SELECT DISTINCT tag FROM skills_tags WHERE org_id = ? ORDER BY tag ASC",
+      "SELECT DISTINCT t.tag FROM skills_tags t JOIN skills_registry s ON s.org_id=t.org_id AND s.slug=t.slug WHERE t.org_id = ? AND s.lifecycle='active' ORDER BY t.tag ASC",
       [principal.orgId],
     ).map((row) => String(row.tag));
   }
@@ -873,7 +896,7 @@ export class SqliteSkillsStore implements SkillsProductStore {
     return this.all(
       `SELECT s.* FROM skills_registry s
        JOIN skills_tags t ON t.org_id = s.org_id AND t.slug = s.slug
-       WHERE t.org_id = ? AND t.tag = ? AND s.tombstoned_at IS NULL
+       WHERE t.org_id = ? AND t.tag = ? AND s.tombstoned_at IS NULL AND s.lifecycle = 'active'
        ORDER BY s.slug ASC`,
       [principal.orgId, tag],
     ).map(rowToSkill);
@@ -888,7 +911,7 @@ export class SqliteSkillsStore implements SkillsProductStore {
       `SELECT p.* FROM skills_pins p
        JOIN skills_tags t ON t.org_id = p.org_id AND t.slug = p.slug
        JOIN skills_registry s ON s.org_id = p.org_id AND s.slug = p.slug
-       WHERE p.org_id = ? AND p.principal = ? AND t.tag = ? AND s.tombstoned_at IS NULL
+       WHERE p.org_id = ? AND p.principal = ? AND t.tag = ? AND s.tombstoned_at IS NULL AND s.lifecycle = 'active'
        ORDER BY p.slug ASC`,
       [principal.orgId, principal.apiKeyId, tag],
     ).map(rowToPin);

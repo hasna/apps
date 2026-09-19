@@ -9,6 +9,7 @@ import type {
 } from "../types/skill-selection.js";
 
 export interface SkillSelectionStore {
+  profilesReferencingSkill(principal: ApiPrincipal, slug: string): Promise<string[]>;
   getProfile(principal: ApiPrincipal, id: string): Promise<SkillProfile | null>;
   /** null expected revision means create-only; null result means CAS conflict. */
   saveProfile(
@@ -67,6 +68,9 @@ export class MemorySkillSelectionStore implements SkillSelectionStore {
   async getProfile(p: ApiPrincipal, id: string) {
     return structuredClone(this.profiles.get(this.key(p.orgId, id)) ?? null);
   }
+  async profilesReferencingSkill(p: ApiPrincipal, slug: string) {
+    return [...this.profiles.values()].filter((profile) => profile.workspaceId === p.orgId && profile.selections.some((selection) => selection.slug === slug)).map((profile) => profile.id).sort();
+  }
   async saveProfile(
     p: ApiPrincipal,
     id: string,
@@ -115,6 +119,10 @@ export class MemorySkillSelectionStore implements SkillSelectionStore {
 
 export class SqliteSkillSelectionStore implements SkillSelectionStore {
   constructor(private db: Database) {}
+  async profilesReferencingSkill(p: ApiPrincipal, slug: string) {
+    const rows = this.db.query("SELECT profile_id,selections_json FROM skills_profiles WHERE org_id=?").all(p.orgId) as Row[];
+    return rows.filter((row) => selections(row.selections_json).some((selection) => selection.slug === slug)).map((row) => String(row.profile_id)).sort();
+  }
   async getProfile(p: ApiPrincipal, id: string) {
     const row = this.db
       .query("SELECT * FROM skills_profiles WHERE org_id=? AND profile_id=?")
@@ -191,6 +199,10 @@ type Sql = (
 ) => Promise<Row[]>;
 export class PostgresSkillSelectionStore implements SkillSelectionStore {
   constructor(private sql: Sql) {}
+  async profilesReferencingSkill(p: ApiPrincipal, slug: string) {
+    const rows = await this.sql`SELECT profile_id,selections_json FROM skills_profiles WHERE org_id=${p.orgId}`;
+    return rows.filter((row) => selections(row.selections_json).some((selection) => selection.slug === slug)).map((row) => String(row.profile_id)).sort();
+  }
   async getProfile(p: ApiPrincipal, id: string) {
     const rows = await this
       .sql`SELECT * FROM skills_profiles WHERE org_id=${p.orgId} AND profile_id=${id}`;
