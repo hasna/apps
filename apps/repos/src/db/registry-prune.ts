@@ -93,6 +93,12 @@ export const KNOWN_REPO_FK_TABLES = new Set([
   "remotes",
   "pull_requests",
   "worktree_leases",
+  // `issues` (migration 16) references repos(id) ON DELETE CASCADE and is a
+  // reviewed member of this set: a repo prune cascades its issue rows away
+  // (counted by countChildRows before the delete), and the canonical-duplicate
+  // merge moves them onto the survivor by (repo_id, number) like pull_requests.
+  // Adding a table here is the REVIEW step; leaving one out is the refusal.
+  "issues",
 ]);
 
 export type RegistryPruneErrorCode =
