@@ -27,6 +27,8 @@ import { checkHealth } from "../generated/storage-kit/index.js";
 import { DomainsRepo, HttpError } from "./repo.js";
 import { buildMigrations } from "./migrations.js";
 import { buildOpenApiSpec } from "./openapi.js";
+import { publicProvisioningJob, type DomainProvisioningService } from "../lib/provisioning.js";
+import { DnsToolValidationError } from "../db/dns-tools.js";
 
 /**
  * Read-only readiness check. The service runs as the DML-only app role, which
@@ -67,6 +69,7 @@ export interface ServeAppOptions {
    */
   keyStatus: KeyStatusResolver;
   audit?: (e: AuthAuditEvent) => void;
+  provisioning?: Pick<DomainProvisioningService, "quote" | "request" | "get" | "advance">;
 }
 
 export interface ServeApp {
@@ -151,6 +154,59 @@ export function createServeApp(options: ServeAppOptions): ServeApp {
       }
       if (method === "GET" && (path === "/openapi.json" || path === "/v1/openapi.json")) {
         return json(spec);
+      }
+
+      // ── hosted purchase + provisioning authority ───────────────────
+      if (path === "/v1/availability" && method === "POST") {
+        const denied = await auth(req, path, ["domains:read"]);
+        if (denied) return denied;
+        if (!options.provisioning) return json({ error: "hosted domain provisioning is not configured" }, 503);
+        const body = await readBody(req);
+        if (!body || typeof body.name !== "string") return json({ error: "name is required" }, 400);
+        try {
+          return json(await options.provisioning.quote(body.name));
+        } catch (error) {
+          if (error instanceof DnsToolValidationError) return json({ error: error.message }, 400);
+          throw error;
+        }
+      }
+
+      if (path === "/v1/provisioning" && method === "POST") {
+        const denied = await auth(req, path, ["domains:purchase"]);
+        if (denied) return denied;
+        if (!options.provisioning) return json({ error: "hosted domain provisioning is not configured" }, 503);
+        const body = await readBody(req);
+        const idempotencyKey = req.headers.get("idempotency-key")?.trim() || body?.idempotency_key;
+        try {
+          const job = await options.provisioning.request({ ...body, idempotency_key: idempotencyKey });
+          return json(publicProvisioningJob(job), job.status === "ready" ? 200 : 202);
+        } catch (error) {
+          if (error instanceof HttpError) throw error;
+          return json({ error: error instanceof Error ? error.message : String(error) }, 400);
+        }
+      }
+
+      let provisioningMatch = path.match(/^\/v1\/provisioning\/([^/]+)$/);
+      if (provisioningMatch && method === "GET") {
+        const denied = await auth(req, path, ["domains:read"]);
+        if (denied) return denied;
+        if (!options.provisioning) return json({ error: "hosted domain provisioning is not configured" }, 503);
+        const job = await options.provisioning.get(decodeURIComponent(provisioningMatch[1]!));
+        return job ? json(publicProvisioningJob(job)) : json({ error: "provisioning job not found" }, 404);
+      }
+
+      provisioningMatch = path.match(/^\/v1\/provisioning\/([^/]+)\/advance$/);
+      if (provisioningMatch && method === "POST") {
+        const denied = await auth(req, path, ["domains:purchase"]);
+        if (denied) return denied;
+        if (!options.provisioning) return json({ error: "hosted domain provisioning is not configured" }, 503);
+        try {
+          const job = await options.provisioning.advance(decodeURIComponent(provisioningMatch[1]!));
+          return json(publicProvisioningJob(job), job.status === "ready" || job.status === "failed" || job.status === "manual_review" ? 200 : 202);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          return /not found/i.test(message) ? json({ error: message }, 404) : json({ error: message }, 500);
+        }
       }
 
       // ── /v1 authenticated surface ─────────────────────────────────────

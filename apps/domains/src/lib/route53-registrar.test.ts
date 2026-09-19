@@ -60,6 +60,7 @@ mock.module("@aws-sdk/client-route-53-domains", () => ({
 
 const {
   getDomainDetail,
+  getRegistrationContactFromDomain,
   getRegistrationStatus,
   registerDomain,
   requestTransferOutAuthCode,
@@ -135,6 +136,20 @@ describe("Route53 registrar lifecycle helpers", () => {
       Nameservers: [{ Name: "ns-1.awsdns.test" }],
       PrivacyProtectRegistrantContact: true,
     });
+  });
+
+  test("reuses an existing Route53 registrant contact without exposing it to clients", async () => {
+    queueDomain("GetDomainDetailCommand", {
+      DomainName: "source.example",
+      RegistrantContact: {
+        FirstName: "Ada", LastName: "Lovelace", Email: "ops@example.com", PhoneNumber: "+40754013776",
+        AddressLine1: "1 Launch St", AddressLine2: "Suite 2", City: "Bucharest", State: "B",
+        CountryCode: "RO", ZipCode: "010101", OrganizationName: "Alumia",
+      },
+    });
+    await expect(getRegistrationContactFromDomain("source.example")).resolves.toEqual(contact);
+    expect(domainCommands).toHaveLength(1);
+    expect(domainCommands[0]).toBeInstanceOf(GetDomainDetailCommand);
   });
 
   test("merges domain detail with paginated summary data and privacy flags", async () => {

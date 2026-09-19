@@ -16,6 +16,9 @@ import { ApiKeyStore } from "@hasna/contracts/auth";
 import { createServerPoolFromEnv } from "../generated/storage-kit/index.js";
 import { getPackageVersion } from "../lib/version.js";
 import { createServeApp } from "./app.js";
+import { DomainProvisioningService } from "../lib/provisioning.js";
+import { DomainsProvisioningRepo } from "./provisioning-repo.js";
+import { createHostedProvisioningProviders } from "./provisioning-runtime.js";
 
 const DEFAULT_PORT = 8080;
 
@@ -106,12 +109,22 @@ export async function startDomainsServer(options: { port: number; host: string }
   // owner-role migration task (`domains db migrate`). The store is used only for
   // the read-path revocation check.
   const store = new ApiKeyStore(client);
+  const provisioning = new DomainProvisioningService(
+    new DomainsProvisioningRepo(client),
+    createHostedProvisioningProviders(process.env),
+    {
+      intervalMs: Number(process.env["DOMAINS_PROVISIONING_INTERVAL_MS"] ?? "5000"),
+      log: (event, detail) => console.log(JSON.stringify({ level: "info", event, ...detail })),
+    },
+  );
+  provisioning.start();
 
   const app = createServeApp({
     db: client,
     signingSecret,
     version,
     keyStatus: store.keyStatus,
+    provisioning,
     audit: (e) => {
       if (e.outcome === "deny") {
         console.error(JSON.stringify({ level: "warn", event: "api_auth_deny", ...e }));
