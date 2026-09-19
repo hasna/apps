@@ -78,11 +78,24 @@ controls are part of each schema, but common arguments are:
 - `full: true` for complete objects;
 - `format: "json"` where the tool advertises a format argument.
 
-`memory_inject` supports `xml`, `markdown`, `compact`, and `json`. It also
-supports default or smart selection, full or hint output, task activation, and
-machine visibility. `compact` is the smallest prompt-ready format; hint mode
-returns topic/count summaries which can be followed by targeted
-`memory_recall` calls.
+`memory_inject` supports `xml`, `markdown`, `compact`, and `json`. Broad calls
+default to `mode="hints"`, returning topic/count summaries that can be followed
+by targeted `memory_recall` calls. Complete content remains available only via
+explicit `mode="full"`; smart selection, task activation, and machine visibility
+remain supported.
+
+
+`memory_context` ordinary non-smart calls return a minified
+`mementos.context.page.v1` receipt with ten ranked compact previews by default,
+a 32 KiB ceiling, deterministic ranking metadata, and `next_offset`. Set
+`detail="full"` for complete memory fields (64 KiB default) and `max_bytes` up
+to 1 MiB explicitly.
+
+`memory_export` returns a truthful byte-bounded page receipt in both `json` and
+portable `v1` modes. Continue by passing `_meta.next_arguments` back verbatim;
+it contains only accepted tool inputs. A terminal page has `truncated=false`, a
+null `truncation_reason`, and no continuation. The tool never labels a silent
+10,000-row prefix as a complete export.
 
 MCP `tools/list` is authoritative for all names and Zod-derived input schemas.
 The convenience `search_tools` tool searches the active profile and returns a

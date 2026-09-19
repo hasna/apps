@@ -246,7 +246,7 @@ describe("mementos CLI without store configuration fails closed", () => {
     expect(exitCode).toBe(0);
     expect(existsSync(dbPath)).toBe(true);
     const parsed = JSON.parse(stdout) as unknown;
-    expect(Array.isArray(parsed)).toBe(true);
+    expect(parsed).toMatchObject({ memories: [], _meta: { complete: true } });
   });
 
   test("the deliberate local flag (HASNA_MEMENTOS_LOCAL=1) works end-to-end", async () => {
@@ -257,7 +257,7 @@ describe("mementos CLI without store configuration fails closed", () => {
     const { stdout, stderr, exitCode } = await runCli(["list", "--limit", "1", "--json"], env, scratch);
 
     expect(exitCode).toBe(0);
-    expect(Array.isArray(JSON.parse(stdout) as unknown)).toBe(true);
+    expect(JSON.parse(stdout)).toMatchObject({ memories: [], _meta: { complete: true } });
     // Local mode must SAY it is local — on stderr, once (fail-closed wave).
     expect(stderr).toMatch(/local/i);
   });

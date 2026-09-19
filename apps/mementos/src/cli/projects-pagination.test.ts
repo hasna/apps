@@ -63,99 +63,27 @@ afterAll(() => {
 });
 
 describe("projects pagination", () => {
-  test("JSON output honors explicit limit and cursor while no flags remain unbounded", async () => {
-    const unbounded = await runCli("--json", "projects");
-    const limited = await runCli("--json", "projects", "--limit", "2");
-    const first = await runCli(
-      "--json",
-      "projects",
-      "--limit",
-      "2",
-      "--cursor",
-      "0",
-    );
-    const second = await runCli(
-      "--json",
-      "projects",
-      "--limit",
-      "2",
-      "--cursor",
-      "2",
-    );
-    const shortTerminal = await runCli(
-      "--json",
-      "projects",
-      "--limit",
-      "2",
-      "--cursor",
-      "4",
-    );
-    const emptyTerminal = await runCli(
-      "--json",
-      "projects",
-      "--limit",
-      "2",
-      "--cursor",
-      "5",
-    );
+  test("JSON output is a compact continuation-bearing receipt by default", async () => {
+    const first = await runCli("--json", "projects", "--limit", "2", "--cursor", "0");
+    const second = await runCli("--json", "projects", "--limit", "2", "--cursor", "2");
+    const terminal = await runCli("--json", "projects", "--limit", "2", "--cursor", "4");
+    const exhaustive = await runCli("--json", "projects", "--all", "--full");
+    for (const result of [first, second, terminal, exhaustive]) expect(result.exitCode).toBe(0);
 
-    for (const result of [
-      unbounded,
-      limited,
-      first,
-      second,
-      shortTerminal,
-      emptyTerminal,
-    ]) {
-      expect(result.exitCode).toBe(0);
-      expect(result.stderr).not.toContain("error:");
-    }
-
-    const unboundedProjects = JSON.parse(unbounded.stdout) as Array<{
-      id: string;
-      name: string;
-    }>;
-    const limitedProjects = JSON.parse(limited.stdout) as Array<{
-      id: string;
-      name: string;
-    }>;
-    const firstPage = JSON.parse(first.stdout) as Array<{
-      id: string;
-      name: string;
-    }>;
-    const secondPage = JSON.parse(second.stdout) as Array<{
-      id: string;
-      name: string;
-    }>;
-    const shortTerminalPage = JSON.parse(shortTerminal.stdout) as Array<{
-      id: string;
-      name: string;
-    }>;
-    const emptyTerminalPage = JSON.parse(emptyTerminal.stdout) as Array<{
-      id: string;
-      name: string;
-    }>;
-
-    expect(unboundedProjects).toHaveLength(5);
-    expect(limitedProjects).toHaveLength(2);
-    expect(limitedProjects).toEqual(firstPage);
-    expect(firstPage.map((project) => project.name)).toEqual([
-      PROJECT_NAMES[4],
-      PROJECT_NAMES[3],
-    ]);
-    expect(secondPage.map((project) => project.name)).toEqual([
-      PROJECT_NAMES[2],
-      PROJECT_NAMES[1],
-    ]);
-    expect(
-      firstPage.some((project) =>
-        secondPage.some((other) => other.id === project.id),
-      ),
-    ).toBe(false);
-    expect(shortTerminalPage.map((project) => project.name)).toEqual([
-      PROJECT_NAMES[0],
-    ]);
-    expect(emptyTerminalPage).toEqual([]);
+    const firstPage = JSON.parse(first.stdout) as { projects: Array<{ id: string; name: string; created_at?: string }>; _meta: Record<string, unknown> };
+    const secondPage = JSON.parse(second.stdout) as typeof firstPage;
+    const terminalPage = JSON.parse(terminal.stdout) as typeof firstPage;
+    const allPage = JSON.parse(exhaustive.stdout) as typeof firstPage;
+    expect(firstPage.projects.map((project) => project.name)).toEqual([PROJECT_NAMES[4], PROJECT_NAMES[3]]);
+    expect(firstPage.projects.every((project) => project.created_at === undefined)).toBe(true);
+    expect(firstPage._meta).toMatchObject({ receipt: "mementos.projects.page.v1", next_cursor: 2, has_more: true, detail: "compact" });
+    expect(secondPage.projects.map((project) => project.name)).toEqual([PROJECT_NAMES[2], PROJECT_NAMES[1]]);
+    expect(terminalPage.projects.map((project) => project.name)).toEqual([PROJECT_NAMES[0]]);
+    expect(terminalPage._meta).toMatchObject({ has_more: false, next_cursor: null });
+    expect(allPage.projects).toHaveLength(5);
+    expect(allPage.projects[0]?.created_at).toBeDefined();
+    expect(allPage._meta).toMatchObject({ all: true, complete: true, detail: "full" });
+    expect(Buffer.byteLength(first.stdout)).toBeLessThanOrEqual(32 * 1024);
   });
 
   test("human output applies the same limit and cursor window", async () => {

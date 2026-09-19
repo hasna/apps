@@ -35,7 +35,7 @@ Required arguments are shown as `<name>` and optional arguments as `[name]`.
 | `recall <key>` (alias `get`) | Recall an exact key. Exits 1 if absent; `--fuzzy` returns the nearest record instead and exits 2 | `--scope`, `--agent`, `--project`, `--fuzzy` |
 | `show <id>` | Show the full record; partial IDs work locally | — |
 | `list` | List memories with filters | `--scope`, `--category`, `--tags`, `--importance-min`, `--pinned`, `--agent`, `--project`, `--session`, `--status`, paging/output options, `--agent-json`, receipt-only `--all`/`--full`/`--max-bytes` |
-| `search <query>` | Full-text and fuzzy search | scope/category/tag/project/agent/session filters, paging/output options, `--verbose`, `--history`, `--popular` |
+| `search <query>` | Full-text and fuzzy search | scope/category/tag/project/agent/session filters, paging/output options, `--verbose`, JSON `--full`/`--all`/`--max-bytes`, `--history`, `--popular` |
 | `pin <keyOrId>` / `unpin <keyOrId>` | Change pin state | `--scope`, `--agent`, `--project` |
 | `archive <keyOrId>` | Hide a memory while retaining its history | `--scope` |
 | `versions <keyOrId>` | Show stored versions | `--scope` |
@@ -108,12 +108,14 @@ page hint. Common options are:
 --format <fmt> compact, json, csv, or yaml where advertised
 ```
 
-Historical `list --json` / `list --format json` and JSON `history` remain
-full-detail bare arrays. An omitted `--limit` keeps the compatibility behavior
-of walking the complete result, while an explicit limit/cursor returns the
-corresponding full-object array slice.
-
-Use `--agent-json` for the bounded, minified page envelope:
+Ordinary `list --json` / `list --format json` now use the bounded, minified
+page envelope below. `--agent-json` is a compatibility alias for the same
+receipt mode. `projects --json`, `agents --json`, and `search --json` use
+parallel `projects`, `agents`, and `results` collection keys with truthful
+continuation metadata. This is an intentional minor-version response-shape
+break: these collection commands have no bare-array mode. Compact output is the
+default; `--full` changes row detail inside the receipt, and `--all` exhausts
+the query while retaining the receipt envelope.
 
 ```json
 {"memories":[...],"_meta":{"receipt":"mementos.list.page.v1","count":20,"limit":20,"offset":0,"next_cursor":20,"has_more":true,"complete":false,"detail":"compact","max_bytes":32768,"response_bytes":7342,"continuation_scope":"unchanged_snapshot"}}
@@ -126,9 +128,12 @@ the page. Receipt pages have a hard limit of 1,000 rows and a default 32 KiB
 byte budget (64 KiB with `--full`); `--max-bytes` accepts 1,024 bytes through
 1 MiB.
 
-`--all`, `--full`, and `--max-bytes` are receipt-only controls and are rejected
-without `--agent-json`. `--all` starts at offset zero, walks bounded `/v1`
-pages, and succeeds only when the complete result fits 5,000 rows and 1 MiB.
+`--all`, `--full`, and `--max-bytes` require JSON receipt mode. `--all` starts
+at offset zero and walks bounded `/v1` pages, but does not switch projects,
+agents, list, or search back to a bare array. The explicit exhaustive ceiling is
+100,000 rows and 64 MiB; ordinary pages remain capped at 1,000 rows and default
+to 32 KiB compact / 64 KiB full output. `export --all` is the one explicit
+legacy bare-array path; paginated export has full row detail by default.
 
 The continuation is offset-based, not a keyset snapshot. The DB ordering ends
 with `id DESC`, so equal-importance/equal-timestamp rows have deterministic,
@@ -147,7 +152,7 @@ Use `show <id>` for a complete human-readable record.
 | `history` | Recently accessed memories | paging, `--verbose`, `--agent-json`, receipt-only `--all`/`--full`/`--max-bytes` |
 | `context [query]` | Prompt-ready relevant memory block | `--max-tokens`, `--min-importance`, `--scope`, `--categories`, `--agent`, `--project`, `--machine` |
 | `clean` | Remove expired memories and enforce configured retention | — |
-| `export` | Write a JSON export to stdout | `--scope`, `--category`, `--agent`, `--project` |
+| `export` | Emit a truthful paginated export receipt; exhaustive legacy array is explicit | filters plus `--limit`, `--cursor`/`--offset`, `--max-bytes`, `--all` |
 | `import [file]` | Import JSON from a file or stdin | `--overwrite` |
 | `backup [path]` | Copy the local SQLite database | `--list` |
 | `restore [file]` | Preview or restore a local SQLite backup | `--latest`, `--force` |
@@ -161,12 +166,12 @@ preview.
 | Command | Purpose | Options |
 | --- | --- | --- |
 | `register-agent <name>` (`init-agent`) | Register an agent | `--description`, `--role`, `--project <id>` |
-| `agents` | List agents | paging |
+| `agents` | List agents | paging; JSON `--full`/`--all`/`--max-bytes` |
 | `agent-update <id>` | Change an agent | `--name`, `--description`, `--role` |
 | `heartbeat [agent-id]` | Refresh `last_seen_at` | global `--agent` may supply the ID |
 | `set-focus [project]` | Set or clear an agent's active project | `--agent <id>` |
 | `get-focus` | Show active project focus | `--agent <id>` |
-| `projects` | List projects or register one | `--add --name <name> --path <path> [--description]`, paging |
+| `projects` | List projects or register one | `--add --name <name> --path <path> [--description]`, paging; JSON `--full`/`--all`/`--max-bytes` |
 | `inject` | Produce memory context | `--agent`, `--project`, `--session`, `--machine`, `--max-tokens`, `--categories`, `--format xml|compact|markdown|json` |
 | `project-panel` | Emit the Projects dashboard contract | `--project`, `--limit`, `--contract` |
 

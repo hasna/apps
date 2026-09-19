@@ -199,7 +199,7 @@ describe("mementos read verbs never leak credential-shaped keys on stdout", () =
     expect(exitCode).toBe(0);
     expect(stdout).not.toContain(AWS_ACCESS_KEY);
     expect(stdout).not.toContain(NPM_REGISTRY_TOKEN);
-    const parsed = JSON.parse(stdout) as Array<{ memory: Record<string, unknown>; score: number }>;
+    const parsed = (JSON.parse(stdout) as { results: Array<{ memory: Record<string, unknown>; score: number }> }).results;
     expect(Array.isArray(parsed)).toBe(true);
     expect(parsed.length).toBe(3);
     // Coordination metadata survives: the token rows are still returned, with
@@ -240,7 +240,7 @@ describe("mementos read verbs never leak credential-shaped keys on stdout", () =
     const { stdout, exitCode } = await runCli(env, "search", NPM_REGISTRY_TOKEN, "--format", "json");
     expect(exitCode).toBe(0);
     expect(stdout).not.toContain(NPM_REGISTRY_TOKEN);
-    const parsed = JSON.parse(stdout) as Array<{ memory: Record<string, unknown>; highlights?: Array<{ field: string; snippet: string }> }>;
+    const parsed = (JSON.parse(stdout) as { results: Array<{ memory: Record<string, unknown>; highlights?: Array<{ field: string; snippet: string }> }> }).results;
     expect(parsed.length).toBe(1);
     expect(parsed[0]!.memory.id).toBe("m-hl-npm");
     // The key field highlight snippet is redacted.
@@ -263,12 +263,12 @@ describe("mementos read verbs never leak credential-shaped keys on stdout", () =
     rows.push({ id: "m-pop-last", key: `npm_${"z".repeat(36)}`, value: "shared population value" });
 
     const { dbPath, env } = await seeded(rows);
-    const { stdout, exitCode } = await runCli(env, "search", "population", "--format", "json", "--limit", "1000");
+    const { stdout, exitCode } = await runCli(env, "search", "population", "--format", "json", "--all");
     expect(exitCode).toBe(0);
     expect(stdout).not.toContain(AWS_ACCESS_KEY);
     expect(stdout).not.toContain(NPM_REGISTRY_TOKEN);
     expect(stdout).not.toContain(`npm_${"z".repeat(36)}`);
-    const parsed = JSON.parse(stdout) as Array<{ memory: Record<string, unknown> }>;
+    const parsed = (JSON.parse(stdout) as { results: Array<{ memory: Record<string, unknown> }> }).results;
     expect(parsed.length).toBe(121);
   });
 
@@ -687,7 +687,7 @@ describe("mementos read verbs never leak credential-shaped keys on stdout", () =
     expect(exitCode).toBe(0);
     expect(stdout).not.toContain(NPM_REGISTRY_TOKEN);
     expect(stdout).not.toContain(AWS_ACCESS_KEY);
-    const parsed = JSON.parse(stdout) as Array<Record<string, unknown>>;
+    const parsed = (JSON.parse(stdout) as { memories: Array<Record<string, unknown>> }).memories;
     expect(parsed.length).toBe(4);
     const npm = parsed.find((m) => m.id === "m-exp-npm");
     expect(npm).toBeTruthy();
