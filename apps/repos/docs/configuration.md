@@ -130,6 +130,7 @@ bootstrap can be disabled separately with `HASNA_REPOS_AUTO_BOOTSTRAP=0`.
 | Variable | Used by |
 |---|---|
 | `HASNA_REPOS_GITHUB_CACHE_PATH` | Default path for the GitHub catalog cache |
+| `HASNA_REPOS_GIT_TIMEOUT_MS` | Positive integer ceiling, in milliseconds, for one worktree-plane `git` process; defaults to `600000` and is capped at `1800000`. `REPOS_GIT_TIMEOUT_MS` is accepted as a legacy alias; the canonical name wins when both are set |
 | `LOOPS_TODOS_PROJECT` | Default todos project for loop-producer task upserts |
 | `REPOS_PORT` | `repos-serve` port; default `19450` |
 | `REPOS_HOST` | `repos-serve` bind hostname; default `127.0.0.1` (loopback only) |
