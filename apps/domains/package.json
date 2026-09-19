@@ -64,7 +64,8 @@
     "prepublishOnly": "bun run build",
     "postinstall": "node postinstall.js",
     "prepack": "bun run build && bun run artifact-scan",
-    "artifact-scan": "bun pm pack --ignore-scripts --quiet --filename \"$PWD/domains-artifact-scan.tgz\" && bunx @hasna/contracts@1.0.2 artifact-scan domains-artifact-scan.tgz; rc=$?; rm -f \"$PWD/domains-artifact-scan.tgz\"; exit $rc"
+    "artifact-scan": "bun pm pack --ignore-scripts --quiet --filename \"$PWD/domains-artifact-scan.tgz\" && bunx @hasna/contracts@1.0.2 artifact-scan domains-artifact-scan.tgz; rc=$?; rm -f \"$PWD/domains-artifact-scan.tgz\"; exit $rc",
+    "test:postgres": "test -n \"$HASNA_DOMAINS_TEST_DATABASE_URL\" || { echo \"HASNA_DOMAINS_TEST_DATABASE_URL must point at an exclusive throwaway PostgreSQL database\" >&2; exit 1; }; bun test src/server/provisioning-live-postgres.test.ts"
   },
   "keywords": [
     "domains",

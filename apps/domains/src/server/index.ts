@@ -4,9 +4,9 @@
  *
  * Usage: domains-serve [--port 8080] [--host 0.0.0.0]
  *
- * The server backend is selected by the environment:
- *   HASNA_DOMAINS_DATABASE_URL      Postgres DSN -> PostgreSQL backend
- *                                   (unset -> SQLite backend)
+ * The server is PostgreSQL-only and fails closed when its required environment
+ * is incomplete:
+ *   HASNA_DOMAINS_DATABASE_URL      PostgreSQL DSN (required)
  *   HASNA_DOMAINS_API_SIGNING_KEY   HMAC signing secret for API keys
  * Falls back to the generic DATABASE_URL / API_KEY_SIGNING_SECRET env names the
  * hasna-app Terraform module injects.
