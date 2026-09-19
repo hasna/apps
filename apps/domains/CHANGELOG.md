@@ -1,5 +1,31 @@
 # @hasna/domains
 
+## 0.2.0
+
+### Minor Changes
+
+- dd9031fce: Add the hosted, idempotent Domains provisioning API as the single production authority for registrar availability and capped purchases, token-only Cloudflare zone and nameserver setup, safely proven Route 53 default-zone cleanup, and Shortlinks Worker Custom Domain readiness.
+
+- 57edde86e: Make high-cardinality Domains CLI JSON compact and bounded by default, with explicit verbose page detail and full legacy response compatibility.
+
+### Patch Changes
+
+- 96a8fa328: Replace the vulnerable Debian slim production image with the pinned multi-architecture Bun Alpine base and exact patched OpenSSL runtime libraries while preserving the zero-CRITICAL/HIGH deployment gate.
+
+- 3dddd85c3: Wait for shared portfolio writes before confirming Sedo purchase records or Route 53 setup completion, and report failed Sedo saves as command failures.
+
+- 5d776ba0d: Keep `bun:sqlite` out of the Domains CLI, MCP, and SDK bundles by isolating the SQLite-backed `LocalStore` in a fixture-only module and avoiding namespace-style dynamic imports that defeat tree-shaking. Hosted authority, credentials, and `/v1` routing are unchanged.
+
+- 965fbedbf: Harden the production deployment lane with protected topology configuration, migration-ledger reconciliation, candidate-anchored rollback, canonical hosted acceptance, and live PostgreSQL provisioning proof; correct the public storage contract to hosted fail-closed clients and PostgreSQL service storage.
+
+- 49db2e50e: Project the reviewed hosted-provider environment into each candidate service task so Cloudflare account, registrant-contact source, and bounded worker scheduling configuration cannot be lost during deployment.
+
+- f3f9ee2fd: Project the reviewed Domains provider-secret manifest into each candidate service task and refuse failed ECS deployment pointers as rollback anchors.
+
+- 913f1ac06: Switch @hasna/domains local path reads/writes through the in-package resolver (XDG/macOS home layout). The legacy `~/.hasna/domains` default (with the `HASNA_DOMAINS_HOME` / `DOMAINS_HOME` / `HASNA_DOMAINS_DIR` / `DOMAINS_DIR` exact-app overrides) stays the effective data home until the store has actually been migrated to the XDG data home or the operator sets the data-kind override `HASNA_DATA_HOME` — an existing local store never becomes invisible on upgrade. The wave-wide resolver dependency (`@hasna/paths@0.1.0`) was deleted 2026-09-03 (hasna/apps#1535); the resolver is now implemented locally in-package.
+
+- 40e34b1c1: Support `domains mcp status --project` to inspect only the current project, matching the install and uninstall scope selector.
+
 ## 0.1.0
 
 ### Minor Changes
