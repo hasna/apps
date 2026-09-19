@@ -1,16 +1,29 @@
 import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { Command } from "commander";
 import { createStore } from "../../server/store.js";
 import type { OperatorScopeEnrollmentInput } from "../../server/types.js";
 
 type EnrollmentManifest = OperatorScopeEnrollmentInput & {
   operation: "enroll-publish";
+  manifestVersion: 1;
   expiresAt: string;
 };
+
+function sha256(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  if (value && typeof value === "object") return `{${Object.entries(value as Record<string, unknown>).filter(([key]) => key !== "manifestDigest").sort(([a], [b]) => a.localeCompare(b)).map(([key, child]) => `${JSON.stringify(key)}:${canonical(child)}`).join(",")}}`;
+  return JSON.stringify(value);
+}
 
 function readManifest(path: string): EnrollmentManifest {
   const parsed = JSON.parse(readFileSync(path, "utf8")) as Partial<EnrollmentManifest>;
   if (parsed.operation !== "enroll-publish") throw new Error("maintenance manifest operation must be enroll-publish");
+  if (parsed.manifestVersion !== 1) throw new Error("unsupported maintenance manifest version");
   for (const field of ["keyId", "stationId", "orgId", "operationId", "manifestDigest", "operatorJobId", "operatorTaskArn", "expiresAt"] as const) {
     if (typeof parsed[field] !== "string" || !parsed[field]!.trim()) throw new Error(`maintenance manifest is missing ${field}`);
   }
@@ -20,6 +33,7 @@ function readManifest(path: string): EnrollmentManifest {
   if (parsed.expectedScopes.includes("skills:publish")) throw new Error("maintenance manifest must describe current scopes without skills:publish");
   if (Date.parse(parsed.expiresAt!) <= Date.now()) throw new Error("maintenance manifest is expired");
   if (!/^[a-f0-9]{64}$/.test(parsed.manifestDigest!)) throw new Error("maintenance manifest digest must be SHA-256");
+  if (sha256(canonical(parsed)) !== parsed.manifestDigest) throw new Error("maintenance manifest digest does not match its bytes");
   return parsed as EnrollmentManifest;
 }
 

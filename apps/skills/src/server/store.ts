@@ -788,12 +788,13 @@ export class PostgresSkillsStore implements SkillsProductStore {
       if (String(row.org_id) !== input.orgId) return { kind: "target_mismatch" };
       const current = parseJsonArray(row.scopes_json);
       const prior = await tx`
-        SELECT metadata_json FROM skills_audit_events
+        SELECT metadata_json, metadata_json->>'target_manifest_digest' AS manifest_digest FROM skills_audit_events
         WHERE action = ${"api_key_scopes_added"} AND target_type = ${"api_key"} AND target_id = ${input.keyId}
           AND metadata_json->>'operator_operation_id' = ${input.operationId}
         LIMIT 1
       `;
       if (prior[0]) {
+        if (String(prior[0].manifest_digest) !== input.manifestDigest) return { kind: "target_mismatch" };
         if (!current.includes("skills:publish")) return { kind: "stale", scopes: current };
         return { kind: "already_applied", scopes: current };
       }

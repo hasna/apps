@@ -20,6 +20,7 @@ describe("operator publication-scope enrollment", () => {
     const store = new MemorySkillsStore([{ token: "station-secret", principal: { apiKeyId: input.keyId, orgId: input.orgId, scopes: input.expectedScopes } }]);
     expect(await store.enrollPublishScopeByOperator!(input)).toEqual({ kind: "updated", scopes: [...input.expectedScopes, "skills:publish"] });
     expect(await store.enrollPublishScopeByOperator!(input)).toEqual({ kind: "already_applied", scopes: [...input.expectedScopes, "skills:publish"] });
+    expect(await store.enrollPublishScopeByOperator!({ ...input, manifestDigest: "b".repeat(64) })).toEqual({ kind: "target_mismatch" });
     expect(await store.enrollPublishScopeByOperator!({ ...input, operationId: "other", expectedScopes: input.expectedScopes })).toEqual({ kind: "stale", scopes: [...input.expectedScopes, "skills:publish"] });
     expect(await store.enrollPublishScopeByOperator!({ ...input, orgId: "org_b", operationId: "foreign" })).toEqual({ kind: "not_found" });
   });

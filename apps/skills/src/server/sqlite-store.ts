@@ -275,6 +275,11 @@ export class SqliteSkillsStore implements SkillsProductStore {
     const current = parseScopes(row.scopes_json);
     const prior = this.get("SELECT metadata_json FROM skills_audit_events WHERE action = ? AND target_type = ? AND target_id = ? AND json_extract(metadata_json, '$.operator_operation_id') = ? LIMIT 1", ["api_key_scopes_added", "api_key", input.keyId, input.operationId]);
     if (prior) {
+      try {
+        if (JSON.parse(String(prior.metadata_json)).target_manifest_digest !== input.manifestDigest) return { kind: "target_mismatch" };
+      } catch {
+        return { kind: "target_mismatch" };
+      }
       return current.includes("skills:publish") ? { kind: "already_applied", scopes: current } : { kind: "stale", scopes: current };
     }
     if (current.length !== input.expectedScopes.length || current.some((scope, index) => scope !== input.expectedScopes[index])) return { kind: "stale", scopes: current };
