@@ -1,11 +1,17 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { bindWorkerCustomDomain, createCloudflareProvider, workerCustomDomainReady } from "./cloudflare.js";
+import { bindWorkerCustomDomain, createCloudflareProvider, getZone, workerCustomDomainReady } from "./cloudflare.js";
 import type { Domain } from "../db/domains.js";
 
 const originalFetch = globalThis.fetch;
+const originalTimeout = process.env["DOMAINS_PROVIDER_HTTP_TIMEOUT_MS"];
+const originalMaxResponse = process.env["DOMAINS_PROVIDER_MAX_RESPONSE_BYTES"];
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
+  if (originalTimeout === undefined) delete process.env["DOMAINS_PROVIDER_HTTP_TIMEOUT_MS"];
+  else process.env["DOMAINS_PROVIDER_HTTP_TIMEOUT_MS"] = originalTimeout;
+  if (originalMaxResponse === undefined) delete process.env["DOMAINS_PROVIDER_MAX_RESPONSE_BYTES"];
+  else process.env["DOMAINS_PROVIDER_MAX_RESPONSE_BYTES"] = originalMaxResponse;
 });
 
 function domain(name: string, registrar: string): Domain {
@@ -32,6 +38,52 @@ function domain(name: string, registrar: string): Domain {
     updated_at: "",
   };
 }
+
+describe("Cloudflare API bounds", () => {
+  it("times out a provider request that never returns headers", async () => {
+    process.env["DOMAINS_PROVIDER_HTTP_TIMEOUT_MS"] = "10";
+    globalThis.fetch = (() => new Promise<Response>(() => {})) as typeof fetch;
+    await expect(getZone("proof.example", { apiToken: "token", accountId: "account" }))
+      .rejects.toThrow("exceeded 10ms");
+  });
+
+  it("times out when response headers arrive but the body stalls", async () => {
+    process.env["DOMAINS_PROVIDER_HTTP_TIMEOUT_MS"] = "10";
+    globalThis.fetch = (async () => new Response(new ReadableStream({
+      start() {
+        // Deliberately never enqueue or close: the request must still time out.
+      },
+    }), { status: 200 })) as typeof fetch;
+    await expect(getZone("proof.example", { apiToken: "token", accountId: "account" }))
+      .rejects.toThrow("exceeded 10ms");
+  });
+
+  it("rejects an oversized provider response before parsing", async () => {
+    process.env["DOMAINS_PROVIDER_MAX_RESPONSE_BYTES"] = "16";
+    globalThis.fetch = (async () => new Response("{}", {
+      status: 200,
+      headers: { "content-length": "17", "content-type": "application/json" },
+    })) as typeof fetch;
+    await expect(getZone("proof.example", { apiToken: "token", accountId: "account" }))
+      .rejects.toThrow("exceeds 16 bytes");
+  });
+
+  it("rejects runtime bounds above their fixed ceilings before provider I/O", async () => {
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return Response.json({ success: true, result: [], errors: [] });
+    }) as typeof fetch;
+    process.env["DOMAINS_PROVIDER_HTTP_TIMEOUT_MS"] = "120001";
+    await expect(getZone("proof.example", { apiToken: "token", accountId: "account" }))
+      .rejects.toThrow("between 1 and 120000");
+    process.env["DOMAINS_PROVIDER_HTTP_TIMEOUT_MS"] = "30000";
+    process.env["DOMAINS_PROVIDER_MAX_RESPONSE_BYTES"] = "4194305";
+    await expect(getZone("proof.example", { apiToken: "token", accountId: "account" }))
+      .rejects.toThrow("between 1 and 4194304");
+    expect(calls).toBe(0);
+  });
+});
 
 
 describe("Cloudflare Worker Custom Domains", () => {

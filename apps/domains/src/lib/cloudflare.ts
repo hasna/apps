@@ -56,6 +56,59 @@ function checkCredentials(cfg: CloudflareConfig): void {
 // ─── API Client ──────────────────────────────────────────────────────────────
 
 const CF_BASE = "https://api.cloudflare.com/client/v4";
+const DEFAULT_CF_TIMEOUT_MS = 30_000;
+const MAX_CF_TIMEOUT_MS = 120_000;
+const DEFAULT_CF_MAX_RESPONSE_BYTES = 1_048_576;
+const MAX_CF_RESPONSE_BYTES = 4_194_304;
+
+function positiveBoundedEnv(name: string, fallback: number, maximum: number): number {
+  const raw = process.env[name]?.trim();
+  if (!raw) return fallback;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 1 || value > maximum) {
+    throw new Error(`${name} must be an integer between 1 and ${maximum}`);
+  }
+  return value;
+}
+
+async function boundedResponseText(
+  response: Response,
+  maxBytes: number,
+  signal: AbortSignal,
+): Promise<string> {
+  const contentLength = Number(response.headers.get("content-length"));
+  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+    throw new Error(`Cloudflare API response exceeds ${maxBytes} bytes`);
+  }
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const abort = () => void reader.cancel("Cloudflare API request aborted");
+  if (signal.aborted) abort();
+  signal.addEventListener("abort", abort, { once: true });
+  const chunks: Uint8Array[] = [];
+  let length = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      length += value.byteLength;
+      if (length > maxBytes) {
+        await reader.cancel("Cloudflare API response exceeds bounded size");
+        throw new Error(`Cloudflare API response exceeds ${maxBytes} bytes`);
+      }
+      chunks.push(value);
+    }
+  } finally {
+    signal.removeEventListener("abort", abort);
+  }
+  const bytes = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(bytes);
+}
 
 async function cfFetch<T>(
   path: string,
@@ -63,19 +116,55 @@ async function cfFetch<T>(
 ): Promise<T> {
   const cfg = opts.config ?? getConfig();
   checkCredentials(cfg);
-
-  const res = await fetch(`${CF_BASE}${path}`, {
-    method: opts.method ?? "GET",
-    headers: {
-      ...cloudflareAuthHeaders(cfg),
-      "Content-Type": "application/json",
-    },
-    body: opts.body ? JSON.stringify(opts.body) : undefined,
+  const timeoutMs = positiveBoundedEnv(
+    "DOMAINS_PROVIDER_HTTP_TIMEOUT_MS",
+    DEFAULT_CF_TIMEOUT_MS,
+    MAX_CF_TIMEOUT_MS,
+  );
+  const maxResponseBytes = positiveBoundedEnv(
+    "DOMAINS_PROVIDER_MAX_RESPONSE_BYTES",
+    DEFAULT_CF_MAX_RESPONSE_BYTES,
+    MAX_CF_RESPONSE_BYTES,
+  );
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      reject(new Error(`Cloudflare API request exceeded ${timeoutMs}ms`));
+    }, timeoutMs);
   });
-
-  const json = await res.json() as { success: boolean; result: T; errors: { message: string }[] };
+  let json: { success: boolean; result: T; errors: { message: string }[] };
+  let status = 0;
+  try {
+    ({ json, status } = await Promise.race([
+      (async () => {
+        const response = await fetch(`${CF_BASE}${path}`, {
+          method: opts.method ?? "GET",
+          headers: {
+            ...cloudflareAuthHeaders(cfg),
+            "Content-Type": "application/json",
+          },
+          body: opts.body ? JSON.stringify(opts.body) : undefined,
+          signal: controller.signal,
+        });
+        const text = await boundedResponseText(response, maxResponseBytes, controller.signal);
+        try {
+          return {
+            status: response.status,
+            json: JSON.parse(text) as { success: boolean; result: T; errors: { message: string }[] },
+          };
+        } catch {
+          throw new Error(`Cloudflare API returned invalid JSON (${response.status})`);
+        }
+      })(),
+      timeout,
+    ]));
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
   if (!json.success) {
-    const msg = json.errors?.[0]?.message ?? `Cloudflare API error (${res.status})`;
+    const msg = json.errors?.[0]?.message ?? `Cloudflare API error (${status})`;
     throw new Error(msg);
   }
   return json.result;

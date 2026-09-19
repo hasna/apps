@@ -402,7 +402,9 @@ function boundedPurchaseQuote(
 ): { totalPriceUsd: number; currency: "USD" } | { error: string } {
   if (!quote.available) return { error: "domain is not available" };
   const unitRegistrationPrice = quote.registration_price_usd ?? quote.price_usd;
-  if (!Number.isFinite(unitRegistrationPrice)) return { error: "registrar returned no bounded purchase price" };
+  if (!Number.isFinite(unitRegistrationPrice) || unitRegistrationPrice! <= 0) {
+    return { error: "registrar returned no positive bounded purchase price" };
+  }
   const currency = (quote.currency ?? "USD").toUpperCase();
   if (currency !== "USD") return { error: `registrar returned unsupported currency ${currency}` };
   const totalPriceUsd = Number((unitRegistrationPrice! * request.years).toFixed(2));

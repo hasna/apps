@@ -251,6 +251,28 @@ describe("DomainProvisioningService", () => {
     expect(submitted).toBe(0);
   });
 
+  test("rejects zero or negative registrar prices before any purchase", async () => {
+    for (const registrationPrice of [0, -1]) {
+      const store = new MemoryStore();
+      let submitted = 0;
+      const service = new DomainProvisioningService(store, providers({
+        checkAvailability: async () => ({
+          available: true,
+          registration_price_usd: registrationPrice,
+          currency: "USD",
+        }),
+        submitRegistration: async () => { submitted++; return { operationId: "never" }; },
+      }));
+      const requested = await service.request(request({
+        idempotency_key: `proof-invalid-price-${registrationPrice}`,
+      }));
+      const advanced = await service.advance(requested.id);
+      expect(advanced.status).toBe("failed");
+      expect(advanced.error).toContain("no positive bounded purchase price");
+      expect(submitted).toBe(0);
+    }
+  });
+
   test("rechecks availability and price immediately before registrar submission", async () => {
     const store = new MemoryStore();
     let checks = 0;

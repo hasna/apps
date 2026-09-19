@@ -319,6 +319,7 @@ Hosted provisioning runtime requirements:
 - AWS task-role permissions for Route 53 Domains registration/status/delegation and safe hosted-zone cleanup.
 - `DOMAINS_REGISTRANT_SOURCE_DOMAIN` naming an existing Route 53 domain whose registrant contact can be reused in-process; contact data is never accepted from or returned to API clients.
 - `CLOUDFLARE_ACCOUNT_ID` plus `CLOUDFLARE_API_TOKEN`, scoped to zone management and the configured target bindings. Hosted provisioning deliberately rejects Cloudflare global API key/email authentication.
+- Optional `DOMAINS_PROVIDER_HTTP_TIMEOUT_MS` (default `30000`, maximum `120000`) and `DOMAINS_PROVIDER_MAX_RESPONSE_BYTES` (default `1048576`, maximum `4194304`) bound each Cloudflare request and response.
 - Optional `DOMAINS_PROVISIONING_INTERVAL_MS` (default `5000`) for the durable background worker.
 
 Consumers must call this API (normally through `@hasna/domains/sdk`) rather than holding registrar or Cloudflare purchase credentials themselves.
@@ -375,6 +376,8 @@ SDK throws — it never degrades to an anonymous client or to local data.
 | `CLOUDFLARE_API_TOKEN` | Cloudflare API token |
 | `CLOUDFLARE_API_KEY`, `CLOUDFLARE_EMAIL` | Cloudflare global key fallback |
 | `CLOUDFLARE_ACCOUNT_ID` | Cloudflare account ID for zone creation |
+| `DOMAINS_PROVIDER_HTTP_TIMEOUT_MS` | Cloudflare request timeout in milliseconds, `1`–`120000` (default `30000`) |
+| `DOMAINS_PROVIDER_MAX_RESPONSE_BYTES` | Cloudflare response-size limit in bytes, `1`–`4194304` (default `1048576`) |
 | `NAMECHEAP_API_KEY` | Namecheap API key |
 | `NAMECHEAP_USERNAME` | Namecheap account username |
 | `NAMECHEAP_CLIENT_IP` | Namecheap whitelisted IP |
