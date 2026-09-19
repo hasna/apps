@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { createCloudflareProvider } from "./cloudflare.js";
+import { bindWorkerCustomDomain, createCloudflareProvider, workerCustomDomainReady } from "./cloudflare.js";
 import type { Domain } from "../db/domains.js";
 
 const originalFetch = globalThis.fetch;
@@ -32,6 +32,29 @@ function domain(name: string, registrar: string): Domain {
     updated_at: "",
   };
 }
+
+
+describe("Cloudflare Worker Custom Domains", () => {
+  it("binds an apex hostname to the reviewed Shortlinks router", async () => {
+    const calls: Array<{ url: string; method: string; body?: unknown }> = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), method: init?.method ?? "GET", ...(init?.body ? { body: JSON.parse(String(init.body)) } : {}) });
+      return Response.json({ success: true, result: { id: "binding-1", hostname: "proof.click", service: "hasna-link-router", zone_id: "zone-1", enabled: true }, errors: [] });
+    }) as typeof fetch;
+    await expect(bindWorkerCustomDomain("proof.click", "zone-1", "hasna-link-router", { apiToken: "token", accountId: "account" }))
+      .resolves.toMatchObject({ hostname: "proof.click", service: "hasna-link-router", enabled: true });
+    expect(calls).toEqual([{ url: "https://api.cloudflare.com/client/v4/accounts/account/workers/domains", method: "PUT", body: { hostname: "proof.click", service: "hasna-link-router", zone_id: "zone-1" } }]);
+  });
+
+  it("requires both the provider binding and the public router probe", async () => {
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("api.cloudflare.com")) return Response.json({ success: true, result: [{ hostname: "proof.click", service: "hasna-link-router", zone_id: "zone-1", enabled: true }], errors: [] });
+      return new Response(JSON.stringify({ status: "ready", service: "hasna-link-router" }), { status: 200, headers: { "x-hasna-link-router": "hasna-link-router", "content-type": "application/json" } });
+    }) as typeof fetch;
+    await expect(workerCustomDomainReady("proof.click", "zone-1", "hasna-link-router", { apiToken: "token", accountId: "account" })).resolves.toBe(true);
+  });
+});
 
 describe("createCloudflareProvider domain inventory", () => {
   it("syncs Cloudflare zones without overwriting existing registrars", async () => {

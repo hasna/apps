@@ -35,7 +35,8 @@
       "auth": "api-key (@hasna/contracts) — header x-api-key or Authorization: Bearer",
       "scopes": [
         "domains:read",
-        "domains:write"
+        "domains:write",
+        "domains:purchase"
       ],
       "signingKeyEnv": "HASNA_DOMAINS_API_SIGNING_KEY"
     },

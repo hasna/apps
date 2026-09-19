@@ -20,6 +20,7 @@ import {
   ListResourceRecordSetsCommand,
   ListHostedZonesByNameCommand,
   type ResourceRecordSet,
+  type ListHostedZonesByNameCommandOutput,
 } from "@aws-sdk/client-route-53";
 import {
   Route53DomainsClient,
@@ -382,6 +383,42 @@ export interface DomainDetail {
   privacy_protected: boolean | null;
 }
 
+export async function getRegistrationContactFromDomain(
+  domain: string,
+  config?: Route53Config,
+): Promise<DomainContactInfo> {
+  const { domains } = makeClients(config);
+  const result = await domains.send(new GetDomainDetailCommand({ DomainName: domain }));
+  const contact = result.RegistrantContact ?? result.AdminContact ?? result.TechContact;
+  if (!contact) throw new Error(`Route53 returned no reusable registration contact for ${domain}`);
+  const required = {
+    first_name: contact.FirstName,
+    last_name: contact.LastName,
+    email: contact.Email,
+    phone: contact.PhoneNumber,
+    address_line_1: contact.AddressLine1,
+    city: contact.City,
+    country_code: contact.CountryCode,
+    zip_code: contact.ZipCode,
+  };
+  for (const [key, value] of Object.entries(required)) {
+    if (!value || !String(value).trim()) throw new Error(`Route53 contact source is missing ${key}`);
+  }
+  return {
+    first_name: String(required.first_name),
+    last_name: String(required.last_name),
+    email: String(required.email),
+    phone: String(required.phone),
+    address_line_1: String(required.address_line_1),
+    ...(contact.AddressLine2 ? { address_line_2: contact.AddressLine2 } : {}),
+    city: String(required.city),
+    ...(contact.State ? { state: contact.State } : {}),
+    country_code: String(required.country_code).toLowerCase(),
+    zip_code: String(required.zip_code),
+    ...(contact.OrganizationName ? { organization_name: contact.OrganizationName } : {}),
+  };
+}
+
 export async function getDomainDetail(domain: string, config?: Route53Config): Promise<DomainDetail> {
   const { domains } = makeClients(config);
   const [result, summary] = await Promise.all([
@@ -657,6 +694,112 @@ export async function deleteHostedZone(hostedZoneId: string, config?: Route53Con
   }
 
   await route53.send(new DeleteHostedZoneCommand({ Id: zoneId }));
+}
+
+
+export async function listHostedZonesByDomain(
+  domain: string,
+  config?: Route53Config,
+): Promise<HostedZoneInfo[]> {
+  const { route53 } = makeClients(config);
+  const normalized = domain.trim().toLowerCase().replace(/\.$/, "");
+  const dnsName = `${normalized}.`;
+  const zones: HostedZoneInfo[] = [];
+  let nextDnsName: string | undefined = normalized;
+  let nextHostedZoneId: string | undefined;
+
+  do {
+    const result: ListHostedZonesByNameCommandOutput = await route53.send(new ListHostedZonesByNameCommand({
+      DNSName: nextDnsName,
+      HostedZoneId: nextHostedZoneId,
+    }));
+    for (const zone of result.HostedZones ?? []) {
+      if (zone.Name?.toLowerCase() !== dnsName || zone.Config?.PrivateZone) continue;
+      zones.push({
+        id: cleanZoneId(zone.Id ?? ""),
+        name: zone.Name ?? dnsName,
+        record_count: zone.ResourceRecordSetCount ?? 0,
+        comment: zone.Config?.Comment,
+        private_zone: false,
+      });
+    }
+    if (!result.IsTruncated || !result.NextDNSName) break;
+    if (result.NextDNSName.toLowerCase().replace(/\.$/, "") !== normalized) break;
+    nextDnsName = result.NextDNSName;
+    nextHostedZoneId = result.NextHostedZoneId;
+  } while (nextDnsName);
+
+  return zones.filter((zone) => zone.id);
+}
+
+export interface DefaultHostedZoneDeleteResult {
+  deleted: boolean;
+  reason?: string;
+}
+
+/**
+ * Delete only an exact, empty Route 53 default zone. This never deletes record
+ * sets. The final DeleteHostedZone call is the TOCTOU guard: if any record is
+ * added after inspection, Route 53 rejects the delete as HostedZoneNotEmpty.
+ */
+export async function deleteDefaultHostedZone(
+  hostedZoneId: string,
+  domain: string,
+  delegatedNameservers: string[],
+  config?: Route53Config,
+): Promise<DefaultHostedZoneDeleteResult> {
+  const zoneId = normalizeZoneId(hostedZoneId);
+  const expectedName = `${domain.trim().toLowerCase().replace(/\.$/, "")}.`;
+  const detail = await getHostedZone(zoneId, config);
+  if (detail.id !== zoneId || detail.name.toLowerCase() !== expectedName || detail.private_zone) {
+    return { deleted: false, reason: "hosted zone identity does not match the persisted public-zone provenance" };
+  }
+  if (!delegatedNameservers.length || nameserversMatch(detail.name_servers, delegatedNameservers)) {
+    return { deleted: false, reason: "registrar delegation still points at the Route 53 hosted zone" };
+  }
+
+  const { route53 } = makeClients(config);
+  const records: ResourceRecordSet[] = [];
+  let nextName: string | undefined;
+  let nextType: ResourceRecordSet["Type"] | undefined;
+  let nextIdentifier: string | undefined;
+  do {
+    const result = await route53.send(new ListResourceRecordSetsCommand({
+      HostedZoneId: zoneId,
+      StartRecordName: nextName,
+      StartRecordType: nextType,
+      StartRecordIdentifier: nextIdentifier,
+    }));
+    records.push(...(result.ResourceRecordSets ?? []));
+    nextName = result.IsTruncated ? result.NextRecordName : undefined;
+    nextType = result.IsTruncated
+      ? (result.NextRecordType as ResourceRecordSet["Type"] | undefined)
+      : undefined;
+    nextIdentifier = result.IsTruncated ? result.NextRecordIdentifier : undefined;
+  } while (nextName && nextType);
+
+  const apexRecords = records.filter((record) => record.Name?.toLowerCase() === expectedName);
+  const ns = apexRecords.filter((record) => record.Type === "NS");
+  const soa = apexRecords.filter((record) => record.Type === "SOA");
+  if (records.length !== 2 || apexRecords.length !== 2 || ns.length !== 1 || soa.length !== 1) {
+    return { deleted: false, reason: "hosted zone contains records other than the expected apex NS and SOA" };
+  }
+  const nsValues = ns[0]?.ResourceRecords?.map((record) => record.Value ?? "") ?? [];
+  if (!nameserversMatch(nsValues, detail.name_servers)) {
+    return { deleted: false, reason: "hosted zone apex NS does not match its delegation set" };
+  }
+
+  try {
+    await route53.send(new DeleteHostedZoneCommand({ Id: zoneId }));
+    return { deleted: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const name = error instanceof Error ? error.name : "";
+    if (name === "HostedZoneNotEmpty" || /HostedZoneNotEmpty|not empty/i.test(message)) {
+      return { deleted: false, reason: "hosted zone changed after inspection and Route 53 refused deletion" };
+    }
+    throw error;
+  }
 }
 
 export async function findHostedZoneByDomain(domain: string, config?: Route53Config): Promise<HostedZoneInfo | null> {

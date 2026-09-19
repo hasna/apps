@@ -21,10 +21,10 @@ class ListResourceRecordSetsCommand extends FakeCommand {}
 const route53Commands: AwsCommand[] = [];
 const route53Responses: Array<{
   command: string;
-  response: Record<string, unknown>;
+  response: Record<string, unknown> | Error;
 }> = [];
 
-function queueRoute53(command: string, response: Record<string, unknown>) {
+function queueRoute53(command: string, response: Record<string, unknown> | Error) {
   route53Responses.push({ command, response });
 }
 
@@ -36,7 +36,9 @@ function takeResponse(commandName: string) {
 
 const route53Send = mock(async (command: AwsCommand) => {
   route53Commands.push(command);
-  return takeResponse(command.constructor.name);
+  const response = takeResponse(command.constructor.name);
+  if (response instanceof Error) throw response;
+  return response;
 });
 
 mock.module("@aws-sdk/client-route-53", () => ({
@@ -56,8 +58,10 @@ const {
   createRoute53Provider,
   createHostedZone,
   deleteRecord,
+  deleteDefaultHostedZone,
   deleteHostedZone,
   findHostedZoneByNameservers,
+  listHostedZonesByDomain,
   upsertRecord,
 } = await import("./route53.js");
 
@@ -186,6 +190,122 @@ describe("Route53 DNS and hosted-zone helpers", () => {
       },
       HostedZoneId: "ZPUBLIC",
     });
+  });
+
+  test("lists only exact public hosted zones for durable registration provenance", async () => {
+    queueRoute53("ListHostedZonesByNameCommand", {
+      IsTruncated: false,
+      HostedZones: [
+        { Config: { PrivateZone: false }, Id: "/hostedzone/ZBEFORE", Name: "example.com.", ResourceRecordSetCount: 2 },
+        { Config: { PrivateZone: true }, Id: "/hostedzone/ZPRIVATE", Name: "example.com.", ResourceRecordSetCount: 2 },
+        { Config: { PrivateZone: false }, Id: "/hostedzone/ZOTHER", Name: "other.com.", ResourceRecordSetCount: 2 },
+      ],
+    });
+    await expect(listHostedZonesByDomain("example.com", config)).resolves.toEqual([
+      expect.objectContaining({ id: "ZBEFORE", name: "example.com.", private_zone: false }),
+    ]);
+  });
+
+  test("deletes a proven default zone without deleting any record sets", async () => {
+    queueRoute53("GetHostedZoneCommand", {
+      DelegationSet: { NameServers: ["ns-1.awsdns.test", "ns-2.awsdns.test"] },
+      HostedZone: { Id: "/hostedzone/ZAUTO", Name: "example.com.", Config: { PrivateZone: false } },
+    });
+    queueRoute53("ListResourceRecordSetsCommand", {
+      IsTruncated: false,
+      ResourceRecordSets: [
+        {
+          Name: "example.com.", Type: "NS", TTL: 172800,
+          ResourceRecords: [{ Value: "ns-1.awsdns.test." }, { Value: "ns-2.awsdns.test" }],
+        },
+        {
+          Name: "example.com.", Type: "SOA", TTL: 900,
+          ResourceRecords: [{ Value: "ns-1.awsdns.test. hostmaster.awsdns.test. 1 7200 900 1209600 86400" }],
+        },
+      ],
+    });
+    queueRoute53("DeleteHostedZoneCommand", {});
+
+    await expect(deleteDefaultHostedZone(
+      "ZAUTO",
+      "example.com",
+      ["amy.ns.cloudflare.com", "bob.ns.cloudflare.com"],
+      config,
+    )).resolves.toEqual({ deleted: true });
+    expect(route53Commands.some((command) => command instanceof ChangeResourceRecordSetsCommand)).toBe(false);
+    expect(route53Commands.at(-1)).toBeInstanceOf(DeleteHostedZoneCommand);
+  });
+
+  test("aborts safe cleanup when any non-default record exists", async () => {
+    queueRoute53("GetHostedZoneCommand", {
+      DelegationSet: { NameServers: ["ns-1.awsdns.test", "ns-2.awsdns.test"] },
+      HostedZone: { Id: "/hostedzone/ZAUTO", Name: "example.com.", Config: { PrivateZone: false } },
+    });
+    queueRoute53("ListResourceRecordSetsCommand", {
+      IsTruncated: false,
+      ResourceRecordSets: [
+        { Name: "example.com.", Type: "NS", ResourceRecords: [{ Value: "ns-1.awsdns.test" }, { Value: "ns-2.awsdns.test" }] },
+        { Name: "example.com.", Type: "SOA", ResourceRecords: [{ Value: "soa" }] },
+        { Name: "www.example.com.", Type: "A", TTL: 300, ResourceRecords: [{ Value: "192.0.2.10" }] },
+      ],
+    });
+
+    await expect(deleteDefaultHostedZone(
+      "ZAUTO",
+      "example.com",
+      ["amy.ns.cloudflare.com", "bob.ns.cloudflare.com"],
+      config,
+    )).resolves.toEqual({
+      deleted: false,
+      reason: "hosted zone contains records other than the expected apex NS and SOA",
+    });
+    expect(route53Commands.some((command) => command instanceof ChangeResourceRecordSetsCommand)).toBe(false);
+    expect(route53Commands.some((command) => command instanceof DeleteHostedZoneCommand)).toBe(false);
+  });
+
+  test("treats Route 53 HostedZoneNotEmpty as a safe TOCTOU abort", async () => {
+    queueRoute53("GetHostedZoneCommand", {
+      DelegationSet: { NameServers: ["ns-1.awsdns.test", "ns-2.awsdns.test"] },
+      HostedZone: { Id: "/hostedzone/ZAUTO", Name: "example.com.", Config: { PrivateZone: false } },
+    });
+    queueRoute53("ListResourceRecordSetsCommand", {
+      IsTruncated: false,
+      ResourceRecordSets: [
+        { Name: "example.com.", Type: "NS", ResourceRecords: [{ Value: "ns-1.awsdns.test" }, { Value: "ns-2.awsdns.test" }] },
+        { Name: "example.com.", Type: "SOA", ResourceRecords: [{ Value: "soa" }] },
+      ],
+    });
+    const changed = new Error("The specified hosted zone contains non-required resource record sets");
+    changed.name = "HostedZoneNotEmpty";
+    queueRoute53("DeleteHostedZoneCommand", changed);
+
+    await expect(deleteDefaultHostedZone(
+      "ZAUTO",
+      "example.com",
+      ["amy.ns.cloudflare.com", "bob.ns.cloudflare.com"],
+      config,
+    )).resolves.toEqual({
+      deleted: false,
+      reason: "hosted zone changed after inspection and Route 53 refused deletion",
+    });
+    expect(route53Commands.some((command) => command instanceof ChangeResourceRecordSetsCommand)).toBe(false);
+  });
+
+  test("aborts cleanup while the registrar still delegates to the Route 53 zone", async () => {
+    queueRoute53("GetHostedZoneCommand", {
+      DelegationSet: { NameServers: ["ns-1.awsdns.test", "ns-2.awsdns.test"] },
+      HostedZone: { Id: "/hostedzone/ZAUTO", Name: "example.com.", Config: { PrivateZone: false } },
+    });
+    await expect(deleteDefaultHostedZone(
+      "ZAUTO",
+      "example.com",
+      ["NS-2.AWSDNS.TEST.", "ns-1.awsdns.test"],
+      config,
+    )).resolves.toEqual({
+      deleted: false,
+      reason: "registrar delegation still points at the Route 53 hosted zone",
+    });
+    expect(route53Commands).toHaveLength(1);
   });
 
   test("deletes hosted zones only after deleting paginated non-NS/SOA records", async () => {
