@@ -10,6 +10,8 @@
 
 ### Patch Changes
 
+- Runtime security: replace the vulnerable Debian slim production base with the pinned multi-architecture Bun Alpine image and exact patched OpenSSL runtime libraries. The zero-CRITICAL/HIGH deployment gate remains unchanged.
+
 - 3dddd85c3: Wait for shared portfolio writes before confirming Sedo purchase records or Route 53 setup completion, and report failed Sedo saves as command failures.
 
 - 5d776ba0d: Keep `bun:sqlite` out of the Domains CLI, MCP, and SDK bundles by isolating the SQLite-backed `LocalStore` in a fixture-only module and avoiding namespace-style dynamic imports that defeat tree-shaking. Hosted authority, credentials, and `/v1` routing are unchanged.
