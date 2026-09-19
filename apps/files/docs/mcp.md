@@ -46,24 +46,32 @@ capability-gated tools until every required `OPEN_FILES_MCP_ALLOW_*` flag is
 enabled. The `full` profile preserves historical discovery and call-time
 capability refusals.
 
-`list_files` and `search_files` preserve the historical full bare-array
-response by default (`format: "legacy"`). Set `format: "page"` for the
-agent-oriented contract. Page mode defaults to 20 compact rows and minified
-JSON and returns `items` plus `_meta.count`, `limit`, `offset`, `next_offset`,
-`has_more`, `end_reached`, whole-query `complete`, `all`, and `detail`.
-Compact pages also include the actual projected `fields` plus
-`byte_length`/`max_bytes`/`byte_limited` and default to a 32-KiB ceiling;
-callers may request 1 KiB through 1 MiB. Normal pages are capped at 500 rows.
-Set `detail: "full"` for full page records or pass `fields` for a compact
-projection; the two options are mutually exclusive and full IDs are always
-retained. `get_file` remains the exact full-detail path.
+`list_files` and `search_files` return a 20-row compact page by default.
+Set `format: "legacy"` for the historical full bare array (50-row default for
+`list_files`). Page responses are minified JSON with `items` plus `_meta.count`,
+`limit`, `offset`, `next_offset`, query-bound `cursor`/`next_cursor`,
+`cursor_contract`, `has_more`, `end_reached`, whole-query `complete`, `all`, and
+`detail`. Compact pages also include the actual projected `fields` plus
+`byte_length`/`max_bytes`/`byte_limited` and default to a 32-KiB ceiling; callers
+may request 1 KiB through 1 MiB. Normal pages are capped at 500 rows. Set
+`detail: "full"` for full page records or pass `fields` for a compact projection;
+the two options are mutually exclusive and full IDs are always retained.
+`get_file` remains the exact full-detail path.
 
-`all: true` requires `format: "page"`, compact detail, and offset zero. It
-walks bounded 500-row service pages and succeeds only if the whole query fits
-within the hard 5,000-row and 1-MiB boundaries. It refuses on either bound;
-it never returns a partial result with `complete: true`. `end_reached` means
-there is no page after the current offset. `complete` means the response covers
-the whole query from offset zero.
+Pass `_meta.next_cursor` back as `cursor` while `has_more` is true. The opaque
+cursor is deterministic and query-bound, so changing filters or crossing list
+and search fails before a read. The collection `/v1/files` route does not yet
+return a snapshot token; continuation therefore preserves the route's existing
+offset semantics and does not claim snapshot isolation. `offset` remains an
+explicit compatibility continuation and cannot be combined with `cursor`.
+
+`all: true` requires the page format, compact detail, and offset zero. It walks
+bounded 500-row service pages and succeeds only if the whole query fits within
+the hard 5,000-row and 1-MiB boundaries. It refuses on either bound; it never
+returns a partial result with `complete: true`. `end_reached` means there is no
+page after the current offset. `complete` means the response covers the whole
+query from offset zero. `format: "legacy"` cannot be combined with cursor,
+projection, byte-budget, or exhaustive controls.
 
 ## Capability Gates
 
