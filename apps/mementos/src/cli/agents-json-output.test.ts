@@ -37,7 +37,7 @@ beforeAll(async () => {
   await assertLocalStoreBackend(CLI_PATH, CLI_ENV, DB_PATH);
   const db = getDatabase(DB_PATH);
   for (let i = 0; i < AGENT_COUNT; i += 1) {
-    registerAgent(`json-output-agent-${String(i).padStart(4, "0")}`, undefined, DESCRIPTION, DESCRIPTION, undefined, db);
+    registerAgent(`json-output-agent-${String(i).padStart(4, "0")}-${"x".repeat(700)}`, undefined, DESCRIPTION, "fixture", undefined, db);
   }
 });
 
@@ -57,8 +57,8 @@ describe("agents JSON output", () => {
     expect(Buffer.byteLength(result.stdout)).toBeGreaterThan(327_680);
     const rows = JSON.parse(result.stdout) as Array<{ name: string }>;
     expect(rows).toHaveLength(AGENT_COUNT);
-    expect(rows[0]?.name).toBe("json-output-agent-0000");
-    expect(rows.at(-1)?.name).toBe("json-output-agent-0999");
+    expect(rows[0]?.name).toBe(`json-output-agent-0000-${"x".repeat(700)}`);
+    expect(rows.at(-1)?.name).toBe(`json-output-agent-0999-${"x".repeat(700)}`);
   }, 60_000);
 
   test("preserves a real CLI nonzero status with complete JSON error output", async () => {
