@@ -40,7 +40,7 @@ export interface RevisionContent {
 }
 
 export function revisionIdOf(content: RevisionContent): string {
-  const canonical = JSON.stringify({
+  const canonicalContent = {
     slug: content.slug,
     displayName: content.displayName,
     description: content.description,
@@ -52,10 +52,17 @@ export function revisionIdOf(content: RevisionContent): string {
     skillMd: content.skillMd ?? null,
     bundleSha256: content.bundleSha256 ?? null,
     bundleByteSize: content.bundleByteSize ?? null,
-    lifecycle: content.lifecycle ?? "active",
-    archiveReason: content.archiveReason ?? null,
-    replacementSlug: content.replacementSlug ?? null,
-  });
+  } as Record<string, unknown>;
+  // Keep the legacy active-row hash byte-compatible. Archived state is a
+  // deliberate revision-bearing transition; active rows with no archive
+  // metadata retain the pre-lifecycle canonical form for old clients and
+  // migration backfills.
+  if (content.lifecycle === "archived" || content.archiveReason !== undefined || content.replacementSlug !== undefined) {
+    canonicalContent.lifecycle = content.lifecycle ?? "active";
+    canonicalContent.archiveReason = content.archiveReason ?? null;
+    canonicalContent.replacementSlug = content.replacementSlug ?? null;
+  }
+  const canonical = JSON.stringify(canonicalContent);
   return createHash("sha256").update(canonical).digest("hex");
 }
 
