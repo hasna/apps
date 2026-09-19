@@ -47,6 +47,13 @@ describe("DomainsClient", () => {
       name: "proof.click", max_price_usd: 5, years: 1, auto_renew: false,
     }, { headers: { "idempotency-key": "proof-request-001" } });
     await client.getDomainProvisioning("job/id");
+    await client.getDomainProvisioningByName("proof.click");
+    await client.adoptOwnedDomainProvisioning({
+      name: "owned.click", target: "website_origin", origin_hostname: "origin.us-east-1.elb.amazonaws.com",
+    }, { headers: { "idempotency-key": "adopt-owned-001" } });
+    await client.reconcileProvisionedDomainDns("proof.click", {
+      records: [{ type: "MX", name: "proof.click", value: "feedback-smtp.us-east-1.amazonses.com", ttl: 300, priority: 10 }],
+    }, { headers: { "idempotency-key": "dns-proof-001" } });
     await client.advanceDomainProvisioning("job/id");
     await client.getDomainStats();
     await client.getVersion();
@@ -68,6 +75,9 @@ describe("DomainsClient", () => {
       ["POST", "/v1/domains/domain%2Fid/offers"],
       ["POST", "/v1/provisioning"],
       ["GET", "/v1/provisioning/job%2Fid"],
+      ["GET", "/v1/provisioning/by-name/proof.click"],
+      ["POST", "/v1/provisioning/adopt"],
+      ["POST", "/v1/provisioning/by-name/proof.click/dns-reconcile"],
       ["POST", "/v1/provisioning/job%2Fid/advance"],
       ["GET", "/v1/stats"],
       ["GET", "/version"],
@@ -92,6 +102,10 @@ describe("DomainsClient", () => {
     expect(calls[13]!.init.body).toBe('{"our_offer":100}');
     expect(calls[14]!.init.body).toBe('{"name":"proof.click","max_price_usd":5,"years":1,"auto_renew":false}');
     expect((calls[14]!.init.headers as Record<string,string>)["idempotency-key"]).toBe("proof-request-001");
+    expect(calls[17]!.init.body).toBe('{"name":"owned.click","target":"website_origin","origin_hostname":"origin.us-east-1.elb.amazonaws.com"}');
+    expect((calls[17]!.init.headers as Record<string,string>)["idempotency-key"]).toBe("adopt-owned-001");
+    expect(calls[18]!.init.body).toContain('"feedback-smtp.us-east-1.amazonses.com"');
+    expect((calls[18]!.init.headers as Record<string,string>)["idempotency-key"]).toBe("dns-proof-001");
   });
 
   test("returns parsed JSON, plain text, and undefined empty responses", async () => {

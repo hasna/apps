@@ -13,13 +13,25 @@ export interface DeleteResult { "id": string; "deleted": boolean }
 
 export interface AvailabilityInput { "name": string }
 
-export interface AvailabilityQuote { "name": string; "available": boolean; "price_usd"?: number; "currency"?: string; "is_premium"?: boolean }
+export interface AvailabilityQuote { "name": string; "available": boolean; "price_usd"?: number; "registration_price_usd"?: number; "renewal_price_usd"?: number; "currency"?: string; "is_premium"?: boolean }
 
-export interface DomainProvisioningRequest { "name": string; "max_price_usd": number; "years": number; "auto_renew": boolean; "registrar"?: "route53"; "dns_provider"?: "cloudflare"; "target"?: "shortlinks"; "worker_name"?: string }
+export interface DomainProvisioningRequest { "name": string; "max_price_usd": number; "years": number; "auto_renew": boolean; "registrar"?: "route53"; "dns_provider"?: "cloudflare"; "target"?: "shortlinks" | "website_origin"; "worker_name"?: string | null; "origin_hostname"?: string | null }
 
-export interface DomainProvisioningProviderState { "quoted_price_usd"?: number; "currency"?: string; "registration_operation_id"?: string; "nameserver_operation_id"?: string; "cloudflare_zone_id"?: string; "cloudflare_nameservers"?: Array<string>; "route53_zone_ids_before_registration"?: Array<string>; "route53_hosted_zone_id"?: string; "route53_hosted_zone_cleaned"?: boolean; "worker_domain_bound"?: boolean; "last_provider_status"?: string; "registration_submitted_at"?: string; "nameservers_submitted_at"?: string }
+export interface DomainAdoptionRequest { "name": string; "dns_provider"?: "cloudflare"; "target": "shortlinks" | "website_origin"; "worker_name"?: string | null; "origin_hostname"?: string | null }
 
-export interface DomainProvisioningJob { "id": string; "domain_id": string; "name": string; "idempotency_key": string; "request_hash": string; "status": "requested" | "quoted" | "registration_submitting" | "registration_submitted" | "registered" | "zone_ready" | "nameservers_submitted" | "delegated" | "worker_bound" | "ready" | "manual_review" | "failed"; "max_price_usd": number; "years": number; "auto_renew": boolean; "registrar": string; "dns_provider": string; "target": string; "worker_name": string; "provider_state": DomainProvisioningProviderState; "attempts": number; "error"?: string | null; "lease_until"?: string | null; "created_at": string; "updated_at": string }
+export interface DomainProvisioningProviderState { "quoted_price_usd"?: number; "currency"?: string; "registration_operation_id"?: string; "nameserver_operation_id"?: string; "cloudflare_zone_id"?: string; "cloudflare_nameservers"?: Array<string>; "route53_zone_ids_before_registration"?: Array<string>; "route53_hosted_zone_id"?: string; "route53_hosted_zone_cleaned"?: boolean; "worker_domain_bound"?: boolean; "website_origin_configured"?: boolean; "web_records"?: Array<ProvisionedWebRecord>; "target_checked_at"?: string; "last_provider_status"?: string; "registration_submitted_at"?: string; "nameservers_submitted_at"?: string }
+
+export interface DomainProvisioningJob { "id": string; "domain_id": string; "name": string; "idempotency_key": string; "request_hash": string; "status": "requested" | "quoted" | "registration_submitting" | "registration_submitted" | "registered" | "zone_ready" | "nameservers_submitted" | "delegated" | "worker_bound" | "ready" | "manual_review" | "failed"; "max_price_usd": number; "years": number; "auto_renew": boolean; "acquisition_mode": "purchase" | "adopt"; "registrar": string; "dns_provider": string; "target": string; "worker_name": string | null; "origin_hostname": string | null; "provider_state": DomainProvisioningProviderState; "result": DomainProvisioningResult | null; "attempts": number; "error"?: string | null; "lease_until"?: string | null; "created_at": string; "updated_at": string }
+
+export interface ProvisionedWebRecord { "type": "CNAME"; "name": string; "value": string; "proxied": true; "ttl": number }
+
+export interface DomainProvisioningResult { "zone_ref": string; "nameservers": Array<string>; "web_records": Array<ProvisionedWebRecord>; "checked_at": string }
+
+export interface HostedDnsRecord { "type": "TXT" | "CNAME" | "MX"; "name": string; "value": string; "ttl": number; "priority"?: number | null }
+
+export interface DomainDnsReconciliationRequest { "records": Array<HostedDnsRecord> }
+
+export interface DomainDnsReconciliation { "id": string; "provisioning_job_id": string; "domain_name": string; "idempotency_key": string; "request_hash": string; "status": "requested" | "applying" | "ready" | "manual_review"; "records": Array<HostedDnsRecord>; "result": { "records": Array<HostedDnsRecord>; "checked_at": string } | null; "error": string | null; "lease_until": string | null; "created_at": string; "updated_at": string }
 
 export interface Domain { "id": string; "name": string; "registrar"?: string | null; "status": string; "registered_at"?: string | null; "expires_at"?: string | null; "auto_renew": boolean; "is_premium": boolean; "premium_price"?: number | null; "standard_price"?: number | null; "purchase_price"?: number | null; "purchase_date"?: string | null; "nameservers"?: Array<string>; "whois"?: Record<string, unknown>; "ssl_expires_at"?: string | null; "ssl_issuer"?: string | null; "notes"?: string | null; "metadata"?: Record<string, unknown>; "created_at": string; "updated_at": string }
 
@@ -234,6 +246,33 @@ export class DomainsClient {
     /** Reserve, cap the total charge, purchase, delegate and bind a domain through the hosted Domains authority. */
     async requestDomainProvisioning(body: DomainProvisioningRequest, init?: RequestInit): Promise<DomainProvisioningJob> {
       return this.request("POST", `/v1/provisioning`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Adopt an existing portfolio domain into hosted provisioning without a registrar purchase. */
+    async adoptOwnedDomainProvisioning(body: DomainAdoptionRequest, init?: RequestInit): Promise<DomainProvisioningJob> {
+      return this.request("POST", `/v1/provisioning/adopt`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Read the durable provisioning job for a canonical domain name. */
+    async getDomainProvisioningByName(name: string, init?: RequestInit): Promise<DomainProvisioningJob> {
+      return this.request("GET", `/v1/provisioning/by-name/${encodeURIComponent(String(name))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Idempotently reconcile bounded TXT, CNAME, and MX record groups for a ready hosted domain. */
+    async reconcileProvisionedDomainDns(name: string, body: DomainDnsReconciliationRequest, init?: RequestInit): Promise<DomainDnsReconciliation> {
+      return this.request("POST", `/v1/provisioning/by-name/${encodeURIComponent(String(name))}/dns-reconcile`, {
         body,
         query: undefined,
         init,

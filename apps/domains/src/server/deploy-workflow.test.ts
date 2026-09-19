@@ -5,6 +5,7 @@ import { join } from "node:path";
 const root = join(import.meta.dir, "..", "..", "..", "..");
 const workflow = readFileSync(join(root, ".github", "workflows", "deploy-domains.yml"), "utf8");
 const livePg = readFileSync(join(root, ".github", "workflows", "domains-live-postgres.yml"), "utf8");
+const serverEntry = readFileSync(join(root, "apps", "domains", "src", "server", "index.ts"), "utf8");
 
 describe("Domains production deployment workflow", () => {
   test("resolves every production target from validated protected configuration", () => {
@@ -81,5 +82,13 @@ describe("Domains production deployment workflow", () => {
     expect(livePg).toContain("domains_provisioning_ci");
     expect(livePg).toContain("bun run test:postgres");
     expect(livePg).toContain("Refuse any non-disposable database target");
+  });
+
+  test("starts the durable provisioning scheduler before accepting HTTP traffic", () => {
+    const startsProvisioning = serverEntry.indexOf("provisioning.start()");
+    const startsHttp = serverEntry.indexOf("Bun.serve(");
+    expect(startsProvisioning).toBeGreaterThan(0);
+    expect(startsHttp).toBeGreaterThan(startsProvisioning);
+    expect(serverEntry).toContain('DOMAINS_PROVISIONING_INTERVAL_MS');
   });
 });

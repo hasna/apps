@@ -148,4 +148,11 @@ test("declares the durable provisioning ledger with financial idempotency and le
   expect(sql).toContain("manual_review");
   expect(sql).toContain("lease_token TEXT");
   expect(sql).toContain("lease_until TEXT");
+  expect(sql).toContain("ADD COLUMN IF NOT EXISTS origin_hostname TEXT");
+  expect(sql).toContain("target IN ('shortlinks', 'website_origin')");
+  expect(sql).toContain("target = 'website_origin' AND worker_name IS NULL AND origin_hostname IS NOT NULL");
+  expect(sql).toContain("CREATE TABLE IF NOT EXISTS domain_dns_reconciliations");
+  expect(sql).toContain("status IN ('requested','applying','ready','manual_review')");
+  expect(sql).toContain("ADD COLUMN IF NOT EXISTS acquisition_mode TEXT NOT NULL DEFAULT 'purchase'");
+  expect(sql).toContain("acquisition_mode = 'adopt' AND max_price_usd = 0");
 });

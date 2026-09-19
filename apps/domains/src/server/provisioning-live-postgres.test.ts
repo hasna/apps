@@ -25,10 +25,12 @@ function request(name: string, key: string): DomainProvisioningRequest {
     max_price_usd: 80,
     years: 2,
     auto_renew: false,
+    acquisition_mode: "purchase",
     registrar: "route53",
     dns_provider: "cloudflare",
     target: "shortlinks",
     worker_name: "hasna-link-router",
+    origin_hostname: null,
   };
 }
 

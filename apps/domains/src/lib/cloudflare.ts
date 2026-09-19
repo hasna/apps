@@ -310,6 +310,29 @@ async function replaceRecordsByNameType(
   }
 }
 
+/** Reconcile only the explicitly named DNS record groups, leaving every other group untouched. */
+export async function reconcileRecords(
+  zoneId: string,
+  records: CloudflareRecord[],
+  config?: CloudflareConfig,
+): Promise<void> {
+  const grouped = new Map<string, CloudflareRecord[]>();
+  for (const record of records) {
+    const key = `${record.type}|${record.name}`;
+    const group = grouped.get(key) ?? [];
+    group.push(record);
+    grouped.set(key, group);
+  }
+  const replacements: CloudflareRecordReplacement[] = [];
+  for (const group of grouped.values()) {
+    const replacement = await prepareRecordsByNameType(zoneId, group, config);
+    if (replacement) replacements.push(replacement);
+  }
+  for (const replacement of replacements) {
+    await replaceRecordsByNameType(zoneId, replacement, config);
+  }
+}
+
 export async function deleteRecord(zoneId: string, recordId: string, config?: CloudflareConfig): Promise<void> {
   await cfFetch(`/zones/${zoneId}/dns_records/${recordId}`, { method: "DELETE", config });
 }
@@ -418,28 +441,14 @@ export function createCloudflareProvider(config?: CloudflareConfig): DnsProvider
     async setDnsRecords(domain: string, records: ProviderDnsRecord[]): Promise<boolean> {
       const zone = await getZone(domain, cfg);
       if (!zone) throw new Error(`No Cloudflare zone found for ${domain}`);
-      const grouped = new Map<string, CloudflareRecord[]>();
-      for (const r of records) {
-        const key = `${r.type}|${r.name}`;
-        const existing = grouped.get(key) ?? [];
-        existing.push({
+      await reconcileRecords(zone.id, records.map((r) => ({
           type: r.type,
           name: r.name,
           content: r.value,
           ttl: r.ttl || 1,
           priority: r.priority,
           ...(r.proxied === undefined ? {} : { proxied: r.proxied }),
-        });
-        grouped.set(key, existing);
-      }
-      const replacements: CloudflareRecordReplacement[] = [];
-      for (const group of grouped.values()) {
-        const replacement = await prepareRecordsByNameType(zone.id, group, cfg);
-        if (replacement) replacements.push(replacement);
-      }
-      for (const replacement of replacements) {
-        await replaceRecordsByNameType(zone.id, replacement, cfg);
-      }
+        })), cfg);
       return true;
     },
 

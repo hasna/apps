@@ -299,16 +299,18 @@ Safe mode registers only read-only/list/check/export tools. Mutating tools such 
 
 ## HTTP API And SDK
 
-`domains-serve` exposes public health, readiness, version, and OpenAPI endpoints plus API-key-authenticated `/v1` routes. Portfolio reads require `domains:read`; ordinary writes require `domains:write`; registrar purchases and provisioning require the separate `domains:purchase` scope. Send keys through `x-api-key` or `Authorization: Bearer`.
+`domains-serve` exposes public health, readiness, version, and OpenAPI endpoints plus API-key-authenticated `/v1` routes. Portfolio reads require `domains:read`; ordinary writes require `domains:write`; registrar purchases and provisioning require the separate `domains:purchase` scope. Send keys through `x-api-key`.
 
-The hosted provisioning API is the only production authority for availability, registration, Cloudflare zone creation, registrar nameserver delegation, and `hasna-link-router` Worker Custom Domain readiness:
+The hosted provisioning API is the production authority for availability, registration, Cloudflare zone creation, registrar nameserver delegation, bounded DNS reconciliation, and target readiness. Targets are generic: the existing `shortlinks` Worker binding and a `website_origin` profile that accepts a validated AWS ALB hostname.
 
-- `POST /v1/availability` — live Route 53 availability and price.
-- `POST /v1/provisioning` — idempotently reserve and enqueue a capped purchase.
-- `GET /v1/provisioning/:id` — read the durable state machine.
+- `POST /v1/availability` — live Route 53 availability with registration and renewal prices.
+- `POST /v1/provisioning` — idempotently reserve and enqueue a capped purchase for a target.
+- `POST /v1/provisioning/adopt` — adopt an already-owned portfolio domain without purchasing it again.
+- `GET /v1/provisioning/:id` and `GET /v1/provisioning/by-name/:name` — read the durable state machine by job or canonical domain.
+- `POST /v1/provisioning/by-name/:name/dns-reconcile` — idempotently reconcile 1–20 exact TXT, CNAME, or MX records after provider readback.
 - `POST /v1/provisioning/:id/advance` — bounded operator recovery; the server worker normally advances jobs automatically.
 
-Every purchase requires an explicit total-charge ceiling (`max_price_usd`), `auto_renew`, and idempotency key. The service rechecks availability and the total multi-year price immediately before registrar submission. An ambiguous registration submission enters `manual_review` and is never retried automatically, preventing duplicate purchases.
+Every purchase requires an explicit total-charge ceiling (`max_price_usd`), `auto_renew`, and idempotency key. The service rechecks availability and the total multi-year price immediately before registrar submission. An ambiguous registration submission enters `manual_review` and is never retried automatically, preventing duplicate purchases. Adoption requires registrar ownership readback plus an existing portfolio row; target changes conflict instead of silently repointing a domain. Ready jobs return a provider-neutral `result` with an opaque zone reference, nameservers, web records, and the target check time.
 
 Before registration, the durable job records the exact set of matching public Route 53 hosted-zone IDs. Cleanup can target only one newly appeared zone, and only when its current record set is exactly the apex NS/SOA pair, its delegation set matches those NS records, the registrar has delegated elsewhere, and Cloudflare is authoritative. Cleanup never deletes record sets; a concurrent record addition makes Route 53 reject the final zone deletion safely.
 
@@ -316,7 +318,7 @@ Hosted provisioning runtime requirements:
 
 - AWS task-role permissions for Route 53 Domains registration/status/delegation and safe hosted-zone cleanup.
 - `DOMAINS_REGISTRANT_SOURCE_DOMAIN` naming an existing Route 53 domain whose registrant contact can be reused in-process; contact data is never accepted from or returned to API clients.
-- `CLOUDFLARE_ACCOUNT_ID` plus `CLOUDFLARE_API_TOKEN`, scoped to zone management and Worker Custom Domain binding. Hosted provisioning deliberately rejects Cloudflare global API key/email authentication.
+- `CLOUDFLARE_ACCOUNT_ID` plus `CLOUDFLARE_API_TOKEN`, scoped to zone management and the configured target bindings. Hosted provisioning deliberately rejects Cloudflare global API key/email authentication.
 - Optional `DOMAINS_PROVISIONING_INTERVAL_MS` (default `5000`) for the durable background worker.
 
 Consumers must call this API (normally through `@hasna/domains/sdk`) rather than holding registrar or Cloudflare purchase credentials themselves.
