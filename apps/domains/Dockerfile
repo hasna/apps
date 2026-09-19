@@ -7,7 +7,7 @@
 # The one-shot migration task overrides CMD with: domains db migrate
 # =============================================================================
 
-FROM oven/bun:1.3.13 AS builder
+FROM oven/bun:1.3.14 AS builder
 WORKDIR /app
 
 # Install dependencies against the committed lockfile.
@@ -32,7 +32,7 @@ RUN bun run build
 RUN rm -rf node_modules && bun install --frozen-lockfile --production --ignore-scripts
 
 # -----------------------------------------------------------------------------
-FROM oven/bun:1.3.13-slim AS runtime
+FROM oven/bun:1.3.14-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production \
     PORT=8080 \

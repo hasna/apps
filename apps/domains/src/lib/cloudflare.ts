@@ -470,3 +470,74 @@ export function createCloudflareProvider(config?: CloudflareConfig): DnsProvider
     },
   };
 }
+
+// ─── Worker Custom Domains ─────────────────────────────────────────────────
+
+export interface CloudflareWorkerDomain {
+  id?: string;
+  zone_id?: string;
+  zone_name?: string;
+  hostname: string;
+  service: string;
+  environment?: string;
+  enabled?: boolean;
+}
+
+export async function listWorkerCustomDomains(config?: CloudflareConfig): Promise<CloudflareWorkerDomain[]> {
+  const cfg = config ?? getConfig();
+  if (!cfg.accountId) throw new Error("CLOUDFLARE_ACCOUNT_ID is required for Worker Custom Domains.");
+  return cfFetch<CloudflareWorkerDomain[]>(
+    `/accounts/${encodeURIComponent(cfg.accountId)}/workers/domains`,
+    { config: cfg },
+  );
+}
+
+export async function bindWorkerCustomDomain(
+  hostname: string,
+  zoneId: string,
+  workerName = "hasna-link-router",
+  config?: CloudflareConfig,
+): Promise<CloudflareWorkerDomain> {
+  const cfg = config ?? getConfig();
+  if (!cfg.accountId) throw new Error("CLOUDFLARE_ACCOUNT_ID is required for Worker Custom Domains.");
+  if (!zoneId.trim()) throw new Error("Cloudflare zone id is required for Worker Custom Domains.");
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(workerName)) throw new Error("Invalid Cloudflare Worker name.");
+  return cfFetch<CloudflareWorkerDomain>(
+    `/accounts/${encodeURIComponent(cfg.accountId)}/workers/domains`,
+    {
+      method: "PUT",
+      body: { hostname, service: workerName, zone_id: zoneId },
+      config: cfg,
+    },
+  );
+}
+
+export async function workerCustomDomainReady(
+  hostname: string,
+  zoneId: string,
+  workerName = "hasna-link-router",
+  config?: CloudflareConfig,
+  fetchImpl: typeof fetch = fetch,
+): Promise<boolean> {
+  const domains = await listWorkerCustomDomains(config);
+  const bound = domains.some((domain) =>
+    domain.hostname.toLowerCase() === hostname.toLowerCase()
+    && domain.service === workerName
+    && (domain.zone_id === undefined || domain.zone_id === zoneId)
+    && domain.enabled !== false
+  );
+  if (!bound) return false;
+  try {
+    const response = await fetchImpl(`https://${hostname}/.well-known/hasna-link-router`, {
+      method: "GET",
+      redirect: "manual",
+      headers: { accept: "application/json" },
+    });
+    const ready = response.status === 200
+      && response.headers.get("x-hasna-link-router") === workerName;
+    await response.body?.cancel();
+    return ready;
+  } catch {
+    return false;
+  }
+}
