@@ -299,16 +299,18 @@ Safe mode registers only read-only/list/check/export tools. Mutating tools such 
 
 ## HTTP API And SDK
 
-`domains-serve` exposes public health, readiness, version, and OpenAPI endpoints plus API-key-authenticated `/v1` routes. Portfolio reads require `domains:read`; ordinary writes require `domains:write`; registrar purchases and provisioning require the separate `domains:purchase` scope. Send keys through `x-api-key` or `Authorization: Bearer`.
+`domains-serve` exposes public health, readiness, version, and OpenAPI endpoints plus API-key-authenticated `/v1` routes. Portfolio reads require `domains:read`; ordinary writes require `domains:write`; registrar purchases and provisioning require the separate `domains:purchase` scope. Send keys through `x-api-key`.
 
-The hosted provisioning API is the only production authority for availability, registration, Cloudflare zone creation, registrar nameserver delegation, and `hasna-link-router` Worker Custom Domain readiness:
+The hosted provisioning API is the production authority for availability, registration, Cloudflare zone creation, registrar nameserver delegation, bounded DNS reconciliation, and target readiness. Targets are generic: the existing `shortlinks` Worker binding and a `website_origin` profile that accepts a validated AWS ALB hostname. Website-origin jobs default to `origin_tls_mode: "strict"`; the weaker `"full"` mode must be explicit in each purchase or adoption request and becomes part of the durable idempotency identity. The service sets only the Cloudflare zone SSL setting, reads the exact value back before creating web records, and refuses to weaken an existing `strict` or stronger `origin_pull` zone. Unknown SSL values fail before mutation. Automatic SSL/TLS is a separate Cloudflare setting and is not changed. Full mode encrypts the Cloudflare-to-origin connection but does not authenticate the origin certificate.
 
-- `POST /v1/availability` — live Route 53 availability and price.
-- `POST /v1/provisioning` — idempotently reserve and enqueue a capped purchase.
-- `GET /v1/provisioning/:id` — read the durable state machine.
+- `POST /v1/availability` — live Route 53 availability with registration and renewal prices.
+- `POST /v1/provisioning` — idempotently reserve and enqueue a capped purchase for a target.
+- `POST /v1/provisioning/adopt` — adopt an already-owned portfolio domain without purchasing it again.
+- `GET /v1/provisioning/:id` and `GET /v1/provisioning/by-name/:name` — read the durable state machine by job or canonical domain.
+- `POST /v1/provisioning/by-name/:name/dns-reconcile` — idempotently reconcile 1–20 exact TXT, CNAME, or MX records after provider readback.
 - `POST /v1/provisioning/:id/advance` — bounded operator recovery; the server worker normally advances jobs automatically.
 
-Every purchase requires an explicit total-charge ceiling (`max_price_usd`), `auto_renew`, and idempotency key. The service rechecks availability and the total multi-year price immediately before registrar submission. An ambiguous registration submission enters `manual_review` and is never retried automatically, preventing duplicate purchases.
+Every purchase requires an explicit total-charge ceiling (`max_price_usd`), `auto_renew`, and idempotency key. The service rechecks availability and the total multi-year price immediately before registrar submission. An ambiguous registration submission enters `manual_review` and is never retried automatically, preventing duplicate purchases. Adoption requires registrar ownership readback plus an existing portfolio row; target changes conflict instead of silently repointing a domain. Ready jobs return a provider-neutral `result` with an opaque zone reference, nameservers, web records, and the target check time.
 
 Before registration, the durable job records the exact set of matching public Route 53 hosted-zone IDs. Cleanup can target only one newly appeared zone, and only when its current record set is exactly the apex NS/SOA pair, its delegation set matches those NS records, the registrar has delegated elsewhere, and Cloudflare is authoritative. Cleanup never deletes record sets; a concurrent record addition makes Route 53 reject the final zone deletion safely.
 
@@ -316,7 +318,8 @@ Hosted provisioning runtime requirements:
 
 - AWS task-role permissions for Route 53 Domains registration/status/delegation and safe hosted-zone cleanup.
 - `DOMAINS_REGISTRANT_SOURCE_DOMAIN` naming an existing Route 53 domain whose registrant contact can be reused in-process; contact data is never accepted from or returned to API clients.
-- `CLOUDFLARE_ACCOUNT_ID` plus `CLOUDFLARE_API_TOKEN`, scoped to zone management and Worker Custom Domain binding. Hosted provisioning deliberately rejects Cloudflare global API key/email authentication.
+- `CLOUDFLARE_ACCOUNT_ID` plus `CLOUDFLARE_API_TOKEN`, scoped to zone management, DNS writes, Cloudflare's `Zone Settings Write` permission for the explicit SSL-mode readback contract, and the configured target bindings. Hosted provisioning deliberately rejects Cloudflare global API key/email authentication.
+- Optional `DOMAINS_PROVIDER_HTTP_TIMEOUT_MS` (default `30000`, maximum `120000`) and `DOMAINS_PROVIDER_MAX_RESPONSE_BYTES` (default `1048576`, maximum `4194304`) bound each Cloudflare request and response.
 - Optional `DOMAINS_PROVISIONING_INTERVAL_MS` (default `5000`) for the durable background worker.
 
 Consumers must call this API (normally through `@hasna/domains/sdk`) rather than holding registrar or Cloudflare purchase credentials themselves.
@@ -373,6 +376,8 @@ SDK throws — it never degrades to an anonymous client or to local data.
 | `CLOUDFLARE_API_TOKEN` | Cloudflare API token |
 | `CLOUDFLARE_API_KEY`, `CLOUDFLARE_EMAIL` | Cloudflare global key fallback |
 | `CLOUDFLARE_ACCOUNT_ID` | Cloudflare account ID for zone creation |
+| `DOMAINS_PROVIDER_HTTP_TIMEOUT_MS` | Cloudflare request timeout in milliseconds, `1`–`120000` (default `30000`) |
+| `DOMAINS_PROVIDER_MAX_RESPONSE_BYTES` | Cloudflare response-size limit in bytes, `1`–`4194304` (default `1048576`) |
 | `NAMECHEAP_API_KEY` | Namecheap API key |
 | `NAMECHEAP_USERNAME` | Namecheap account username |
 | `NAMECHEAP_CLIENT_IP` | Namecheap whitelisted IP |

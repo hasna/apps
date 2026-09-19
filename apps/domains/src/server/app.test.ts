@@ -114,6 +114,12 @@ describe("domains-serve app", () => {
     const spec = (await (await app.handle(new Request("http://x/openapi.json"))).json()) as Record<string, any>;
     expect(spec.openapi).toBe("3.1.0");
     expect(spec.paths["/v1/domains"]).toBeDefined();
+    expect(spec.paths["/v1/provisioning/adopt"]?.post?.operationId).toBe("adoptOwnedDomainProvisioning");
+    expect(spec.paths["/v1/provisioning/by-name/{name}"]?.get?.operationId).toBe("getDomainProvisioningByName");
+    expect(spec.paths["/v1/provisioning/by-name/{name}/dns-reconcile"]?.post?.operationId).toBe("reconcileProvisionedDomainDns");
+    expect(spec.components.schemas.AvailabilityQuote.properties).toMatchObject({
+      registration_price_usd: { type: "number" }, renewal_price_usd: { type: "number" },
+    });
   });
 
   test("/v1/domains requires an API key (401 without one)", async () => {
@@ -210,22 +216,37 @@ describe("domains-serve app", () => {
     const job = {
       id: "job-1", domain_id: "dom-1", name: "proof.click", idempotency_key: "idem-proof-001",
       request_hash: "hash", status: "requested" as const, max_price_usd: 5, years: 1, auto_renew: false,
+      acquisition_mode: "purchase" as const,
       registrar: "route53" as const, dns_provider: "cloudflare" as const, target: "shortlinks" as const,
-      worker_name: "hasna-link-router", provider_state: {}, attempts: 0, error: null, lease_token: null,
+      worker_name: "hasna-link-router", origin_hostname: null, origin_tls_mode: null, provider_state: {}, attempts: 0, error: null, lease_token: null,
       lease_until: null, created_at: "2026-09-19T00:00:00.000Z", updated_at: "2026-09-19T00:00:00.000Z",
     };
     const provisioning = {
-      quote: async (name: string) => { calls.push({ op: "quote", value: name }); return { name, available: true, price_usd: 3, currency: "USD" }; },
+      quote: async (name: string) => { calls.push({ op: "quote", value: name }); return { name, available: true, price_usd: 3, registration_price_usd: 3, renewal_price_usd: 4, currency: "USD" }; },
       request: async (input: any) => { calls.push({ op: "request", value: input }); return job; },
+      adopt: async (input: any) => { calls.push({ op: "adopt", value: input }); return { ...job, acquisition_mode: "adopt" as const, status: "registered" as const }; },
       get: async (id: string) => { calls.push({ op: "get", value: id }); return id === job.id ? job : null; },
+      getByName: async (name: string) => { calls.push({ op: "getByName", value: name }); return name === job.name ? job : null; },
+      reconcileDns: async (name: string, input: any) => {
+        calls.push({ op: "reconcileDns", value: { name, input } });
+        return {
+          id: "dns-1", provisioning_job_id: job.id, domain_name: name,
+          idempotency_key: input.idempotency_key, request_hash: "dns-hash", status: "ready" as const,
+          records: input.records, result: { records: input.records, checked_at: "2026-09-19T00:01:00.000Z" },
+          error: null, lease_token: null, lease_until: null,
+          created_at: "2026-09-19T00:00:00.000Z", updated_at: "2026-09-19T00:01:00.000Z",
+        };
+      },
       advance: async (id: string) => { calls.push({ op: "advance", value: id }); return { ...job, status: "ready" as const }; },
     };
-    const { app, token } = appWithKey(["domains:read", "domains:purchase"], provisioning);
+    const { app, token } = appWithKey(["domains:read", "domains:write", "domains:purchase"], provisioning);
     const headers = { "x-api-key": token, "content-type": "application/json" };
 
     const quote = await app.handle(new Request("http://x/v1/availability", { method: "POST", headers, body: JSON.stringify({ name: "proof.click" }) }));
     expect(quote.status).toBe(200);
     expect((await quote.json() as any).price_usd).toBe(3);
+    const quotedAgain = await app.handle(new Request("http://x/v1/availability", { method: "POST", headers, body: JSON.stringify({ name: "proof.click" }) }));
+    expect(await quotedAgain.json()).toMatchObject({ registration_price_usd: 3, renewal_price_usd: 4 });
 
     const created = await app.handle(new Request("http://x/v1/provisioning", {
       method: "POST", headers: { ...headers, "idempotency-key": "idem-proof-001" },
@@ -239,6 +260,23 @@ describe("domains-serve app", () => {
 
     const got = await app.handle(new Request(`http://x/v1/provisioning/${job.id}`, { headers }));
     expect(got.status).toBe(200);
+    const byName = await app.handle(new Request(`http://x/v1/provisioning/by-name/${job.name}`, { headers }));
+    expect(byName.status).toBe(200);
+    expect((await byName.json() as any).id).toBe(job.id);
+    const adopted = await app.handle(new Request("http://x/v1/provisioning/adopt", {
+      method: "POST", headers: { ...headers, "idempotency-key": "adopt-proof-001" },
+      body: JSON.stringify({ name: "proof.click", target: "website_origin", origin_hostname: "origin.us-east-1.elb.amazonaws.com", origin_tls_mode: "full" }),
+    }));
+    expect(adopted.status).toBe(202);
+    expect((await adopted.json() as any).acquisition_mode).toBe("adopt");
+    expect((calls.find((call) => call.op === "adopt")!.value as any).origin_tls_mode).toBe("full");
+    const dns = await app.handle(new Request(`http://x/v1/provisioning/by-name/${job.name}/dns-reconcile`, {
+      method: "POST", headers: { ...headers, "idempotency-key": "dns-proof-001" },
+      body: JSON.stringify({ records: [{ type: "TXT", name: "_amazonses.proof.click", value: "token", ttl: 300 }] }),
+    }));
+    expect(dns.status).toBe(200);
+    expect(await dns.json()).toMatchObject({ status: "ready", result: { checked_at: "2026-09-19T00:01:00.000Z" } });
+    expect((calls.find((call) => call.op === "reconcileDns")!.value as any).input.idempotency_key).toBe("dns-proof-001");
     const advanced = await app.handle(new Request(`http://x/v1/provisioning/${job.id}/advance`, { method: "POST", headers }));
     expect(advanced.status).toBe(200);
     expect((await advanced.json() as any).status).toBe("ready");
@@ -251,7 +289,10 @@ describe("domains-serve app", () => {
         return { name: normalizeDomainName(name), available: true, price_usd: 3 };
       },
       request: async () => { throw new Error("must not run"); },
+      adopt: async () => { throw new Error("must not run"); },
       get: async () => null,
+      getByName: async () => null,
+      reconcileDns: async () => { throw new Error("must not run"); },
       advance: async () => { throw new Error("must not run"); },
     };
     const { app, token } = appWithKey(["domains:read"], provisioning);
@@ -267,7 +308,10 @@ describe("domains-serve app", () => {
     const provisioning = {
       quote: async () => ({ name: "proof.click", available: true, price_usd: 3 }),
       request: async () => { throw new Error("must not run"); },
+      adopt: async () => { throw new Error("must not run"); },
       get: async () => null,
+      getByName: async () => null,
+      reconcileDns: async () => { throw new Error("must not run"); },
       advance: async () => { throw new Error("must not run"); },
     };
     const { app, token } = appWithKey(["domains:read", "domains:write"], provisioning);

@@ -17,6 +17,7 @@ export const PROVISIONING_STATUSES = [
 ] as const;
 
 export type ProvisioningStatus = (typeof PROVISIONING_STATUSES)[number];
+export type OriginTlsMode = "strict" | "full";
 
 export interface DomainProvisioningRequest {
   name: string;
@@ -24,10 +25,65 @@ export interface DomainProvisioningRequest {
   max_price_usd: number;
   years: number;
   auto_renew: boolean;
+  acquisition_mode: "purchase" | "adopt";
   registrar: "route53";
   dns_provider: "cloudflare";
-  target: "shortlinks";
-  worker_name: string;
+  target: "shortlinks" | "website_origin";
+  worker_name: string | null;
+  origin_hostname: string | null;
+  origin_tls_mode: OriginTlsMode | null;
+}
+
+export interface ProvisionedWebRecord {
+  type: "CNAME";
+  name: string;
+  value: string;
+  proxied: true;
+  ttl: number;
+}
+
+export interface DomainProvisioningResult {
+  zone_ref: string;
+  nameservers: string[];
+  web_records: ProvisionedWebRecord[];
+  origin_tls_mode: OriginTlsMode | null;
+  checked_at: string;
+}
+
+export const HOSTED_DNS_RECORD_TYPES = ["TXT", "CNAME", "MX"] as const;
+export type HostedDnsRecordType = (typeof HOSTED_DNS_RECORD_TYPES)[number];
+
+export interface HostedDnsRecord {
+  type: HostedDnsRecordType;
+  name: string;
+  value: string;
+  ttl: number;
+  priority: number | null;
+}
+
+export interface DomainDnsReconciliation {
+  id: string;
+  provisioning_job_id: string;
+  domain_name: string;
+  idempotency_key: string;
+  request_hash: string;
+  status: "requested" | "applying" | "ready" | "manual_review";
+  records: HostedDnsRecord[];
+  result: { records: HostedDnsRecord[]; checked_at: string } | null;
+  error: string | null;
+  lease_token: string | null;
+  lease_until: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type PublicDomainDnsReconciliation = Omit<DomainDnsReconciliation, "lease_token">;
+
+export function publicDnsReconciliation(
+  reconciliation: DomainDnsReconciliation,
+): PublicDomainDnsReconciliation {
+  const { lease_token: _leaseToken, ...safe } = reconciliation;
+  return safe;
 }
 
 export interface DomainProvisioningProviderState {
@@ -41,6 +97,11 @@ export interface DomainProvisioningProviderState {
   route53_hosted_zone_id?: string;
   route53_hosted_zone_cleaned?: boolean;
   worker_domain_bound?: boolean;
+  website_origin_configured?: boolean;
+  origin_tls_mode_configured?: OriginTlsMode | "origin_pull";
+  origin_tls_mode_checked_at?: string;
+  web_records?: ProvisionedWebRecord[];
+  target_checked_at?: string;
   last_provider_status?: string;
   registration_submitted_at?: string;
   nameservers_submitted_at?: string;
@@ -63,6 +124,7 @@ export interface DomainProvisioningJob extends DomainProvisioningRequest {
 export interface DomainProvisioningStore {
   reserve(request: DomainProvisioningRequest, requestHash: string): Promise<DomainProvisioningJob>;
   get(id: string): Promise<DomainProvisioningJob | null>;
+  getByName(name: string): Promise<DomainProvisioningJob | null>;
   listRunnable(limit: number): Promise<DomainProvisioningJob[]>;
   claim(id: string, leaseToken: string, leaseUntil: string): Promise<DomainProvisioningJob | null>;
   update(
@@ -71,11 +133,30 @@ export interface DomainProvisioningStore {
     leaseToken?: string,
   ): Promise<DomainProvisioningJob | null>;
   markPortfolioReady(job: DomainProvisioningJob, detail: RegisteredDomainDetail): Promise<void>;
+  reserveAdoption(
+    request: DomainProvisioningRequest,
+    requestHash: string,
+    detail: RegisteredDomainDetail,
+  ): Promise<DomainProvisioningJob>;
+  reserveDnsReconciliation(input: {
+    job: DomainProvisioningJob;
+    idempotencyKey: string;
+    requestHash: string;
+    records: HostedDnsRecord[];
+  }): Promise<DomainDnsReconciliation>;
+  claimDnsReconciliation(id: string, leaseToken: string, leaseUntil: string): Promise<DomainDnsReconciliation | null>;
+  updateDnsReconciliation(
+    id: string,
+    patch: Partial<Pick<DomainDnsReconciliation, "status" | "result" | "error" | "lease_token" | "lease_until">>,
+    leaseToken: string,
+  ): Promise<DomainDnsReconciliation | null>;
 }
 
 export interface AvailabilityQuote {
   available: boolean;
   price_usd?: number;
+  registration_price_usd?: number;
+  renewal_price_usd?: number;
   currency?: string;
   is_premium?: boolean;
 }
@@ -113,6 +194,35 @@ export interface DomainProvisioningProviders {
   resolvePublicNameservers(name: string): Promise<string[]>;
   bindWorkerDomain(input: { hostname: string; zoneId: string; workerName: string }): Promise<void>;
   workerDomainReady(input: { hostname: string; zoneId: string; workerName: string }): Promise<boolean>;
+  configureWebsiteOrigin(input: {
+    hostname: string;
+    zoneId: string;
+    originHostname: string;
+  }): Promise<ProvisionedWebRecord[]>;
+  ensureWebsiteOriginTls(input: {
+    zoneId: string;
+    requestedMode: OriginTlsMode;
+  }): Promise<{
+    mode: OriginTlsMode | "origin_pull";
+    changed: boolean;
+    downgradeRefused: boolean;
+  }>;
+  websiteOriginReady(input: {
+    hostname: string;
+    zoneId: string;
+    originHostname: string;
+    originTlsMode: OriginTlsMode;
+  }): Promise<boolean>;
+  reconcileDnsRecords(input: {
+    hostname: string;
+    zoneId: string;
+    records: HostedDnsRecord[];
+  }): Promise<HostedDnsRecord[]>;
+  dnsRecordsReady(input: {
+    hostname: string;
+    zoneId: string;
+    records: HostedDnsRecord[];
+  }): Promise<boolean>;
   listRoute53HostedZoneIds?(name: string): Promise<string[]>;
   cleanupRoute53HostedZone?(input: {
     name: string;
@@ -135,14 +245,86 @@ const TERMINAL = new Set<ProvisioningStatus>(["ready", "manual_review", "failed"
 function requestHash(request: DomainProvisioningRequest): string {
   return createHash("sha256").update(JSON.stringify({
     auto_renew: request.auto_renew,
+    acquisition_mode: request.acquisition_mode,
     dns_provider: request.dns_provider,
     max_price_usd: request.max_price_usd,
     name: request.name,
     registrar: request.registrar,
     target: request.target,
     worker_name: request.worker_name,
+    origin_hostname: request.origin_hostname,
+    ...(request.target === "website_origin" ? { origin_tls_mode: request.origin_tls_mode } : {}),
     years: request.years,
   })).digest("hex");
+}
+
+function dnsRecordName(value: unknown, domain: string): string {
+  if (typeof value !== "string") throw new Error("DNS record name must be a string");
+  const name = (value.trim() === "@" ? domain : value.trim()).toLowerCase().replace(/\.$/u, "");
+  if (
+    name.length > 253 ||
+    !/^[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?(?:\.[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?)*$/u.test(name) ||
+    (name !== domain && !name.endsWith(`.${domain}`))
+  ) {
+    throw new Error("DNS record name must be the domain or one of its subdomains");
+  }
+  return name;
+}
+
+function dnsHostnameValue(value: unknown): string {
+  if (typeof value !== "string") throw new Error("DNS record value must be a hostname");
+  const hostname = value.trim().toLowerCase().replace(/\.$/u, "");
+  if (
+    hostname.length > 253 ||
+    !/^[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?(?:\.[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?)*$/u.test(hostname)
+  ) {
+    throw new Error("DNS record value must be a hostname");
+  }
+  return hostname;
+}
+
+export function normalizeHostedDnsRecords(value: unknown, domainValue: string): HostedDnsRecord[] {
+  const domain = normalizeDomainName(domainValue);
+  if (!Array.isArray(value) || value.length < 1 || value.length > 20) {
+    throw new Error("records must contain 1-20 DNS records");
+  }
+  const records = value.map((raw): HostedDnsRecord => {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("invalid DNS record");
+    const input = raw as Record<string, unknown>;
+    const type = String(input.type ?? "").toUpperCase();
+    if (!HOSTED_DNS_RECORD_TYPES.includes(type as HostedDnsRecordType)) {
+      throw new Error("hosted DNS reconciliation allows only TXT, CNAME, and MX records");
+    }
+    const ttl = Number(input.ttl ?? 300);
+    if (!Number.isInteger(ttl) || ttl < 60 || ttl > 86_400) {
+      throw new Error("DNS record ttl must be an integer from 60 to 86400");
+    }
+    const recordType = type as HostedDnsRecordType;
+    const value = recordType === "TXT"
+      ? (() => {
+          if (typeof input.value !== "string" || !input.value.trim() || input.value.length > 4_096 || /[\r\n\0]/u.test(input.value)) {
+            throw new Error("TXT record value must be 1-4096 characters without control lines");
+          }
+          return input.value;
+        })()
+      : dnsHostnameValue(input.value);
+    const priority = recordType === "MX" ? Number(input.priority) : null;
+    if (recordType === "MX" && (!Number.isInteger(priority) || Number(priority) < 0 || Number(priority) > 65_535)) {
+      throw new Error("MX record priority must be an integer from 0 to 65535");
+    }
+    if (recordType !== "MX" && input.priority !== undefined && input.priority !== null) {
+      throw new Error("priority is valid only for MX records");
+    }
+    return { type: recordType, name: dnsRecordName(input.name, domain), value, ttl, priority };
+  });
+  const canonical = [...records].sort((left, right) => {
+    const leftJson = JSON.stringify(left);
+    const rightJson = JSON.stringify(right);
+    return leftJson < rightJson ? -1 : leftJson > rightJson ? 1 : 0;
+  });
+  const identities = canonical.map((record) => JSON.stringify(record));
+  if (new Set(identities).size !== identities.length) throw new Error("duplicate DNS records are not allowed");
+  return canonical;
 }
 
 function normalizeRequest(input: Partial<DomainProvisioningRequest>): DomainProvisioningRequest {
@@ -165,22 +347,63 @@ function normalizeRequest(input: Partial<DomainProvisioningRequest>): DomainProv
   const registrar = input.registrar ?? "route53";
   const dnsProvider = input.dns_provider ?? "cloudflare";
   const target = input.target ?? "shortlinks";
-  const workerName = String(input.worker_name ?? "hasna-link-router").trim();
   if (registrar !== "route53") throw new Error("only registrar=route53 is supported by hosted provisioning");
   if (dnsProvider !== "cloudflare") throw new Error("only dns_provider=cloudflare is supported by hosted provisioning");
-  if (target !== "shortlinks") throw new Error("only target=shortlinks is supported by hosted provisioning");
-  if (!/^[A-Za-z0-9_-]{1,64}$/.test(workerName)) throw new Error("invalid worker_name");
+  if (target !== "shortlinks" && target !== "website_origin") {
+    throw new Error("target must be shortlinks or website_origin");
+  }
+  let workerName: string | null = null;
+  let originHostname: string | null = null;
+  let originTlsMode: OriginTlsMode | null = null;
+  if (target === "shortlinks") {
+    if (input.origin_hostname !== undefined && input.origin_hostname !== null) {
+      throw new Error("origin_hostname is only valid for target=website_origin");
+    }
+    if (input.origin_tls_mode !== undefined && input.origin_tls_mode !== null) {
+      throw new Error("origin_tls_mode is only valid for target=website_origin");
+    }
+    workerName = String(input.worker_name ?? "hasna-link-router").trim();
+    if (!/^[A-Za-z0-9_-]{1,64}$/.test(workerName)) throw new Error("invalid worker_name");
+  } else {
+    if (input.worker_name !== undefined && input.worker_name !== null) {
+      throw new Error("worker_name is only valid for target=shortlinks");
+    }
+    originHostname = normalizeWebsiteOriginHostname(input.origin_hostname);
+    const requestedTlsMode = input.origin_tls_mode ?? "strict";
+    if (requestedTlsMode !== "strict" && requestedTlsMode !== "full") {
+      throw new Error("origin_tls_mode must be strict or full");
+    }
+    originTlsMode = requestedTlsMode;
+  }
   return {
     name,
     idempotency_key: idempotencyKey,
     max_price_usd: maxPrice,
     years,
     auto_renew: input.auto_renew,
+    acquisition_mode: "purchase",
     registrar,
     dns_provider: dnsProvider,
     target,
     worker_name: workerName,
+    origin_hostname: originHostname,
+    origin_tls_mode: originTlsMode,
   };
+}
+
+/** A hosted website origin is an AWS ALB DNS hostname, never a URL or an IP. */
+export function normalizeWebsiteOriginHostname(value: unknown): string {
+  if (typeof value !== "string") {
+    throw new Error("origin_hostname is required for target=website_origin");
+  }
+  const hostname = value.trim().toLowerCase().replace(/\.$/u, "");
+  if (
+    hostname.length > 253 ||
+    !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.[a-z0-9-]+\.elb\.amazonaws\.com$/u.test(hostname)
+  ) {
+    throw new Error("origin_hostname must be an AWS ALB DNS hostname");
+  }
+  return hostname;
 }
 
 function normalizeNameservers(values: string[]): string[] {
@@ -203,10 +426,13 @@ function boundedPurchaseQuote(
   request: Pick<DomainProvisioningRequest, "max_price_usd" | "years">,
 ): { totalPriceUsd: number; currency: "USD" } | { error: string } {
   if (!quote.available) return { error: "domain is not available" };
-  if (!Number.isFinite(quote.price_usd)) return { error: "registrar returned no bounded purchase price" };
+  const unitRegistrationPrice = quote.registration_price_usd ?? quote.price_usd;
+  if (!Number.isFinite(unitRegistrationPrice) || unitRegistrationPrice! <= 0) {
+    return { error: "registrar returned no positive bounded purchase price" };
+  }
   const currency = (quote.currency ?? "USD").toUpperCase();
   if (currency !== "USD") return { error: `registrar returned unsupported currency ${currency}` };
-  const totalPriceUsd = Number((quote.price_usd! * request.years).toFixed(2));
+  const totalPriceUsd = Number((unitRegistrationPrice! * request.years).toFixed(2));
   if (totalPriceUsd > request.max_price_usd) {
     return { error: `quoted total price exceeds max_price_usd (${totalPriceUsd} > ${request.max_price_usd})` };
   }
@@ -251,12 +477,115 @@ export class DomainProvisioningService {
   }
 
   async request(input: Partial<DomainProvisioningRequest>): Promise<DomainProvisioningJob> {
+    if (input.acquisition_mode !== undefined && input.acquisition_mode !== "purchase") {
+      throw new Error("use the adoption endpoint for acquisition_mode=adopt");
+    }
     const normalized = normalizeRequest(input);
     return this.store.reserve(normalized, requestHash(normalized));
   }
 
+  async adopt(input: {
+    name?: unknown;
+    idempotency_key?: unknown;
+    dns_provider?: unknown;
+    target?: unknown;
+    worker_name?: unknown;
+    origin_hostname?: unknown;
+    origin_tls_mode?: unknown;
+  }): Promise<DomainProvisioningJob> {
+    const normalized = normalizeRequest({
+      name: input.name as string,
+      idempotency_key: input.idempotency_key as string,
+      max_price_usd: 1,
+      years: 1,
+      auto_renew: true,
+      registrar: "route53",
+      dns_provider: input.dns_provider as "cloudflare" | undefined,
+      target: input.target as DomainProvisioningRequest["target"] | undefined,
+      worker_name: input.worker_name as string | null | undefined,
+      origin_hostname: input.origin_hostname as string | null | undefined,
+      origin_tls_mode: input.origin_tls_mode as OriginTlsMode | null | undefined,
+    });
+    const request: DomainProvisioningRequest = {
+      ...normalized,
+      acquisition_mode: "adopt",
+      max_price_usd: 0,
+    };
+    const hash = requestHash(request);
+    if (await this.store.getByName(request.name)) {
+      return this.store.reserveAdoption(request, hash, { nameservers: [] });
+    }
+    const detail = await this.providers.getDomainDetail(normalized.name);
+    if (!detail) throw new Error("registrar does not report this domain as already owned");
+    return this.store.reserveAdoption(request, hash, detail);
+  }
+
   get(id: string): Promise<DomainProvisioningJob | null> {
     return this.store.get(id);
+  }
+
+  getByName(name: string): Promise<DomainProvisioningJob | null> {
+    return this.store.getByName(normalizeDomainName(name));
+  }
+
+  async reconcileDns(
+    name: string,
+    input: { idempotency_key?: unknown; records?: unknown },
+  ): Promise<DomainDnsReconciliation> {
+    const canonicalName = normalizeDomainName(name);
+    const idempotencyKey = String(input.idempotency_key ?? "").trim();
+    if (!/^[A-Za-z0-9._:-]{8,128}$/.test(idempotencyKey)) {
+      throw new Error("idempotency_key must be 8-128 safe characters");
+    }
+    const records = normalizeHostedDnsRecords(input.records, canonicalName);
+    const job = await this.store.getByName(canonicalName);
+    if (!job || job.status !== "ready") throw new Error("domain provisioning job is not ready");
+    const zoneId = job.provider_state.cloudflare_zone_id;
+    if (!zoneId) throw new Error("provisioned domain has no DNS zone");
+    const hash = createHash("sha256").update(JSON.stringify({
+      domain_name: canonicalName,
+      records,
+    })).digest("hex");
+    let reconciliation = await this.store.reserveDnsReconciliation({
+      job,
+      idempotencyKey,
+      requestHash: hash,
+      records,
+    });
+    if (reconciliation.status === "ready") return reconciliation;
+    const leaseToken = randomUUID();
+    const leaseUntil = new Date(this.now().getTime() + this.leaseMs).toISOString();
+    const claimed = await this.store.claimDnsReconciliation(reconciliation.id, leaseToken, leaseUntil);
+    if (!claimed) return reconciliation;
+    try {
+      await this.store.updateDnsReconciliation(claimed.id, {
+        status: "applying", error: null,
+      }, leaseToken);
+      const applied = await this.providers.reconcileDnsRecords({
+        hostname: canonicalName,
+        zoneId,
+        records,
+      });
+      if (!await this.providers.dnsRecordsReady({ hostname: canonicalName, zoneId, records })) {
+        throw new Error("DNS provider readback does not match the requested records");
+      }
+      reconciliation = (await this.store.updateDnsReconciliation(claimed.id, {
+        status: "ready",
+        result: { records: applied, checked_at: this.now().toISOString() },
+        error: null,
+        lease_token: null,
+        lease_until: null,
+      }, leaseToken))!;
+      return reconciliation;
+    } catch (error) {
+      const updated = await this.store.updateDnsReconciliation(claimed.id, {
+        status: "manual_review",
+        error: `DNS reconciliation outcome requires review: ${error instanceof Error ? error.message : String(error)}`.slice(0, 1000),
+        lease_token: null,
+        lease_until: null,
+      }, leaseToken);
+      return updated ?? claimed;
+    }
   }
 
   async advance(id: string): Promise<DomainProvisioningJob> {
@@ -433,18 +762,68 @@ export class DomainProvisioningService {
         if (!detail || zone.status !== "active" || !nameserversEqual(detail.nameservers, zone.nameservers) || !nameserversEqual(publicNameservers, zone.nameservers)) {
           return update({ ...clearLease });
         }
-        await this.providers.bindWorkerDomain({
-          hostname: job.name,
-          zoneId: zone.id,
-          workerName: job.worker_name,
-        });
+        let targetState: DomainProvisioningProviderState;
+        if (job.target === "website_origin") {
+          if (!job.origin_hostname || !job.origin_tls_mode) {
+            return update({ status: "manual_review", error: "website origin configuration is missing", ...clearLease });
+          }
+          const tls = await this.providers.ensureWebsiteOriginTls({
+            zoneId: zone.id,
+            requestedMode: job.origin_tls_mode,
+          });
+          if (tls.downgradeRefused) {
+            return update({
+              status: "manual_review",
+              error: `refused to weaken existing Cloudflare ${tls.mode} origin TLS mode to ${job.origin_tls_mode}`,
+              provider_state: {
+                ...job.provider_state,
+                origin_tls_mode_configured: tls.mode,
+                origin_tls_mode_checked_at: this.now().toISOString(),
+              },
+              ...clearLease,
+            });
+          }
+          if (tls.mode !== job.origin_tls_mode) {
+            return update({
+              status: "manual_review",
+              error: `Cloudflare origin TLS readback is ${tls.mode}, expected ${job.origin_tls_mode}`,
+              provider_state: {
+                ...job.provider_state,
+                origin_tls_mode_configured: tls.mode,
+                origin_tls_mode_checked_at: this.now().toISOString(),
+              },
+              ...clearLease,
+            });
+          }
+          const webRecords = await this.providers.configureWebsiteOrigin({
+            hostname: job.name,
+            zoneId: zone.id,
+            originHostname: job.origin_hostname,
+          });
+          targetState = {
+            website_origin_configured: true,
+            origin_tls_mode_configured: job.origin_tls_mode,
+            origin_tls_mode_checked_at: this.now().toISOString(),
+            web_records: webRecords,
+          };
+        } else {
+          if (!job.worker_name) {
+            return update({ status: "manual_review", error: "worker name is missing", ...clearLease });
+          }
+          await this.providers.bindWorkerDomain({
+            hostname: job.name,
+            zoneId: zone.id,
+            workerName: job.worker_name,
+          });
+          targetState = { worker_domain_bound: true };
+        }
         return update({
           status: "worker_bound",
           provider_state: {
             ...job.provider_state,
             cloudflare_zone_id: zone.id,
             cloudflare_nameservers: zone.nameservers,
-            worker_domain_bound: true,
+            ...targetState,
           },
           ...clearLease,
         });
@@ -452,18 +831,37 @@ export class DomainProvisioningService {
       case "worker_bound": {
         const zoneId = job.provider_state.cloudflare_zone_id;
         if (!zoneId) return update({ status: "manual_review", error: "Cloudflare zone id is missing", ...clearLease });
-        const ready = await this.providers.workerDomainReady({
-          hostname: job.name,
-          zoneId,
-          workerName: job.worker_name,
-        });
+        let ready: boolean;
+        if (job.target === "website_origin") {
+          if (!job.origin_hostname || !job.origin_tls_mode) {
+            return update({ status: "manual_review", error: "website origin configuration is missing", ...clearLease });
+          }
+          ready = await this.providers.websiteOriginReady({
+            hostname: job.name,
+            zoneId,
+            originHostname: job.origin_hostname,
+            originTlsMode: job.origin_tls_mode,
+          });
+        } else {
+          if (!job.worker_name) {
+            return update({ status: "manual_review", error: "worker name is missing", ...clearLease });
+          }
+          ready = await this.providers.workerDomainReady({
+            hostname: job.name,
+            zoneId,
+            workerName: job.worker_name,
+          });
+        }
         if (!ready) return update({ ...clearLease });
         const detail = await this.providers.getDomainDetail(job.name);
         if (!detail) return update({ status: "manual_review", error: "registered domain detail is missing", ...clearLease });
         // Update the portfolio before making the job terminal. If this write
         // fails, the worker-bound job remains retryable instead of becoming a
         // ready job whose portfolio projection can never be repaired.
-        let finalProviderState = { ...job.provider_state };
+        let finalProviderState = {
+          ...job.provider_state,
+          target_checked_at: this.now().toISOString(),
+        };
         const baseline = finalProviderState.route53_zone_ids_before_registration;
         if (
           !finalProviderState.route53_hosted_zone_id
@@ -568,10 +966,34 @@ export function isProvisioningTerminal(status: ProvisioningStatus): boolean {
   return TERMINAL.has(status);
 }
 
-export type PublicDomainProvisioningJob = Omit<DomainProvisioningJob, "lease_token">;
+export type PublicDomainProvisioningJob = Omit<DomainProvisioningJob, "lease_token"> & {
+  result: DomainProvisioningResult | null;
+};
 
 /** Strip the worker lease credential from every API response. */
 export function publicProvisioningJob(job: DomainProvisioningJob): PublicDomainProvisioningJob {
   const { lease_token: _leaseToken, ...safe } = job;
-  return safe;
+  const zoneRef = job.provider_state.cloudflare_zone_id;
+  const checkedAt = job.provider_state.target_checked_at;
+  const nameservers = job.provider_state.cloudflare_nameservers;
+  const webRecords = job.provider_state.web_records;
+  const configuredTlsMode = job.provider_state.origin_tls_mode_configured;
+  const result =
+    job.status === "ready" &&
+    zoneRef &&
+    checkedAt &&
+    Array.isArray(nameservers) &&
+    (job.target === "shortlinks" || (
+      Array.isArray(webRecords) &&
+      configuredTlsMode === job.origin_tls_mode
+    ))
+      ? {
+          zone_ref: `zone:${createHash("sha256").update(zoneRef).digest("hex").slice(0, 24)}`,
+          nameservers: [...nameservers],
+          web_records: job.target === "website_origin" ? [...(webRecords ?? [])] : [],
+          origin_tls_mode: job.target === "website_origin" ? job.origin_tls_mode : null,
+          checked_at: checkedAt,
+        }
+      : null;
+  return { ...safe, result };
 }

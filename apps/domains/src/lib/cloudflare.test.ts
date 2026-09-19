@@ -1,11 +1,23 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { bindWorkerCustomDomain, createCloudflareProvider, workerCustomDomainReady } from "./cloudflare.js";
+import {
+  bindWorkerCustomDomain,
+  createCloudflareProvider,
+  ensureZoneOriginTlsMode,
+  getZone,
+  workerCustomDomainReady,
+} from "./cloudflare.js";
 import type { Domain } from "../db/domains.js";
 
 const originalFetch = globalThis.fetch;
+const originalTimeout = process.env["DOMAINS_PROVIDER_HTTP_TIMEOUT_MS"];
+const originalMaxResponse = process.env["DOMAINS_PROVIDER_MAX_RESPONSE_BYTES"];
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
+  if (originalTimeout === undefined) delete process.env["DOMAINS_PROVIDER_HTTP_TIMEOUT_MS"];
+  else process.env["DOMAINS_PROVIDER_HTTP_TIMEOUT_MS"] = originalTimeout;
+  if (originalMaxResponse === undefined) delete process.env["DOMAINS_PROVIDER_MAX_RESPONSE_BYTES"];
+  else process.env["DOMAINS_PROVIDER_MAX_RESPONSE_BYTES"] = originalMaxResponse;
 });
 
 function domain(name: string, registrar: string): Domain {
@@ -32,6 +44,134 @@ function domain(name: string, registrar: string): Domain {
     updated_at: "",
   };
 }
+
+describe("Cloudflare API bounds", () => {
+  it("times out a provider request that never returns headers", async () => {
+    process.env["DOMAINS_PROVIDER_HTTP_TIMEOUT_MS"] = "10";
+    globalThis.fetch = (() => new Promise<Response>(() => {})) as typeof fetch;
+    await expect(getZone("proof.example", { apiToken: "token", accountId: "account" }))
+      .rejects.toThrow("exceeded 10ms");
+  });
+
+  it("times out when response headers arrive but the body stalls", async () => {
+    process.env["DOMAINS_PROVIDER_HTTP_TIMEOUT_MS"] = "10";
+    globalThis.fetch = (async () => new Response(new ReadableStream({
+      start() {
+        // Deliberately never enqueue or close: the request must still time out.
+      },
+    }), { status: 200 })) as typeof fetch;
+    await expect(getZone("proof.example", { apiToken: "token", accountId: "account" }))
+      .rejects.toThrow("exceeded 10ms");
+  });
+
+  it("rejects an oversized provider response before parsing", async () => {
+    process.env["DOMAINS_PROVIDER_MAX_RESPONSE_BYTES"] = "16";
+    globalThis.fetch = (async () => new Response("{}", {
+      status: 200,
+      headers: { "content-length": "17", "content-type": "application/json" },
+    })) as typeof fetch;
+    await expect(getZone("proof.example", { apiToken: "token", accountId: "account" }))
+      .rejects.toThrow("exceeds 16 bytes");
+  });
+
+  it("rejects runtime bounds above their fixed ceilings before provider I/O", async () => {
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return Response.json({ success: true, result: [], errors: [] });
+    }) as typeof fetch;
+    process.env["DOMAINS_PROVIDER_HTTP_TIMEOUT_MS"] = "120001";
+    await expect(getZone("proof.example", { apiToken: "token", accountId: "account" }))
+      .rejects.toThrow("between 1 and 120000");
+    process.env["DOMAINS_PROVIDER_HTTP_TIMEOUT_MS"] = "30000";
+    process.env["DOMAINS_PROVIDER_MAX_RESPONSE_BYTES"] = "4194305";
+    await expect(getZone("proof.example", { apiToken: "token", accountId: "account" }))
+      .rejects.toThrow("between 1 and 4194304");
+    expect(calls).toBe(0);
+  });
+});
+
+describe("Cloudflare zone origin TLS", () => {
+  it("sets one explicit TLS mode and requires exact GET readback", async () => {
+    const calls: Array<{ method: string; url: string; body?: unknown }> = [];
+    let mode = "flexible";
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const method = init?.method ?? "GET";
+      const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+      calls.push({ method, url: String(input), ...(body ? { body } : {}) });
+      if (method === "PATCH") mode = String((body as { value: string }).value);
+      return Response.json({ success: true, result: { id: "ssl", value: mode }, errors: [] });
+    }) as typeof fetch;
+
+    await expect(ensureZoneOriginTlsMode("zone/one", "strict", { apiToken: "token", accountId: "account" }))
+      .resolves.toEqual({ mode: "strict", changed: true, downgradeRefused: false });
+    expect(calls).toEqual([
+      { method: "GET", url: "https://api.cloudflare.com/client/v4/zones/zone%2Fone/settings/ssl" },
+      { method: "PATCH", url: "https://api.cloudflare.com/client/v4/zones/zone%2Fone/settings/ssl", body: { value: "strict" } },
+      { method: "GET", url: "https://api.cloudflare.com/client/v4/zones/zone%2Fone/settings/ssl" },
+    ]);
+  });
+
+  it("refuses strict-to-full without a PATCH", async () => {
+    const methods: string[] = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      methods.push(init?.method ?? "GET");
+      return Response.json({ success: true, result: { id: "ssl", value: "strict" }, errors: [] });
+    }) as typeof fetch;
+
+    await expect(ensureZoneOriginTlsMode("zone", "full", { apiToken: "token", accountId: "account" }))
+      .resolves.toEqual({ mode: "strict", changed: false, downgradeRefused: true });
+    expect(methods).toEqual(["GET"]);
+  });
+
+  for (const requested of ["full", "strict"] as const) {
+    it(`refuses origin_pull-to-${requested} without a PATCH`, async () => {
+      const methods: string[] = [];
+      globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+        methods.push(init?.method ?? "GET");
+        return Response.json({
+          success: true,
+          result: { id: "ssl", value: "origin_pull" },
+          errors: [],
+        });
+      }) as typeof fetch;
+
+      await expect(ensureZoneOriginTlsMode("zone", requested, {
+        apiToken: "token",
+        accountId: "account",
+      })).resolves.toEqual({ mode: "origin_pull", changed: false, downgradeRefused: true });
+      expect(methods).toEqual(["GET"]);
+    });
+  }
+
+  it("rejects an unknown SSL value before PATCH", async () => {
+    const methods: string[] = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      methods.push(init?.method ?? "GET");
+      return Response.json({
+        success: true,
+        result: { id: "ssl", value: "automatic" },
+        errors: [],
+      });
+    }) as typeof fetch;
+
+    await expect(ensureZoneOriginTlsMode("zone", "full", {
+      apiToken: "token",
+      accountId: "account",
+    })).rejects.toThrow("unsupported zone SSL setting automatic");
+    expect(methods).toEqual(["GET"]);
+  });
+
+  it("fails when the provider readback does not match the requested mode", async () => {
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => Response.json({
+      success: true,
+      result: { id: "ssl", value: init?.method === "PATCH" ? "strict" : "flexible" },
+      errors: [],
+    })) as typeof fetch;
+    await expect(ensureZoneOriginTlsMode("zone", "full", { apiToken: "token", accountId: "account" }))
+      .rejects.toThrow("readback is flexible, expected full");
+  });
+});
 
 
 describe("Cloudflare Worker Custom Domains", () => {

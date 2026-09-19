@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   DomainProvisioningService,
   type DomainProvisioningJob,
+  type DomainDnsReconciliation,
   type DomainProvisioningProviders,
   type DomainProvisioningRequest,
   type DomainProvisioningStore,
@@ -10,6 +11,7 @@ import {
 
 class MemoryStore implements DomainProvisioningStore {
   jobs = new Map<string, DomainProvisioningJob>();
+  dns = new Map<string, DomainDnsReconciliation>();
   ready: Array<{ job: DomainProvisioningJob; detail: RegisteredDomainDetail }> = [];
 
   async reserve(request: DomainProvisioningRequest, requestHash: string): Promise<DomainProvisioningJob> {
@@ -41,6 +43,11 @@ class MemoryStore implements DomainProvisioningStore {
     return this.jobs.has(id) ? structuredClone(this.jobs.get(id)!) : null;
   }
 
+  async getByName(name: string): Promise<DomainProvisioningJob | null> {
+    const job = [...this.jobs.values()].find((candidate) => candidate.name === name);
+    return job ? structuredClone(job) : null;
+  }
+
   async listRunnable(limit: number): Promise<DomainProvisioningJob[]> {
     return [...this.jobs.values()]
       .filter((job) => !["ready", "manual_review", "failed"].includes(job.status) && !job.lease_token)
@@ -66,6 +73,64 @@ class MemoryStore implements DomainProvisioningStore {
   async markPortfolioReady(job: DomainProvisioningJob, detail: RegisteredDomainDetail): Promise<void> {
     this.ready.push({ job: structuredClone(job), detail: structuredClone(detail) });
   }
+
+  async reserveAdoption(
+    request: DomainProvisioningRequest,
+    requestHash: string,
+    _detail: RegisteredDomainDetail,
+  ): Promise<DomainProvisioningJob> {
+    const existing = [...this.jobs.values()].find((job) =>
+      job.idempotency_key === request.idempotency_key || job.name === request.name
+    );
+    if (existing) {
+      if (existing.request_hash !== requestHash) throw new Error("different provisioning intent");
+      return structuredClone(existing);
+    }
+    const now = new Date().toISOString();
+    const job: DomainProvisioningJob = {
+      ...request, id: `job-${this.jobs.size + 1}`, domain_id: `dom-${this.jobs.size + 1}`,
+      request_hash: requestHash, status: "registered", provider_state: { last_provider_status: "externally_verified_owned" },
+      attempts: 0, error: null, lease_token: null, lease_until: null, created_at: now, updated_at: now,
+    };
+    this.jobs.set(job.id, job);
+    return structuredClone(job);
+  }
+
+  async reserveDnsReconciliation(input: Parameters<DomainProvisioningStore["reserveDnsReconciliation"]>[0]) {
+    const existing = [...this.dns.values()].find((row) => row.idempotency_key === input.idempotencyKey);
+    if (existing) {
+      if (existing.request_hash !== input.requestHash) throw new Error("conflicting DNS reconciliation request");
+      return structuredClone(existing);
+    }
+    const now = new Date().toISOString();
+    const row: DomainDnsReconciliation = {
+      id: `dns-${this.dns.size + 1}`, provisioning_job_id: input.job.id,
+      domain_name: input.job.name, idempotency_key: input.idempotencyKey,
+      request_hash: input.requestHash, status: "requested", records: structuredClone(input.records),
+      result: null, error: null, lease_token: null, lease_until: null,
+      created_at: now, updated_at: now,
+    };
+    this.dns.set(row.id, row);
+    return structuredClone(row);
+  }
+
+  async claimDnsReconciliation(id: string, leaseToken: string, leaseUntil: string) {
+    const row = this.dns.get(id);
+    if (!row || row.status === "ready" || row.lease_token) return null;
+    row.lease_token = leaseToken; row.lease_until = leaseUntil;
+    return structuredClone(row);
+  }
+
+  async updateDnsReconciliation(
+    id: string,
+    patch: Partial<DomainDnsReconciliation>,
+    leaseToken: string,
+  ) {
+    const row = this.dns.get(id);
+    if (!row || row.lease_token !== leaseToken) return null;
+    Object.assign(row, structuredClone(patch), { updated_at: new Date().toISOString() });
+    return structuredClone(row);
+  }
 }
 
 function request(overrides: Partial<DomainProvisioningRequest> = {}): Partial<DomainProvisioningRequest> {
@@ -79,6 +144,8 @@ function request(overrides: Partial<DomainProvisioningRequest> = {}): Partial<Do
     dns_provider: "cloudflare",
     target: "shortlinks",
     worker_name: "hasna-link-router",
+    origin_hostname: null,
+    origin_tls_mode: null,
     ...overrides,
   };
 }
@@ -101,6 +168,14 @@ function providers(overrides: Partial<DomainProvisioningProviders> = {}): Domain
     resolvePublicNameservers: async () => ["bob.ns.cloudflare.com.", "amy.ns.cloudflare.com."],
     bindWorkerDomain: async () => {},
     workerDomainReady: async () => true,
+    ensureWebsiteOriginTls: async ({ requestedMode }) => ({ mode: requestedMode, changed: true, downgradeRefused: false }),
+    configureWebsiteOrigin: async ({ hostname, originHostname }) => [
+      { type: "CNAME", name: hostname, value: originHostname, proxied: true, ttl: 1 },
+      { type: "CNAME", name: `www.${hostname}`, value: originHostname, proxied: true, ttl: 1 },
+    ],
+    websiteOriginReady: async () => true,
+    reconcileDnsRecords: async ({ records }) => records,
+    dnsRecordsReady: async () => true,
     listRoute53HostedZoneIds: async () => ++hostedZoneReads === 1 ? [] : ["r53-zone"],
     cleanupRoute53HostedZone: async () => true,
     ...overrides,
@@ -178,6 +253,28 @@ describe("DomainProvisioningService", () => {
     expect(submitted).toBe(0);
   });
 
+  test("rejects zero or negative registrar prices before any purchase", async () => {
+    for (const registrationPrice of [0, -1]) {
+      const store = new MemoryStore();
+      let submitted = 0;
+      const service = new DomainProvisioningService(store, providers({
+        checkAvailability: async () => ({
+          available: true,
+          registration_price_usd: registrationPrice,
+          currency: "USD",
+        }),
+        submitRegistration: async () => { submitted++; return { operationId: "never" }; },
+      }));
+      const requested = await service.request(request({
+        idempotency_key: `proof-invalid-price-${registrationPrice}`,
+      }));
+      const advanced = await service.advance(requested.id);
+      expect(advanced.status).toBe("failed");
+      expect(advanced.error).toContain("no positive bounded purchase price");
+      expect(submitted).toBe(0);
+    }
+  });
+
   test("rechecks availability and price immediately before registrar submission", async () => {
     const store = new MemoryStore();
     let checks = 0;
@@ -247,10 +344,276 @@ describe("DomainProvisioningService", () => {
     const store = new MemoryStore();
     const service = new DomainProvisioningService(store, providers());
     const first = await service.request(request());
+    expect(first.request_hash).toBe("3b1faf93cde0a9c975d958a05aae7c7993b1573e2283581c65253f44604cf3e1");
     const second = await service.request(request({ name: "proof.example" }));
     expect(second.id).toBe(first.id);
     await expect(service.request(request({ auto_renew: undefined }))).rejects.toThrow("auto_renew");
     await expect(service.request(request({ idempotency_key: "short" }))).rejects.toThrow("idempotency_key");
     await expect(service.request(request({ registrar: "godaddy" as never }))).rejects.toThrow("route53");
+  });
+
+  test("configures a generic website origin and exposes only provider-neutral ready evidence", async () => {
+    const store = new MemoryStore();
+    const configured: unknown[] = [];
+    let workerBindings = 0;
+    const service = new DomainProvisioningService(store, providers({
+      bindWorkerDomain: async () => { workerBindings++; },
+      configureWebsiteOrigin: async (input) => {
+        configured.push(input);
+        return [
+          { type: "CNAME", name: input.hostname, value: input.originHostname, proxied: true, ttl: 1 },
+          { type: "CNAME", name: `www.${input.hostname}`, value: input.originHostname, proxied: true, ttl: 1 },
+        ];
+      },
+    }), { now: () => new Date("2026-09-19T10:00:00.000Z") });
+    let job = await service.request(request({
+      target: "website_origin",
+      worker_name: null,
+      origin_hostname: "News-Origin-123.us-east-1.elb.amazonaws.com.",
+      origin_tls_mode: "full",
+    }));
+    expect(job.origin_hostname).toBe("news-origin-123.us-east-1.elb.amazonaws.com");
+    expect(job.origin_tls_mode).toBe("full");
+    expect((await service.getByName("PROOF.EXAMPLE"))?.id).toBe(job.id);
+    for (let i = 0; i < 8; i++) job = await service.advance(job.id);
+    expect(job.status).toBe("ready");
+    expect(workerBindings).toBe(0);
+    expect(configured).toEqual([{
+      hostname: "proof.example",
+      zoneId: "cf-zone",
+      originHostname: "news-origin-123.us-east-1.elb.amazonaws.com",
+    }]);
+    const { publicProvisioningJob } = await import("./provisioning.js");
+    const publicJob = publicProvisioningJob(job);
+    expect(publicJob).not.toHaveProperty("lease_token");
+    expect(publicJob.result).toEqual({
+      zone_ref: expect.stringMatching(/^zone:[0-9a-f]{24}$/),
+      nameservers: ["amy.ns.cloudflare.com", "bob.ns.cloudflare.com"],
+      web_records: [
+        { type: "CNAME", name: "proof.example", value: "news-origin-123.us-east-1.elb.amazonaws.com", proxied: true, ttl: 1 },
+        { type: "CNAME", name: "www.proof.example", value: "news-origin-123.us-east-1.elb.amazonaws.com", proxied: true, ttl: 1 },
+      ],
+      origin_tls_mode: "full",
+      checked_at: "2026-09-19T10:00:00.000Z",
+    });
+  });
+
+  test("the scheduled worker automatically progresses a website job to durable readiness", async () => {
+    const store = new MemoryStore();
+    let registrationSubmissions = 0;
+    let websiteBindings = 0;
+    const service = new DomainProvisioningService(store, providers({
+      submitRegistration: async () => {
+        registrationSubmissions++;
+        return { operationId: "reg-op" };
+      },
+      configureWebsiteOrigin: async ({ hostname, originHostname }) => {
+        websiteBindings++;
+        return [
+          { type: "CNAME", name: hostname, value: originHostname, proxied: true, ttl: 1 },
+          { type: "CNAME", name: `www.${hostname}`, value: originHostname, proxied: true, ttl: 1 },
+        ];
+      },
+    }), { intervalMs: 1 });
+    const requested = await service.request(request({
+      target: "website_origin",
+      worker_name: null,
+      origin_hostname: "scheduled-origin.us-east-1.elb.amazonaws.com",
+    }));
+    service.start();
+    try {
+      const deadline = Date.now() + 2_000;
+      let current = await store.get(requested.id);
+      while (current?.status !== "ready" && Date.now() < deadline) {
+        await Bun.sleep(2);
+        current = await store.get(requested.id);
+      }
+      expect(current?.status).toBe("ready");
+      expect(registrationSubmissions).toBe(1);
+      expect(websiteBindings).toBe(1);
+      const { publicProvisioningJob } = await import("./provisioning.js");
+      expect(current && publicProvisioningJob(current).result).toMatchObject({
+        origin_tls_mode: "strict",
+        web_records: [
+          { name: "proof.example", value: "scheduled-origin.us-east-1.elb.amazonaws.com" },
+          { name: "www.proof.example", value: "scheduled-origin.us-east-1.elb.amazonaws.com" },
+        ],
+      });
+      await Bun.sleep(5);
+      expect(registrationSubmissions).toBe(1);
+      expect(websiteBindings).toBe(1);
+    } finally {
+      service.stop();
+    }
+  });
+
+  test("validates target-specific fields before reservation and binds origin changes into idempotency", async () => {
+    const store = new MemoryStore();
+    const service = new DomainProvisioningService(store, providers());
+    for (const origin_hostname of ["https://origin.example", "127.0.0.1", "localhost", "origin.example", "x.elb.amazonaws.com"]) {
+      await expect(service.request(request({ target: "website_origin", worker_name: null, origin_hostname }))).rejects.toThrow("AWS ALB");
+    }
+    await expect(service.request(request({ target: "website_origin", origin_hostname: "lb.us-east-1.elb.amazonaws.com" }))).rejects.toThrow("worker_name");
+    await expect(service.request(request({ origin_hostname: "lb.us-east-1.elb.amazonaws.com" }))).rejects.toThrow("origin_hostname");
+    await expect(service.request(request({ origin_tls_mode: "full" }))).rejects.toThrow("origin_tls_mode");
+    await expect(service.request(request({
+      target: "website_origin", worker_name: null,
+      origin_hostname: "one.us-east-1.elb.amazonaws.com",
+      origin_tls_mode: "flexible" as never,
+    }))).rejects.toThrow("strict or full");
+    const first = await service.request(request({
+      target: "website_origin", worker_name: null,
+      origin_hostname: "one.us-east-1.elb.amazonaws.com",
+    }));
+    expect(first.id).toBeTruthy();
+    await expect(service.request(request({
+      target: "website_origin", worker_name: null,
+      origin_hostname: "two.us-east-1.elb.amazonaws.com",
+    }))).rejects.toThrow("conflicting provisioning request");
+  });
+
+  test("binds origin TLS mode into idempotency and refuses a strict-to-full downgrade before DNS", async () => {
+    const store = new MemoryStore();
+    let dnsWrites = 0;
+    const service = new DomainProvisioningService(store, providers({
+      ensureWebsiteOriginTls: async ({ requestedMode }) => ({
+        mode: "strict",
+        changed: false,
+        downgradeRefused: requestedMode === "full",
+      }),
+      configureWebsiteOrigin: async () => {
+        dnsWrites += 1;
+        return [];
+      },
+    }), { now: () => new Date("2026-09-19T10:01:00.000Z") });
+    let job = await service.request(request({
+      target: "website_origin", worker_name: null,
+      origin_hostname: "one.us-east-1.elb.amazonaws.com",
+      origin_tls_mode: "full",
+    }));
+    await expect(service.request(request({
+      target: "website_origin", worker_name: null,
+      origin_hostname: "one.us-east-1.elb.amazonaws.com",
+      origin_tls_mode: "strict",
+    }))).rejects.toThrow("conflicting provisioning request");
+    for (let i = 0; i < 7; i++) job = await service.advance(job.id);
+    expect(job.status).toBe("manual_review");
+    expect(job.error).toContain("refused to weaken");
+    expect(job.provider_state.origin_tls_mode_configured).toBe("strict");
+    expect(dnsWrites).toBe(0);
+  });
+
+  test("parks an origin_pull zone without changing TLS or DNS", async () => {
+    const store = new MemoryStore();
+    let dnsWrites = 0;
+    const service = new DomainProvisioningService(store, providers({
+      ensureWebsiteOriginTls: async () => ({
+        mode: "origin_pull",
+        changed: false,
+        downgradeRefused: true,
+      }),
+      configureWebsiteOrigin: async () => {
+        dnsWrites += 1;
+        return [];
+      },
+    }), { now: () => new Date("2026-09-19T10:01:00.000Z") });
+    let job = await service.request(request({
+      target: "website_origin", worker_name: null,
+      origin_hostname: "one.us-east-1.elb.amazonaws.com",
+      origin_tls_mode: "full",
+    }));
+    for (let i = 0; i < 7; i++) job = await service.advance(job.id);
+    expect(job.status).toBe("manual_review");
+    expect(job.error).toContain("origin_pull");
+    expect(job.provider_state.origin_tls_mode_configured).toBe("origin_pull");
+    expect(dnsWrites).toBe(0);
+  });
+
+  test("durably reconciles only bounded SES-compatible DNS records with conflict-safe replay", async () => {
+    const store = new MemoryStore();
+    const applied: unknown[] = [];
+    const service = new DomainProvisioningService(store, providers({
+      reconcileDnsRecords: async (input) => { applied.push(input); return input.records; },
+    }), { now: () => new Date("2026-09-19T11:00:00.000Z") });
+    let job = await service.request(request());
+    for (let i = 0; i < 8; i++) job = await service.advance(job.id);
+    const records = [
+      { type: "MX", name: "mail.proof.example", value: "feedback-smtp.us-east-1.amazonses.com.", ttl: 300, priority: 10 },
+      { type: "TXT", name: "_amazonses.proof.example", value: "verification-token", ttl: 300 },
+      { type: "CNAME", name: "abc._domainkey.proof.example", value: "abc.dkim.amazonses.com.", ttl: 300 },
+    ];
+    const first = await service.reconcileDns("PROOF.EXAMPLE", {
+      idempotency_key: "ses-dns-proof-001", records,
+    });
+    expect(first.status).toBe("ready");
+    expect(first.result?.checked_at).toBe("2026-09-19T11:00:00.000Z");
+    expect(first.records.map((record) => record.type)).toEqual(["CNAME", "MX", "TXT"]);
+    expect(applied).toHaveLength(1);
+    const replay = await service.reconcileDns("proof.example", {
+      idempotency_key: "ses-dns-proof-001", records: [...records].reverse(),
+    });
+    expect(replay.id).toBe(first.id);
+    expect(applied).toHaveLength(1);
+    await expect(service.reconcileDns("proof.example", {
+      idempotency_key: "ses-dns-proof-001",
+      records: [{ type: "TXT", name: "proof.example", value: "different", ttl: 300 }],
+    })).rejects.toThrow("conflicting DNS reconciliation request");
+  });
+
+  test("rejects unbounded, off-domain, and unsupported hosted DNS inputs before provider I/O", async () => {
+    const store = new MemoryStore();
+    let calls = 0;
+    const service = new DomainProvisioningService(store, providers({
+      reconcileDnsRecords: async ({ records }) => { calls++; return records; },
+    }));
+    let job = await service.request(request());
+    for (let i = 0; i < 8; i++) job = await service.advance(job.id);
+    for (const records of [
+      [],
+      [{ type: "A", name: "proof.example", value: "127.0.0.1", ttl: 300 }],
+      [{ type: "TXT", name: "other.example", value: "x", ttl: 300 }],
+      [{ type: "MX", name: "proof.example", value: "mx.example", ttl: 300 }],
+      [{ type: "CNAME", name: "www.proof.example", value: "target.example", ttl: 1 }],
+    ]) {
+      await expect(service.reconcileDns("proof.example", { idempotency_key: "invalid-dns-001", records })).rejects.toThrow();
+    }
+    expect(calls).toBe(0);
+  });
+
+  test("adopts an externally verified owned domain without registrar purchase and rejects conflicting intent", async () => {
+    const store = new MemoryStore();
+    let purchases = 0;
+    let ownershipReads = 0;
+    const service = new DomainProvisioningService(store, providers({
+      submitRegistration: async () => { purchases++; return { operationId: "must-not-run" }; },
+      getDomainDetail: async () => {
+        ownershipReads++;
+        return {
+          nameservers: ["amy.ns.cloudflare.com", "bob.ns.cloudflare.com"],
+          auto_renew: ownershipReads === 1 ? false : true,
+        };
+      },
+    }));
+    let job = await service.adopt({
+      name: "Owned.Example", idempotency_key: "adopt-owned-001",
+      target: "website_origin", origin_hostname: "owned-origin.us-east-1.elb.amazonaws.com",
+    });
+    expect(job.status).toBe("registered");
+    expect(job.acquisition_mode).toBe("adopt");
+    expect(job.max_price_usd).toBe(0);
+    for (let i = 0; i < 6; i++) job = await service.advance(job.id);
+    expect(job.status).toBe("ready");
+    expect(purchases).toBe(0);
+    const ownershipReadsBeforeReplay = ownershipReads;
+    const replay = await service.adopt({
+      name: "owned.example", idempotency_key: "adopt-owned-001",
+      target: "website_origin", origin_hostname: "owned-origin.us-east-1.elb.amazonaws.com",
+    });
+    expect(replay.id).toBe(job.id);
+    expect(ownershipReads).toBe(ownershipReadsBeforeReplay);
+    await expect(service.adopt({
+      name: "owned.example", idempotency_key: "adopt-owned-002",
+      target: "website_origin", origin_hostname: "different.us-east-1.elb.amazonaws.com",
+    })).rejects.toThrow("different provisioning intent");
   });
 });

@@ -25,10 +25,13 @@ function request(name: string, key: string): DomainProvisioningRequest {
     max_price_usd: 80,
     years: 2,
     auto_renew: false,
+    acquisition_mode: "purchase",
     registrar: "route53",
     dns_provider: "cloudflare",
     target: "shortlinks",
     worker_name: "hasna-link-router",
+    origin_hostname: null,
+    origin_tls_mode: null,
   };
 }
 
@@ -145,5 +148,27 @@ describeLive("Domains provisioning against live PostgreSQL", () => {
     });
     const listed = await portfolio.listDomains({ search: domain, limit: 10 });
     expect(listed.map((item) => item.id)).toEqual([one.domain_id]);
+
+    const websiteInput: DomainProvisioningRequest = {
+      ...request(`web-${suffix}.example`, `domains-web-${suffix}`),
+      target: "website_origin",
+      worker_name: null,
+      origin_hostname: "origin.us-east-1.elb.amazonaws.com",
+      origin_tls_mode: "full",
+    };
+    const website = await left.reserve(websiteInput, hash(websiteInput));
+    expect(website).toMatchObject({
+      target: "website_origin",
+      worker_name: null,
+      origin_hostname: "origin.us-east-1.elb.amazonaws.com",
+      origin_tls_mode: "full",
+    });
+    const persisted = await client.one<{ origin_tls_mode: string }>(
+      "SELECT origin_tls_mode FROM domain_provisioning_jobs WHERE id = $1",
+      [website.id],
+    );
+    expect(persisted).toEqual({ origin_tls_mode: "full" });
+    const conflicting = { ...websiteInput, origin_tls_mode: "strict" as const };
+    await expect(left.reserve(conflicting, hash(conflicting))).rejects.toMatchObject({ status: 409 });
   });
 });
