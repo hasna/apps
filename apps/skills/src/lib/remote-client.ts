@@ -25,6 +25,13 @@ import { quoteUnavailableMessages, readQuoteUnavailableCode, type RemoteQuoteUna
 import { parseSkillsAccess, assertSkillsPermission, type RemoteSkillsAccess } from "./remote-permissions.js";
 export type { RemoteQuoteUnavailableCode } from "./remote-quote-errors.js";
 
+export function validateSkillPublishScopeInput(keyId: string, expectedScopes: string[], expectedOrgId: string): { keyId: string; expectedScopes: string[]; expectedOrgId: string } {
+  if (!/^[A-Za-z0-9_-]+$/.test(keyId)) throw new Error("Invalid API key id");
+  if (!/^[A-Za-z0-9_-]{1,256}$/.test(expectedOrgId)) throw new Error("Invalid expected organization id");
+  if (!Array.isArray(expectedScopes) || expectedScopes.length > 32 || expectedScopes.some((scope) => typeof scope !== "string" || scope.length > 128 || !/^(?:\*|[a-z][a-z0-9_-]*:(?:\*|[a-z][a-z0-9_-]*))$/.test(scope)) || new Set(expectedScopes).size !== expectedScopes.length) throw new Error("Invalid expected API key scopes");
+  return { keyId, expectedScopes: [...expectedScopes], expectedOrgId };
+}
+
 /**
  * A server that predates this client's pin/tag/incremental-sync routes answered
  * 404/405 for them. The caller must never mistake that for "no pins" or "empty
@@ -323,9 +330,7 @@ export class RemoteSkillsClient {
 
   /** Add the single supported publication scope to an existing key, metadata only. */
   async addSkillPublishScope(keyId: string, expectedScopes: string[], expectedOrgId: string): Promise<Record<string, unknown>> {
-    if (!/^[A-Za-z0-9_-]+$/.test(keyId)) throw new Error("Invalid API key id");
-    if (!/^[A-Za-z0-9_-]{1,256}$/.test(expectedOrgId)) throw new Error("Invalid expected organization id");
-    if (!Array.isArray(expectedScopes) || expectedScopes.length > 32 || expectedScopes.some((scope) => typeof scope !== "string" || scope.length > 128 || !/^(?:\*|[a-z][a-z0-9_-]*:(?:\*|[a-z][a-z0-9_-]*))$/.test(scope)) || new Set(expectedScopes).size !== expectedScopes.length) throw new Error("Invalid expected API key scopes");
+    ({ keyId, expectedScopes, expectedOrgId } = validateSkillPublishScopeInput(keyId, expectedScopes, expectedOrgId));
     const path = `/api/v1/admin/keys/${encodeURIComponent(keyId)}/scopes`;
     const response = await this.request(path, { method: "PATCH", body: JSON.stringify({ expected_scopes: expectedScopes, add_scopes: ["skills:publish"] }) });
     if (!response.ok) throw new RemoteRequestError(path, response.status);

@@ -8,7 +8,7 @@ import { workspaceContext, workspaceExpectedUserId, parseWorkspaceLogin,
 import { readBoundedResponse } from "./remote-files.js";
 import { workspaceMembersQuery, type RemoteWorkspaceMembersOptions } from "./remote-workspace.js";
 import { workspaceMemberRoleInput, workspaceMemberRemovalInput, type SetRemoteWorkspaceMemberRole, type RemoveRemoteWorkspaceMember } from "./remote-workspace.js";
-import { RemoteSkillsClient } from "./remote-client.js";
+import { RemoteSkillsClient, validateSkillPublishScopeInput } from "./remote-client.js";
 import { normalizeSkillsApiOrigin, skillsApiRequestUrl } from "./fleet-credentials.js";
 import { customerNamePatch, type UpdateRemoteProfile, type UpdateRemoteWorkspace } from "./remote-profile.js";
 
@@ -204,10 +204,11 @@ export class RemoteSkillsAuthClient {
     expectedOrgId: string,
     context: RemoteWorkspaceContext,
   ) {
+    const input = validateSkillPublishScopeInput(keyId, expectedScopes, expectedOrgId);
     const target = workspaceContext(context);
     const session = await this.switchWorkspace(email, code, target);
-    if (session.organization.id !== expectedOrgId) throw new WorkspaceIdentityMismatchError();
-    return new RemoteSkillsClient(session.token, this.apiOrigin).addSkillPublishScope(keyId, expectedScopes, expectedOrgId);
+    if (session.organization.id !== input.expectedOrgId) throw new WorkspaceIdentityMismatchError();
+    return new RemoteSkillsClient(session.token, this.apiOrigin).addSkillPublishScope(input.keyId, input.expectedScopes, input.expectedOrgId);
   }
   /** Reauthentication is ephemeral: it never replaces a saved key or profile. */
   async updateProfile(email: string, code: string, input: UpdateRemoteProfile, context?: RemoteWorkspaceContext) {

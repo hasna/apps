@@ -236,3 +236,15 @@ test("fresh scope admission refuses an unexpected tenant before the CAS update",
     .rejects.toBeInstanceOf(WorkspaceIdentityMismatchError);
   expect(f.calls.some(c => c.path.endsWith("/admin/keys/key_target/scopes"))).toBe(false);
 }));
+
+test("fresh scope admission validates key, scope, tenant and context before OTP", async () => fixture(async f => {
+  for (const input of [
+    ["key/extra", ["skills:read"], f.ob],
+    ["key_target", ["invalid scope"], f.ob],
+    ["key_target", ["skills:read"], "bad tenant"],
+    ["key_target", ["skills:read"], f.ob, { userId: f.userId, membershipId: "bad" }],
+  ] as const) {
+    await expect(f.fresh.addSkillPublishScope(email, code, input[0], [...input[1]], input[2], input[3] ?? f.context)).rejects.toThrow();
+  }
+  expect(f.calls).toEqual([]);
+}));

@@ -53,6 +53,18 @@ test("ephemeral scope CLI uses stdin only, binds the selected workspace and pers
   } finally { await server.stop(true); rmSync(root, { recursive: true, force: true }); }
 });
 
+test("ephemeral scope CLI rejects invalid scope inputs before consuming stdin or making requests", async () => {
+  const root = mkdtempSync(join(scratch, "invalid-input-")), home = join(root, "home"); mkdirSync(home);
+  let requests = 0;
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() { requests += 1; return Response.json({}); } });
+  try {
+    const result = await invoke(server.url.origin, home, "123456\n", ["auth", "keys", "add-publish-scope", "bad/key", "--expected-scopes", "skills:read", "--email", "owner@example.test", "--code-stdin", "--user-id", userId, "--membership-id", membershipId, "--organization-id", organizationId, "--json"]);
+    expect(result.code).toBe(1);
+    expect(result.stdout + result.stderr).toContain("Invalid API key id");
+    expect(requests).toBe(0);
+  } finally { await server.stop(true); rmSync(root, { recursive: true, force: true }); }
+});
+
 test("ephemeral scope CLI rejects malformed stdin before any network request", async () => {
   const root = mkdtempSync(join(scratch, "malformed-")), home = join(root, "home"); mkdirSync(home);
   let requests = 0;

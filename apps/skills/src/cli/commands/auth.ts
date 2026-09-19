@@ -5,8 +5,9 @@ import chalk from "chalk";
 import { createInterface } from "readline";
 import { getAuthConfig, getAuthIdentity, saveAuthConfig, clearAuthConfig, getApiUrl, getAuthFilePath } from "../../lib/auth-store.js";
 import { resolveSkillsFleet, resolveSkillsConnection, SkillsFleetCredentialError, SKILLS_API_KEY_ENV, SKILLS_API_URL_ENV } from "../../lib/fleet-credentials.js";
-import { RemoteSkillsClient } from "../../lib/remote-client.js";
+import { RemoteSkillsClient, validateSkillPublishScopeInput } from "../../lib/remote-client.js";
 import { NameInputError, readCode } from "./customer-verification.js";
+import { workspaceContext } from "../../lib/remote-workspace-selection.js";
 import type { RemoteSkillsAccess } from "../../lib/remote-permissions.js";
 
 
@@ -507,9 +508,12 @@ export function registerAuth(parent: Command) {
         if (fresh) {
           if (!options.email?.includes("@") || !options.codeStdin || !options.userId || !options.membershipId || !options.organizationId)
             throw new NameInputError("Ephemeral scope administration requires --email, --code-stdin, --user-id, --membership-id and --organization-id.");
+          const expectedScopes = options.expectedScopes.split(",").map((scope) => scope.trim()).filter(Boolean);
+          const input = validateSkillPublishScopeInput(id, expectedScopes, options.organizationId);
+          const context = workspaceContext({ userId: options.userId, membershipId: options.membershipId });
           const origin = getApiUrl("Add Skills publication scope with ephemeral owner verification", { ...process.env });
           const code = await readCode();
-          result = await new RemoteSkillsAuthClient(origin).addSkillPublishScope(options.email, code, id, options.expectedScopes.split(",").map((scope) => scope.trim()).filter(Boolean), options.organizationId, { userId: options.userId, membershipId: options.membershipId });
+          result = await new RemoteSkillsAuthClient(origin).addSkillPublishScope(options.email, code, input.keyId, input.expectedScopes, input.expectedOrgId, context);
         } else {
           const connection = await resolveSkillsConnection();
           if (!connection) throw new Error("A hosted Skills credential is required for key scope administration");
