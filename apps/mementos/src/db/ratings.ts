@@ -1,9 +1,15 @@
 /**
  * Memory ratings — usefulness feedback for memories.
+ *
+ * `memory_rate` fed the usefulness signal every agent is instructed to produce
+ * into a per-station SQLite table, so it never reached the shared store and the
+ * ratio a station reported was its own keystrokes. The hosted arms below route
+ * the write and the read to `/v1/memories/{id}/ratings`.
  */
 
 import { SqliteAdapter as Database } from "../storage.js";
 import { getDatabase, uuid, now } from "./database.js";
+import { isApiMode, apiJson } from "./api-mode.js";
 
 // ============================================================================
 // Types
@@ -37,6 +43,22 @@ export function rateMemory(
   context?: string,
   db?: Database
 ): MemoryRating {
+  if (!db && isApiMode()) {
+    const { data } = apiJson<{ rating: MemoryRating }>(
+      "POST",
+      `/memories/${encodeURIComponent(memoryId)}/ratings`,
+      { useful, agent_id: agentId, context },
+    );
+    if (!data?.rating) {
+      // Feedback that was not recorded must never read as recorded: a
+      // success-shaped object with no rating would let the CLI print "Rated"
+      // while the store holds nothing.
+      throw new Error(
+        `mementos cloud POST /memories/${memoryId}/ratings returned a malformed 2xx response (no rating) — the feedback was not recorded`,
+      );
+    }
+    return data.rating;
+  }
   const d = db || getDatabase();
   const id = uuid();
   const timestamp = now();
@@ -65,6 +87,13 @@ export function listRatingsForMemory(
   memoryId: string,
   db?: Database
 ): MemoryRating[] {
+  if (!db && isApiMode()) {
+    const { data } = apiJson<{ ratings: MemoryRating[] }>(
+      "GET",
+      `/memories/${encodeURIComponent(memoryId)}/ratings`,
+    );
+    return data?.ratings ?? [];
+  }
   const d = db || getDatabase();
   const rows = d
     .query("SELECT * FROM memory_ratings WHERE memory_id = ? ORDER BY created_at DESC")
@@ -77,6 +106,21 @@ export function getRatingsSummary(
   memoryId: string,
   db?: Database
 ): RatingsSummary {
+  if (!db && isApiMode()) {
+    const { data } = apiJson<{ summary: RatingsSummary }>(
+      "GET",
+      `/memories/${encodeURIComponent(memoryId)}/ratings`,
+    );
+    return (
+      data?.summary ?? {
+        memory_id: memoryId,
+        total: 0,
+        useful_count: 0,
+        not_useful_count: 0,
+        usefulness_ratio: 0,
+      }
+    );
+  }
   const d = db || getDatabase();
   const rows = d
     .query("SELECT useful, COUNT(*) as cnt FROM memory_ratings WHERE memory_id = ? GROUP BY useful")

@@ -303,6 +303,36 @@ function respond(method: string, path: string, mode: string, requestUrl: URL, re
       ],
     };
   }
+  // --- ACL + ratings (hosted PORT) ---
+  if (method === "POST" && path === "/v1/acl") {
+    return { id: "acl-1", agent_id: "agent-1", key_pattern: "team-*", permission: "readwrite", project_id: null, created_at: "2026-09-19T00:00:00.000Z" };
+  }
+  if (method === "GET" && path.startsWith("/v1/acl/check")) {
+    return { allowed: true, policy_state: "granted", matched_pattern: "team-*", granted_permission: "readwrite" };
+  }
+  if (method === "GET" && path.startsWith("/v1/acl")) {
+    return { acls: [{ id: "acl-1", agent_id: "agent-1", key_pattern: "team-*", permission: "readwrite", project_id: null, created_at: "2026-09-19T00:00:00.000Z" }], count: 1 };
+  }
+  if (method === "DELETE" && path.startsWith("/v1/acl/")) {
+    // Malformed mode answers 2xx with a non-boolean receipt for the refusal test.
+    if (mode === "malformed-acl-remove") return { deleted: "yes" };
+    return { deleted: true };
+  }
+  if (method === "POST" && path.startsWith("/v1/memories/") && path.endsWith("/ratings")) {
+    if (mode === "malformed-rate") return {}; // no rating -> must refuse, not read as recorded
+    return {
+      rating: { id: "rate-1", memory_id: "mem-1", agent_id: "agent-1", useful: true, context: null, created_at: "2026-09-19T00:00:00.000Z" },
+      summary: { memory_id: "mem-1", total: 1, useful_count: 1, not_useful_count: 0, usefulness_ratio: 1 },
+    };
+  }
+  if (method === "GET" && path.startsWith("/v1/memories/") && path.endsWith("/ratings")) {
+    return {
+      ratings: [{ id: "rate-1", memory_id: "mem-1", agent_id: "agent-1", useful: true, context: null, created_at: "2026-09-19T00:00:00.000Z" }],
+      count: 1,
+      summary: { memory_id: "mem-1", total: 1, useful_count: 1, not_useful_count: 0, usefulness_ratio: 1 },
+    };
+  }
+
   // Ambient traffic a handler may make on the way (project auto-registration,
   // memory reads). Shapes are valid-but-empty so nothing downstream invents
   // data; the assertions only look at the route lines above.

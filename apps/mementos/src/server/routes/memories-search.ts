@@ -5,6 +5,7 @@ import { getDatabase } from "../../db/database.js";
 import type { MemoryCategory, MemoryScope, MemoryFilter } from "../../types/index.js";
 import { addRoute } from "../router.js";
 import { json, errorResponse, readJson } from "../helpers.js";
+import { readableMemoryFilter } from "../acl-enforcement.js";
 
 // POST /api/memories/search/semantic — vector (embedding) similarity search
 addRoute("POST", "/api/memories/search/semantic", async (req) => {
@@ -20,7 +21,10 @@ addRoute("POST", "/api/memories/search/semantic", async (req) => {
     project_id: (body["project_id"] as string) ?? undefined,
     index_missing: body["index_missing"] === true || body["index_missing"] === "true",
   });
-  return json({ results, count: results.length });
+  // ACL read enforcement: a denied key must not be readable through any of the
+  // search surfaces. The predicate loads the subject's rules once.
+  const readable = results.filter((r) => readableMemoryFilter(req)(r.memory));
+  return json({ results: readable, count: readable.length });
 });
 
 // POST /api/memories/recall/deep — ASMR deep recall (server-side; the client
@@ -64,7 +68,10 @@ addRoute("POST", "/api/memories/search", async (req) => {
   if (body["limit"]) filter.limit = body["limit"] as number;
 
   const results = searchMemories(body["query"] as string, filter);
-  return json({ results, count: results.length });
+  // ACL read enforcement: a denied key must not be readable through any of the
+  // search surfaces. The predicate loads the subject's rules once.
+  const readable = results.filter((r) => readableMemoryFilter(req)(r.memory));
+  return json({ results: readable, count: readable.length });
 });
 
 // POST /api/memories/search/hybrid — hybrid search (keyword + semantic via RRF)
@@ -88,7 +95,10 @@ addRoute("POST", "/api/memories/search/hybrid", async (req) => {
     semantic_threshold: (body["semantic_threshold"] as number) ?? undefined,
     limit: (body["limit"] as number) ?? undefined,
   });
-  return json({ results, count: results.length });
+  // ACL read enforcement: a denied key must not be readable through any of the
+  // search surfaces. The predicate loads the subject's rules once.
+  const readable = results.filter((r) => readableMemoryFilter(req)(r.memory));
+  return json({ results: readable, count: readable.length });
 });
 
 // POST /api/memories/search/bm25 — BM25-ranked search
@@ -109,5 +119,8 @@ addRoute("POST", "/api/memories/search/bm25", async (req) => {
   if (body["limit"]) filter.limit = body["limit"] as number;
 
   const results = searchWithBm25(body["query"] as string, filter);
-  return json({ results, count: results.length });
+  // ACL read enforcement: a denied key must not be readable through any of the
+  // search surfaces. The predicate loads the subject's rules once.
+  const readable = results.filter((r) => readableMemoryFilter(req)(r.memory));
+  return json({ results: readable, count: readable.length });
 });

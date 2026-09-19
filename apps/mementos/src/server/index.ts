@@ -56,6 +56,8 @@ import "./routes/tasks.js";
 import "./routes/machines.js";
 import "./routes/audit.js";
 import "./routes/system.js";
+import "./routes/acl.js";
+import "./routes/ratings.js";
 
 // ============================================================================
 // Config
