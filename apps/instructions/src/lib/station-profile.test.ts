@@ -61,7 +61,8 @@ describe("station profile block", () => {
     expect(block).toContain("OS: linux/arm64");
     expect(block).toContain("user: hasna");
     expect(block).toContain("home: /home/hasna");
-    expect(block).toContain("Workspace: /home/hasna/workspace");
+    expect(block).toContain("Scratchpad: /home/hasna/.hasna/scratchpad/scratch/<session-id>");
+    expect(block).not.toContain("Workspace:");
     expect(block).toContain("Status: online");
     expect(block).toContain("@hasna/* 11");
     expect(block).toContain("@hasna-internal/* 5 (business-engines, payroll, social, subscriptions, takumi)");
@@ -261,19 +262,21 @@ describe("cache file", () => {
     }
   });
 
-  test("refresh rejects a block over the byte budget", () => {
+  test("refresh ignores retired manifest workspace paths", () => {
     const root = makeTempRoot("station-profile-budget-");
     try {
       const longPath = `/home/${"x".repeat(400)}/workspace`;
       const env = { HOME: root, HASNA_CONFIGS_HOME: join(root, ".hasna", "instructions"), HASNA_MACHINES_MANIFEST_PATH: join(root, "no.json"), BUN_INSTALL: root };
-      // The manifest entry must match THIS machine's hostname (the manifest
-      // record is what carries the oversized workspace path); otherwise the
-      // block falls back to local OS facts and stays under the budget.
+      // The manifest entry must match THIS machine's hostname. The retired
+      // workspacePath field must not leak into the rendered prompt.
       writeFileSync(join(root, "no.json"), JSON.stringify({
         version: 1,
         machines: [{ id: "station01", hostname: osHostname(), platform: "linux", workspacePath: longPath }],
       }));
-      expect(() => refreshStationProfile({ env, probe: false })).toThrow(/byte budget/);
+      const result = refreshStationProfile({ env, probe: false });
+      expect(result.bytes).toBeLessThanOrEqual(STATION_PROFILE_MAX_BYTES);
+      expect(result.content).toContain("Scratchpad:");
+      expect(result.content).not.toContain(longPath);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
