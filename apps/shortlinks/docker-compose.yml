@@ -27,6 +27,9 @@ services:
       PORT: "8080"
       HASNA_SHORTLINKS_DATABASE_URL: postgres://shortlinks:shortlinks@postgres:5432/shortlinks
       HASNA_SHORTLINKS_API_SIGNING_KEY: local-dev-signing-secret-change-me
+      # Point these at either the hosted Domains API or an operator-owned domains-serve.
+      HASNA_DOMAINS_API_KEY: ${HASNA_DOMAINS_API_KEY:?Set a Domains API key scoped to domains:read and domains:purchase}
+      HASNA_DOMAINS_API_URL: ${HASNA_DOMAINS_API_URL:-https://api.hasna.com/domains}
       SHORTLINKS_VERSION: local
     ports:
       - "8080:8080"

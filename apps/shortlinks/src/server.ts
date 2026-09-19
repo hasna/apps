@@ -4,6 +4,7 @@
 // only under the explicit HASNA_SHORTLINKS_LOCAL=1 opt-in. The on-box store is
 // then loaded through the same gated dynamic-import seam, keeping `bun:sqlite`
 // out of the CLI, MCP, and SDK client artifacts.
+import { timingSafeEqual } from "node:crypto";
 import { isLocalOptIn, LOCAL_OPT_IN_ENV_KEY, openExplicitLocalStore } from "./client-store.js";
 import type { Env } from "./store-interface.js";
 import type { ClickInput, Link } from "./types.js";
@@ -14,6 +15,7 @@ import {
   trustedProxiesFromEnv,
 } from "./client-ip.js";
 import { resolvePublicOrigin } from "./request-origin.js";
+import { DEFAULT_DOMAIN_HOSTNAME } from "./slug.js";
 
 export interface ShortlinksRuntimeStore {
   totalStats(): { domains: number; links: number; clicks: number } | Promise<{ domains: number; links: number; clicks: number }>;
@@ -35,12 +37,28 @@ export interface ShortlinksHandlerOptions {
   env?: Env;
   /** Optional sink for the explicit-local notice. */
   notice?: (line: string) => void;
+  /** Host fallback for synthetic/direct requests that have no Host header. */
   defaultHost?: string;
+  /** Trust X-Forwarded-Host from a separately authenticated proxy. False by default. */
+  trustForwardedHost?: boolean;
+  /** Shared edge secret required before x-hasna-public-* routing hints are accepted. */
+  linkRouterSecret?: string;
   redirectStatus?: 301 | 302 | 307 | 308;
   onRecordClickError?: (error: unknown, context: RecordClickErrorContext) => void | Promise<void>;
 }
 
 const REDIRECT_ALLOW_HEADER = "GET, HEAD";
+
+export const LINK_ROUTER_AUTH_HEADER = "x-hasna-link-router-auth";
+
+function trustedLinkRouterRequest(request: Request, configuredSecret?: string): boolean {
+  const expected = configuredSecret?.trim() ?? "";
+  const actual = request.headers.get(LINK_ROUTER_AUTH_HEADER)?.trim() ?? "";
+  if (!expected || !actual) return false;
+  const expectedBytes = Buffer.from(expected);
+  const actualBytes = Buffer.from(actual);
+  return expectedBytes.length === actualBytes.length && timingSafeEqual(expectedBytes, actualBytes);
+}
 
 function json(data: unknown, status = 200, headers?: HeadersInit): Response {
   const responseHeaders = new Headers(headers);
@@ -52,17 +70,29 @@ function json(data: unknown, status = 200, headers?: HeadersInit): Response {
 }
 
 /**
- * Host used to resolve a shortlink. `x-forwarded-host` is only honored when
- * the forwarding hop is explicitly trusted (SHORTLINKS_TRUST_PROXY) — the
- * shortlinks Cloudflare worker and the api.hasna.com gateway both set it —
- * and every candidate is sanitized, so a hostile header can never steer
- * resolution to an attacker-chosen domain (see ./request-origin.ts).
+ * Host used to resolve a shortlink. The has.na/custom-domain edge sets
+ * `x-hasna-public-host`, which is preferred over the API gateway's
+ * `x-forwarded-host`, then Host. Every candidate is sanitized. This value is
+ * used only for public link lookup and never for API authentication or tenant
+ * authorization (see ./request-origin.ts).
  */
-function getHost(request: Request, fallback?: string): string {
+function getHost(
+  request: Request,
+  fallback?: string,
+  trustForwardedHost?: boolean,
+  trustHasnaPublicHost = false,
+): string {
+  let requestHost = fallback;
+  try {
+    requestHost = new URL(request.url).host || fallback;
+  } catch {
+    // The caller-provided fallback remains the final synthetic-request host.
+  }
   const origin = resolvePublicOrigin({
     headers: request.headers,
-    defaultHost: fallback,
-    trustForwardedHost: resolveTrustProxy(),
+    defaultHost: requestHost,
+    trustHasnaPublicHost,
+    trustForwardedHost: trustForwardedHost ?? resolveTrustProxy(),
   });
   if (!origin) return "";
   const url = new URL(origin);
@@ -123,9 +153,9 @@ export function createShortlinksHandler(options: ShortlinksHandlerOptions = {}):
   };
 
   return async (request: Request): Promise<Response> => {
-    const store = await getStore();
     const url = new URL(request.url);
     if (url.pathname === "/healthz") {
+      const store = await getStore();
       return json({ ok: true, service: "shortlinks", stats: await store.totalStats() });
     }
 
@@ -133,9 +163,22 @@ export function createShortlinksHandler(options: ShortlinksHandlerOptions = {}):
       return json({ service: "shortlinks", ok: true });
     }
 
+    const rawSegments = url.pathname.replace(/^\/+|\/+$/g, "").split("/").filter(Boolean);
+    const firstSegment = rawSegments[0]?.toLowerCase() ?? "";
+    // `/a` belongs to Attachments and `/v1` belongs to the authenticated API.
+    // Refuse both roots and descendants if a routing mistake reaches this
+    // public handler; arbitrary nested paths are never shortlinks.
+    if (firstSegment === "a" || firstSegment === "v1" || rawSegments.length > 1) {
+      return json({
+        error: firstSegment === "a" || firstSegment === "v1"
+          ? "Reserved path prefix."
+          : "Shortlink paths must contain exactly one segment.",
+      }, 404);
+    }
+
     let slug = "";
     try {
-      slug = decodeURIComponent(url.pathname.replace(/^\/+/, "").split("/")[0] || "");
+      slug = decodeURIComponent(rawSegments[0] || "");
     } catch {
       return json({ error: "Invalid slug." }, 400);
     }
@@ -145,9 +188,16 @@ export function createShortlinksHandler(options: ShortlinksHandlerOptions = {}):
       return json({ error: "Method not allowed." }, 405, { allow: REDIRECT_ALLOW_HEADER });
     }
 
-    const host = getHost(request, options.defaultHost);
+    const linkRouterSecret = options.linkRouterSecret ?? env.HASNA_LINK_ROUTER_SHARED_SECRET;
+    const host = getHost(
+      request,
+      options.defaultHost ?? DEFAULT_DOMAIN_HOSTNAME,
+      options.trustForwardedHost ?? false,
+      trustedLinkRouterRequest(request, linkRouterSecret),
+    );
     if (!host) return json({ error: "Missing Host header." }, 400);
 
+    const store = await getStore();
     let link: Link | null = null;
     try {
       link = await store.resolve(host, slug);

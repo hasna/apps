@@ -996,6 +996,7 @@
         "shortlinks-serve": "dist/serve/index.js",
       },
       "dependencies": {
+        "@hasna/domains": "0.2.0",
         "@hasna/events": "^0.1.6",
         "@modelcontextprotocol/sdk": "^1.27.1",
         "chalk": "^5.4.1",

@@ -78,20 +78,22 @@ describe("formatShortUrl", () => {
 });
 
 describe("config updates", () => {
-  test("merges nested cloudflare settings without dropping existing values", () => {
+  test("persists only Shortlinks-owned settings and strips retired provider config", () => {
     const home = mkdtempSync(join(tmpdir(), "shortlinks-config-"));
     const previousHome = process.env.SHORTLINKS_HOME;
     process.env.SHORTLINKS_HOME = home;
     try {
-      updateConfig({
+      saveConfig({ defaultDomain: "has.na", publicBaseUrl: "https://has.na" });
+      expect(updateConfig({ publicBaseUrl: "https://has.na/base" })).toEqual({
         defaultDomain: "has.na",
-        cloudflare: { accountId: "account-1", workerName: "worker-1" },
+        publicBaseUrl: "https://has.na/base",
       });
-      expect(updateConfig({ cloudflare: { origin: "origin-1" } })).toEqual({
+      const path = getConfigPath();
+      Bun.write(path, JSON.stringify({
         defaultDomain: "has.na",
-        cloudflare: { accountId: "account-1", workerName: "worker-1", origin: "origin-1" },
-      });
-      expect(loadConfig().cloudflare?.workerName).toBe("worker-1");
+        cloudflare: { accountId: "retired", workerName: "retired" },
+      }));
+      expect(loadConfig()).toEqual({ defaultDomain: "has.na" });
     } finally {
       if (previousHome === undefined) delete process.env.SHORTLINKS_HOME;
       else process.env.SHORTLINKS_HOME = previousHome;

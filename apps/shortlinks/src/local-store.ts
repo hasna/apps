@@ -22,6 +22,8 @@ import type {
   ClickInput,
   CreateLinkInput,
   Domain,
+  DomainReconciliationResult,
+  ProvisionDomainInput,
   Link,
   LinkStats,
 } from "./types.js";
@@ -61,6 +63,14 @@ export class LocalStore implements Store {
 
   async deleteDomain(hostnameOrId: string): Promise<Domain> {
     return this.inner.deleteDomain(hostnameOrId);
+  }
+
+  async provisionDomain(_input: ProvisionDomainInput): Promise<DomainReconciliationResult> {
+    throw new Error("Custom-domain purchases require the hosted Shortlinks API, which delegates to the hosted Domains API.");
+  }
+
+  async reconcileDomain(_hostname: string): Promise<DomainReconciliationResult> {
+    throw new Error("Custom-domain reconciliation requires the hosted Shortlinks API.");
   }
 
   async createLink(input: CreateLinkInput): Promise<Link> {

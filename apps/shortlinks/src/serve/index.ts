@@ -22,6 +22,7 @@ import { SHORTLINKS_MIGRATIONS } from "../db/migrations.js";
 import { handleEarlyArgs } from "../early-args.js";
 import { PgShortlinksStore } from "../pg-store.js";
 import { createServeApp } from "./app.js";
+import { createDomainsProvisioningClient, reconcilePendingShortlinksDomains } from "../domains-provisioning.js";
 
 const APP_SLUG = "shortlinks";
 const DEFAULT_PORT = 8080;
@@ -34,6 +35,22 @@ function resolveSigningSecret(): string {
   if (!secret) {
     throw new Error(
       "Missing API signing secret. Set HASNA_SHORTLINKS_API_SIGNING_KEY (or HASNA_API_SIGNING_KEY).",
+    );
+  }
+  return secret;
+}
+
+
+function resolveLinkRouterSecret(): string {
+  const values = [
+    process.env.HASNA_LINK_ROUTER_SHARED_SECRET,
+    process.env.SHORTLINKS_LINK_ROUTER_SHARED_SECRET,
+  ].filter((value): value is string => value !== undefined);
+  const secret = values[0]?.trim() ?? "";
+  if (!secret || values.some((value) => value !== value.trim() || !value.trim()) || new Set(values).size > 1) {
+    throw new Error(
+      "Missing link-router shared secret. Set HASNA_LINK_ROUTER_SHARED_SECRET " +
+      "(or SHORTLINKS_LINK_ROUTER_SHARED_SECRET).",
     );
   }
   return secret;
@@ -68,6 +85,9 @@ options:
 environment:
   HASNA_SHORTLINKS_DATABASE_URL     PostgreSQL DSN (required; the pool factory fails closed without it)
   HASNA_SHORTLINKS_API_SIGNING_KEY  API-key signing secret (or HASNA_API_SIGNING_KEY)
+  HASNA_LINK_ROUTER_SHARED_SECRET   authenticates has.na/custom-domain routing hints
+  HASNA_DOMAINS_API_KEY             credential for the configured Domains API
+  HASNA_DOMAINS_API_URL             optional self-hosted Domains service root (default https://api.hasna.com/domains)
   PORT, HOST                        listen address (default 0.0.0.0:8080)
 `;
 }
@@ -105,7 +125,9 @@ async function main(): Promise<void> {
   }
 
   const signingSecret = resolveSigningSecret();
+  const linkRouterSecret = resolveLinkRouterSecret();
   const store = PgShortlinksStore.fromQueryClient(client);
+  const domains = createDomainsProvisioningClient(process.env);
   const keyStore = new ApiKeyStore(client);
   const version = await resolveVersion();
 
@@ -115,6 +137,8 @@ async function main(): Promise<void> {
     version,
     backend: backendResolution.backend,
     signingSecret,
+    linkRouterSecret,
+    domains,
     keyStatus: keyStore.keyStatus,
     audit: (e) => console.log("[api_auth]", JSON.stringify(e)),
   });
@@ -122,6 +146,25 @@ async function main(): Promise<void> {
   const port = process.env.PORT ? parseInt(process.env.PORT, 10) : DEFAULT_PORT;
   const hostname = process.env.HOST?.trim() || "0.0.0.0";
   Bun.serve({ port, hostname, fetch: app.fetch, idleTimeout: 120 });
+  const configuredInterval = Number(process.env.SHORTLINKS_DOMAINS_RECONCILE_INTERVAL_MS ?? "5000");
+  if (!Number.isInteger(configuredInterval) || configuredInterval < 1000 || configuredInterval > 300_000) {
+    throw new Error("SHORTLINKS_DOMAINS_RECONCILE_INTERVAL_MS must be an integer from 1000 to 300000");
+  }
+  let reconcileRunning = false;
+  const reconcileOnce = async (): Promise<void> => {
+    if (reconcileRunning) return;
+    reconcileRunning = true;
+    try {
+      await reconcilePendingShortlinksDomains(store, domains);
+    } catch (error) {
+      console.error("[domains-api] reconciliation failed:", error instanceof Error ? error.message : String(error));
+    } finally {
+      reconcileRunning = false;
+    }
+  };
+  const reconcileTimer = setInterval(() => { void reconcileOnce(); }, configuredInterval);
+  reconcileTimer.unref?.();
+  void reconcileOnce();
   console.log(
     `shortlinks-serve listening on http://${hostname}:${port} (backend=${backendResolution.backend}, db_source=${connectionSource})`,
   );
@@ -130,6 +173,7 @@ async function main(): Promise<void> {
     process.once("SIGINT", resolve);
     process.once("SIGTERM", resolve);
   });
+  clearInterval(reconcileTimer);
   await client.close();
   process.exit(0);
 }

@@ -40,6 +40,8 @@ import type {
   ClickInput,
   CreateLinkInput,
   Domain,
+  DomainReconciliationResult,
+  ProvisionDomainInput,
   Link,
   LinkStats,
 } from "./types.js";
@@ -125,14 +127,29 @@ export class CloudShortlinksStore implements Store {
 
   // ── Domains ────────────────────────────────────────────────────────────────
   async addDomain(input: AddDomainInput): Promise<Domain> {
-    return this.client.create<Domain>("domains", {
+    const result = await this.transport.post<{ domain: Domain; provisioning: null }>("/domains", {
       hostname: input.hostname,
-      ...(input.provider !== undefined ? { provider: input.provider } : {}),
       ...(input.defaultDomain !== undefined ? { default: input.defaultDomain } : {}),
-      ...(input.originUrl !== undefined ? { origin_url: input.originUrl } : {}),
-      ...(input.notes !== undefined ? { notes: input.notes } : {}),
-      ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
     });
+    return result.domain;
+  }
+
+  async provisionDomain(input: ProvisionDomainInput): Promise<DomainReconciliationResult> {
+    return this.transport.post<DomainReconciliationResult>(
+      "/domains",
+      {
+        hostname: input.hostname,
+        max_price_usd: input.maxPriceUsd,
+        years: input.years,
+        auto_renew: input.autoRenew,
+        default: Boolean(input.defaultDomain),
+      },
+      { idempotencyKey: input.idempotencyKey },
+    );
+  }
+
+  async reconcileDomain(hostname: string): Promise<DomainReconciliationResult> {
+    return this.transport.post<DomainReconciliationResult>(`/domains/${enc(hostname)}/reconcile`);
   }
 
   async listDomains(): Promise<Domain[]> {
@@ -150,8 +167,15 @@ export class CloudShortlinksStore implements Store {
   }
 
   async getDefaultDomain(): Promise<Domain | null> {
-    const domains = await this.listDomains();
-    return domains.find((d) => d.default_domain) ?? domains[0] ?? null;
+    const domains = (await this.listDomains()).filter((domain) => {
+      const provisioning = domain.metadata?.["provisioning"];
+      if (!provisioning || typeof provisioning !== "object" || Array.isArray(provisioning)) return true;
+      const status = (provisioning as Record<string, unknown>)["status"];
+      return status === undefined || status === "active";
+    });
+    return domains.find((d) => d.default_domain)
+      ?? domains.find((d) => d.hostname.toLowerCase() === "has.na")
+      ?? null;
   }
 
   async deleteDomain(hostnameOrId: string): Promise<Domain> {

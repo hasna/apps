@@ -23,6 +23,8 @@ const CORE_MIGRATIONS: Migration[] = [
        hostname TEXT NOT NULL UNIQUE,
        provider TEXT NOT NULL DEFAULT 'manual',
        default_domain INTEGER NOT NULL DEFAULT 0,
+       -- Legacy nullable columns retained for production schema compatibility only.
+       -- Shortlinks never accepts, writes, or exposes provider implementation data.
        cloudflare_zone_id TEXT,
        cloudflare_account_id TEXT,
        cloudflare_worker_name TEXT,

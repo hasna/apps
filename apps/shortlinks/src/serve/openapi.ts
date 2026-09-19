@@ -113,22 +113,61 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
             slug: { type: "string", description: "Custom slug; generated when omitted." },
             title: { type: "string" },
             expires_at: { type: "string", description: "ISO date/time." },
-            length: { type: "integer", description: "Generated slug length." },
+            length: { type: "integer", description: "Minimum generated code length (default/minimum 3; grows under collision pressure)." },
             metadata: { type: "object", additionalProperties: true },
           },
           required: ["url"],
         },
         AddDomainRequest: {
           type: "object",
+          description: "Shortlinks domain intent. Provider implementation fields are forbidden; Domains owns registrar, DNS, nameservers, and Worker binding.",
           properties: {
             hostname: { type: "string" },
-            provider: { type: "string" },
             default: { type: "boolean" },
-            origin_url: { type: "string" },
-            notes: { type: "string" },
-            metadata: { type: "object", additionalProperties: true },
+            max_price_usd: { type: "number", minimum: 0, exclusiveMinimum: true },
+            years: { type: "integer", minimum: 1, maximum: 10, default: 1 },
+            auto_renew: { type: "boolean" },
+            idempotency_key: { type: "string", description: "May be supplied in the idempotency-key header instead." },
           },
           required: ["hostname"],
+          additionalProperties: false,
+        },
+        DomainAvailabilityRequest: {
+          type: "object",
+          properties: { hostname: { type: "string" } },
+          required: ["hostname"],
+          additionalProperties: false,
+        },
+        DomainAvailabilityQuote: {
+          type: "object",
+          properties: {
+            name: { type: "string" },
+            available: { type: "boolean" },
+            price_usd: { type: "number" },
+            currency: { type: "string" },
+            is_premium: { type: "boolean" },
+          },
+          required: ["name", "available"],
+        },
+        DomainProvisioning: {
+          type: "object",
+          properties: {
+            id: { type: "string" },
+            name: { type: "string" },
+            status: { type: "string", enum: ["requested", "quoted", "registration_submitting", "registration_submitted", "registered", "zone_ready", "nameservers_submitted", "delegated", "worker_bound", "ready", "manual_review", "failed"] },
+            error: { type: "string", nullable: true },
+            created_at: { type: "string" },
+            updated_at: { type: "string" },
+          },
+          required: ["id", "name", "status", "error", "created_at", "updated_at"],
+        },
+        DomainProvisioningResponse: {
+          type: "object",
+          properties: {
+            domain: { $ref: "#/components/schemas/Domain" },
+            provisioning: { allOf: [{ $ref: "#/components/schemas/DomainProvisioning" }], nullable: true },
+          },
+          required: ["domain", "provisioning"],
         },
         DeleteResponse: {
           type: "object",
@@ -198,16 +237,47 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
           },
         },
         post: {
-          operationId: "addDomain",
-          summary: "Add or update a domain.",
+          operationId: "requestShortlinksDomain",
+          summary: "Ensure has.na or request a custom-domain purchase through the Domains API.",
           security: [{ apiKey: [] }],
+          parameters: [
+            { name: "idempotency-key", in: "header", required: false, schema: { type: "string" } },
+          ],
           requestBody: {
             required: true,
             content: { "application/json": { schema: { $ref: "#/components/schemas/AddDomainRequest" } } },
           },
           responses: {
-            "201": { content: { "application/json": { schema: { $ref: "#/components/schemas/Domain" } } } },
+            "201": { content: { "application/json": { schema: { $ref: "#/components/schemas/DomainProvisioningResponse" } } } },
+            "202": { content: { "application/json": { schema: { $ref: "#/components/schemas/DomainProvisioningResponse" } } } },
           },
+        },
+      },
+      "/v1/domains/availability": {
+        post: {
+          operationId: "checkDomainAvailability",
+          summary: "Check availability and price through the Domains API.",
+          security: [{ apiKey: [] }],
+          requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/DomainAvailabilityRequest" } } } },
+          responses: { "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/DomainAvailabilityQuote" } } } } },
+        },
+      },
+      "/v1/domains/{hostname}/provisioning": {
+        get: {
+          operationId: "getDomainProvisioning",
+          summary: "Read the projected Domains provisioning status without mutating it.",
+          security: [{ apiKey: [] }],
+          parameters: [{ name: "hostname", in: "path", required: true, schema: { type: "string" } }],
+          responses: { "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/DomainProvisioning" } } } } },
+        },
+      },
+      "/v1/domains/{hostname}/reconcile": {
+        post: {
+          operationId: "reconcileDomainProvisioning",
+          summary: "Refresh a Shortlinks domain projection from the Domains API.",
+          security: [{ apiKey: [] }],
+          parameters: [{ name: "hostname", in: "path", required: true, schema: { type: "string" } }],
+          responses: { "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/DomainProvisioningResponse" } } } } },
         },
       },
       "/v1/domains/{hostname}": {

@@ -3,7 +3,9 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { __resetShortlinksLocalNotice } from "./client-store.js";
-import { createShortlinksHandler } from "./server.js";
+import { createShortlinksHandler, LINK_ROUTER_AUTH_HEADER } from "./server.js";
+
+const EDGE_AUTH = ["unit", "test", "edge"].join("-");
 import { ShortlinksStore } from "./store.js";
 import type { Link } from "./types.js";
 
@@ -231,5 +233,84 @@ describe("redirect handler", () => {
     });
 
     store.close();
+  });
+});
+
+describe("edge host routing and reserved paths", () => {
+  test("prefers x-hasna-public-host over gateway forwarding headers and Host", async () => {
+    const store = new ShortlinksStore(dbPath);
+    store.addDomain({ hostname: "has.na", defaultDomain: true });
+    store.addDomain({
+      hostname: "go.example.com",
+      provider: "domains-api",
+      metadata: { provisioning: { mode: "domains-api", domains_job_id: "job-go", status: "active" } },
+    });
+    store.createLink({ domain: "has.na", destinationUrl: "https://example.com/default", slug: "friendly-link" });
+    store.createLink({ domain: "go.example.com", destinationUrl: "https://example.com/custom", slug: "friendly-link" });
+    const handler = createShortlinksHandler({ store, trustForwardedHost: true, linkRouterSecret: EDGE_AUTH });
+
+    const response = await handler(new Request("https://api.hasna.com/friendly-link", {
+      headers: {
+        host: "api.hasna.com",
+        "x-forwarded-host": "api.hasna.com",
+        "x-hasna-public-host": "GO.EXAMPLE.COM",
+        "x-hasna-public-proto": "https",
+        [LINK_ROUTER_AUTH_HEADER]: EDGE_AUTH,
+      },
+    }));
+    expect(response.status).toBe(302);
+    expect(response.headers.get("location")).toBe("https://example.com/custom");
+    store.close();
+  });
+
+
+  test("does not trust x-hasna-public-host without the edge secret", async () => {
+    const store = new ShortlinksStore(dbPath);
+    store.createLink({ destinationUrl: "https://example.com/default", slug: "friendly" });
+    const handler = createShortlinksHandler({ store, linkRouterSecret: EDGE_AUTH });
+    const response = await handler(new Request("https://unknown.example/friendly", {
+      headers: { "x-hasna-public-host": "has.na" },
+    }));
+    expect(response.status).toBe(404);
+    store.close();
+  });
+
+  test("falls back from an invalid public-host hint to trusted x-forwarded-host", async () => {
+    const store = new ShortlinksStore(dbPath);
+    store.createLink({ destinationUrl: "https://example.com/default", slug: "friendly" });
+    const handler = createShortlinksHandler({ store, trustForwardedHost: true });
+    const response = await handler(new Request("https://api.hasna.com/friendly", {
+      headers: {
+        host: "api.hasna.com",
+        "x-forwarded-host": "has.na",
+        "x-hasna-public-host": "bad/host",
+      },
+    }));
+    expect(response.status).toBe(302);
+    store.close();
+  });
+
+  test("refuses /a/* and all nested paths without consulting the store", async () => {
+    let resolutions = 0;
+    const handler = createShortlinksHandler({
+      store: {
+        totalStats: () => ({ domains: 0, links: 0, clicks: 0 }),
+        resolve: () => {
+          resolutions += 1;
+          return null;
+        },
+        recordClick: () => undefined,
+      },
+    });
+    const reservedRoot = await handler(new Request("https://has.na/a", { headers: { host: "has.na" } }));
+    const reserved = await handler(new Request("https://has.na/a/token", { headers: { host: "has.na" } }));
+    const apiRoot = await handler(new Request("https://has.na/v1", { headers: { host: "has.na" } }));
+    const nested = await handler(new Request("https://has.na/docs/start", { headers: { host: "has.na" } }));
+    expect(reservedRoot.status).toBe(404);
+    expect(reserved.status).toBe(404);
+    expect(apiRoot.status).toBe(404);
+    expect(await reserved.json()).toEqual({ error: "Reserved path prefix." });
+    expect(nested.status).toBe(404);
+    expect(resolutions).toBe(0);
   });
 });

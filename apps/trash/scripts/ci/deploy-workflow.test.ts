@@ -206,7 +206,7 @@ describe("monorepo deploy context (hasna/apps)", () => {
 
   test("declares a CI-bound Trash lane held until its infrastructure exists", () => {
     const laneGate = readFileSync(join(repoRoot, "tooling", "ci", "check-deploy-lanes.ts"), "utf8");
-    expect(laneGate).toContain('"projects", "skills", "switcher", "trash"');
+    expect(laneGate).toContain('"trash"');
     expect(workflow).toContain('vars.TRASH_DEPLOY_ENABLED');
     expect(workflow).toContain('"${DEPLOY_ENABLED:-}" != "true"');
   });

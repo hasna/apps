@@ -2,10 +2,23 @@ import { createHash } from "node:crypto";
 import { ShortlinksDatabase, makeId, now } from "./database.js";
 import { formatShortUrl, getClickSalt, loadConfig, normalizeHostname, updateConfig, type ConfigEnv } from "./config.js";
 import { getMachineId } from "./machine.js";
-import { DEFAULT_SLUG_LENGTH, normalizeSlug, randomToken } from "./slug.js";
+import {
+  adaptiveSlugLength,
+  DEFAULT_DOMAIN_HOSTNAME,
+  normalizeGeneratedSlugLength,
+  normalizeSlug,
+  randomToken,
+  type SlugTokenFactory,
+} from "./slug.js";
 import type { AddDomainInput, Click, ClickInput, CreateLinkInput, Domain, Link, LinkStats } from "./types.js";
 
-type DomainRow = Omit<Domain, "default_domain" | "metadata"> & {
+type LegacyDomainProviderColumns = {
+  cloudflare_zone_id?: string | null;
+  cloudflare_account_id?: string | null;
+  cloudflare_worker_name?: string | null;
+};
+
+type DomainRow = Omit<Domain, "default_domain" | "metadata"> & LegacyDomainProviderColumns & {
   default_domain: number;
   metadata: string;
 };
@@ -31,8 +44,9 @@ function parseJsonObject(value: string | null | undefined): Record<string, unkno
 }
 
 function domainFromRow(row: DomainRow): Domain {
+  const { cloudflare_zone_id: _zone, cloudflare_account_id: _account, cloudflare_worker_name: _worker, ...publicRow } = row;
   return {
-    ...row,
+    ...publicRow,
     default_domain: Boolean(row.default_domain),
     metadata: parseJsonObject(row.metadata),
   };
@@ -56,6 +70,24 @@ function clickFromRow(row: ClickRow): Click {
   };
 }
 
+function domainIsActive(domain: Domain): boolean {
+  const provisioning = domain.metadata["provisioning"];
+  if (!provisioning || typeof provisioning !== "object" || Array.isArray(provisioning)) return true;
+  const status = (provisioning as Record<string, unknown>)["status"];
+  return status === undefined || status === "active";
+}
+
+function assertDomainProjectionWrite(hostname: string, input: AddDomainInput): void {
+  if (hostname === DEFAULT_DOMAIN_HOSTNAME) return;
+  const provisioning = input.metadata?.["provisioning"];
+  const record = provisioning && typeof provisioning === "object" && !Array.isArray(provisioning)
+    ? provisioning as Record<string, unknown>
+    : null;
+  if (input.provider !== "domains-api" || record?.["mode"] !== "domains-api" || typeof record?.["domains_job_id"] !== "string") {
+    throw new Error("Custom domain rows may only be applied as projections of a hosted Domains API job.");
+  }
+}
+
 function validateDestinationUrl(url: string): string {
   let parsed: URL;
   try {
@@ -76,13 +108,24 @@ function isoOrNull(input: string | undefined): string | null {
   return date.toISOString();
 }
 
+export interface ShortlinksStoreOptions {
+  /** Injectable only for deterministic collision tests; production uses cryptographic randomness. */
+  tokenFactory?: SlugTokenFactory;
+}
+
 export class ShortlinksStore {
   readonly database: ShortlinksDatabase;
   /** The env the store was built with: every app-home read (config, machine id, click salt) follows it. */
   private readonly env: ConfigEnv;
+  private readonly tokenFactory: SlugTokenFactory;
 
-  constructor(dbPath?: string, env: ConfigEnv = process.env) {
+  constructor(
+    dbPath?: string,
+    env: ConfigEnv = process.env,
+    options: ShortlinksStoreOptions = {},
+  ) {
     this.env = env;
+    this.tokenFactory = options.tokenFactory ?? randomToken;
     this.database = new ShortlinksDatabase(dbPath, env);
   }
 
@@ -92,6 +135,7 @@ export class ShortlinksStore {
 
   addDomain(input: AddDomainInput): Domain {
     const hostname = normalizeHostname(input.hostname);
+    assertDomainProjectionWrite(hostname, input);
     const timestamp = now();
     const machineId = getMachineId(this.env);
     const existing = this.getDomain(hostname);
@@ -125,9 +169,9 @@ export class ShortlinksStore {
       hostname,
       input.provider || existing?.provider || "manual",
       input.defaultDomain ?? existing?.default_domain ? 1 : 0,
-      input.cloudflareZoneId || existing?.cloudflare_zone_id || null,
-      input.cloudflareAccountId || existing?.cloudflare_account_id || null,
-      input.cloudflareWorkerName || existing?.cloudflare_worker_name || null,
+      null,
+      null,
+      null,
       input.originUrl || existing?.origin_url || null,
       input.notes || existing?.notes || null,
       JSON.stringify(input.metadata || existing?.metadata || {}),
@@ -171,38 +215,51 @@ export class ShortlinksStore {
 
   getDefaultDomain(): Domain | null {
     const config = loadConfig(this.env);
+    const domains = this.listDomains().filter(domainIsActive);
     if (config.defaultDomain) {
-      const configured = this.getDomain(config.defaultDomain);
+      const configuredHostname = normalizeHostname(config.defaultDomain);
+      const configured = domains.find((domain) => domain.hostname === configuredHostname);
       if (configured) return configured;
     }
-    const row = this.database.db.query(`
-      SELECT * FROM domains ORDER BY default_domain DESC, created_at ASC LIMIT 1
-    `).get() as DomainRow | null;
-    return row ? domainFromRow(row) : null;
+    return domains.find((domain) => domain.default_domain)
+      ?? domains.find((domain) => domain.hostname === DEFAULT_DOMAIN_HOSTNAME)
+      ?? null;
+  }
+
+  private ensureDefaultDomain(): Domain {
+    const selected = this.getDefaultDomain();
+    if (selected) return selected;
+    const existing = this.getDomain(DEFAULT_DOMAIN_HOSTNAME);
+    if (existing && !domainIsActive(existing)) {
+      throw new Error("The managed has.na domain is not active yet.");
+    }
+    return this.addDomain({
+      hostname: DEFAULT_DOMAIN_HOSTNAME,
+      provider: "managed",
+      defaultDomain: true,
+      originUrl: `https://${DEFAULT_DOMAIN_HOSTNAME}`,
+      notes: "Automatic default shortlink domain.",
+    });
   }
 
   createLink(input: CreateLinkInput): Link {
-    const domain = input.domain ? this.getDomain(input.domain) : this.getDefaultDomain();
-    if (!domain) {
-      throw new Error("No domain configured. Run `shortlinks domain add <domain> --default` first.");
-    }
+    const domain = input.domain ? this.getDomain(input.domain) : this.ensureDefaultDomain();
+    if (!domain) throw new Error(`Domain not found: ${input.domain}`);
     const destinationUrl = validateDestinationUrl(input.destinationUrl);
     const timestamp = now();
     const machineId = getMachineId(this.env);
     const expiresAt = isoOrNull(input.expiresAt);
-    const slug = input.slug
-      ? normalizeSlug(input.slug)
-      : this.generateAvailableSlug(domain.id, input.slugLength || DEFAULT_SLUG_LENGTH);
-
-    try {
-      this.database.db.query(`
+    const id = makeId("lnk");
+    const insert = (slug: string, ignoreCollision: boolean): boolean => {
+      const result = this.database.db.query(`
         INSERT INTO links (
           id, domain_id, slug, destination_url, title, active, expires_at, metadata,
           machine_id, synced_at, created_at, updated_at
         )
         VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, NULL, ?, ?)
+        ${ignoreCollision ? "ON CONFLICT(domain_id, slug) DO NOTHING" : ""}
       `).run(
-        makeId("lnk"),
+        id,
         domain.id,
         slug,
         destinationUrl,
@@ -213,15 +270,29 @@ export class ShortlinksStore {
         timestamp,
         timestamp,
       );
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (message.includes("UNIQUE")) {
-        throw new Error(`Slug already exists for ${domain.hostname}: ${slug}`);
+      return result.changes === 1;
+    };
+
+    if (input.slug) {
+      const slug = normalizeSlug(input.slug);
+      try {
+        insert(slug, false);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (message.includes("UNIQUE")) {
+          throw new Error(`Slug already exists for ${domain.hostname}: ${slug}`);
+        }
+        throw error;
       }
-      throw error;
+      return this.getLink(domain.hostname, slug)!;
     }
 
-    return this.getLink(domain.hostname, slug)!;
+    const requestedLength = normalizeGeneratedSlugLength(input.slugLength);
+    for (let attempt = 0; attempt < 256; attempt += 1) {
+      const slug = this.tokenFactory(adaptiveSlugLength(attempt, requestedLength));
+      if (insert(slug, true)) return this.getLink(domain.hostname, slug)!;
+    }
+    throw new Error("Could not allocate an unused public short code after 256 atomic attempts.");
   }
 
   listLinks(options: { domain?: string; activeOnly?: boolean; limit?: number } = {}): Link[] {
@@ -247,13 +318,14 @@ export class ShortlinksStore {
   }
 
   getLink(domainOrSlug: string, maybeSlug?: string): Link | null {
-    const slug = normalizeSlug(maybeSlug || domainOrSlug);
-    const params: string[] = [slug];
-    let domainClause = "";
-    if (maybeSlug) {
-      domainClause = "AND d.hostname = ?";
-      params.push(normalizeHostname(domainOrSlug));
+    if (!maybeSlug) {
+      const domain = this.getDefaultDomain();
+      return domain ? this.getLink(domain.hostname, domainOrSlug) : null;
     }
+    const slug = normalizeSlug(maybeSlug);
+    const params: string[] = [slug];
+    const domainClause = "AND d.hostname = ?";
+    params.push(normalizeHostname(domainOrSlug));
     const row = this.database.db.query(`
       SELECT l.*, d.hostname
       FROM links l
@@ -268,6 +340,8 @@ export class ShortlinksStore {
   resolve(hostname: string, slug: string): Link | null {
     const normalizedSlug = normalizeSlug(slug);
     const normalizedHost = normalizeHostname(hostname);
+    const domain = this.getDomain(normalizedHost);
+    if (!domain || !domainIsActive(domain)) return null;
     const row = this.database.db.query(`
       SELECT l.*, d.hostname
       FROM links l
@@ -275,11 +349,7 @@ export class ShortlinksStore {
       WHERE d.hostname = ? AND l.slug = ?
       LIMIT 1
     `).get(normalizedHost, normalizedSlug) as LinkRow | null;
-    if (row) return linkFromRow(row, this.env);
-
-    const fallback = this.getDefaultDomain();
-    if (!fallback || fallback.hostname === normalizedHost) return null;
-    return this.getLink(fallback.hostname, normalizedSlug);
+    return row ? linkFromRow(row, this.env) : null;
   }
 
   setLinkActive(domainOrSlug: string, maybeSlugOrActive: string | boolean, maybeActive?: boolean): Link {
@@ -374,16 +444,6 @@ export class ShortlinksStore {
     return row;
   }
 
-  private generateAvailableSlug(domainId: string, length: number): string {
-    for (let attempt = 0; attempt < 32; attempt += 1) {
-      const slug = randomToken(length);
-      const exists = this.database.db.query(`
-        SELECT 1 FROM links WHERE domain_id = ? AND slug = ? LIMIT 1
-      `).get(domainId, slug);
-      if (!exists) return slug;
-    }
-    throw new Error("Could not generate an unused slug after 32 attempts.");
-  }
 
   private hashIp(ip: string): string {
     return createHash("sha256").update(`${getClickSalt(this.env)}:${ip}`).digest("hex");
