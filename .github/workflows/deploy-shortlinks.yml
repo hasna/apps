@@ -53,8 +53,10 @@ env:
   EXPECTED_CLUSTER: oss-fleet-prod
   EXPECTED_SERVICE: shortlinks-prod
   EXPECTED_WEB_FAMILY: shortlinks-prod
+  EXPECTED_WEB_CONTAINER: shortlinks
   EXPECTED_ECR_REPOSITORY: shortlinks
   EXPECTED_MIGRATION_FAMILY: shortlinks-prod-migrate
+  EXPECTED_MIGRATION_CONTAINER: shortlinks-migrate
   EXPECTED_CPU_ARCHITECTURE: X86_64
   LOCAL_IMAGE: shortlinks-deploy-candidate
   # The workflow whose successful conclusion is the ONLY automatic entry point
@@ -303,12 +305,25 @@ jobs:
           health_url="$(get_string '.health_url')"
           subnets="$(jq -er '.subnets | arrays | select(length > 0) | join(",")' <<<"${manifest}")"
           security_groups="$(jq -er '.security_groups | arrays | select(length > 0) | join(",")' <<<"${manifest}")"
+          web_secrets="$(jq -ce --arg region "${AWS_REGION}" --arg account "${AWS_ACCOUNT_ID}" '
+            .web_secrets
+            | objects
+            | select(has("HASNA_DOMAINS_API_KEY"))
+            | select(has("HASNA_LINK_ROUTER_SHARED_SECRET"))
+            | select(length >= 2)
+            | select(all(to_entries[];
+                (.key | test("^[A-Z][A-Z0-9_]{0,127}$")) and
+                (.value | test("^arn:aws:secretsmanager:" + $region + ":" + $account + ":secret:[A-Za-z0-9/_+=.@-]+$"))
+              ))
+          ' <<<"${manifest}")"
 
           expected_ecr_url="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${EXPECTED_ECR_REPOSITORY}"
           [[ "${cluster}" == "${EXPECTED_CLUSTER}" ]] || { echo "manifest cluster mismatch" >&2; exit 1; }
           [[ "${service}" == "${EXPECTED_SERVICE}" ]] || { echo "manifest service mismatch" >&2; exit 1; }
           [[ "${web_family}" == "${EXPECTED_WEB_FAMILY}" ]] || { echo "manifest web task family mismatch" >&2; exit 1; }
+          [[ "${web_container}" == "${EXPECTED_WEB_CONTAINER}" ]] || { echo "manifest web container mismatch" >&2; exit 1; }
           [[ "${migration_family}" == "${EXPECTED_MIGRATION_FAMILY}" ]] || { echo "manifest migration family mismatch" >&2; exit 1; }
+          [[ "${migration_container}" == "${EXPECTED_MIGRATION_CONTAINER}" ]] || { echo "manifest migration container mismatch" >&2; exit 1; }
           [[ "${ecr_url}" == "${expected_ecr_url}" ]] || { echo "manifest ECR repository mismatch" >&2; exit 1; }
           [[ "${web_family}" =~ ^[A-Za-z0-9_-]+$ ]]
           [[ "${web_container}" =~ ^[A-Za-z0-9_-]+$ ]]
@@ -331,6 +346,7 @@ jobs:
             printf 'subnets=%s\n' "${subnets}"
             printf 'security_groups=%s\n' "${security_groups}"
             printf 'health_url=%s\n' "${health_url}"
+            printf 'web_secrets=%s\n' "${web_secrets}"
           } >> "${GITHUB_OUTPUT}"
 
       - name: Capture rollback anchor and verify live service authority
@@ -539,17 +555,48 @@ jobs:
           SERVICE: ${{ steps.manifest.outputs.service }}
           WEB_FAMILY: ${{ steps.manifest.outputs.web_family }}
           WEB_CONTAINER: ${{ steps.manifest.outputs.web_container }}
+          PREVIOUS_TASK_DEFINITION: ${{ steps.before.outputs.previous_task_definition }}
+          MANIFEST_WEB_SECRETS: ${{ steps.manifest.outputs.web_secrets }}
         run: |
           set -Eeuo pipefail
-          task_definition="$(aws ecs describe-task-definition --task-definition "${WEB_FAMILY}" --query taskDefinition --output json)"
+          task_definition="$(aws ecs describe-task-definition --task-definition "${PREVIOUS_TASK_DEFINITION}" --query taskDefinition --output json)"
+          [[ "$(jq -r '.taskDefinitionArn' <<<"${task_definition}")" == "${PREVIOUS_TASK_DEFINITION}" ]]
+          [[ "$(jq -r '.family' <<<"${task_definition}")" == "${WEB_FAMILY}" ]]
           [[ "$(jq --arg c "${WEB_CONTAINER}" '[.containerDefinitions[] | select(.name == $c)] | length' <<<"${task_definition}")" == "1" ]]
-          replacement="$(jq --arg image "${IMAGE}" --arg c "${WEB_CONTAINER}" '
-            .containerDefinitions |= map(if .name == $c then .image = $image else . end)
+          jq -e 'type == "object" and has("HASNA_DOMAINS_API_KEY") and has("HASNA_LINK_ROUTER_SHARED_SECRET")' <<<"${MANIFEST_WEB_SECRETS}" >/dev/null
+          replacement="$(jq --arg image "${IMAGE}" --arg c "${WEB_CONTAINER}" --argjson required_secrets "${MANIFEST_WEB_SECRETS}" '
+            .containerDefinitions |= map(
+              if .name == $c then
+                .image = $image
+                | .secrets = (
+                    ((.secrets // []) | map(select(.name as $name | ($required_secrets | has($name) | not))))
+                    + ($required_secrets | to_entries | map({name:.key,valueFrom:.value}))
+                    | sort_by(.name)
+                  )
+              else . end
+            )
             | del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy,.deregisteredAt)
           ' <<<"${task_definition}")"
+          jq -e --arg c "${WEB_CONTAINER}" --argjson required_secrets "${MANIFEST_WEB_SECRETS}" '
+            .containerDefinitions[] | select(.name == $c)
+            | (.secrets // []) as $actual_secrets
+            | all($required_secrets | to_entries[]; . as $entry | any($actual_secrets[]; .name == $entry.key and .valueFrom == $entry.value))
+          ' <<<"${replacement}" >/dev/null
           deployed_task_definition="$(aws ecs register-task-definition --cli-input-json "${replacement}" --query taskDefinition.taskDefinitionArn --output text)"
           [[ "${deployed_task_definition}" == *":task-definition/${WEB_FAMILY}:"* ]]
           printf 'deployed_task_definition=%s\n' "${deployed_task_definition}" >> "${GITHUB_OUTPUT}"
+
+          # Last possible read before mutation: a concurrent operator, Terraform
+          # apply, or deployment invalidates this run instead of being silently
+          # overwritten by a candidate derived from the stale rollback anchor.
+          current_service="$(aws ecs describe-services --cluster "${CLUSTER}" --services "${SERVICE}" --output json)"
+          jq -e '.failures | length == 0 and (.services | length == 1)' <<<"${current_service}" >/dev/null
+          current_task_definition="$(jq -er '.services[0].taskDefinition' <<<"${current_service}")"
+          [[ "${current_task_definition}" == "${PREVIOUS_TASK_DEFINITION}" ]] || {
+            echo "shortlinks service anchor changed during deployment; refusing to overwrite ${current_task_definition}" >&2
+            exit 1
+          }
+
           printf 'service_mutated=true\n' >> "${GITHUB_OUTPUT}"
           aws ecs update-service \
             --cluster "${CLUSTER}" \

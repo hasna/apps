@@ -1,4 +1,4 @@
-import { DomainsClient, type DomainProvisioningJob } from "@hasna/domains/sdk";
+import { createDomainsClientFromEnv, type DomainProvisioningJob } from "@hasna/domains/sdk";
 import type { Domain } from "./types.js";
 
 /**
@@ -63,22 +63,11 @@ export function createDomainsProvisioningClient(
   env: Record<string, string | undefined> = process.env,
   fetchImpl: typeof fetch = fetch,
 ): DomainsProvisioningClient {
-  const apiKey = env["HASNA_DOMAINS_API_KEY"]?.trim();
-  const configuredUrl = env["HASNA_DOMAINS_API_URL"]?.trim() || "https://api.hasna.com/domains";
-  let parsed: URL;
-  try {
-    parsed = new URL(configuredUrl);
-  } catch {
-    throw new Error("HASNA_DOMAINS_API_URL must be a valid http(s) URL.");
-  }
-  if ((parsed.protocol !== "https:" && parsed.protocol !== "http:") || parsed.username || parsed.password || parsed.search || parsed.hash) {
-    throw new Error("HASNA_DOMAINS_API_URL must be an http(s) service URL without credentials, query, or fragment.");
-  }
-  const baseUrl = configuredUrl.replace(/\/v1\/?$/, "").replace(/\/$/, "");
-  if (!apiKey) {
-    throw new Error("HASNA_DOMAINS_API_KEY is required; Shortlinks provisions domains only through the configured Domains API.");
-  }
-  return new DomainsClient({ baseUrl, apiKey, fetch: fetchImpl });
+  // Delegate credential and authority resolution to the public Domains SDK.
+  // This preserves the shared @hasna/contracts chain (argument/pointer,
+  // Keychain, credentials file, then env) and refreshes rotated credentials
+  // per request instead of snapshotting another service's key in Shortlinks.
+  return createDomainsClientFromEnv(env, { fetch: fetchImpl });
 }
 
 export interface RequestShortlinksDomainInput {

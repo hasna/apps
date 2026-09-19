@@ -23,11 +23,15 @@ function job(overrides: Partial<DomainProvisioningJob> = {}): DomainProvisioning
     max_price_usd: 5,
     years: 1,
     auto_renew: false,
+    acquisition_mode: "purchase",
     registrar: "route53",
     dns_provider: "cloudflare",
     target: "shortlinks",
     worker_name: "hasna-link-router",
+    origin_hostname: null,
+    origin_tls_mode: null,
     provider_state: {},
+    result: null,
     attempts: 0,
     error: null,
     lease_until: null,
@@ -63,7 +67,7 @@ function domain(status: "pending" | "active" | "failed" = "pending", id = "job-1
 
 describe("Shortlinks -> hosted Domains API boundary", () => {
   test("fails closed without the Domains service credential", () => {
-    expect(() => createDomainsProvisioningClient({})).toThrow(/HASNA_DOMAINS_API_KEY is required/);
+    expect(() => createDomainsProvisioningClient({})).toThrow(/no API key could be resolved.*HASNA_DOMAINS_API_KEY/s);
   });
 
   test("defaults to the canonical authority and sends only business intent plus target profile", async () => {

@@ -24,7 +24,9 @@ describe("Shortlinks production deployment workflow", () => {
     expect(workflow).toContain("role/shortlinks-prod-gha-deploy");
     expect(workflow).toContain("EXPECTED_SERVICE: shortlinks-prod");
     expect(workflow).toContain("EXPECTED_WEB_FAMILY: shortlinks-prod");
+    expect(workflow).toContain("EXPECTED_WEB_CONTAINER: shortlinks");
     expect(workflow).toContain("EXPECTED_MIGRATION_FAMILY: shortlinks-prod-migrate");
+    expect(workflow).toContain("EXPECTED_MIGRATION_CONTAINER: shortlinks-migrate");
     expect(workflow).toContain("EXPECTED_CPU_ARCHITECTURE: X86_64");
     expect(workflow).toContain("--platform linux/amd64");
     expect(workflow).toContain("--target runtime");
@@ -44,6 +46,30 @@ describe("Shortlinks production deployment workflow", () => {
     expect(workflow).toContain('digest_image=%s@%s');
     expect(workflow).toContain('bash scripts/ci/verify-ecs-rollout.sh');
     expect(workflow).toContain('node scripts/ci/redact-log-lines.mjs');
+  });
+
+  test("projects the reviewed Domains and router secrets into the live task anchor", () => {
+    expect(workflow).toContain('web_secrets="$(jq -ce');
+    expect(workflow).toContain('has("HASNA_DOMAINS_API_KEY")');
+    expect(workflow).toContain('has("HASNA_LINK_ROUTER_SHARED_SECRET")');
+    expect(workflow).toContain("MANIFEST_WEB_SECRETS");
+    expect(workflow).toContain("PREVIOUS_TASK_DEFINITION");
+    expect(workflow).toContain("required_secrets");
+    expect(workflow).toContain("valueFrom:.value");
+    expect(workflow).toContain("$required_secrets | has($name) | not");
+  });
+
+  test("rechecks the live service anchor immediately before mutation", () => {
+    const register = workflow.indexOf("aws ecs register-task-definition", workflow.indexOf("Register digest-pinned task definition and update service"));
+    const anchorRead = workflow.indexOf('current_service="$(aws ecs describe-services', register);
+    const anchorCompare = workflow.indexOf('current_task_definition}" == "${PREVIOUS_TASK_DEFINITION}', anchorRead);
+    const mutationReceipt = workflow.indexOf("service_mutated=true", anchorCompare);
+    const updateService = workflow.indexOf("aws ecs update-service", mutationReceipt);
+    expect(register).toBeGreaterThan(0);
+    expect(anchorRead).toBeGreaterThan(register);
+    expect(anchorCompare).toBeGreaterThan(anchorRead);
+    expect(mutationReceipt).toBeGreaterThan(anchorCompare);
+    expect(updateService).toBeGreaterThan(mutationReceipt);
   });
 
   test("verifies the fleet client key only after the deployment", () => {
