@@ -332,6 +332,25 @@ export interface SessionRenderFile {
   sourceIds: string[];
 }
 
+/** Exact compiled source pins supporting a separately reviewed legacy migration. */
+export interface SessionLegacyReplacementSource {
+  id: string;
+  configId: string;
+  configVersion: number;
+  renderedPayloadSha256: string;
+}
+
+export interface SessionLegacyRetirementProvenance {
+  replacementAuthority: string;
+  replacementProfileId: string;
+  relativePath: string;
+  preimageSha256: string;
+  /** Digest of the operator-reviewed clause-to-canonical-source coverage evidence.
+   * This is provenance, not an automated claim of semantic equivalence. */
+  coverageReviewSha256: string;
+  replacementSources: SessionLegacyReplacementSource[];
+}
+
 export interface SessionRenderManifest {
   schema: typeof SESSION_RENDER_SCHEMA;
   tool: SessionRenderTool;
@@ -353,6 +372,7 @@ export interface SessionRenderManifest {
     previousManagedSha256: string;
     sourceIds: string[];
   }>;
+  legacyRetirements?: SessionLegacyRetirementProvenance[];
   retirements?: Array<{
     relativePath: string;
     preimageSha256: string;
