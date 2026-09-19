@@ -1,0 +1,14 @@
+# Explicitly configured development service. No local-object fallback or baked-in secrets.
+# TLS termination and approved S3 credentials must be supplied separately.
+services:
+  attachments-serve:
+    build: .
+    environment:
+      PORT: "8080"
+      HASNA_ATTACHMENTS_DATABASE_URL: ${HASNA_ATTACHMENTS_DATABASE_URL:?explicit PostgreSQL DSN required}
+      HASNA_ATTACHMENTS_API_SIGNING_KEY: ${HASNA_ATTACHMENTS_API_SIGNING_KEY:?signing key required}
+      ATTACHMENTS_S3_BUCKET: ${ATTACHMENTS_S3_BUCKET:?S3 bucket required}
+      ATTACHMENTS_S3_REGION: ${ATTACHMENTS_S3_REGION:?S3 region required}
+      ATTACHMENTS_PUBLIC_BASE_URL: ${ATTACHMENTS_PUBLIC_BASE_URL:?HTTPS public base URL required}
+    ports:
+      - "127.0.0.1:8080:8080"

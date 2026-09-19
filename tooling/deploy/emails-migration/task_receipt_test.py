@@ -18,8 +18,24 @@ class TaskReceiptTest(unittest.TestCase):
             "src/server/self-hosted/env.ts": '''
 const initial=[{id:"0001",checksum:"sha256:one"}];
 (globalThis as any).__rows=initial.map(row=>({...row}));
-export function getSelfHostedPool(){return{client:{many:async()=>[...(globalThis as any).__rows],execute:async()=>{}}}};
-export async function closeSelfHostedPool(){}
+export function getSelfHostedPool(){return{client:{
+  many:async()=>[...(globalThis as any).__rows],
+  transaction:async(fn:any)=>{
+    const before=(globalThis as any).__rows.map((row:any)=>({...row}));
+    let locked=false;
+    const tx={
+      many:async()=>[...(globalThis as any).__rows],
+      execute:async(sql:string)=>{
+        if(sql==="LOCK TABLE schema_migrations IN ACCESS EXCLUSIVE MODE")locked=true;
+        else if(!locked)throw new Error("migration SQL ran before ledger lock");
+      },
+    };
+    try{return await fn(tx)}catch(error){(globalThis as any).__rows=before;throw error}
+  },
+}}};
+export async function closeSelfHostedPool(){
+  if(process.env.TEST_LEDGER_DUMP)console.log("TEST_LEDGER:"+JSON.stringify((globalThis as any).__rows));
+}
 ''',
             "src/server/self-hosted/migrations.ts": '''
 export function emailsSelfHostedMigrations(){return[
@@ -29,7 +45,7 @@ export function emailsSelfHostedMigrations(){return[
 ''',
             "src/storage-kit/index.ts": '''
 export const migrationAcceptsChecksum=(migration:any,checksum:string)=>migration.checksum===checksum;
-export class MigrationLedger{constructor(private client:any,private migrations:any[]){}async migrate(){const rows=(globalThis as any).__rows;for(const migration of this.migrations)if(!rows.some((row:any)=>row.id===migration.id))rows.push({id:migration.id,checksum:migration.checksum});rows.sort((a:any,b:any)=>a.id.localeCompare(b.id));return{}}}
+export class MigrationLedger{constructor(private client:any,private migrations:any[]){}async migrate(){const rows=(globalThis as any).__rows;for(const migration of this.migrations)if(!rows.some((row:any)=>row.id===migration.id)){await this.client.execute(migration.sql);if(process.env.TEST_INJECT_MIGRATION_FAILURE)throw new Error("synthetic migration failure");rows.push({id:migration.id,checksum:migration.checksum})}rows.sort((a:any,b:any)=>a.id.localeCompare(b.id));return{}}}
 ''',
             "src/server/self-hosted/provider-root-kms.ts": '''
 export function buildProviderRootKms(){return{
@@ -86,6 +102,27 @@ export function buildProviderRootKms(){return{
             result = subprocess.run([bun, "--no-env-file", "-e", SCRIPT], cwd=root, env=env, capture_output=True, text=True, timeout=30)
             self.assertNotEqual(result.returncode, 0)
             self.assertNotIn(MARKER, result.stdout)
+
+    def test_apply_rolls_back_after_migration_failure_and_emits_no_receipt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.fixture(root)
+            plan, _ = self.run_receipt(root, "plan")
+            bun = shutil.which("bun")
+            env = {
+                "PATH": os.path.dirname(bun),
+                "EMAILS_MIGRATION_OPERATION": "apply",
+                "EMAILS_MIGRATION_EXPECTED_LEDGER_SHA256": plan["ledgerSha256"],
+                "EMAILS_MIGRATION_EXPECTED_PLAN_SHA256": plan["planSha256"],
+                "EMAILS_MIGRATION_EXPECTED_AFTER_LEDGER_SHA256": plan["expectedAfterLedgerSha256"],
+                "TEST_INJECT_MIGRATION_FAILURE": "1",
+                "TEST_LEDGER_DUMP": "1",
+            }
+            result = subprocess.run([bun, "--no-env-file", "-e", SCRIPT], cwd=root, env=env, capture_output=True, text=True, timeout=30)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertNotIn(MARKER, result.stdout)
+            ledgers = [json.loads(line.removeprefix("TEST_LEDGER:")) for line in result.stdout.splitlines() if line.startswith("TEST_LEDGER:")]
+            self.assertEqual(ledgers, [[{"id": "0001", "checksum": "sha256:one"}]])
 
     def test_kms_round_trip_emits_no_key_material(self):
         with tempfile.TemporaryDirectory() as directory:

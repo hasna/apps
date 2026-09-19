@@ -347,15 +347,17 @@ export function registerProjectCommands(program: Command): void {
         const agentId =
           (opts.agent as string | undefined) || globalOpts.agent;
         const projectPath =
-          (opts.project as string | undefined) || globalOpts.project;
+          (opts.project as string | undefined) ?? globalOpts.project;
         const sessionId =
           (opts.session as string | undefined) || globalOpts.session;
         const visibleMachineId = resolveVisibleMachineId(opts.machine as string | undefined);
 
         let projectId: string | undefined;
-        if (projectPath) {
+        if (projectPath !== undefined) {
+          if (!projectPath.trim()) throw new Error("Project not found: empty project path");
           const project = getProject(resolve(projectPath));
-          if (project) projectId = project.id;
+          if (!project) throw new Error(`Project not found: ${projectPath}`);
+          projectId = project.id;
         }
 
         // Collect memories from all visible scopes
@@ -395,6 +397,7 @@ export function registerProjectCommands(program: Command): void {
             min_importance: minImportance,
             status: "active",
             agent_id: agentId,
+            project_id: projectId,
             session_id: sessionId,
             ...visibleToMachineFilter(visibleMachineId),
             limit: 50,
