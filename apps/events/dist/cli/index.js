@@ -4109,8 +4109,11 @@ function webhookTargetPolicyFromEnv() {
 }
 
 // src/cli/list-cursor.ts
+init_protocol();
 import { createHash as createHash4 } from "crypto";
-var EVENT_LIST_CURSOR_PREFIX = "events-list-v1:";
+var EVENT_LIST_CURSOR_VERSION = 2;
+var EVENT_LIST_CURSOR_PREFIX = "events-list-v2:";
+var EVENT_LIST_CURSOR_MAX_CHARS = 1024;
 var DEFAULT_COMPACT_EVENT_LIST_MAX_BYTES = 32 * 1024;
 var COMPACT_EVENT_FIELD_MAX_BYTES = Object.freeze({
   id: 256,
@@ -4122,52 +4125,112 @@ var COMPACT_EVENT_FIELD_MAX_BYTES = Object.freeze({
   message: 160,
   schemaVersion: 32
 });
+var EVENT_LIST_CURSOR_MAX_PAYLOAD_BYTES = 768;
 var CURSOR_FINGERPRINT = /^[A-Za-z0-9_-]{43}$/;
+var CANONICAL_BASE64URL = /^[A-Za-z0-9_-]+$/;
 var COMPACT_LIST_HINT = "Continue with --cursor when has_more is true; pass --full for exact, unbounded legacy event fields.";
-function isNonNegativeInteger(value) {
-  return typeof value === "number" && Number.isInteger(value) && value >= 0;
+var CURSOR_STATE_KEYS = [
+  "before_fingerprint",
+  "before_position",
+  "filter_fingerprint",
+  "snapshot_fingerprint",
+  "snapshot_position",
+  "version"
+];
+var CURSOR_PAYLOAD_KEYS = [...CURSOR_STATE_KEYS, "integrity"].sort();
+function invalidCursor() {
+  return new Error("Invalid event list cursor");
+}
+function isNonNegativeSafeInteger(value) {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 function isCursorFingerprint(value) {
   return typeof value === "string" && CURSOR_FINGERPRINT.test(value);
 }
+function hasExactKeys(value, expected) {
+  if (!value || typeof value !== "object" || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype)
+    return false;
+  const actual = Object.keys(value).sort();
+  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
+}
 function fingerprint(value) {
-  return createHash4("sha256").update(JSON.stringify(value)).digest("base64url");
+  return createHash4("sha256").update(canonicalJson(value), "utf8").digest("base64url");
 }
 function eventFingerprint(event) {
-  return fingerprint([event.id, event.time, event.source, event.type, event.schemaVersion]);
+  return fingerprint(["hasna.events.list-event.v2", event]);
+}
+function eventSnapshotFingerprint(events) {
+  const hash = createHash4("sha256");
+  hash.update("hasna.events.list-snapshot.v2\x00", "utf8");
+  hash.update(String(events.length), "utf8");
+  hash.update("\x00", "utf8");
+  for (const event of events) {
+    hash.update(eventFingerprint(event), "ascii");
+    hash.update("\x00", "utf8");
+  }
+  return hash.digest("base64url");
 }
 function filterFingerprint(filters) {
-  return fingerprint([filters.source ?? null, filters.type ?? null]);
+  return fingerprint(["hasna.events.list-filter.v2", filters.source ?? null, filters.type ?? null]);
 }
-function encodeEventListCursor(payload) {
-  if (!isNonNegativeInteger(payload.snapshot_position) || !isCursorFingerprint(payload.snapshot_fingerprint) || !isNonNegativeInteger(payload.before_position) || payload.before_position > payload.snapshot_position || !isCursorFingerprint(payload.before_fingerprint) || !isCursorFingerprint(payload.filter_fingerprint)) {
-    throw new Error("Event list cursor positions and fingerprints are required");
-  }
-  return `${EVENT_LIST_CURSOR_PREFIX}${Buffer.from(JSON.stringify(payload), "utf8").toString("base64url")}`;
+function cursorIntegrity(state) {
+  return fingerprint(["hasna.events.list-cursor-integrity.v2", state]);
+}
+function validateCursorState(value) {
+  if (!hasExactKeys(value, CURSOR_STATE_KEYS))
+    return false;
+  return value.version === EVENT_LIST_CURSOR_VERSION && isNonNegativeSafeInteger(value.snapshot_position) && isCursorFingerprint(value.snapshot_fingerprint) && isNonNegativeSafeInteger(value.before_position) && value.before_position <= value.snapshot_position && isCursorFingerprint(value.before_fingerprint) && isCursorFingerprint(value.filter_fingerprint);
+}
+function encodeEventListCursor(state) {
+  if (!validateCursorState(state))
+    throw new Error("Event list cursor positions, version, and fingerprints are required");
+  const payload = { ...state, integrity: cursorIntegrity(state) };
+  const encoded = Buffer.from(canonicalJson(payload), "utf8").toString("base64url");
+  const cursor = `${EVENT_LIST_CURSOR_PREFIX}${encoded}`;
+  if (cursor.length > EVENT_LIST_CURSOR_MAX_CHARS)
+    throw new Error("Event list cursor exceeds its maximum encoded length");
+  return cursor;
 }
 function decodeEventListCursor(cursor, filters) {
-  if (!cursor.startsWith(EVENT_LIST_CURSOR_PREFIX))
-    throw new Error("Invalid event list cursor");
+  if (typeof cursor !== "string" || cursor.length <= EVENT_LIST_CURSOR_PREFIX.length || cursor.length > EVENT_LIST_CURSOR_MAX_CHARS || !cursor.startsWith(EVENT_LIST_CURSOR_PREFIX))
+    throw invalidCursor();
+  const encoded = cursor.slice(EVENT_LIST_CURSOR_PREFIX.length);
+  if (!CANONICAL_BASE64URL.test(encoded))
+    throw invalidCursor();
+  let bytes;
+  let text;
   let candidate;
   try {
-    candidate = JSON.parse(Buffer.from(cursor.slice(EVENT_LIST_CURSOR_PREFIX.length), "base64url").toString("utf8"));
+    bytes = Buffer.from(encoded, "base64url");
+    if (bytes.length === 0 || bytes.length > EVENT_LIST_CURSOR_MAX_PAYLOAD_BYTES || bytes.toString("base64url") !== encoded)
+      throw invalidCursor();
+    text = bytes.toString("utf8");
+    if (!Buffer.from(text, "utf8").equals(bytes))
+      throw invalidCursor();
+    candidate = JSON.parse(text);
+    if (canonicalJson(candidate) !== text)
+      throw invalidCursor();
   } catch {
-    throw new Error("Invalid event list cursor");
+    throw invalidCursor();
   }
-  const payload = candidate;
-  if (!payload || !isNonNegativeInteger(payload.snapshot_position) || !isCursorFingerprint(payload.snapshot_fingerprint) || !isNonNegativeInteger(payload.before_position) || payload.before_position > payload.snapshot_position || !isCursorFingerprint(payload.before_fingerprint) || !isCursorFingerprint(payload.filter_fingerprint)) {
-    throw new Error("Invalid event list cursor");
-  }
-  if (payload.filter_fingerprint !== filterFingerprint(filters)) {
+  if (!hasExactKeys(candidate, CURSOR_PAYLOAD_KEYS))
+    throw invalidCursor();
+  const state = {
+    version: candidate.version,
+    snapshot_position: candidate.snapshot_position,
+    snapshot_fingerprint: candidate.snapshot_fingerprint,
+    before_position: candidate.before_position,
+    before_fingerprint: candidate.before_fingerprint,
+    filter_fingerprint: candidate.filter_fingerprint
+  };
+  if (!validateCursorState(state) || !isCursorFingerprint(candidate.integrity))
+    throw invalidCursor();
+  if (candidate.integrity !== cursorIntegrity(state))
+    throw invalidCursor();
+  if (state.filter_fingerprint !== filterFingerprint(filters)) {
     throw new Error("Event list cursor filter mismatch");
   }
-  return {
-    snapshot_position: payload.snapshot_position,
-    snapshot_fingerprint: payload.snapshot_fingerprint,
-    before_position: payload.before_position,
-    before_fingerprint: payload.before_fingerprint,
-    filter_fingerprint: payload.filter_fingerprint
-  };
+  return state;
 }
 function applyFullEventLimit(events, rawLimit) {
   if (rawLimit === undefined || rawLimit <= 0)
@@ -4187,10 +4250,12 @@ function eventListSnapshotPage(events, options) {
     const cursor = decodeEventListCursor(options.cursor, options);
     currentCursor = encodeEventListCursor(cursor);
     const snapshotEvent = events.at(cursor.snapshot_position);
-    if (!snapshotEvent || eventFingerprint(snapshotEvent) !== cursor.snapshot_fingerprint) {
+    if (!snapshotEvent)
+      throw new Error("Event list cursor snapshot is no longer available");
+    snapshotEvents = events.slice(0, cursor.snapshot_position + 1);
+    if (eventSnapshotFingerprint(snapshotEvents) !== cursor.snapshot_fingerprint) {
       throw new Error("Event list cursor snapshot is no longer available");
     }
-    snapshotEvents = events.slice(0, cursor.snapshot_position + 1);
     snapshotPosition = cursor.snapshot_position;
     snapshotId = snapshotEvent.id;
     const boundaryEvent = snapshotEvents.at(cursor.before_position);
@@ -4203,8 +4268,9 @@ function eventListSnapshotPage(events, options) {
   const pageEvents = snapshotEvents.slice(start, end);
   const hasMore = start > 0;
   const nextCursor = hasMore && snapshotPosition >= 0 && pageEvents[0] ? encodeEventListCursor({
+    version: EVENT_LIST_CURSOR_VERSION,
     snapshot_position: snapshotPosition,
-    snapshot_fingerprint: eventFingerprint(snapshotEvents[snapshotPosition]),
+    snapshot_fingerprint: eventSnapshotFingerprint(snapshotEvents),
     before_position: start,
     before_fingerprint: eventFingerprint(pageEvents[0]),
     filter_fingerprint: filterFingerprint(options)
@@ -4933,6 +4999,8 @@ async function handleEvents(client, command, tail, parsed, options) {
     const type = takeOption(args, "--type");
     const source = takeOption(args, "--source");
     const full = takeFlag(args, "--full");
+    if (full && cursor)
+      throw new Error("--cursor cannot be used with --full; omit --full for paged compact output");
     if (full) {
       let events = await client.listEvents({ type, source });
       events = applyFullEventLimit(events, rawLimit);

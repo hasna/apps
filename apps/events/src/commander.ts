@@ -10,6 +10,7 @@ import {
 } from "./index.js";
 import { parseFilterOptions } from "./filter-options.js";
 import { webhookTargetPolicyFromEnv } from "./cli-webhook-policy.js";
+import { applyFullEventLimit, compactEventListOutput } from "./cli/list-cursor.js";
 
 type CommanderLike = any;
 type CommanderCommandLike = any;
@@ -22,10 +23,9 @@ export interface RegisterEventsCommandsOptions {
   eventsCommandName?: string;
   /**
    * Default row cap applied to `events list` when the caller does not pass an
-   * explicit `--limit`. Guards against dumping the entire event store (a
-   * usability/performance hazard for hosts with large stores). Pass `--limit 0`
-   * to opt out and list every recorded event. Defaults to
-   * {@link DEFAULT_EVENT_LIST_LIMIT}.
+   * explicit `--limit`. Ordinary output is always a compact, cursor-paged
+   * envelope; `--full` is the explicit exact-record compatibility escape.
+   * Defaults to {@link DEFAULT_EVENT_LIST_LIMIT}.
    */
   defaultEventListLimit?: number;
 }
@@ -35,7 +35,7 @@ export interface RegisterEventsCommandsOptions {
  * host does not configure {@link RegisterEventsCommandsOptions.defaultEventListLimit}
  * and the user does not pass an explicit `--limit`.
  */
-export const DEFAULT_EVENT_LIST_LIMIT = 100;
+export const DEFAULT_EVENT_LIST_LIMIT = 20;
 
 function parseJsonObject(value: string | undefined, fallback: Record<string, unknown>): Record<string, unknown> {
   if (!value) return fallback;
@@ -322,22 +322,50 @@ export function registerEventCommands(program: CommanderLike, options: RegisterE
       print(result, wantsJson(actionOptions, command), `${result.deduped ? "Deduped" : "Emitted"} ${result.event.id} to ${result.deliveries.length} channel(s)`);
     });
 
-  const defaultListLimit = options.defaultEventListLimit ?? DEFAULT_EVENT_LIST_LIMIT;
-  events.command("list").description("List recorded events").option("--source <source>", "Filter by source").option("--type <type>", "Filter by type").option("--limit <n>", `Limit to the most recent <n> events (default ${defaultListLimit}; use 0 for all)`, parseNumber, defaultListLimit).option("-j, --json", "Print JSON output", false).action(async (actionOptions: { source?: string; type?: string; limit?: number; json?: boolean }, command?: CommanderCommandLike) => {
-    let rows = await createClient(options).listEvents();
-    if (actionOptions.source) rows = rows.filter((event) => event.source === actionOptions.source);
-    if (actionOptions.type) rows = rows.filter((event) => event.type === actionOptions.type);
-    if (actionOptions.limit) rows = rows.slice(-actionOptions.limit);
-    if (wantsJson(actionOptions, command)) {
-      console.log(JSON.stringify(rows, null, 2));
-      return;
-    }
-    if (!rows.length) {
-      console.log("No events recorded.");
-      return;
-    }
-    for (const event of rows) console.log(`${event.time}\t${event.id}\t${event.source}\t${event.type}\t${event.severity}`);
-  });
+  const defaultListLimit = Math.max(1, Math.min(1000, Math.floor(options.defaultEventListLimit ?? DEFAULT_EVENT_LIST_LIMIT)));
+  events.command("list")
+    .description("List recorded events")
+    .option("--source <source>", "Filter by source")
+    .option("--type <type>", "Filter by type")
+    .option("--cursor <cursor>", "Opaque cursor returned by a previous compact page")
+    .option("--limit <n>", `Maximum compact events (default ${defaultListLimit}, max 1000)`, parseNumber)
+    .option("--full", "Return exact legacy event records; omitted limit lists all", false)
+    .option("-j, --json", "Print JSON output", false)
+    .action(async (actionOptions: { source?: string; type?: string; cursor?: string; limit?: number; full?: boolean; json?: boolean }, command?: CommanderCommandLike) => {
+      const json = wantsJson(actionOptions, command);
+      try {
+        if (actionOptions.full && actionOptions.cursor) {
+          throw new Error("--cursor cannot be used with --full; omit --full for paged compact output");
+        }
+        const client = createClient(options);
+        if (actionOptions.full) {
+          const rows = applyFullEventLimit(
+            await client.listEvents({ source: actionOptions.source, type: actionOptions.type }),
+            actionOptions.limit,
+          );
+          if (json) return console.log(JSON.stringify(rows, null, 2));
+          if (!rows.length) return console.log("No events recorded.");
+          for (const event of rows) console.log(`${event.time}\t${event.id}\t${event.source}\t${event.type}\t${event.severity}`);
+          return;
+        }
+        const limit = Math.max(1, Math.min(1000, Math.floor(actionOptions.limit ?? defaultListLimit)));
+        const rows = await client.listEvents({ source: actionOptions.source, type: actionOptions.type });
+        const compact = compactEventListOutput(rows, {
+          limit,
+          cursor: actionOptions.cursor,
+          source: actionOptions.source,
+          type: actionOptions.type,
+        });
+        if (json) return console.log(JSON.stringify(compact, null, 2));
+        if (!compact.events.length) return console.log("No events recorded.");
+        for (const event of compact.events) {
+          console.log(`${event.time}\t${JSON.stringify(event.id)}\t${event.source}\t${event.type}\t${event.severity}`);
+        }
+        if (compact.next_cursor) console.log(`next cursor: ${compact.next_cursor}`);
+      } catch (error) {
+        fail(error, json);
+      }
+    });
 
   events.command("replay").description("Replay recorded events").option("--id <id>", "Replay one event id").option("--source <source>", "Filter by source").option("--type <type>", "Filter by type").option("--cursor <cursor>", "Opaque replay cursor from a previous page").option("--limit <n>", "Maximum events to replay", parseNumber).option("--dry-run", "Preview without delivery", false).option("-j, --json", "Print JSON output", false).action(async (actionOptions: { id?: string; source?: string; type?: string; cursor?: string; limit?: number; dryRun?: boolean; json?: boolean }, command?: CommanderCommandLike) => {
     const result = await createClient(options).replay({

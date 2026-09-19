@@ -1,9 +1,13 @@
 import { describe, expect, test } from "bun:test";
+import { canonicalJson } from "../intake/protocol.js";
 import {
   COMPACT_EVENT_FIELD_MAX_BYTES,
   DEFAULT_COMPACT_EVENT_LIST_MAX_BYTES,
+  EVENT_LIST_CURSOR_MAX_CHARS,
+  EVENT_LIST_CURSOR_PREFIX,
   applyFullEventLimit,
   compactEventListOutput,
+  decodeEventListCursor,
   eventListSnapshotPage,
 } from "./list-cursor.js";
 
@@ -12,12 +16,25 @@ const event = (id: string, occurrence: string | number = id) => ({
   source: "test",
   type: "item",
   time: `2026-09-18T00:00:00.${String(occurrence).padStart(3, "0")}Z`,
+  subject: `subject-${occurrence}`,
   severity: "info",
-  data: { occurrence },
+  data: { occurrence, nested: { stable: true } },
+  message: `message-${occurrence}`,
+  dedupeKey: `dedupe-${occurrence}`,
   schemaVersion: "1",
+  metadata: { occurrence, nested: { stable: true } },
 }) as any;
 
 const occurrence = (page: ReturnType<typeof eventListSnapshotPage>) => page.events.map((row) => row.data.occurrence);
+
+function cursorPayload(cursor: string): Record<string, unknown> {
+  return JSON.parse(Buffer.from(cursor.slice(EVENT_LIST_CURSOR_PREFIX.length), "base64url").toString("utf8"));
+}
+
+function cursorFromPayload(payload: Record<string, unknown>, canonical = true): string {
+  const text = canonical ? canonicalJson(payload) : JSON.stringify(payload, null, 2);
+  return `${EVENT_LIST_CURSOR_PREFIX}${Buffer.from(text, "utf8").toString("base64url")}`;
+}
 
 describe("event list snapshot cursor", () => {
   test("does not shift when new events append between pages", () => {
@@ -44,6 +61,22 @@ describe("event list snapshot cursor", () => {
     expect(fourth.has_more).toBe(false);
   });
 
+  test("positions distinguish fully identical duplicate occurrences", () => {
+    const duplicate = event("same", 1);
+    const rows = Array.from({ length: 4 }, () => structuredClone(duplicate));
+    const cursors = new Set<string>();
+    let cursor: string | undefined;
+    let count = 0;
+    do {
+      const page = eventListSnapshotPage(rows, { limit: 1, cursor, source: "test" });
+      count += page.events.length;
+      if (page.next_cursor) cursors.add(page.next_cursor);
+      cursor = page.next_cursor ?? undefined;
+    } while (cursor);
+    expect(count).toBe(4);
+    expect(cursors.size).toBe(3);
+  });
+
   test("keeps a duplicate-id snapshot append-safe while more duplicates append concurrently", () => {
     const initial = [event("duplicate", 1), event("duplicate", 2), event("duplicate", 3)];
     const first = eventListSnapshotPage(initial, { limit: 1, source: "test" });
@@ -58,13 +91,46 @@ describe("event list snapshot cursor", () => {
     expect(third.next_cursor).toBeNull();
   });
 
-  test("binds cursors to filters, positions, and identities", () => {
-    const first = eventListSnapshotPage([event("1"), event("2")], { limit: 1, type: "item" });
-    expect(() => eventListSnapshotPage([event("1"), event("2")], { limit: 1, cursor: first.next_cursor!, type: "other" })).toThrow(/filter mismatch/);
-    expect(() => eventListSnapshotPage([event("1")], { limit: 1, cursor: first.next_cursor!, type: "item" })).toThrow(/snapshot/);
-    expect(() => eventListSnapshotPage([event("1"), event("different")], { limit: 1, cursor: first.next_cursor!, type: "item" })).toThrow(/snapshot/);
+  test("rejects filter changes, stale positions, and mutations to any canonical event field", () => {
+    const rows = [event("1"), event("2"), event("3"), event("4")];
+    const first = eventListSnapshotPage(rows, { limit: 1, type: "item" });
+    expect(() => eventListSnapshotPage(rows, { limit: 1, cursor: first.next_cursor!, type: "other" })).toThrow(/filter mismatch/);
+    expect(() => eventListSnapshotPage(rows.slice(1), { limit: 1, cursor: first.next_cursor!, type: "item" })).toThrow(/snapshot/);
+
+    const dataMutation = structuredClone(rows);
+    dataMutation[1].data.nested.stable = false;
+    expect(() => eventListSnapshotPage(dataMutation, { limit: 1, cursor: first.next_cursor!, type: "item" })).toThrow(/snapshot/);
+
+    const metadataMutation = structuredClone(rows);
+    metadataMutation[2].metadata.extra = "changed";
+    expect(() => eventListSnapshotPage(metadataMutation, { limit: 1, cursor: first.next_cursor!, type: "item" })).toThrow(/snapshot/);
+
+    const optionalFieldMutation = structuredClone(rows);
+    optionalFieldMutation[3].message = "changed";
+    expect(() => eventListSnapshotPage(optionalFieldMutation, { limit: 1, cursor: first.next_cursor!, type: "item" })).toThrow(/snapshot/);
   });
 
+  test("accepts only bounded canonical base64url cursors with exact versioned keys and intact checksums", () => {
+    const valid = eventListSnapshotPage([event("1"), event("2")], { limit: 1, source: "test" }).next_cursor!;
+    expect(valid.length).toBeLessThanOrEqual(EVENT_LIST_CURSOR_MAX_CHARS);
+    expect(decodeEventListCursor(valid, { source: "test" }).version).toBe(2);
+
+    for (const invalid of [
+      `${valid}=`,
+      `${valid}\n`,
+      `${valid} `,
+      `${EVENT_LIST_CURSOR_PREFIX}${"A".repeat(EVENT_LIST_CURSOR_MAX_CHARS)}`,
+    ]) expect(() => decodeEventListCursor(invalid, { source: "test" })).toThrow("Invalid event list cursor");
+
+    const payload = cursorPayload(valid);
+    expect(() => decodeEventListCursor(cursorFromPayload(payload, false), { source: "test" })).toThrow("Invalid event list cursor");
+    expect(() => decodeEventListCursor(cursorFromPayload({ ...payload, extra: true }), { source: "test" })).toThrow("Invalid event list cursor");
+    const missing = { ...payload };
+    delete missing.before_fingerprint;
+    expect(() => decodeEventListCursor(cursorFromPayload(missing), { source: "test" })).toThrow("Invalid event list cursor");
+    expect(() => decodeEventListCursor(cursorFromPayload({ ...payload, version: 1 }), { source: "test" })).toThrow("Invalid event list cursor");
+    expect(() => decodeEventListCursor(cursorFromPayload({ ...payload, before_position: 0 }), { source: "test" })).toThrow("Invalid event list cursor");
+  });
 
   test("enforces an exact byte ceiling while bounding every compact string field", () => {
     const hostile = "\0".repeat(2_000);
@@ -78,6 +144,7 @@ describe("event list snapshot cursor", () => {
       message: `message ${index} ${hostile}`,
       schemaVersion: `schema-${index}-${hostile}`,
       data: {},
+      metadata: {},
     })) as any[];
 
     const page = compactEventListOutput(rows, { limit: 20 });
@@ -96,6 +163,7 @@ describe("event list snapshot cursor", () => {
       }
     }
     expect(Buffer.byteLength(page.snapshot_id!, "utf8")).toBeLessThanOrEqual(COMPACT_EVENT_FIELD_MAX_BYTES.id);
+    expect(page.next_cursor!.length).toBeLessThanOrEqual(EVENT_LIST_CURSOR_MAX_CHARS);
   });
 
   test("byte-limited compact pages walk every append occurrence without overlap", () => {

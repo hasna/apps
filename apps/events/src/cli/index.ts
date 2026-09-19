@@ -660,6 +660,7 @@ async function handleEvents(client: EventsClient, command: string | undefined, t
     const type = takeOption(args, "--type");
     const source = takeOption(args, "--source");
     const full = takeFlag(args, "--full");
+    if (full && cursor) throw new Error("--cursor cannot be used with --full; omit --full for paged compact output");
     if (full) {
       let events = await client.listEvents({ type, source });
       events = applyFullEventLimit(events, rawLimit);

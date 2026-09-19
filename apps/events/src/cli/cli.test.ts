@@ -260,6 +260,12 @@ describe("CLI smoke behavior", () => {
     expect(page.byte_limited).toBe(true);
     expect(page.count).toBeGreaterThan(0);
     expect(page.next_cursor).toBeString();
+    const incompatible = await runCli(["events", "list", "--full", "--cursor", page.next_cursor]);
+    expect(incompatible.exitCode).toBe(1);
+    expect(incompatible.stderr).toBe("");
+    expect(JSON.parse(incompatible.stdout)).toEqual({
+      error: "--cursor cannot be used with --full; omit --full for paged compact output",
+    });
     for (const row of page.events) {
       for (const [field, maxBytes] of Object.entries(COMPACT_EVENT_FIELD_MAX_BYTES)) {
         const value = row[field];

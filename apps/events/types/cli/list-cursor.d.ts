@@ -1,5 +1,7 @@
 import type { EventEnvelope } from "../types.js";
-export declare const EVENT_LIST_CURSOR_PREFIX = "events-list-v1:";
+export declare const EVENT_LIST_CURSOR_VERSION: 2;
+export declare const EVENT_LIST_CURSOR_PREFIX = "events-list-v2:";
+export declare const EVENT_LIST_CURSOR_MAX_CHARS = 1024;
 export declare const DEFAULT_COMPACT_EVENT_LIST_MAX_BYTES: number;
 export declare const COMPACT_EVENT_FIELD_MAX_BYTES: Readonly<{
     id: 256;
@@ -11,7 +13,8 @@ export declare const COMPACT_EVENT_FIELD_MAX_BYTES: Readonly<{
     message: 160;
     schemaVersion: 32;
 }>;
-interface EventListCursorPayload {
+export interface EventListCursorState {
+    version: typeof EVENT_LIST_CURSOR_VERSION;
     snapshot_position: number;
     snapshot_fingerprint: string;
     before_position: number;
@@ -44,11 +47,11 @@ export interface CompactEventListOutput {
     max_bytes: number;
     hint: string;
 }
-export declare function encodeEventListCursor(payload: EventListCursorPayload): string;
+export declare function encodeEventListCursor(state: EventListCursorState): string;
 export declare function decodeEventListCursor(cursor: string, filters: {
     source?: string;
     type?: string;
-}): EventListCursorPayload;
+}): EventListCursorState;
 export declare function applyFullEventLimit<T>(events: T[], rawLimit: number | undefined): T[];
 export declare function eventListSnapshotPage(events: EventEnvelope[], options: {
     limit: number;

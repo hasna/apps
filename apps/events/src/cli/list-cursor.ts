@@ -1,7 +1,10 @@
 import { createHash } from "node:crypto";
+import { canonicalJson } from "../intake/protocol.js";
 import type { EventEnvelope } from "../types.js";
 
-export const EVENT_LIST_CURSOR_PREFIX = "events-list-v1:";
+export const EVENT_LIST_CURSOR_VERSION = 2 as const;
+export const EVENT_LIST_CURSOR_PREFIX = "events-list-v2:";
+export const EVENT_LIST_CURSOR_MAX_CHARS = 1024;
 export const DEFAULT_COMPACT_EVENT_LIST_MAX_BYTES = 32 * 1024;
 export const COMPACT_EVENT_FIELD_MAX_BYTES = Object.freeze({
   id: 256,
@@ -14,15 +17,31 @@ export const COMPACT_EVENT_FIELD_MAX_BYTES = Object.freeze({
   schemaVersion: 32,
 });
 
+const EVENT_LIST_CURSOR_MAX_PAYLOAD_BYTES = 768;
 const CURSOR_FINGERPRINT = /^[A-Za-z0-9_-]{43}$/;
+const CANONICAL_BASE64URL = /^[A-Za-z0-9_-]+$/;
 const COMPACT_LIST_HINT = "Continue with --cursor when has_more is true; pass --full for exact, unbounded legacy event fields.";
+const CURSOR_STATE_KEYS = [
+  "before_fingerprint",
+  "before_position",
+  "filter_fingerprint",
+  "snapshot_fingerprint",
+  "snapshot_position",
+  "version",
+] as const;
+const CURSOR_PAYLOAD_KEYS = [...CURSOR_STATE_KEYS, "integrity"].sort();
 
-interface EventListCursorPayload {
+export interface EventListCursorState {
+  version: typeof EVENT_LIST_CURSOR_VERSION;
   snapshot_position: number;
   snapshot_fingerprint: string;
   before_position: number;
   before_fingerprint: string;
   filter_fingerprint: string;
+}
+
+interface EventListCursorPayload extends EventListCursorState {
+  integrity: string;
 }
 
 interface CompactEvent {
@@ -53,73 +72,121 @@ export interface CompactEventListOutput {
   hint: string;
 }
 
-function isNonNegativeInteger(value: unknown): value is number {
-  return typeof value === "number" && Number.isInteger(value) && value >= 0;
+function invalidCursor(): Error {
+  return new Error("Invalid event list cursor");
+}
+
+function isNonNegativeSafeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
 function isCursorFingerprint(value: unknown): value is string {
   return typeof value === "string" && CURSOR_FINGERPRINT.test(value);
 }
 
-function fingerprint(value: unknown): string {
-  return createHash("sha256").update(JSON.stringify(value)).digest("base64url");
+function hasExactKeys(value: unknown, expected: readonly string[]): value is Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) return false;
+  const actual = Object.keys(value).sort();
+  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
 }
 
+function fingerprint(value: unknown): string {
+  return createHash("sha256").update(canonicalJson(value), "utf8").digest("base64url");
+}
+
+/** Every canonical event field, including nested data/metadata and optional fields. */
 function eventFingerprint(event: EventEnvelope): string {
-  return fingerprint([event.id, event.time, event.source, event.type, event.schemaVersion]);
+  return fingerprint(["hasna.events.list-event.v2", event]);
+}
+
+/** Bind the cursor to the complete ordered snapshot while allowing later appends. */
+function eventSnapshotFingerprint(events: EventEnvelope[]): string {
+  const hash = createHash("sha256");
+  hash.update("hasna.events.list-snapshot.v2\0", "utf8");
+  hash.update(String(events.length), "utf8");
+  hash.update("\0", "utf8");
+  for (const event of events) {
+    hash.update(eventFingerprint(event), "ascii");
+    hash.update("\0", "utf8");
+  }
+  return hash.digest("base64url");
 }
 
 function filterFingerprint(filters: { source?: string; type?: string }): string {
-  return fingerprint([filters.source ?? null, filters.type ?? null]);
+  return fingerprint(["hasna.events.list-filter.v2", filters.source ?? null, filters.type ?? null]);
 }
 
-export function encodeEventListCursor(payload: EventListCursorPayload): string {
-  if (
-    !isNonNegativeInteger(payload.snapshot_position) ||
-    !isCursorFingerprint(payload.snapshot_fingerprint) ||
-    !isNonNegativeInteger(payload.before_position) ||
-    payload.before_position > payload.snapshot_position ||
-    !isCursorFingerprint(payload.before_fingerprint) ||
-    !isCursorFingerprint(payload.filter_fingerprint)
-  ) {
-    throw new Error("Event list cursor positions and fingerprints are required");
-  }
-  return `${EVENT_LIST_CURSOR_PREFIX}${Buffer.from(JSON.stringify(payload), "utf8").toString("base64url")}`;
+function cursorIntegrity(state: EventListCursorState): string {
+  return fingerprint(["hasna.events.list-cursor-integrity.v2", state]);
+}
+
+function validateCursorState(value: unknown): value is EventListCursorState {
+  if (!hasExactKeys(value, CURSOR_STATE_KEYS)) return false;
+  return value.version === EVENT_LIST_CURSOR_VERSION
+    && isNonNegativeSafeInteger(value.snapshot_position)
+    && isCursorFingerprint(value.snapshot_fingerprint)
+    && isNonNegativeSafeInteger(value.before_position)
+    && value.before_position <= value.snapshot_position
+    && isCursorFingerprint(value.before_fingerprint)
+    && isCursorFingerprint(value.filter_fingerprint);
+}
+
+export function encodeEventListCursor(state: EventListCursorState): string {
+  if (!validateCursorState(state)) throw new Error("Event list cursor positions, version, and fingerprints are required");
+  const payload: EventListCursorPayload = { ...state, integrity: cursorIntegrity(state) };
+  const encoded = Buffer.from(canonicalJson(payload), "utf8").toString("base64url");
+  const cursor = `${EVENT_LIST_CURSOR_PREFIX}${encoded}`;
+  if (cursor.length > EVENT_LIST_CURSOR_MAX_CHARS) throw new Error("Event list cursor exceeds its maximum encoded length");
+  return cursor;
 }
 
 export function decodeEventListCursor(
   cursor: string,
   filters: { source?: string; type?: string },
-): EventListCursorPayload {
-  if (!cursor.startsWith(EVENT_LIST_CURSOR_PREFIX)) throw new Error("Invalid event list cursor");
+): EventListCursorState {
+  if (
+    typeof cursor !== "string"
+    || cursor.length <= EVENT_LIST_CURSOR_PREFIX.length
+    || cursor.length > EVENT_LIST_CURSOR_MAX_CHARS
+    || !cursor.startsWith(EVENT_LIST_CURSOR_PREFIX)
+  ) throw invalidCursor();
+
+  const encoded = cursor.slice(EVENT_LIST_CURSOR_PREFIX.length);
+  if (!CANONICAL_BASE64URL.test(encoded)) throw invalidCursor();
+
+  let bytes: Buffer;
+  let text: string;
   let candidate: unknown;
   try {
-    candidate = JSON.parse(Buffer.from(cursor.slice(EVENT_LIST_CURSOR_PREFIX.length), "base64url").toString("utf8"));
+    bytes = Buffer.from(encoded, "base64url");
+    if (
+      bytes.length === 0
+      || bytes.length > EVENT_LIST_CURSOR_MAX_PAYLOAD_BYTES
+      || bytes.toString("base64url") !== encoded
+    ) throw invalidCursor();
+    text = bytes.toString("utf8");
+    if (!Buffer.from(text, "utf8").equals(bytes)) throw invalidCursor();
+    candidate = JSON.parse(text);
+    if (canonicalJson(candidate) !== text) throw invalidCursor();
   } catch {
-    throw new Error("Invalid event list cursor");
+    throw invalidCursor();
   }
-  const payload = candidate as Partial<EventListCursorPayload> | null;
-  if (
-    !payload ||
-    !isNonNegativeInteger(payload.snapshot_position) ||
-    !isCursorFingerprint(payload.snapshot_fingerprint) ||
-    !isNonNegativeInteger(payload.before_position) ||
-    payload.before_position > payload.snapshot_position ||
-    !isCursorFingerprint(payload.before_fingerprint) ||
-    !isCursorFingerprint(payload.filter_fingerprint)
-  ) {
-    throw new Error("Invalid event list cursor");
-  }
-  if (payload.filter_fingerprint !== filterFingerprint(filters)) {
+
+  if (!hasExactKeys(candidate, CURSOR_PAYLOAD_KEYS)) throw invalidCursor();
+  const state: EventListCursorState = {
+    version: candidate.version as typeof EVENT_LIST_CURSOR_VERSION,
+    snapshot_position: candidate.snapshot_position as number,
+    snapshot_fingerprint: candidate.snapshot_fingerprint as string,
+    before_position: candidate.before_position as number,
+    before_fingerprint: candidate.before_fingerprint as string,
+    filter_fingerprint: candidate.filter_fingerprint as string,
+  };
+  if (!validateCursorState(state) || !isCursorFingerprint(candidate.integrity)) throw invalidCursor();
+  if (candidate.integrity !== cursorIntegrity(state)) throw invalidCursor();
+  if (state.filter_fingerprint !== filterFingerprint(filters)) {
     throw new Error("Event list cursor filter mismatch");
   }
-  return {
-    snapshot_position: payload.snapshot_position,
-    snapshot_fingerprint: payload.snapshot_fingerprint,
-    before_position: payload.before_position,
-    before_fingerprint: payload.before_fingerprint,
-    filter_fingerprint: payload.filter_fingerprint,
-  };
+  return state;
 }
 
 export function applyFullEventLimit<T>(events: T[], rawLimit: number | undefined): T[] {
@@ -143,10 +210,11 @@ export function eventListSnapshotPage(
     const cursor = decodeEventListCursor(options.cursor, options);
     currentCursor = encodeEventListCursor(cursor);
     const snapshotEvent = events.at(cursor.snapshot_position);
-    if (!snapshotEvent || eventFingerprint(snapshotEvent) !== cursor.snapshot_fingerprint) {
+    if (!snapshotEvent) throw new Error("Event list cursor snapshot is no longer available");
+    snapshotEvents = events.slice(0, cursor.snapshot_position + 1);
+    if (eventSnapshotFingerprint(snapshotEvents) !== cursor.snapshot_fingerprint) {
       throw new Error("Event list cursor snapshot is no longer available");
     }
-    snapshotEvents = events.slice(0, cursor.snapshot_position + 1);
     snapshotPosition = cursor.snapshot_position;
     snapshotId = snapshotEvent.id;
     const boundaryEvent = snapshotEvents.at(cursor.before_position);
@@ -161,8 +229,9 @@ export function eventListSnapshotPage(
   const hasMore = start > 0;
   const nextCursor = hasMore && snapshotPosition >= 0 && pageEvents[0]
     ? encodeEventListCursor({
+        version: EVENT_LIST_CURSOR_VERSION,
         snapshot_position: snapshotPosition,
-        snapshot_fingerprint: eventFingerprint(snapshotEvents[snapshotPosition]!),
+        snapshot_fingerprint: eventSnapshotFingerprint(snapshotEvents),
         before_position: start,
         before_fingerprint: eventFingerprint(pageEvents[0]),
         filter_fingerprint: filterFingerprint(options),

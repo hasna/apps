@@ -47,7 +47,13 @@ describe("commander adapter", () => {
       console.log = originalLog;
     }
 
-    expect(output).toEqual(["[]"]);
+    expect(JSON.parse(output.at(-1) ?? "{}")).toMatchObject({
+      events: [],
+      count: 0,
+      limit: DEFAULT_EVENT_LIST_LIMIT,
+      has_more: false,
+      compact: true,
+    });
   });
 
   test("persists data and metadata channel filters from embedded commands", async () => {
@@ -227,7 +233,8 @@ describe("commander adapter", () => {
     const limitOption = list?.options.find((option: { long?: string }) => option.long === "--limit");
 
     expect(limitOption).toBeDefined();
-    expect(limitOption?.defaultValue).toBe(DEFAULT_EVENT_LIST_LIMIT);
+    expect(limitOption?.defaultValue).toBeUndefined();
+    expect(limitOption?.description).toContain(`default ${DEFAULT_EVENT_LIST_LIMIT}`);
   });
 
   test("events list caps output to the configured default limit and returns the most recent events", async () => {
@@ -248,12 +255,46 @@ describe("commander adapter", () => {
       console.log = originalLog;
     }
 
-    const rows = JSON.parse(output.at(-1) ?? "[]");
-    expect(rows).toHaveLength(2);
-    expect(rows.map((row: { type: string }) => row.type)).toEqual(["testapp.two", "testapp.three"]);
+    const page = JSON.parse(output.at(-1) ?? "{}");
+    expect(page).toMatchObject({ count: 2, limit: 2, compact: true, has_more: true });
+    expect(page.events.map((row: { type: string }) => row.type)).toEqual(["testapp.two", "testapp.three"]);
+    expect(page.next_cursor).toBeString();
   });
 
-  test("events list --limit 0 lists every recorded event, overriding the default cap", async () => {
+
+  test("embedded list cursors page compact output and --full rejects a cursor explicitly", async () => {
+    const program = new Command();
+    const output: string[] = [];
+    const originalLog = console.log;
+    const previousExitCode = process.exitCode;
+    program.exitOverride();
+    program.configureOutput({ writeOut: () => undefined, writeErr: () => undefined });
+    registerEventsCommands(program, { source: "testapp", dataDir, defaultEventListLimit: 1 });
+
+    try {
+      console.log = (value?: unknown) => output.push(String(value));
+      await program.parseAsync(["node", "testapp", "events", "emit", "testapp.one", "--no-deliver"]);
+      await program.parseAsync(["node", "testapp", "events", "emit", "testapp.two", "--no-deliver"]);
+      await program.parseAsync(["node", "testapp", "events", "list", "-j"]);
+      const first = JSON.parse(output.at(-1) ?? "{}");
+      await program.parseAsync(["node", "testapp", "events", "list", "--cursor", first.next_cursor, "-j"]);
+      const second = JSON.parse(output.at(-1) ?? "{}");
+      expect(first).toMatchObject({ count: 1, has_more: true, compact: true });
+      expect(second).toMatchObject({ count: 1, has_more: false, compact: true });
+      expect(second.events[0].id).not.toBe(first.events[0].id);
+
+      await program.parseAsync(["node", "testapp", "events", "list", "--full", "--cursor", first.next_cursor, "-j"]);
+      expect(JSON.parse(output.at(-1) ?? "{}")).toEqual({
+        error: "--cursor cannot be used with --full; omit --full for paged compact output",
+      });
+      expect(process.exitCode).toBe(1);
+    } finally {
+      console.log = originalLog;
+      process.exitCode = previousExitCode ?? 0;
+    }
+  });
+
+  test("events list --full --limit 0 preserves every exact recorded event", async () => {
     const program = new Command();
     const output: string[] = [];
     const originalLog = console.log;
@@ -266,7 +307,7 @@ describe("commander adapter", () => {
       await program.parseAsync(["node", "testapp", "events", "emit", "testapp.one", "--no-deliver"]);
       await program.parseAsync(["node", "testapp", "events", "emit", "testapp.two", "--no-deliver"]);
       await program.parseAsync(["node", "testapp", "events", "emit", "testapp.three", "--no-deliver"]);
-      await program.parseAsync(["node", "testapp", "events", "list", "--limit", "0", "-j"]);
+      await program.parseAsync(["node", "testapp", "events", "list", "--full", "--limit", "0", "-j"]);
     } finally {
       console.log = originalLog;
     }
