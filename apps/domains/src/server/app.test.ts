@@ -77,7 +77,7 @@ function fakeDb(): TypedQueryClient {
   return client;
 }
 
-function appWithKey(scopes: string[]) {
+function appWithKey(scopes: string[], provisioning?: Parameters<typeof createServeApp>[0]["provisioning"]) {
   // The contracts auth verifier fails closed at construction without a
   // key-status hook. Tests wire a stub resolver reporting every minted key
   // active; the revoked-key regression below proves the hook is consulted.
@@ -86,6 +86,7 @@ function appWithKey(scopes: string[]) {
     signingSecret: SIGNING,
     version: "9.9.9",
     keyStatus: async () => "active",
+    ...(provisioning ? { provisioning } : {}),
   });
   const { token } = mintApiKey({ app: "domains", scopes, signingSecret: SIGNING });
   return { app, token };
@@ -202,6 +203,79 @@ describe("domains-serve app", () => {
     expect(res.status).toBe(404);
     // Distinguishes a wired route (record missing) from an absent route (catch-all).
     expect(((await res.json()) as Record<string, unknown>)["error"]).toBe("dns record not found");
+  });
+
+  test("hosted availability and provisioning routes delegate to the Domains authority", async () => {
+    const calls: Array<{ op: string; value: unknown }> = [];
+    const job = {
+      id: "job-1", domain_id: "dom-1", name: "proof.click", idempotency_key: "idem-proof-001",
+      request_hash: "hash", status: "requested" as const, max_price_usd: 5, years: 1, auto_renew: false,
+      registrar: "route53" as const, dns_provider: "cloudflare" as const, target: "shortlinks" as const,
+      worker_name: "hasna-link-router", provider_state: {}, attempts: 0, error: null, lease_token: null,
+      lease_until: null, created_at: "2026-09-19T00:00:00.000Z", updated_at: "2026-09-19T00:00:00.000Z",
+    };
+    const provisioning = {
+      quote: async (name: string) => { calls.push({ op: "quote", value: name }); return { name, available: true, price_usd: 3, currency: "USD" }; },
+      request: async (input: any) => { calls.push({ op: "request", value: input }); return job; },
+      get: async (id: string) => { calls.push({ op: "get", value: id }); return id === job.id ? job : null; },
+      advance: async (id: string) => { calls.push({ op: "advance", value: id }); return { ...job, status: "ready" as const }; },
+    };
+    const { app, token } = appWithKey(["domains:read", "domains:purchase"], provisioning);
+    const headers = { "x-api-key": token, "content-type": "application/json" };
+
+    const quote = await app.handle(new Request("http://x/v1/availability", { method: "POST", headers, body: JSON.stringify({ name: "proof.click" }) }));
+    expect(quote.status).toBe(200);
+    expect((await quote.json() as any).price_usd).toBe(3);
+
+    const created = await app.handle(new Request("http://x/v1/provisioning", {
+      method: "POST", headers: { ...headers, "idempotency-key": "idem-proof-001" },
+      body: JSON.stringify({ name: "proof.click", max_price_usd: 5, years: 1, auto_renew: false }),
+    }));
+    expect(created.status).toBe(202);
+    const createdBody = await created.json() as any;
+    expect(createdBody.id).toBe(job.id);
+    expect(createdBody).not.toHaveProperty("lease_token");
+    expect((calls.find((call) => call.op === "request")!.value as any).idempotency_key).toBe("idem-proof-001");
+
+    const got = await app.handle(new Request(`http://x/v1/provisioning/${job.id}`, { headers }));
+    expect(got.status).toBe(200);
+    const advanced = await app.handle(new Request(`http://x/v1/provisioning/${job.id}/advance`, { method: "POST", headers }));
+    expect(advanced.status).toBe(200);
+    expect((await advanced.json() as any).status).toBe("ready");
+  });
+
+  test("availability rejects invalid hostnames as client errors", async () => {
+    const provisioning = {
+      quote: async (name: string) => {
+        const { normalizeDomainName } = await import("../db/dns-tools.js");
+        return { name: normalizeDomainName(name), available: true, price_usd: 3 };
+      },
+      request: async () => { throw new Error("must not run"); },
+      get: async () => null,
+      advance: async () => { throw new Error("must not run"); },
+    };
+    const { app, token } = appWithKey(["domains:read"], provisioning);
+    const response = await app.handle(new Request("http://x/v1/availability", {
+      method: "POST",
+      headers: { "x-api-key": token, "content-type": "application/json" },
+      body: JSON.stringify({ name: "not a hostname" }),
+    }));
+    expect(response.status).toBe(400);
+  });
+
+  test("purchase submission requires domains:purchase, not generic write", async () => {
+    const provisioning = {
+      quote: async () => ({ name: "proof.click", available: true, price_usd: 3 }),
+      request: async () => { throw new Error("must not run"); },
+      get: async () => null,
+      advance: async () => { throw new Error("must not run"); },
+    };
+    const { app, token } = appWithKey(["domains:read", "domains:write"], provisioning);
+    const response = await app.handle(new Request("http://x/v1/provisioning", {
+      method: "POST", headers: { "x-api-key": token, "content-type": "application/json", "idempotency-key": "idem-proof-001" },
+      body: JSON.stringify({ name: "proof.click", max_price_usd: 5, years: 1, auto_renew: false }),
+    }));
+    expect(response.status).toBe(403);
   });
 
   test("a key for another app is rejected", async () => {

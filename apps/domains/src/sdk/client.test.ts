@@ -31,6 +31,7 @@ describe("DomainsClient", () => {
 
     await client.getHealth({ headers: { "x-request": "health" } });
     await client.getReady();
+    await client.checkDomainAvailability({ name: "proof.click" });
     await client.getDnsRecord("dns/id");
     await client.deleteDnsRecord("dns/id");
     await client.listDomains({ search: "a b", limit: 0, status: undefined });
@@ -42,12 +43,18 @@ describe("DomainsClient", () => {
     await client.createDnsRecord("domain/id", { type: "A", name: "@", value: "127.0.0.1" });
     await client.listOffers("domain/id");
     await client.createOffer("domain/id", { our_offer: 100 });
+    await client.requestDomainProvisioning({
+      name: "proof.click", max_price_usd: 5, years: 1, auto_renew: false,
+    }, { headers: { "idempotency-key": "proof-request-001" } });
+    await client.getDomainProvisioning("job/id");
+    await client.advanceDomainProvisioning("job/id");
     await client.getDomainStats();
     await client.getVersion();
 
     expect(calls.map(({ url, init }) => [init.method, url.pathname])).toEqual([
       ["GET", "/health"],
       ["GET", "/ready"],
+      ["POST", "/v1/availability"],
       ["GET", "/v1/dns/dns%2Fid"],
       ["DELETE", "/v1/dns/dns%2Fid"],
       ["GET", "/v1/domains"],
@@ -59,26 +66,32 @@ describe("DomainsClient", () => {
       ["POST", "/v1/domains/domain%2Fid/dns"],
       ["GET", "/v1/domains/domain%2Fid/offers"],
       ["POST", "/v1/domains/domain%2Fid/offers"],
+      ["POST", "/v1/provisioning"],
+      ["GET", "/v1/provisioning/job%2Fid"],
+      ["POST", "/v1/provisioning/job%2Fid/advance"],
       ["GET", "/v1/stats"],
       ["GET", "/version"],
     ]);
-    expect(calls[4]!.url.searchParams.toString()).toBe("search=a+b&limit=0");
+    expect(calls[5]!.url.searchParams.toString()).toBe("search=a+b&limit=0");
     expect(calls[0]!.init.headers).toEqual({
       Accept: "application/json",
       "x-client": "sdk",
       "x-request": "health",
       "x-api-key": "secret",
     });
-    expect(calls[5]!.init.headers).toEqual({
+    expect(calls[6]!.init.headers).toEqual({
       Accept: "application/json",
       "x-client": "sdk",
       "x-api-key": "secret",
       "Content-Type": "application/json",
     });
-    expect(calls[5]!.init.body).toBe('{"name":"example.com"}');
-    expect(calls[8]!.init.body).toBe('{"notes":null}');
-    expect(calls[10]!.init.body).toBe('{"type":"A","name":"@","value":"127.0.0.1"}');
-    expect(calls[12]!.init.body).toBe('{"our_offer":100}');
+    expect(calls[2]!.init.body).toBe('{"name":"proof.click"}');
+    expect(calls[6]!.init.body).toBe('{"name":"example.com"}');
+    expect(calls[9]!.init.body).toBe('{"notes":null}');
+    expect(calls[11]!.init.body).toBe('{"type":"A","name":"@","value":"127.0.0.1"}');
+    expect(calls[13]!.init.body).toBe('{"our_offer":100}');
+    expect(calls[14]!.init.body).toBe('{"name":"proof.click","max_price_usd":5,"years":1,"auto_renew":false}');
+    expect((calls[14]!.init.headers as Record<string,string>)["idempotency-key"]).toBe("proof-request-001");
   });
 
   test("returns parsed JSON, plain text, and undefined empty responses", async () => {
