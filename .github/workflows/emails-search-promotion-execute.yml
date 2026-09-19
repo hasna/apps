@@ -8,6 +8,7 @@ on:
         default: search-capacity
       phase: {type: string, required: true}
       source: {type: string, required: true}
+      kms_ci_run_id: {type: string, required: false, default: ""}
       prepared_run_id: {type: string, required: true}
       prepared_sha256: {type: string, required: true}
       reconciliation_run_id: {type: string, required: false, default: ""}
@@ -399,6 +400,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       SOURCE: ${{ inputs.source }}
+      KMS_CI_RUN_ID: ${{ inputs.kms_ci_run_id }}
       PHASE: ${{ inputs.phase }}
       PREPARED_RUN: ${{ inputs.prepared_run_id }}
       PREPARED_SHA: ${{ inputs.prepared_sha256 }}
@@ -410,7 +412,7 @@ jobs:
           persist-credentials: false
       - name: Verify paired KMS baseline controls before authority
         run: python3 -I -B tooling/deploy/emails-kms-baseline/test_baseline.py
-      - name: Authenticate exact main and reviewed paired baseline
+      - name: Authenticate CI anchor, current main inputs and reviewed paired baseline
         run: |
           python3 -I -B tooling/deploy/emails-kms-baseline/gate.py \
             --phase "$PHASE" --source "$SOURCE" --run "$PREPARED_RUN" \
