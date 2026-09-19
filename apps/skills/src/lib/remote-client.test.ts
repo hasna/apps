@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   RemoteRequestError,
   RemoteRouteUnsupportedError,
+  RemoteSkillLifecycleError,
   RemoteSkillsClient,
 } from "./remote-client.js";
 
@@ -309,6 +310,43 @@ describe("error mapping — other failures surface as RemoteRequestError", () =>
 
     expect(error).toBeInstanceOf(RemoteRequestError);
     expect((error as RemoteRequestError).status).toBe(500);
+  });
+});
+
+describe("skill lifecycle HTTP failures", () => {
+  test("archive profile conflict is typed, safe, and rejects nonzero at the CLI boundary", async () => {
+    mockServer(async () => Response.json({ code: "SKILL_ARCHIVE_PROFILE_CONFLICT", profiles: ["proof-codewith-install-owner-20260917"], message: "must not be rendered" }, { status: 409 }));
+
+    const error = await client().setSkillLifecycle("codewith-install-owner", "archived", { expectedRevisionId: "revision-1" }).then(
+      () => null,
+      (e: unknown) => e,
+    );
+
+    expect(error).toBeInstanceOf(RemoteSkillLifecycleError);
+    expect((error as RemoteSkillLifecycleError).status).toBe(409);
+    expect((error as RemoteSkillLifecycleError).code).toBe("SKILL_ARCHIVE_PROFILE_CONFLICT");
+    expect((error as Error).message).toBe("Skill lifecycle update was refused (HTTP 409, code SKILL_ARCHIVE_PROFILE_CONFLICT)");
+    expect((error as Error).message).not.toContain("proof-codewith");
+    expect((error as Error).message).not.toContain("must not be rendered");
+  });
+
+  test("successful lifecycle response remains available to callers", async () => {
+    mockServer(async () => jsonResponse({ slug: "fixture", lifecycle: "archived", revisionId: "revision-2" }));
+
+    await expect(client().setSkillLifecycle("fixture", "archived", { expectedRevisionId: "revision-1" })).resolves.toEqual({ slug: "fixture", lifecycle: "archived", revisionId: "revision-2" });
+    expect(calls[0].init?.method).toBe("PATCH");
+    expect(calls[0].init?.headers).toMatchObject({ "If-Match": "revision-1" });
+  });
+
+  test("unknown uppercase error codes are not reflected", async () => {
+    mockServer(async () => Response.json({ code: "CREDENTIAL_BEARER_SHAPED_CANARY" }, { status: 409 }));
+
+    const error = await client().setSkillLifecycle("fixture", "archived", { expectedRevisionId: "revision-1" }).catch((value: unknown) => value as RemoteSkillLifecycleError);
+
+    expect(error).toBeInstanceOf(RemoteSkillLifecycleError);
+    expect(error.code).toBeUndefined();
+    expect(error.message).toBe("Skill lifecycle update was refused (HTTP 409)");
+    expect(error.message).not.toContain("CREDENTIAL_BEARER_SHAPED_CANARY");
   });
 });
 
