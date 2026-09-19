@@ -290,6 +290,44 @@ describe("aggregate JSON paging helper", () => {
       .toThrow(AggregateCursorError);
   });
 
+  test("advances duplicate projected anchors by occurrence without duplicate or skipped pages", () => {
+    const duplicateItems = [
+      { id: 1, value: "same" },
+      { id: 2, value: "same" },
+      { id: 3, value: "same" },
+    ];
+    const options = {
+      collection: "items",
+      command: "duplicate-anchor-fixture",
+      filters: {},
+      ordering: "id-asc",
+      items: duplicateItems,
+      limit: 1,
+      project: (item: { id: number; value: string }) => ({ value: item.value }),
+    } as const;
+    const first = buildAggregatePage(options);
+    const second = buildAggregatePage({ ...options, cursor: first.next_cursor });
+    const third = buildAggregatePage({ ...options, cursor: second.next_cursor });
+    const firstPayload = JSON.parse(Buffer.from(first.next_cursor!, "base64url").toString("utf8"));
+    const secondPayload = JSON.parse(Buffer.from(second.next_cursor!, "base64url").toString("utf8"));
+
+    expect(firstPayload.a).toBe(secondPayload.a);
+    expect(firstPayload.c).toBe(1);
+    expect(secondPayload.c).toBe(2);
+    expect(first.count).toBe(1);
+    expect(second.count).toBe(1);
+    expect(third.count).toBe(1);
+    expect(third.next_cursor).toBeNull();
+    expect(third.complete).toBe(true);
+  });
+
+  test("rejects empty and oversized cursor bounds instead of restarting", () => {
+    expect(() => buildAggregatePage({ ...baseOptions, items: baseItems, cursor: "" }))
+      .toThrow("invalid aggregate cursor encoding");
+    expect(() => buildAggregatePage({ ...baseOptions, items: baseItems, cursor: "a".repeat(513) }))
+      .toThrow("invalid aggregate cursor encoding");
+  });
+
   test("rejects a structurally valid cursor whose anchor or occurrence was forged", () => {
     const first = buildAggregatePage({ ...baseOptions, items: baseItems });
     const decoded = JSON.parse(Buffer.from(first.next_cursor!, "base64url").toString("utf8"));

@@ -285,6 +285,10 @@ describe("repos issues CLI verb", () => {
     const numeric = runCli(["issues", "--json", "--cursor", "7"]);
     expect(numeric.exitCode).toBe(1);
     expect(new TextDecoder().decode(numeric.stderr)).toContain("invalid aggregate cursor");
+
+    const empty = runCli(["issues", "--json", "--cursor", ""]);
+    expect(empty.exitCode).toBe(1);
+    expect(new TextDecoder().decode(empty.stderr)).toContain("invalid aggregate cursor encoding");
   });
 
   test("issue cursors fail closed on delete and reorder mutations", () => {

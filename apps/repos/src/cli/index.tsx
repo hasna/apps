@@ -389,7 +389,7 @@ function aggregateWindow<T>(items: readonly T[], opts: AggregateCliOptions): {
   shown: T[];
   limit: number;
 } {
-  if (opts.cursor) {
+  if (opts.cursor !== undefined) {
     printError("--cursor is an opaque machine-page cursor and requires --json");
     process.exit(1);
   }

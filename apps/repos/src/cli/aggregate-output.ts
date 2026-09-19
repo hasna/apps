@@ -217,9 +217,10 @@ export function buildAggregatePage<T, U>(options: AggregatePageOptions<T, U>): A
     seenAnchors.set(anchor, occurrence);
     return occurrence;
   });
-  const inputCursor = options.cursor ?? null;
-  const start = inputCursor
-    ? decodeCursor(inputCursor, contextDigest, snapshotDigest, anchors)
+  const hasInputCursor = options.cursor !== undefined && options.cursor !== null;
+  const inputCursor = hasInputCursor ? options.cursor! : null;
+  const start = hasInputCursor
+    ? decodeCursor(inputCursor!, contextDigest, snapshotDigest, anchors)
     : 0;
   const candidates = projected.slice(start, start + limit);
   const rows: U[] = [];
