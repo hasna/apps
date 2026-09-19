@@ -7,7 +7,18 @@
 # The one-shot migration task overrides CMD with: domains db migrate
 # =============================================================================
 
-FROM oven/bun:1.3.14 AS builder
+# Pinned multi-architecture Alpine index. The previous Debian slim runtime
+# carried 3 CRITICAL and 85 HIGH OS findings on September 19, 2026, so the
+# production vulnerability gate correctly refused it before AWS authentication.
+# Alpine removes the Debian perl/util-linux class; the exact OpenSSL floor below
+# carries the current fixes without weakening the zero-CRITICAL/HIGH gate.
+ARG BUN_IMAGE=oven/bun:1.3.14-alpine@sha256:5acc90a93e91ff07bf72aa90a7c9f0fa189765aec90b47bdbf2152d2196383c0
+ARG BUN_VERSION=1.3.14
+ARG OPENSSL_VERSION=3.5.8-r0
+
+FROM ${BUN_IMAGE} AS builder
+ARG BUN_VERSION
+RUN test "$(bun --version)" = "${BUN_VERSION}"
 WORKDIR /app
 
 # Install dependencies against the committed lockfile.
@@ -32,8 +43,18 @@ RUN bun run build
 RUN rm -rf node_modules && bun install --frozen-lockfile --production --ignore-scripts
 
 # -----------------------------------------------------------------------------
-FROM oven/bun:1.3.14-slim AS runtime
+FROM ${BUN_IMAGE} AS runtime
+ARG BUN_VERSION
+ARG OPENSSL_VERSION
 WORKDIR /app
+RUN test "$(bun --version)" = "${BUN_VERSION}" \
+ && apk add --no-cache \
+      "libcrypto3=${OPENSSL_VERSION}" \
+      "libssl3=${OPENSSL_VERSION}" \
+ && apk info -vv | grep -q "^libcrypto3-${OPENSSL_VERSION} - " \
+ && apk info -vv | grep -q "^libssl3-${OPENSSL_VERSION} - " \
+ && ! apk info -e perl \
+ && ! apk info -e util-linux
 ENV NODE_ENV=production \
     PORT=8080 \
     HOST=0.0.0.0 \
