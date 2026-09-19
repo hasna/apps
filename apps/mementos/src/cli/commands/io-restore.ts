@@ -153,7 +153,7 @@ export function registerRestoreCommand(program: Command): void {
 
           if (!opts.force) {
             if (globalOpts.json) {
-              await outputJsonAndExit({
+              outputJson({
                 action: "restore",
                 source,
                 target: "cloud-api",
@@ -162,7 +162,7 @@ export function registerRestoreCommand(program: Command): void {
                 status: "dry_run",
                 message:
                   "Restores the backup's memories into the hosted store; existing store rows are never overwritten. Use --force to confirm.",
-              }, 1);
+              });
               return;
             }
             console.log(chalk.bold("Restore preview (hosted store):"));
