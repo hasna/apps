@@ -39,7 +39,7 @@ describe("search-index CLI", () => {
     }).exitCode).toBe(0);
 
     const list = Bun.spawnSync({
-      cmd: ["bun", "run", cliPath, "list", "--json"],
+      cmd: ["bun", "run", cliPath, "list", "--json", "--full"],
       env,
       stdout: "pipe",
       stderr: "pipe",
@@ -80,7 +80,7 @@ describe("search-index CLI", () => {
     expect(document.searchable_text).toBeUndefined();
 
     const search = Bun.spawnSync({
-      cmd: ["bun", "run", cliPath, "search", "warehouse lease", "--scope", "content", "--json"],
+      cmd: ["bun", "run", cliPath, "search", "warehouse lease", "--scope", "content", "--json", "--full"],
       env,
       stdout: "pipe",
       stderr: "pipe",

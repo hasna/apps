@@ -46,7 +46,7 @@ describe("knowledge CLI", () => {
     const source = sources.find((entry) => entry.name === "docs")!;
 
     const listProc = Bun.spawnSync({
-      cmd: ["bun", "run", cliPath, "list", "--json"],
+      cmd: ["bun", "run", cliPath, "list", "--json", "--full"],
       env,
       stdout: "pipe",
       stderr: "pipe",

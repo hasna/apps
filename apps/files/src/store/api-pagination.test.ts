@@ -177,6 +177,7 @@ describe("ApiStore listFiles logical limits", () => {
         "--offset",
         "0",
         "--json",
+        "--full",
       ], {
         cwd: process.cwd(),
         env: {

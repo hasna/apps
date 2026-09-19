@@ -193,7 +193,8 @@ describe("CLI hosted list/search — the verbs work against the /v1 backend", ()
       });
       expect(out.exitCode).toBe(0);
       expect(out.stderr.replace(/^\[files\] DEPRECATED:.*\n/gm, "")).toBe("");
-      expect(JSON.parse(out.stdout)).toHaveLength(2);
+      const page = JSON.parse(out.stdout) as { items: Array<Record<string, unknown>> };
+      expect(page.items).toHaveLength(2);
       const query = received[0]!;
       expect(query.collection_id).toBe("col_1");
       expect(query.after).toBe("2026-06-01");
@@ -229,10 +230,10 @@ describe("CLI hosted list/search — the verbs work against the /v1 backend", ()
       });
       expect(out.exitCode).toBe(0);
       expect(out.stderr.replace(/^\[files\] DEPRECATED:.*\n/gm, "")).toBe("");
-      const parsed = JSON.parse(out.stdout) as Array<{ rank: number; search_match_sources: string[] }>;
-      expect(parsed).toHaveLength(1);
-      expect(parsed[0]!.rank).toBe(0.87);
-      expect(parsed[0]!.search_match_sources).toEqual(["content"]);
+      const parsed = JSON.parse(out.stdout) as { items: Array<{ rank: number; search_match_sources: string[] }> };
+      expect(parsed.items).toHaveLength(1);
+      expect(parsed.items[0]!.rank).toBe(0.87);
+      expect(parsed.items[0]!.search_match_sources).toEqual(["content"]);
       expect(received[0]!.q).toBe("warehouse lease");
       expect(received[0]!.search_scope).toBe("content");
     } finally {

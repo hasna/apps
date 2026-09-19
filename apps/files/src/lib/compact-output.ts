@@ -1,7 +1,12 @@
+import { createHash } from "node:crypto";
 import { FILES_API_MAX_PAGE_SIZE } from "./api-pagination.js";
 import type { FileWithTags, SearchResult } from "../types/index.js";
 
 export type FileOutputDetail = "compact" | "full";
+export type FilePageCursorKind = "list" | "search";
+
+export const FILE_PAGE_CURSOR_CONTRACT = "files.collection.page.v1";
+const MAX_FILE_PAGE_CURSOR_BYTES = 2_048;
 
 export const DEFAULT_COMPACT_FILE_MAX_BYTES = 32 * 1024;
 export const MAX_COMPACT_FILE_MAX_BYTES = 1024 * 1024;
@@ -79,11 +84,19 @@ const FIELD_STRING_LIMITS: Partial<Record<FileOutputField, number>> = {
 const MAX_ARRAY_ITEMS = 20;
 const MAX_ARRAY_STRING_CHARS = 128;
 
+export interface FilePageContinuation {
+  kind: FilePageCursorKind;
+  query: Record<string, unknown>;
+}
+
 export interface FilePageMeta {
   count: number;
   limit: number;
   offset: number;
   next_offset: number | null;
+  cursor_contract?: typeof FILE_PAGE_CURSOR_CONTRACT;
+  cursor?: string | null;
+  next_cursor?: string | null;
   has_more: boolean;
   end_reached: boolean;
   complete: boolean;
@@ -110,6 +123,93 @@ export interface BuildFilePageOptions {
   pretty?: boolean;
   trailingNewline?: boolean;
   all?: boolean;
+  continuation?: FilePageContinuation;
+}
+
+interface FilePageCursorPayload {
+  v: 1;
+  kind: FilePageCursorKind;
+  offset: number;
+  query: string;
+}
+
+export function filePageQueryFingerprint(query: Record<string, unknown>): string {
+  return createHash("sha256").update(canonicalJson(query)).digest("base64url").slice(0, 24);
+}
+
+export function encodeFilePageCursor(
+  kind: FilePageCursorKind,
+  offset: number,
+  query: Record<string, unknown>,
+): string {
+  if (!Number.isSafeInteger(offset) || offset < 0) {
+    throw new Error("file page cursor offset must be a non-negative safe integer");
+  }
+  const payload: FilePageCursorPayload = {
+    v: 1,
+    kind,
+    offset,
+    query: filePageQueryFingerprint(query),
+  };
+  return Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+}
+
+export function decodeFilePageCursor(
+  cursor: string,
+  kind: FilePageCursorKind,
+  query: Record<string, unknown>,
+): number {
+  if (
+    typeof cursor !== "string"
+    || cursor.length === 0
+    || Buffer.byteLength(cursor, "utf8") > MAX_FILE_PAGE_CURSOR_BYTES
+    || !/^[A-Za-z0-9_-]+$/.test(cursor)
+  ) {
+    throw new Error("Invalid file page cursor");
+  }
+  let decoded: Buffer;
+  let value: unknown;
+  try {
+    decoded = Buffer.from(cursor, "base64url");
+    if (decoded.toString("base64url") !== cursor) throw new Error("noncanonical");
+    value = JSON.parse(decoded.toString("utf8"));
+  } catch {
+    throw new Error("Invalid file page cursor");
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Invalid file page cursor");
+  }
+  const payload = value as Partial<FilePageCursorPayload> & Record<string, unknown>;
+  if (
+    Object.keys(payload).sort().join(",") !== "kind,offset,query,v"
+    || payload.v !== 1
+    || !Number.isSafeInteger(payload.offset)
+    || (payload.offset as number) < 0
+    || typeof payload.kind !== "string"
+    || typeof payload.query !== "string"
+  ) {
+    throw new Error("Invalid file page cursor");
+  }
+  if (payload.kind !== kind || payload.query !== filePageQueryFingerprint(query)) {
+    throw new Error("File page cursor does not match this query");
+  }
+  if (encodeFilePageCursor(kind, payload.offset as number, query) !== cursor) {
+    throw new Error("Invalid file page cursor");
+  }
+  return payload.offset as number;
+}
+
+export function resolveFilePageOffset(
+  cursor: string | undefined,
+  explicitOffset: number | undefined,
+  continuation: FilePageContinuation,
+): number {
+  if (cursor !== undefined && explicitOffset !== undefined) {
+    throw new Error("Pass cursor or offset, not both");
+  }
+  return cursor === undefined
+    ? explicitOffset ?? 0
+    : decodeFilePageCursor(cursor, continuation.kind, continuation.query);
 }
 
 export function parseFileDetail(value: string | undefined): FileOutputDetail {
@@ -259,6 +359,15 @@ function makePage<T>(
       limit: options.limit,
       offset: options.offset,
       next_offset: hasMore ? options.offset + items.length : null,
+      ...(options.continuation ? {
+        cursor_contract: FILE_PAGE_CURSOR_CONTRACT,
+        cursor: options.offset === 0
+          ? null
+          : encodeFilePageCursor(options.continuation.kind, options.offset, options.continuation.query),
+        next_cursor: hasMore
+          ? encodeFilePageCursor(options.continuation.kind, options.offset + items.length, options.continuation.query)
+          : null,
+      } : {}),
       has_more: hasMore,
       end_reached: !hasMore,
       complete: !hasMore && options.offset === 0,
@@ -322,6 +431,18 @@ function compactFieldValue(
     return clipped;
   }
   return value;
+}
+
+function canonicalJson(value: unknown): string {
+  if (value === undefined) return "null";
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record)
+    .filter((key) => record[key] !== undefined)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`)
+    .join(",")}}`;
 }
 
 export function filePageJson(page: FilePage<unknown>, pretty = false): string {
