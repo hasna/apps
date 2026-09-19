@@ -16,9 +16,11 @@ Commander help. `repos --version` and all standalone executables support
 ## Output and startup behavior
 
 Human list output is compact and usually capped. `--verbose` widens commands
-that offer it, while `--json` returns full machine-readable records. Paginated
-list commands accept `--limit` and `--offset` or `--cursor`; `repos repos` and
-`repos prs` warn on stderr when a JSON page is not the complete result.
+that offer it. High-volume machine lists and secondary aggregates use minified,
+continuation-bearing JSON pages by default; explicit `--full`/`--all` flags
+retain exhaustive legacy arrays where documented. Paginated commands accept
+`--limit` and `--offset` or `--cursor`; envelopes report `total`, `next_cursor`,
+`has_more`, and whether the page is complete.
 
 Before most commands, the CLI bootstraps an empty or differently configured
 index, installs its marked `post-commit` hook block, and scans configured
@@ -54,12 +56,12 @@ print unusable registry rows but exit non-zero unless
 | `repos status` | Stable metadata-only inventory contract with no names, paths, branches, messages, or remote URLs; `--json` |
 | `repos activity` | `--days`, `-n/--limit`, `--verbose`, `--json` |
 | `repos contributors` | `--repo`, `-n/--limit`, `--verbose`, `--json` |
-| `repos stale` | `--days`, `-n/--limit` for human output, `--verbose`, `--json` |
+| `repos stale` | `--days`, `-n/--limit`, `--cursor`, `--verbose`, `--json`; JSON defaults to a 20-row compact page under 32 KiB, while `--full`/`--all` restores the exhaustive legacy array |
 | `repos heatmap` | `--repo`, `--json` |
 | `repos gh-info <name>` | Fetch description, language, stars, forks, and topics through `gh`; `--json` |
 | `repos find <file>` | Find a path fragment across indexed repos; `-n/--limit`, `--verbose`, `--json` |
-| `repos who <query>` | Author aggregates; `-n/--limit` for human output, `--verbose`, `--json` |
-| `repos diff-stats` | `--today`, `--week`, or `--days`; `-n/--limit` for human output, `--verbose`, `--json` |
+| `repos who <query>` | Author aggregates; `-n/--limit`, `--cursor`, `--verbose`, `--json`; compact paged JSON by default, exhaustive with `--full`/`--all` |
+| `repos diff-stats` | `--today`, `--week`, or `--days`; `-n/--limit`, `--cursor`, `--verbose`, `--json`; compact paged JSON by default, exhaustive with `--full`/`--all` |
 | `repos report` | Period summary; `--days`, `--verbose`, `--json` |
 | `repos churn` | Changed-file frequency; `--days`, `-n/--limit`, `--verbose`, `--json` |
 | `repos languages` | Language/org summary; `-n/--limit` for human output, `--verbose`, `--json` |
@@ -81,9 +83,9 @@ counts plus the full per-PR `state` read.
 
 | Command | Options and behavior |
 |---|---|
-| `repos dirty` | Repos with modified, untracked, or staged files; `-n/--limit`, `--verbose`, `--json` |
-| `repos unpushed` | Repos ahead of their tracking branch; `-n/--limit`, `--verbose`, `--json` |
-| `repos behind` | Repos behind their tracking branch; `--fetch`, `-n/--limit`, `--verbose`, `--json` |
+| `repos dirty` | Repos with modified, untracked, or staged files; `-n/--limit`, `--cursor`, `--verbose`, `--json`; compact JSON omits paths, exhaustive legacy paths require `--full`/`--all` |
+| `repos unpushed` | Repos ahead of their tracking branch; `-n/--limit`, `--cursor`, `--verbose`, `--json`; compact JSON omits paths, exhaustive legacy paths require `--full`/`--all` |
+| `repos behind` | Repos behind their tracking branch; `--fetch`, `-n/--limit`, `--cursor`, `--verbose`, `--json`; compact JSON omits paths, exhaustive legacy paths require `--full`/`--all` |
 | `repos health` | Combined dirty, unpushed, behind, and 30-day stale report; `-n/--limit`, `--verbose`, `--json` |
 | `repos cd [name]` | Print one usable path; `--remote`, `--exact` |
 | `repos open [name]` | Open one usable path in VS Code; `--remote`, `--exact` |
@@ -211,8 +213,8 @@ Run `repos graph build` after indexing before querying derived relationships.
 | `repos graph query <type> <id>` | `-n/--limit`, `--verbose`, `--json`; types are `repo`, `author`, `org`, `language` |
 | `repos graph related <repo>` | `-n/--limit`, `--verbose`, `--json` |
 | `repos graph path <from-type> <from-id> <to-type> <to-id>` | `--verbose`, `--json` |
-| `repos graph deps <repo>` | `--depth`, `-n/--limit` for human output, `--verbose`, `--json` |
-| `repos graph authors` | `-n/--limit` for human output, `--verbose`, `--json` |
+| `repos graph deps <repo>` | `--depth`, `-n/--limit`, `--cursor`, `--verbose`, `--json`; compact paged JSON by default, exhaustive with `--full`/`--all` |
+| `repos graph authors` | `-n/--limit`, `--cursor`, `--verbose`, `--json`; compact paged JSON by default, exhaustive with `--full`/`--all` |
 | `repos graph stats` | `--json` |
 
 ## Database and completion utilities

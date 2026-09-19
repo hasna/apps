@@ -100,13 +100,19 @@ registered by `@hasna/events`.
 | `repos events ...` / `repos webhooks ...` | Emit/replay events and manage event subscriptions |
 | `repos backup` / `repos restore` | Copy or restore the selected SQLite registry |
 
+Secondary aggregate commands (`stale`, `who`, `diff-stats`, `dirty`,
+`unpushed`, `behind`, `graph deps`, and `graph authors`) return minified,
+20-row JSON pages by default. Pages are capped at 32 KiB and include `total`,
+`next_cursor`, and `has_more`; continue with `--cursor`, or request the
+exhaustive legacy array explicitly with `--full`/`--all`.
+
 CLI output is compact by default so it stays readable in agent terminals:
 
 - List/search/status-style commands show essential fields, truncate long text, and cap human rows by default.
 - Use `--verbose` for wider human rows and extra fields.
 - Use `--limit` plus `--cursor` or `--offset` on paginated list commands for more rows.
 - Use `repos show <name>` or `repos inspect <name>` for full repo detail.
-- Use `--json` for machine-readable records. JSON output keeps full fields where possible.
+- Use `--json` for machine-readable records. High-volume collections use bounded compact pages; request explicit full output only when needed.
 
 ### no-cloud registry inventory
 
