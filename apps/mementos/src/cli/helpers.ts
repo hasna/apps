@@ -130,7 +130,11 @@ export function resolveEntityArg(nameOrId: string, type?: EntityType): Entity {
 // ============================================================================
 
 export function outputJson(data: unknown): void {
-  console.log(JSON.stringify(data, null, 2));
+  // `console.log` can return before a large pipe write is drained. CLI callers
+  // exit immediately after emitting JSON, which truncates unbounded payloads
+  // while still returning status 0. Keep the serialization single-shot and
+  // use the stdout stream directly so the runtime owns the complete write.
+  process.stdout.write(`${JSON.stringify(data, null, 2)}\n`);
 }
 
 export const DEFAULT_COMPACT_LIMIT = 20;
