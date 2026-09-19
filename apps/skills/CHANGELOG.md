@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.4
+
+### Patch Changes
+
+- a9e4016: Accept harmless Codex native TOML table reordering while preserving unrelated hook configuration.
+- a9e4016: Add guarded reconciliation for interrupted Codex native trust writes, including exact legacy journal recovery and fail-closed drift checks.
+
 ## 0.9.3
 
 ### Minor Changes
