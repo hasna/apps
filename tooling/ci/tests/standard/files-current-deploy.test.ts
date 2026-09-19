@@ -73,8 +73,14 @@ describe("Files current-server deployment lane", () => {
     expect(dataPlane).toContain('--header "@${HEADER_FILE}"');
     expect(dataPlane).toContain('double_v1_paths:0');
     expect(workflow).toContain('FILES_CLIENT_KEY_SECRET_ID: hasna/oss/files/api-key');
+    expect(workflow).toContain('Resolve authenticated receipt credential before mutation');
     expect(workflow).toContain('aws secretsmanager get-secret-value');
+    expect(workflow).toContain('Remove authenticated receipt credential');
     expect(workflow).toContain('apps/files/data-plane-canonical.json');
+    const credentialPreflight = workflow.indexOf('Resolve authenticated receipt credential before mutation');
+    const authorityStep = workflow.indexOf("Configure AWS credentials with GitHub OIDC");
+    expect(credentialPreflight).toBeGreaterThan(authorityStep);
+    expect(credentialPreflight).toBeLessThan(mutation);
     expect(workflow).toContain('HASNA_FILES_DEPLOY_SOURCE_COMMIT');
     expect(workflow).toContain('HASNA_FILES_DEPLOY_IMAGE_DIGEST');
     expect(workflow).toContain('deployed_source_commit');
