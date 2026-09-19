@@ -21,6 +21,9 @@ export interface SkillMeta {
   tags: string[];
   dependencies?: string[];
   version?: string;
+  /** Server registry revision and lifecycle, when supplied by a remote read. */
+  revisionId?: string;
+  lifecycle?: "active" | "archived";
   /**
    * Artifact class of the skill. "executable" skills carry a runnable
    * package.json/bin/src; "instruction" skills are SKILL.md-primary prose for
