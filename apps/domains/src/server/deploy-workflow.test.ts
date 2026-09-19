@@ -39,6 +39,16 @@ describe("Domains production deployment workflow", () => {
     expect(workflow).toContain("valueFrom:.value");
   });
 
+  test("projects required provider environment from the reviewed manifest", () => {
+    expect(workflow).toContain("web_environment=\"$(jq -ce");
+    for (const name of ["CLOUDFLARE_ACCOUNT_ID", "DOMAINS_REGISTRANT_SOURCE_DOMAIN", "DOMAINS_PROVISIONING_INTERVAL_MS"]) {
+      expect(workflow).toContain(`has(\"${name}\")`);
+    }
+    expect(workflow).toContain("MANIFEST_WEB_ENVIRONMENT");
+    expect(workflow).toContain("required_environment");
+    expect(workflow).toContain("value:.value");
+  });
+
   test("refuses a failed service pointer as a rollback anchor", () => {
     expect(workflow).toContain('rolloutState == "COMPLETED"');
     expect(workflow).toContain('rolloutState == "FAILED"');
