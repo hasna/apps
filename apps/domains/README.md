@@ -318,6 +318,7 @@ Hosted provisioning runtime requirements:
 - `DOMAINS_REGISTRANT_SOURCE_DOMAIN` naming an existing Route 53 domain whose registrant contact can be reused in-process; contact data is never accepted from or returned to API clients.
 - `CLOUDFLARE_ACCOUNT_ID` plus `CLOUDFLARE_API_TOKEN`, scoped to zone management and Worker Custom Domain binding. Hosted provisioning deliberately rejects Cloudflare global API key/email authentication.
 - Optional `DOMAINS_PROVISIONING_INTERVAL_MS` (default `5000`) for the durable background worker.
+- Optional `DOMAINS_PROVISIONING_MAX_ATTEMPTS` (default `17280`) bounds consecutive polls within one state; successful state transitions reset the counter so normal registrar/DNS/certificate waits do not consume the whole job budget.
 
 Consumers must call this API (normally through `@hasna/domains/sdk`) rather than holding registrar or Cloudflare purchase credentials themselves.
 

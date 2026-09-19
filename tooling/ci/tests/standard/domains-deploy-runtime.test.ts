@@ -36,7 +36,7 @@ describe("Domains manifest secret projection", () => {
     expect(workflow).toContain("MANIFEST_WEB_SECRETS");
     expect(workflow).toContain("required_secrets");
     expect(workflow).toContain("valueFrom:.value");
-    for (const name of ["CLOUDFLARE_ACCOUNT_ID", "DOMAINS_REGISTRANT_SOURCE_DOMAIN", "DOMAINS_PROVISIONING_INTERVAL_MS"]) {
+    for (const name of ["CLOUDFLARE_ACCOUNT_ID", "DOMAINS_REGISTRANT_SOURCE_DOMAIN", "DOMAINS_PROVISIONING_INTERVAL_MS", "DOMAINS_PROVISIONING_MAX_ATTEMPTS"]) {
       expect(workflow).toContain(`has(\"${name}\")`);
     }
     expect(workflow).toContain("MANIFEST_WEB_ENVIRONMENT");

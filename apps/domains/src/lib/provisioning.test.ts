@@ -235,6 +235,29 @@ describe("DomainProvisioningService", () => {
     expect(store.ready).toHaveLength(1);
   });
 
+  test("resets the bounded attempt counter on state transitions", async () => {
+    const store = new MemoryStore();
+    const pending = providers({
+      getOperationStatus: async () => ({ status: "IN_PROGRESS" }),
+    });
+    const service = new DomainProvisioningService(store, pending, { maxAttempts: 2 });
+    let job = await service.request(request());
+    job = await service.advance(job.id);
+    expect(job.status).toBe("quoted");
+    expect(job.attempts).toBe(0);
+    job = await service.advance(job.id);
+    expect(job.status).toBe("registration_submitted");
+    expect(job.attempts).toBe(0);
+    job = await service.advance(job.id);
+    expect(job.status).toBe("registration_submitted");
+    expect(job.attempts).toBe(1);
+    job = await service.advance(job.id);
+    expect(job.attempts).toBe(2);
+    job = await service.advance(job.id);
+    expect(job.status).toBe("failed");
+    expect(job.error).toContain("attempt limit");
+  });
+
   test("rejects invalid worker scheduling options instead of starting a hot loop", () => {
     const store = new MemoryStore();
     expect(() => new DomainProvisioningService(store, providers(), { intervalMs: Number.NaN })).toThrow("intervalMs");

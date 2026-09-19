@@ -239,7 +239,11 @@ export class DomainProvisioningService {
     this.intervalMs = positiveIntegerOption("intervalMs", options.intervalMs, 5_000);
     this.batchSize = positiveIntegerOption("batchSize", options.batchSize, 5);
     this.leaseMs = positiveIntegerOption("leaseMs", options.leaseMs, 60_000);
-    this.maxAttempts = positiveIntegerOption("maxAttempts", options.maxAttempts, 240);
+    // Polling successful but externally pending provider states is normal and
+    // may last hours (registrar operations, NS propagation, certificate issue).
+    // Keep the default bounded, but large enough for two active workers at the
+    // default cadence; transitions reset the per-state counter below.
+    this.maxAttempts = positiveIntegerOption("maxAttempts", options.maxAttempts, 17_280);
     this.now = options.now ?? (() => new Date());
     this.log = options.log ?? (() => {});
   }
@@ -314,7 +318,11 @@ export class DomainProvisioningService {
     const clearLease = { lease_token: null, lease_until: null } as const;
     const update = async (
       patch: Partial<Pick<DomainProvisioningJob, "status" | "provider_state" | "attempts" | "error" | "lease_token" | "lease_until">>,
-    ) => (await this.store.update(job.id, { attempts: nextAttempts, error: null, ...patch }, leaseToken))!;
+    ) => {
+      const transitioned = patch.status !== undefined && patch.status !== job.status;
+      const attempts = patch.attempts ?? (transitioned ? 0 : nextAttempts);
+      return (await this.store.update(job.id, { attempts, error: null, ...patch }, leaseToken))!;
+    };
 
     switch (job.status) {
       case "requested": {
@@ -346,7 +354,7 @@ export class DomainProvisioningService {
         };
         const submitting = await this.store.update(job.id, {
           status: "registration_submitting",
-          attempts: nextAttempts,
+          attempts: 0,
           error: null,
           provider_state: providerState,
         }, leaseToken);
