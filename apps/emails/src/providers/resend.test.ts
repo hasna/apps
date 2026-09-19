@@ -574,19 +574,18 @@ describe("ResendAdapter.sendEmail", () => {
     expect(attachments[0]!.content).toBeInstanceOf(Buffer);
   });
 
-  it("returns empty string when response has no id", async () => {
+  it("keeps the outcome uncertain when the response has no id", async () => {
     mockEmailsSend.mockImplementation(async (_payload: unknown) => ({
       data: {},
       error: null,
     }));
     const adapter = new ResendAdapter(makeProvider());
-    const id = await adapter.sendEmail({
+    await expect(adapter.sendEmail({
       from: "a@example.com",
       to: "b@example.com",
       subject: "Test",
       text: "Body",
-    });
-    expect(id).toBe("");
+    })).rejects.toThrow("Resend send outcome is uncertain: provider response did not include a valid message ID");
   });
 
   it("throws when result has an error", async () => {

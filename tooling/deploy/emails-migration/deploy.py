@@ -27,6 +27,7 @@ DIGEST_PATTERN = re.compile(r"sha256:[0-9a-f]{64}")
 SHA64 = re.compile(r"[0-9a-f]{64}")
 RECEIPT_MARKER = "EMAILS_MIGRATION_RECEIPT:"
 MIGRATION_EXECUTION_ENABLED = False  # Requires atomic migration and paired API/worker cutover review.
+MIGRATION_PREPARE_ENABLED = False  # Requires a dedicated read-only probe task and launcher authority.
 
 
 def require(ok, code):
@@ -455,6 +456,7 @@ def service_matches_reconciliation(reconciled):
 
 
 def prepare(source, inputs, image_digest, out):
+    require(MIGRATION_PREPARE_ENABLED, "MIGRATION_PREPARE_DISABLED")
     reconciled = load_migration_reconciliation(inputs)
     require(reconciled.get("sourceCommit") == source, "MIGRATION_RECONCILIATION_SOURCE")
     require(promotion.aws("sts", "get-caller-identity")["Account"] == promotion.ACCOUNT, "AWS_ACCOUNT")

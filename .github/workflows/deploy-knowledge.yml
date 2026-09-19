@@ -153,7 +153,12 @@ jobs:
           set -Eeuo pipefail
           test "$(aws sts get-caller-identity --query Account --output text)" = "$AWS_ACCOUNT_ID"
           aws ecr describe-repositories --repository-names knowledge > "$RUNNER_TEMP/knowledge-ecr.json"
-          jq -e '.repositories | length == 1 and .[0].imageTagMutability == "IMMUTABLE" and .[0].imageScanningConfiguration.scanOnPush == true' "$RUNNER_TEMP/knowledge-ecr.json" >/dev/null
+          repository_count="$(jq -r '.repositories | length' "$RUNNER_TEMP/knowledge-ecr.json")"
+          [[ "$repository_count" == "1" ]] || { echo "::error::ECR describe-repositories returned .repositories length ${repository_count} for knowledge, expected exactly 1"; exit 1; }
+          image_tag_mutability="$(jq -r '.repositories[0].imageTagMutability' "$RUNNER_TEMP/knowledge-ecr.json")"
+          [[ "$image_tag_mutability" == "IMMUTABLE" ]] || { echo "::error::ECR repository knowledge imageTagMutability=${image_tag_mutability}, expected IMMUTABLE"; exit 1; }
+          scan_on_push="$(jq -c '.repositories[0].imageScanningConfiguration.scanOnPush' "$RUNNER_TEMP/knowledge-ecr.json")"
+          [[ "$scan_on_push" == "true" ]] || { echo "::error::ECR repository knowledge imageScanningConfiguration.scanOnPush=${scan_on_push}, expected true"; exit 1; }
           registry="$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
           image_tag="deploy-$SOURCE_SHA-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           aws ecr get-login-password | docker login --username AWS --password-stdin "$registry"

@@ -86,7 +86,7 @@ additive comma-separated profile list with `--mcp-profile`,
   audit, and eviction;
 - `storage` — storage status, sync, and migration operations;
 - `hooks` — hooks, webhooks, subscriptions, tool events, and feedback;
-- `full` — compatibility profile exposing all 123 tools and the three legacy
+- `full` — compatibility profile exposing all 124 tools and the three legacy
   unpaged resources.
 
 Every reduced profile includes `core`, and profiles compose:
@@ -141,7 +141,7 @@ agent-workflow-<name>  -- process knowledge
 |------|------------|
 | **@hasna/sessions** | `session_extract()` after session ingest → auto-save learnings |
 | **@hasna/todos** | Include `session_id` in memory_save when working on a task |
-| **Attachments service** | Store attachment IDs as memory values |
+| **@hasna/attachments** | Store attachment IDs as memory values |
 | **@hasna/conversations** | `update_agent(active_project_id)` → mementos as agent registry |
 | **@hasna/instructions** | `memory_inject()` for context; config decisions as `fact` memories |
 

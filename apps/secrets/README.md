@@ -53,6 +53,32 @@ remote secret name remains supported. Otherwise canonical names shaped as
 `<PROVIDER>_<WORKLOAD>_<KEY>`. All metadata pages are considered, and missing,
 ambiguous, non-current, or non-string selections fail before the child runs.
 
+Use `--secret-ref` to select one exact AWS Secrets Manager ARN independently of
+the child variable. This performs one value request without listing secrets or
+trying alternate names:
+
+```bash
+secrets exec --provider your-source-profile --account "$AWS_ACCOUNT_ID" \
+  --env SERVICE_CREDENTIAL --secret-ref "$AWS_SECRET_REF" -- my-tool sync
+```
+
+The reference can be a full secret ARN or the native ECS form
+`<secret-arn>:<json-key>:<version-stage>:<version-id>`. Keep all three suffix
+separators when selecting a JSON field or version; empty fields are allowed.
+Specify a version stage or version ID, never both. With neither, the selected
+stage is `AWSCURRENT`. A JSON field must exist directly on the returned object
+and contain a string; binary values and other JSON types are refused.
+
+The configured profile must unambiguously match the requested account. Its
+configured region, when present, must match the ARN. The command also checks
+the caller's actual account before reading and verifies the returned ARN and
+version selection. Errors omit provider messages and secret content. Existing
+provider commands without `--secret-ref` keep their original selection rules.
+
+`exec` supplies one binding per invocation. Only run a trusted child: its output
+is inherited, and that child can read or print the injected value. Nested `exec`
+commands also inherit earlier bindings in their intermediate processes.
+
 Prove a secret exists or compare values without revealing them:
 
 ```bash
@@ -932,7 +958,7 @@ failures, and skips fail the gate. Repository branch protection must require the
 
 Use only a disposable PostgreSQL fixture with the `secrets_test` administrative
 user and `secrets_test` database on literal `127.0.0.1` with an explicit port:
-`SECRETS_TEST_DATABASE_URL=postgresql://secrets_test@127.0.0.1:5432/secrets_test bun run test:postgres`.
+`SECRETS_TEST_DATABASE_URL="$DISPOSABLE_POSTGRES_URL" bun run test:postgres`.
 The runner rejects other targets and clears ambient credentials. Each suite
 creates and removes unique schemas and non-superuser/non-BYPASSRLS serving roles;
 the administrative fixture role is used only for schema/role setup and inspection.

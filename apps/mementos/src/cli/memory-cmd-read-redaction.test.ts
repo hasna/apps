@@ -324,14 +324,16 @@ describe("mementos read verbs never leak credential-shaped keys on stdout", () =
       stderr: "pipe",
     });
     try {
-      // Let the poller start and take its first (empty) tick.
-      await sleep(450);
+      // Starting the full CLI can take more than one poll interval on a loaded
+      // CI shard. Seed only after a bounded startup window so startPolling's
+      // baseline read cannot absorb these rows before the live tail begins.
+      await sleep(3_000);
       seedRows(dbPath, [
         { id: "m-tail-npm", key: NPM_REGISTRY_TOKEN, value: "registry token tail fixture" },
         { id: "m-tail-ok", key: ORDINARY_KEY, value: ORDINARY_VALUE },
       ]);
-      // Give the poller enough ticks to observe the insert.
-      await sleep(900);
+      // Give the poller several ticks to observe the insert under shard load.
+      await sleep(1_500);
     } finally {
       proc.kill();
     }
@@ -339,7 +341,7 @@ describe("mementos read verbs never leak credential-shaped keys on stdout", () =
     expect(stdout).not.toContain(NPM_REGISTRY_TOKEN);
     expect(stdout).toContain(ORDINARY_KEY);
     expect(stdout).toContain("m-tail-npm");
-  });
+  }, 10_000);
 
   test("tail human: live token-shaped-key row is streamed redacted", async () => {
     const { dbPath, env } = await seeded([]);
@@ -349,12 +351,12 @@ describe("mementos read verbs never leak credential-shaped keys on stdout", () =
       stderr: "pipe",
     });
     try {
-      await sleep(450);
+      await sleep(3_000);
       seedRows(dbPath, [
         { id: "m-tailh-npm", key: NPM_REGISTRY_TOKEN, value: "registry token tail human fixture" },
         { id: "m-tailh-ok", key: ORDINARY_KEY, value: ORDINARY_VALUE },
       ]);
-      await sleep(900);
+      await sleep(1_500);
     } finally {
       proc.kill();
     }
@@ -364,7 +366,7 @@ describe("mementos read verbs never leak credential-shaped keys on stdout", () =
     // Human tail renders the redacted key and the value text (not the id).
     expect(stdout).toContain("[REDACTED]");
     expect(stdout).toContain("registry token tail human fixture");
-  });
+  }, 10_000);
 
   // ==========================================================================
   // chain

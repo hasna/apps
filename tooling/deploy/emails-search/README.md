@@ -1,5 +1,40 @@
 # Emails compatible search promotion
 
+The existing workflow also accepts the finite `recipe=delivery-headers` choice.
+The default remains `search-capacity`; the current-server caller continues to
+use its existing path. Both recipes share the same production environment,
+concurrency and existing role, with no new authority or workflow trust path.
+
+The delivery recipe is a compatibility patch for the exact 1.4.10 parent image.
+It changes only `email-address.ts`, `service.ts` and `providers/ses.ts`: a safe
+inline sender name is used when no safe configured name exists, invalid explicit
+Reply-To lists refuse before a send intent, and SES receives separate mailbox
+entries. Configured-name precedence and trusted RFC reply threading already
+exist in the parent. Unknown historical message identities still refuse.
+No package version, dependency, migration, authentication, store or task
+environment change is included. The task delta is exactly the web image.
+
+Delivery files preserve their individually measured owners and 0664 modes.
+Before any image upload, the producer tests the authenticated old and patched
+send route and SES MIME code with synthetic storage/provider boundaries. These
+tests do not execute the full dependency image or send mail. It also compares
+the actual OCI migration inputs, package resolution and loader closure before
+upload, then authenticates both registry images and repeats the comparison
+before emitting preparation or admitting later operations. All original image
+layers, configuration and entrypoint remain intact.
+
+Use the normal sequence below with the same recipe on every dispatch. Delivery
+artifacts are named `emails-delivery-prepared`, `emails-delivery-reconciled` and
+`emails-delivery-promoted`. Their schemas and purpose differ from search, and
+preparation binds the producer run, exact source, recipe, image and task hashes.
+Cross-purpose substitution refuses. Delivery reconciliation admits only the
+exact prepared base or exact candidate, never a guessed task revision or a
+descendant image. It compares two complete running-task observations around
+service and public readiness reads. Schema readiness must remain compatible
+with 1.4.10; rollback to the captured parent is invalid after a forward migration.
+Every operation retains the existing single-write and uncertain-outcome rules.
+Live provider delivery and receiver rendering remain separate authorized tests.
+
 This lane raises the existing self-hosted Emails search admission from one to
 eight concurrent requests while preserving its deployed 1.4.10 image and later
 hotpatches. It is a three-file compatibility overlay, not a whole current npm

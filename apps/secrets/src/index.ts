@@ -40,7 +40,7 @@ Commands:
                               value-safe copy/migration: reads <old> in-process, writes <new>
                               in the same call; the value never renders to any output surface
   exec <key> [--as <VAR>] -- <cmd> [args...]   run <cmd> with a local vault value in its env only
-  exec --provider <PROFILE> --account <ID> --env <VAR> -- <cmd> [args...]
+  exec --provider <PROFILE> --account <ID> --env <VAR> [--secret-ref <ARN>] -- <cmd> [args...]
                               run <cmd> with an account-scoped AWS secret in <VAR>
   delete <key>               (aliases: remove, rm, uninstall)
   versions <key> [--limit <n>] [--json]   metadata-only version history; never prints values
@@ -962,11 +962,27 @@ switch (command) {
     // Parse from the RAW arg list, not `flags`/`positional`: everything after the
     // first bare `--` belongs to the child verbatim.
     const execUsage =
-      "Usage: secrets exec (<key> [--as <VAR>] | --provider <PROFILE> --account <12-DIGIT-ID> --env <VAR>) -- <cmd> [args...]";
+      "Usage: secrets exec (<key> [--as <VAR>] | --provider <PROFILE> --account <12-DIGIT-ID> --env <VAR> [--secret-ref <ARN>]) -- <cmd> [args...]";
     const sepIndex = rest.indexOf("--");
     if (sepIndex === -1) { console.error(`Missing "--" separator. ${execUsage}`); process.exit(1); }
     const childCmd = rest.slice(sepIndex + 1);
-    const { flags: execFlags, positional: execPositional } = parseArgs(rest.slice(0, sepIndex));
+    const execTokens = rest.slice(0, sepIndex);
+    const { flags: execFlags, positional: execPositional } = parseArgs(execTokens);
+    const exactReferenceExec = execTokens.some((arg) => arg === "--secret-ref" || arg.startsWith("--secret-ref="));
+    if (exactReferenceExec) {
+      // An exact reference cannot be silently overwritten or combined with a
+      // positional vault selector. Preserve the old parser for existing forms.
+      const allowed = new Set(["--provider", "--account", "--env", "--secret-ref"]);
+      const seen = new Set<string>();
+      let valid = execTokens.length === 8;
+      for (let i = 0; i < execTokens.length; i += 2) {
+        const flag = execTokens[i]!;
+        const value = execTokens[i + 1];
+        if (!allowed.has(flag) || seen.has(flag) || !value || value.startsWith("--")) valid = false;
+        seen.add(flag);
+      }
+      if (!valid || seen.size !== allowed.size) { console.error(execUsage); process.exit(1); }
+    }
     const [execKey] = execPositional;
     const scopedFields = [execFlags.provider, execFlags.account, execFlags.env];
     const scopedExec = scopedFields.some(Boolean);
@@ -983,12 +999,22 @@ switch (command) {
       ? execFlags.env
       : execFlags.as ?? execKey.toUpperCase().replace(/[^A-Z0-9]+/g, "_");
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(envName)) {
-      console.error(`Invalid env var name "${envName}". Use --as/--env with letters, digits, and underscores.`);
+      console.error(exactReferenceExec
+        ? "Invalid destination environment variable name."
+        : `Invalid env var name "${envName}". Use --as/--env with letters, digits, and underscores.`);
       process.exit(1);
     }
 
     let execValue: string;
-    if (scopedExec) {
+    if (exactReferenceExec) {
+      try {
+        const { getAwsSecretValueForReference } = await import("./aws-reference-provider.js");
+        execValue = await getAwsSecretValueForReference(execFlags.provider, execFlags.account, execFlags["secret-ref"]);
+      } catch {
+        console.error("Unable to read exact account-scoped secret reference.");
+        process.exit(1);
+      }
+    } else if (scopedExec) {
       try {
         const { getAwsSecretValueForEnv, loadAwsProfiles, resolveAwsAccountProfile } = await import("./aws.js");
         const target = resolveAwsAccountProfile(
@@ -1018,14 +1044,20 @@ switch (command) {
       execValue = execEntry.value;
     }
 
-    const child = Bun.spawn({
-      cmd: childCmd,
-      env: { ...process.env, [envName]: execValue },
-      stdin: "inherit",
-      stdout: "inherit",
-      stderr: "inherit",
-    });
-    process.exit(await child.exited);
+    try {
+      const child = Bun.spawn({
+        cmd: childCmd,
+        env: { ...process.env, [envName]: execValue },
+        stdin: "inherit",
+        stdout: "inherit",
+        stderr: "inherit",
+      });
+      process.exit(await child.exited);
+    } catch (error) {
+      if (!exactReferenceExec) throw error;
+      console.error("Unable to execute the child command.");
+      process.exit(1);
+    }
   }
 
   case "delete":

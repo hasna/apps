@@ -354,6 +354,7 @@ export class EcsDispatcher implements Dispatcher {
       && !!attempt.startedBy && receipt.startedBy === attempt.startedBy
       && receipt.bundleDigest === admission.bundleDigest && receipt.runtimeImageDigest === admission.runtimeImageDigest
       && receipt.dependencyLayerTag === admission.dependencyLayerTag
+      && canonicalJson(receipt.executionContract ?? null) === canonicalJson(admission.executionContract ?? null)
       && canonicalJson(receipt.policy) === canonicalJson(admission.policy) && canonicalJson(receipt.limits) === canonicalJson(admission.limits)
       && (receipt.taskId === null || receipt.taskId === attempt.taskId)
       && ((receipt.status === null && receipt.completedAt === null)

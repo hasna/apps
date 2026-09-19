@@ -174,6 +174,7 @@ beforeAll(async () => {
   for (const t of [...TABLES, ...ROLLUP_TABLES, ...REPAIR_TABLES, ...REPAIR_ALIAS_TABLES, ...PROVENANCE_TABLES]) {
     await pg.execute(`ALTER TABLE ${t} OWNER TO ${PROBE}`);
   }
+  await pg.execute(`ALTER TABLE events OWNER TO ${PROBE}`);
 }, 60_000);
 
 afterAll(async () => {
@@ -186,6 +187,52 @@ afterAll(async () => {
 });
 
 describe.skipIf(!pg)("Row-Level Security backstop (Layer 2, migration 0013)", () => {
+  it("0044 backfills unambiguous provider provenance per tenant under forced RLS", async () => {
+    const migration = emailsSelfHostedMigrations().find((item) => item.id === "0044_message_provider_provenance_tenant_backfill");
+    expect(migration).toBeDefined();
+    await pg!.execute(
+      `INSERT INTO messages (id, from_addr, tenant_id, provider_id) VALUES
+       ('msg-0044-a', 'sender@a.example', $1, NULL),
+       ('msg-0044-conflict', 'sender@a.example', $1, NULL),
+       ('msg-0044-manual', 'sender@a.example', $1, 'manual'),
+       ('msg-0044-b', 'sender@b.example', $2, NULL),
+       ('msg-0044-unknown', 'sender@b.example', $2, NULL)`,
+      [TENANT_A, TENANT_B],
+    );
+    await pg!.execute(
+      `INSERT INTO events (id, email_id, provider_id, type, tenant_id) VALUES
+       ('evt-0044-a1', 'msg-0044-a', 'provider-a', 'delivered', $1),
+       ('evt-0044-a2', 'msg-0044-a', 'provider-a', 'delivered', $1),
+       ('evt-0044-c1', 'msg-0044-conflict', 'provider-a', 'delivered', $1),
+       ('evt-0044-c2', 'msg-0044-conflict', 'provider-other', 'delivered', $1),
+       ('evt-0044-m1', 'msg-0044-manual', 'provider-a', 'delivered', $1),
+       ('evt-0044-b1', 'msg-0044-b', 'provider-b', 'delivered', $2)`,
+      [TENANT_A, TENANT_B],
+    );
+    try {
+      for (let pass = 0; pass < 2; pass++) {
+        await asProbe(null, async (tx) => {
+          expect((await tx.one<{ n: number }>("SELECT count(*)::int AS n FROM messages")).n).toBe(0);
+          await tx.execute(migration!.sql);
+          expect((await tx.one<{ n: number }>("SELECT count(*)::int AS n FROM messages")).n).toBe(0);
+        });
+      }
+      const rows = await pg!.many<{ id: string; provider_id: string | null }>(
+        `SELECT id, provider_id FROM messages WHERE id LIKE 'msg-0044-%' ORDER BY id`,
+      );
+      expect(rows).toEqual([
+        { id: "msg-0044-a", provider_id: "provider-a" },
+        { id: "msg-0044-b", provider_id: "provider-b" },
+        { id: "msg-0044-conflict", provider_id: null },
+        { id: "msg-0044-manual", provider_id: "manual" },
+        { id: "msg-0044-unknown", provider_id: null },
+      ]);
+    } finally {
+      await pg!.execute("DELETE FROM events WHERE id LIKE 'evt-0044-%'");
+      await pg!.execute("DELETE FROM messages WHERE id LIKE 'msg-0044-%'");
+    }
+  }, 20_000);
+
   it("fails closed: with NO app.current_tenant GUC, the NOBYPASSRLS role sees zero rows", async () => {
     for (const t of [...TABLES, ...ROLLUP_TABLES, ...REPAIR_TABLES, ...REPAIR_ALIAS_TABLES]) {
       expect(await countAsProbe(null, t), `${t} with unset GUC`).toBe(0);
