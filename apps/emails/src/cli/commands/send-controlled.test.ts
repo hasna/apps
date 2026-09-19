@@ -295,7 +295,7 @@ describe("controlled threaded replies", () => {
       expect(calls).toEqual([]);
       expect(await stub.sendRequests()).toHaveLength(0);
     });
-  });
+  }, 15_000); // 13 isolated CLI subprocesses; bound the adversarial matrix without the 5s suite default.
 
   it("readback needs only identity after body files disappear and reply capability is unavailable", async () => {
     const files = fixture({ reply_to_message_id: "parent-PARENT_PRIVATE_SENTINEL" });
