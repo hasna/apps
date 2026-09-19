@@ -2660,7 +2660,7 @@ mcpCmd.command("install")
           }
           // A fresh machine has no ~/.codex yet; install must create it the
           // same way the Antigravity installer creates ~/.gemini/config.
-          md(dn(configPath), { recursive: true });
+          md(dn(configPath), { recursive: true, mode: 0o700 });
           appendFileSync(configPath, block);
           console.log(chalk.green("✓") + " Installed into Codex");
         } else if (target === "antigravity") {
