@@ -1,11 +1,16 @@
 const TRANSIENT_AUDIT_STATUS = /audit request failed \(status (429|502|503|504)\)/;
-const AUDIT_FINDING = /\b(?:GHSA-[A-Z0-9-]+|CVE-\d{4}-\d+|(?:critical|high|moderate|low)\s+(?:severity|vulnerabil))/i;
+const BUN_AUDIT_HEADER = /^bun audit v\S+ \([^\n]+\)$/i;
 
 /** Return the registry HTTP status only for Bun's explicit transient audit error. */
 export function transientAuditStatus(result) {
-  const output = `${result?.stdout ?? ""}\n${result?.stderr ?? ""}`;
-  if (AUDIT_FINDING.test(output)) return null;
-  const match = TRANSIENT_AUDIT_STATUS.exec(output);
+  const output = `${result?.stdout ?? ""}\n${result?.stderr ?? ""}`
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const transientLines = output.filter((line) => TRANSIENT_AUDIT_STATUS.test(line));
+  if (transientLines.length !== 1 || output.some((line) => !BUN_AUDIT_HEADER.test(line) && !TRANSIENT_AUDIT_STATUS.test(line))) return null;
+  const match = TRANSIENT_AUDIT_STATUS.exec(transientLines[0]);
   return match ? Number(match[1]) : null;
 }
 

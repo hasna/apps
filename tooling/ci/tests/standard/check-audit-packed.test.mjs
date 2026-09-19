@@ -79,7 +79,7 @@ test("transient audit service failures retry with bounded backoff", () => {
     () => {
       attempts.push(attempts.length + 1);
       return attempts.length < 3
-        ? { status: 1, stdout: "", stderr: "error: audit request failed (status 503)" }
+        ? { status: 1, stdout: "bun audit v1.3.14 (0d9b296a)", stderr: "error: audit request failed (status 503)" }
         : { status: 0, stdout: "No vulnerabilities found", stderr: "" };
     },
     (seconds) => waits.push(seconds),
@@ -91,11 +91,13 @@ test("transient audit service failures retry with bounded backoff", () => {
 
 test("audit findings and non-transient failures never retry", () => {
   for (const status of [429, 502, 503, 504]) {
-    expect(transientAuditStatus({ status: 1, stdout: "", stderr: `error: audit request failed (status ${status})` })).toBe(status);
+    expect(transientAuditStatus({ status: 1, stdout: "bun audit v1.3.14 (0d9b296a)", stderr: `error: audit request failed (status ${status})` })).toBe(status);
   }
   expect(transientAuditStatus({ status: 1, stdout: "GHSA-3xgq-45jj-v275", stderr: "" })).toBeNull();
   expect(transientAuditStatus({ status: 1, stdout: "GHSA-3xgq-45jj-v275", stderr: "error: audit request failed (status 503)" })).toBeNull();
-  expect(transientAuditStatus({ status: 1, stdout: "critical vulnerability found", stderr: "error: audit request failed (status 503)" })).toBeNull();
+  expect(transientAuditStatus({ status: 1, stdout: "critical: vulnerability found", stderr: "error: audit request failed (status 503)" })).toBeNull();
+  expect(transientAuditStatus({ status: 1, stdout: "severity=critical", stderr: "error: audit request failed (status 503)" })).toBeNull();
+  expect(transientAuditStatus({ status: 1, stdout: "bun audit v1.3.14 (0d9b296a)\nextra diagnostic", stderr: "error: audit request failed (status 503)" })).toBeNull();
   expect(transientAuditStatus({ status: 1, stdout: "", stderr: "error: audit request failed (status 500)" })).toBeNull();
   const attempts = [];
   const result = runAuditWithRetry(
@@ -115,7 +117,7 @@ test("persistent transient audit outage remains a bounded failure", () => {
   const result = runAuditWithRetry(
     () => {
       attempts.push(1);
-      return { status: 1, stdout: "", stderr: "error: audit request failed (status 503)" };
+      return { status: 1, stdout: "bun audit v1.3.14 (0d9b296a)", stderr: "error: audit request failed (status 503)" };
     },
     (seconds) => waits.push(seconds),
   );
