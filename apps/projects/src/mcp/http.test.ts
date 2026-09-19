@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { buildServer } from "./index.js";
 import { handleMcpRequest, resolveMcpHttpPort, DEFAULT_MCP_HTTP_PORT } from "./http.js";
 import { closeDatabase } from "../db/database.js";
-import { createWorkspace } from "../db/workspaces.js";
+import { createRoot, createWorkspace } from "../db/workspaces.js";
 import { __resetProjectStore } from "../store/project-store.js";
 import { HOSTED_API_ENV_KEYS, silenceHostedApiEnv } from "../testing/spawn-env.js";
 
@@ -112,25 +112,27 @@ describe("projects MCP HTTP transport", () => {
     expect(result.isError).not.toBe(true);
     const content = result.content as Array<{ type: string; text?: string }> | undefined;
     expect(content?.[0]?.type).toBe("text");
-    const payload = JSON.parse(content?.[0]?.text ?? "[]") as Array<{ slug: string; metadata?: { notes?: string } }>;
-    expect(payload.find((item) => item.slug === "http-compact-project")?.metadata?.notes).toHaveLength(500);
-
-    const compact = await client.callTool({ name: "projects_list", arguments: { query: "http-compact-project", compact: true, limit: 1 } });
-    expect(compact.isError).not.toBe(true);
-    const compactContent = compact.content as Array<{ type: string; text?: string }> | undefined;
-    const compactPayload = JSON.parse(compactContent?.[0]?.text ?? "{}") as {
+    const payload = JSON.parse(content?.[0]?.text ?? "{}") as {
       projects?: Array<{ slug: string; metadata?: unknown }>;
       count?: number;
-      next_steps?: string;
+      total?: number;
+      detail?: string;
+      response_bytes?: number;
     };
-    expect(compactPayload.projects?.[0]?.slug).toBe("http-compact-project");
-    expect(compactPayload.projects?.[0]?.metadata).toBeUndefined();
-    expect(compactPayload.count).toBe(1);
-    expect(compactPayload.next_steps).toContain("full records");
+    expect(payload.projects?.[0]?.slug).toBe("http-compact-project");
+    expect(payload.projects?.[0]?.metadata).toBeUndefined();
+    expect(payload).toMatchObject({ count: 1, total: 1, detail: "compact" });
+    expect(payload.response_bytes).toBe(Buffer.byteLength(content?.[0]?.text ?? ""));
+
+    const full = await client.callTool({ name: "projects_list", arguments: { query: "http-compact-project", full: true, limit: 1 } });
+    expect(full.isError).not.toBe(true);
+    const fullContent = full.content as Array<{ type: string; text?: string }> | undefined;
+    const fullPayload = JSON.parse(fullContent?.[0]?.text ?? "[]") as Array<{ slug: string; metadata?: { notes?: string } }>;
+    expect(fullPayload.find((item) => item.slug === "http-compact-project")?.metadata?.notes).toHaveLength(500);
     await client.close();
   });
 
-  test("projects_search is compact, bounded, paginated, and leaves projects_list legacy output intact", async () => {
+  test("projects_list and projects_search are compact, bounded, and preserve explicit full output", async () => {
     const client = new Client({ name: "projects-http-search-test", version: "0.0.0" });
     const transport = new StreamableHTTPClientTransport(
       new URL(`http://127.0.0.1:${port}/mcp`),
@@ -152,7 +154,13 @@ describe("projects MCP HTTP transport", () => {
       expect(created.isError).not.toBe(true);
     }
 
-    const legacy = await client.callTool({ name: "projects_list", arguments: { query: "mcp-search-0", limit: 1 } });
+    const defaultList = await client.callTool({ name: "projects_list", arguments: { query: "MCP Search", limit: 2 } });
+    const defaultListText = (defaultList.content as Array<{ type: string; text?: string }>)[0]?.text ?? "{}";
+    expect(JSON.parse(defaultListText)).toMatchObject({ count: 2, total: 3, detail: "compact", has_more: true });
+    expect(defaultListText).not.toContain("x".repeat(500));
+    expect(defaultListText).not.toContain("\n  ");
+
+    const legacy = await client.callTool({ name: "projects_list", arguments: { query: "mcp-search-0", full: true, limit: 1 } });
     const legacyText = (legacy.content as Array<{ type: string; text?: string }>)[0]?.text ?? "[]";
     expect((JSON.parse(legacyText) as Array<{ metadata?: { notes?: string } }>)[0]?.metadata?.notes).toHaveLength(2_000);
 
@@ -168,7 +176,8 @@ describe("projects MCP HTTP transport", () => {
       total: number;
       offset: number;
       limit: number;
-      next_offset: number;
+      next_cursor: string;
+      next_offset: null;
       has_more: boolean;
       complete: boolean;
       detail: string;
@@ -183,25 +192,27 @@ describe("projects MCP HTTP transport", () => {
       total: 3,
       offset: 0,
       limit: 2,
-      next_offset: 2,
+      next_offset: null,
       has_more: true,
       complete: false,
       detail: "compact",
       fields: ["id", "slug", "path"],
       query_scope: "discovery",
-      next_arguments: { query: "MCP Search", query_scope: "discovery", offset: 2, limit: 2 },
+      next_arguments: { query: "MCP Search", query_scope: "discovery", limit: 2 },
       max_bytes: 32768,
     });
     expect(Object.keys(firstPayload.projects[0] ?? {})).toEqual(["id", "slug", "path"]);
     expect(firstPayload.projects[0]?.path).toContain("projects-parent");
-    expect(Buffer.byteLength(firstText)).toBeLessThan(1_500);
+    expect(Buffer.byteLength(firstText)).toBeLessThan(2_500);
     expect(firstPayload.response_bytes).toBe(Buffer.byteLength(firstText));
+    expect(firstPayload.next_cursor).toBeString();
+    expect(firstPayload.next_arguments.cursor).toBe(firstPayload.next_cursor);
     expect(firstPayload.next_arguments.max_bytes).toBe(32768);
     expect(firstText).not.toContain("\n  ");
 
     const second = await client.callTool({
       name: "projects_search",
-      arguments: { query: "MCP Search", limit: 2, offset: 2 },
+      arguments: { query: "MCP Search", limit: 2, cursor: firstPayload.next_cursor, fields: ["slug", "path"] },
     });
     expect(JSON.parse((second.content as Array<{ text?: string }>)[0]?.text ?? "{}")).toMatchObject({
       count: 1,
@@ -236,6 +247,58 @@ describe("projects MCP HTTP transport", () => {
     await client.close();
   });
 
+  test("opaque MCP cursors reject project and root collection drift", async () => {
+    const client = new Client({ name: "projects-http-cursor-test", version: "0.0.0" });
+    const transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`));
+    await client.connect(transport);
+    try {
+      const duplicateA = createWorkspace({ name: "MCP Cursor Duplicate", slug: "mcp-cursor-duplicate-a", kind: "project", primary_path: join(root, "mcp-cursor-duplicate-a") });
+      const duplicateB = createWorkspace({ name: "MCP Cursor Duplicate", slug: "mcp-cursor-duplicate-b", kind: "project", primary_path: join(root, "mcp-cursor-duplicate-b") });
+      const first = await client.callTool({
+        name: "projects_list",
+        arguments: { query: "MCP Cursor Duplicate", query_scope: "identity", limit: 1 },
+      });
+      const firstPayload = JSON.parse((first.content as Array<{ text?: string }>)[0]?.text ?? "{}") as {
+        projects: Array<{ id: string }>;
+        next_cursor: string;
+      };
+      expect(first.isError).not.toBe(true);
+      expect(firstPayload.next_cursor).toBeString();
+      const second = await client.callTool({
+        name: "projects_list",
+        arguments: { query: "MCP Cursor Duplicate", query_scope: "identity", limit: 1, cursor: firstPayload.next_cursor },
+      });
+      const secondPayload = JSON.parse((second.content as Array<{ text?: string }>)[0]?.text ?? "{}") as { projects: Array<{ id: string }> };
+      expect(second.isError).not.toBe(true);
+      expect(new Set([firstPayload.projects[0]!.id, secondPayload.projects[0]!.id])).toEqual(new Set([duplicateA.id, duplicateB.id]));
+
+      const mutationFirst = await client.callTool({
+        name: "projects_list",
+        arguments: { query: "MCP Cursor Duplicate", query_scope: "identity", limit: 1 },
+      });
+      const mutationCursor = (JSON.parse((mutationFirst.content as Array<{ text?: string }>)[0]?.text ?? "{}") as { next_cursor: string }).next_cursor;
+      createWorkspace({ name: "MCP Cursor Duplicate", slug: "mcp-cursor-duplicate-c", kind: "project", primary_path: join(root, "mcp-cursor-duplicate-c") });
+      const changed = await client.callTool({
+        name: "projects_list",
+        arguments: { query: "MCP Cursor Duplicate", query_scope: "identity", limit: 1, cursor: mutationCursor },
+      });
+      expect(changed.isError).toBe(true);
+      expect((changed.content as Array<{ text?: string }>)[0]?.text).toContain("invalid or stale");
+
+      createRoot({ name: "MCP Cursor Root A", slug: "mcp-cursor-root-a", base_path: join(root, "root-a") });
+      createRoot({ name: "MCP Cursor Root B", slug: "mcp-cursor-root-b", base_path: join(root, "root-b") });
+      const rootFirst = await client.callTool({ name: "projects_roots_list", arguments: { limit: 1 } });
+      const rootCursor = (JSON.parse((rootFirst.content as Array<{ text?: string }>)[0]?.text ?? "{}") as { next_cursor: string }).next_cursor;
+      expect(rootCursor).toBeString();
+      createRoot({ name: "MCP Cursor Root C", slug: "mcp-cursor-root-c", base_path: join(root, "root-c") });
+      const rootChanged = await client.callTool({ name: "projects_roots_list", arguments: { limit: 1, cursor: rootCursor } });
+      expect(rootChanged.isError).toBe(true);
+      expect((rootChanged.content as Array<{ text?: string }>)[0]?.text).toContain("invalid or stale");
+    } finally {
+      await client.close();
+    }
+  });
+
   test("projects_list excludes registry-fixture rows by default; include_fixtures=true includes them", async () => {
     createWorkspace({
       name: "Fixture Smoke",
@@ -256,9 +319,9 @@ describe("projects MCP HTTP transport", () => {
     });
     expect(def.isError).not.toBe(true);
     const defPayload = JSON.parse(
-      (def.content as Array<{ type: string; text?: string }>)?.[0]?.text ?? "[]",
-    ) as Array<{ slug: string }>;
-    expect(defPayload.find((item) => item.slug === "fixture-smoke")).toBeUndefined();
+      (def.content as Array<{ type: string; text?: string }>)?.[0]?.text ?? "{}",
+    ) as { projects: Array<{ slug: string }> };
+    expect(defPayload.projects.find((item) => item.slug === "fixture-smoke")).toBeUndefined();
 
     const inc = await client.callTool({
       name: "projects_list",
@@ -266,9 +329,9 @@ describe("projects MCP HTTP transport", () => {
     });
     expect(inc.isError).not.toBe(true);
     const incPayload = JSON.parse(
-      (inc.content as Array<{ type: string; text?: string }>)?.[0]?.text ?? "[]",
-    ) as Array<{ slug: string }>;
-    expect(incPayload.find((item) => item.slug === "fixture-smoke")).toBeDefined();
+      (inc.content as Array<{ type: string; text?: string }>)?.[0]?.text ?? "{}",
+    ) as { projects: Array<{ slug: string }> };
+    expect(incPayload.projects.find((item) => item.slug === "fixture-smoke")).toBeDefined();
 
     await client.close();
   });

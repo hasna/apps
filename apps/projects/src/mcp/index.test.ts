@@ -44,6 +44,7 @@ function runMcpSession(messages: unknown[], env: Record<string, string>) {
   // sessions exercise that registry, so they state the opt-in explicitly
   // unless the caller already did (including a deliberate blank).
   if (!("HASNA_PROJECTS_LOCAL" in env)) isolated["HASNA_PROJECTS_LOCAL"] = "1";
+  if (!("HASNA_PROJECTS_MCP_PROFILE" in env)) isolated["HASNA_PROJECTS_MCP_PROFILE"] = "full";
   return Bun.spawnSync({
     cmd: ["node", "src/testing/mcp-stdio-client.mjs", JSON.stringify(messages)],
     stdout: "pipe",
@@ -771,6 +772,68 @@ describe("projects-mcp project-first surface", () => {
     }
   });
 
+  test("projects_list bounds adversarial metadata by default and preserves explicit full compatibility", () => {
+    const root = mkdtempSync(join(tmpdir(), "project-mcp-token-bound-"));
+    const dbPath = join(root, "projects.db");
+    const db = new Database(dbPath);
+    db.run("PRAGMA foreign_keys=ON");
+    runMigrations(db);
+    db.transaction(() => {
+      for (let index = 0; index < 120; index += 1) {
+        const suffix = String(index).padStart(3, "0");
+        createWorkspace({
+          name: `MCP Bounded ${suffix}`,
+          slug: `mcp-bounded-${suffix}`,
+          kind: "project",
+          primary_path: join(root, `mcp-bounded-${suffix}`),
+          metadata: { notes: `metadata-${suffix}-${"x".repeat(20_000)}` },
+          integrations: { evidence: "y".repeat(20_000) },
+        }, db);
+      }
+    })();
+    db.close();
+
+    const messages = [
+      INITIALIZE_REQUEST,
+      { jsonrpc: "2.0", method: "notifications/initialized", params: {} },
+      { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "projects_list", arguments: {} } },
+      { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "projects_list", arguments: { full: true } } },
+    ];
+    try {
+      const result = runMcpSession(messages, testSpawnEnv({ HASNA_PROJECTS_DB_PATH: dbPath }));
+      expect(result.exitCode).toBe(0);
+      expect(withoutUnhostedNotice(Buffer.from(result.stderr).toString("utf-8"))).toBe("");
+      const responses = Buffer.from(result.stdout).toString("utf-8").trim().split("\n").map((line) => JSON.parse(line)) as Array<{
+        id?: number;
+        result?: { content?: Array<{ text: string }> };
+      }>;
+      const compactText = responses.find((response) => response.id === 2)?.result?.content?.[0]?.text ?? "{}";
+      expect(Buffer.byteLength(compactText)).toBeLessThanOrEqual(32 * 1024);
+      const compact = JSON.parse(compactText) as {
+        projects: Array<Record<string, unknown>>;
+        count: number;
+        total: number;
+        limit: number;
+        next_cursor: string;
+        next_offset: null;
+        has_more: boolean;
+        response_bytes: number;
+      };
+      expect(compact).toMatchObject({ count: 25, total: 120, limit: 25, next_offset: null, has_more: true });
+      expect(compact.next_cursor).toBeString();
+      expect(compact.projects.every((project) => !("metadata" in project) && !("integrations" in project))).toBe(true);
+      expect(compact.response_bytes).toBe(Buffer.byteLength(compactText));
+
+      const fullText = responses.find((response) => response.id === 3)?.result?.content?.[0]?.text ?? "[]";
+      expect(Buffer.byteLength(fullText)).toBeGreaterThan(1_000_000);
+      const full = JSON.parse(fullText) as Array<{ slug: string; metadata: { notes: string } }>;
+      expect(full).toHaveLength(120);
+      expect(full.find((project) => project.slug === "mcp-bounded-119")?.metadata.notes).toContain("metadata-119");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
   test("redacts project registry values in MCP JSON-RPC tool output", async () => {
     const root = mkdtempSync(join(tmpdir(), "project-mcp-redaction-"));
     const dbPath = join(root, "projects.db");
@@ -810,8 +873,8 @@ describe("projects-mcp project-first surface", () => {
         },
       },
       { jsonrpc: "2.0", method: "notifications/initialized", params: {} },
-      { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "projects_list", arguments: { query: "mcp-redaction" } } },
-      { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "projects_events_list", arguments: { project: "mcp-redaction" } } },
+      { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "projects_list", arguments: { query: "mcp-redaction", full: true } } },
+      { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "projects_events_list", arguments: { project: "mcp-redaction", full: true } } },
     ];
     const result = runMcpSession(messages, testSpawnEnv({ HASNA_PROJECTS_DB_PATH: dbPath }));
     const stdout = Buffer.from(result.stdout).toString("utf-8");

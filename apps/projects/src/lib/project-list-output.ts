@@ -123,6 +123,11 @@ export interface ProjectListEnvelopeInput<T> {
   hasMore?: boolean;
   complete?: boolean;
   nextOffset?: number | null;
+  cursor?: string | null;
+  nextCursor?: string | null;
+  nextCursorForCount?: (count: number) => string | null;
+  snapshot?: string | null;
+  opaqueCursor?: boolean;
 }
 
 export interface ProjectListEnvelope<T> {
@@ -131,7 +136,10 @@ export interface ProjectListEnvelope<T> {
   total: number;
   offset: number;
   limit: number | null;
+  cursor: string | null;
+  next_cursor: string | null;
   next_offset: number | null;
+  snapshot: string | null;
   has_more: boolean;
   complete: boolean;
   detail: ProjectListDetail;
@@ -151,22 +159,27 @@ export interface BoundedProjectListEnvelope<T> extends ProjectListEnvelope<T> {
 export function buildProjectListEnvelope<T>(input: ProjectListEnvelopeInput<T>): ProjectListEnvelope<T> {
   const count = input.projects.length;
   const hasMore = input.hasMore ?? input.offset + count < input.total;
-  const nextOffset = hasMore ? input.nextOffset ?? input.offset + count : null;
+  const positionalNextOffset = hasMore ? input.nextOffset ?? input.offset + count : null;
+  const nextOffset = input.opaqueCursor ? null : positionalNextOffset;
+  const nextCursor = hasMore ? input.nextCursor ?? null : null;
   const complete = input.complete ?? (input.offset === 0 && !hasMore && count === input.total);
-  const nextArguments = nextOffset === null
-    ? null
-    : {
+  const nextArguments = hasMore
+    ? {
         ...(input.nextArguments ?? {}),
-        offset: nextOffset,
+        ...(input.opaqueCursor ? { cursor: nextCursor } : { offset: nextOffset }),
         ...(input.limit === null ? {} : { limit: input.limit }),
-      };
+      }
+    : null;
   return {
     projects: input.projects,
     count,
     total: input.total,
     offset: input.offset,
     limit: input.limit,
+    cursor: input.cursor ?? null,
+    next_cursor: nextCursor,
     next_offset: nextOffset,
+    snapshot: input.snapshot ?? null,
     has_more: hasMore,
     complete,
     detail: input.detail,
@@ -211,12 +224,16 @@ export function buildBoundedProjectListOutput<T>(
         ? input.offset + count
         : input.nextOffset ?? input.offset + sourceRows.length
       : null;
+    const nextCursor = hasMore && input.nextCursorForCount
+      ? input.nextCursorForCount(count)
+      : hasMore ? input.nextCursor ?? null : null;
     const base = buildProjectListEnvelope({
       ...input,
       projects,
       hasMore,
       complete,
       nextOffset,
+      nextCursor,
     });
     const envelope = withResponseBytes({
       ...base,

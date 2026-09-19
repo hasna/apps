@@ -1566,7 +1566,7 @@ describe("project-first CLI surface", () => {
     expect(created.project?.primary_path).toBe(targetPath);
     expect(created.workspace).toBeUndefined();
 
-    const list = runProjects(["list", "--json"], env);
+    const list = runProjects(["list", "--json", "--full"], env);
     expect(list.exitCode).toBe(0);
     const rows = JSON.parse(text(list.stdout)) as Array<{ slug: string }>;
     expect(rows.some((row) => row.slug === "surface-app")).toBe(true);
@@ -2722,7 +2722,7 @@ describe("project-first CLI surface", () => {
     const labelsPayload = JSON.parse(text(labelsAdd.stdout)) as { labels: string[] };
     expect(labelsPayload.labels).toContain("kind:work-project");
 
-    const filtered = runProjects(["list", "--label", "kind:work-project", "--json"], env);
+    const filtered = runProjects(["list", "--label", "kind:work-project", "--json", "--full"], env);
     expect(filtered.exitCode).toBe(0);
     expect((JSON.parse(text(filtered.stdout)) as Array<{ slug: string }>).map((project) => project.slug)).toEqual(["store-work"]);
 
@@ -2743,11 +2743,11 @@ describe("project-first CLI surface", () => {
     expect(runProjects(["create", "--name", "Normal Project", "--slug", "normal-project", "--path", join(root, "normal"), "--json"], env).exitCode).toBe(0);
     expect(runProjects(["create", "--name", "Eval Hidden", "--slug", "eval-hidden", "--path", join(root, "eval-hidden"), "--json"], env).exitCode).toBe(0);
 
-    const visible = runProjects(["list", "--json"], env);
+    const visible = runProjects(["list", "--json", "--full"], env);
     expect(visible.exitCode).toBe(0);
     expect((JSON.parse(text(visible.stdout)) as Array<{ slug: string }>).map((item) => item.slug)).toEqual(["normal-project"]);
 
-    const all = runProjects(["list", "--include-evals", "--json"], env);
+    const all = runProjects(["list", "--include-evals", "--json", "--full"], env);
     expect(all.exitCode).toBe(0);
     expect((JSON.parse(text(all.stdout)) as Array<{ slug: string }>).map((item) => item.slug).sort()).toEqual(["eval-hidden", "normal-project"]);
 
@@ -2759,11 +2759,11 @@ describe("project-first CLI surface", () => {
     expect(cleanup.exitCode).toBe(0);
     expect((JSON.parse(text(cleanup.stdout)) as { deleted: { projects: number } }).deleted.projects).toBe(1);
 
-    const after = runProjects(["list", "--include-evals", "--json"], env);
+    const after = runProjects(["list", "--include-evals", "--json", "--full"], env);
     expect((JSON.parse(text(after.stdout)) as Array<{ slug: string }>).map((item) => item.slug)).toEqual(["normal-project"]);
   });
 
-  test("top-level list is compact by default and JSON remains detailed", () => {
+  test("top-level list and ordinary JSON are compact by default while --full preserves legacy records", () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-compact-list-"));
     const dbPath = join(root, "projects.db");
     const env = { HASNA_PROJECTS_DB_PATH: dbPath };
@@ -2798,12 +2798,30 @@ describe("project-first CLI surface", () => {
 
     const json = runProjects(["list", "--json"], env);
     expect(json.exitCode).toBe(0);
-    const rows = JSON.parse(text(json.stdout)) as Array<{ slug: string; metadata: Record<string, string> }>;
+    const page = JSON.parse(text(json.stdout)) as {
+      projects: Array<{ slug: string; metadata?: unknown }>;
+      count: number;
+      total: number;
+      limit: number;
+      next_cursor: string;
+      next_offset: null;
+      has_more: boolean;
+      response_bytes: number;
+    };
+    expect(page).toMatchObject({ count: 25, total: 30, limit: 25, next_offset: null, has_more: true });
+    expect(page.next_cursor).toBeString();
+    expect(page.projects).toHaveLength(25);
+    expect(page.projects[0]?.metadata).toBeUndefined();
+    expect(page.response_bytes).toBe(Buffer.byteLength(text(json.stdout)));
+    expect(Buffer.byteLength(text(json.stdout))).toBeLessThanOrEqual(32 * 1024);
+
+    const legacy = runProjects(["list", "--json", "--full"], env);
+    const rows = JSON.parse(text(legacy.stdout)) as Array<{ slug: string; metadata: Record<string, string> }>;
     expect(rows).toHaveLength(30);
     expect(rows.find((row) => row.slug === "compact-29")?.metadata.notes).toHaveLength(500);
   }, 60000);
 
-  test("top-level list offers bounded compact machine output without changing legacy JSON", () => {
+  test("top-level list defaults to bounded compact machine output and preserves explicit full JSON", () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-compact-json-"));
     const dbPath = join(root, "projects.db");
     const env = { HASNA_PROJECTS_DB_PATH: dbPath };
@@ -2826,7 +2844,7 @@ describe("project-first CLI surface", () => {
     }
     db.close();
 
-    const legacy = runProjects(["list", "--query", "projects", "--json"], env);
+    const legacy = runProjects(["list", "--query", "projects", "--json", "--full"], env);
     expect(legacy.exitCode, text(legacy.stderr)).toBe(0);
     const legacyRows = JSON.parse(text(legacy.stdout)) as Array<{ slug: string; metadata: { notes: string } }>;
     expect(legacyRows).toHaveLength(30);
@@ -2876,23 +2894,26 @@ describe("project-first CLI surface", () => {
       projects: unknown[];
       total: number;
       limit: number;
-      next_offset: number;
+      next_cursor: string;
+      next_offset: null;
       has_more: boolean;
       complete: boolean;
-      next_arguments: { offset: number; limit: number; query: string; query_scope: string };
+      next_arguments: { cursor: string; limit: number; query: string; query_scope: string };
     };
     expect(firstPayload.projects).toHaveLength(25);
     expect(firstPayload).toMatchObject({
       total: 30,
       limit: 25,
-      next_offset: 25,
+      next_offset: null,
       has_more: true,
       complete: false,
-      next_arguments: { offset: 25, limit: 25, query: "projects", query_scope: "all" },
+      next_arguments: { limit: 25, query: "projects", query_scope: "all" },
     });
+    expect(firstPayload.next_cursor).toBeString();
+    expect(firstPayload.next_arguments.cursor).toBe(firstPayload.next_cursor);
 
     const secondPage = runProjects([
-      "list", "--query", "projects", "--query-scope", "all", "--json", "--detail", "compact", "--offset", "25",
+      "list", "--query", "projects", "--query-scope", "all", "--json", "--detail", "compact", "--cursor", firstPayload.next_cursor,
     ], env);
     expect(JSON.parse(text(secondPage.stdout))).toMatchObject({
       count: 5,
@@ -2913,7 +2934,7 @@ describe("project-first CLI surface", () => {
     const pretty = runProjects(["list", "--json", "--detail", "compact", "--limit", "1", "--pretty"], env);
     expect(text(pretty.stdout)).toContain("\n  \"projects\"");
 
-    const legacyPretty = runProjects(["list", "--json", "--pretty", "--limit", "1"], env);
+    const legacyPretty = runProjects(["list", "--json", "--full", "--pretty", "--limit", "1"], env);
     expect(Array.isArray(JSON.parse(text(legacyPretty.stdout)))).toBe(true);
 
     const byteBounded = runProjects([
@@ -2921,7 +2942,8 @@ describe("project-first CLI surface", () => {
     ], env);
     const bytePayload = JSON.parse(text(byteBounded.stdout)) as {
       count: number;
-      next_offset: number;
+      next_cursor: string;
+      next_offset: null;
       truncated: boolean;
       truncation_reason: string;
       max_bytes: number;
@@ -2930,7 +2952,8 @@ describe("project-first CLI surface", () => {
     };
     expect(bytePayload.count).toBeLessThan(25);
     expect(bytePayload).toMatchObject({ truncated: true, truncation_reason: "max_bytes", max_bytes: 2048 });
-    expect(bytePayload.next_offset).toBe(bytePayload.count);
+    expect(bytePayload.next_offset).toBeNull();
+    expect(bytePayload.next_cursor).toBeString();
     expect(bytePayload.response_bytes).toBe(Buffer.byteLength(text(byteBounded.stdout)));
     expect(bytePayload.response_bytes).toBeLessThanOrEqual(2048);
     expect(bytePayload.next_arguments.max_bytes).toBe(2048);
@@ -2960,13 +2983,111 @@ describe("project-first CLI surface", () => {
     expect(unsafeFullAll.exitCode).not.toBe(0);
     expect(text(unsafeFullAll.stderr)).toContain("--all is only available with --detail compact");
 
-    const legacyWildcard = runProjects(["list", "--query", "%", "--json"], env);
+    const legacyWildcard = runProjects(["list", "--query", "%", "--json", "--full"], env);
     expect(JSON.parse(text(legacyWildcard.stdout))).toHaveLength(30);
     const literalWildcard = runProjects(["list", "--query", "%", "--json", "--detail", "compact"], env);
     expect(JSON.parse(text(literalWildcard.stdout))).toMatchObject({ count: 0, total: 0 });
 
     rmSync(root, { recursive: true, force: true });
   }, 60000);
+
+  test("opaque project-list cursors survive duplicate names and refuse insert, delete, or reorder drift", async () => {
+    const duplicateRoot = mkdtempSync(join(tmpdir(), "projects-cli-cursor-duplicates-"));
+    const duplicateDbPath = join(duplicateRoot, "projects.db");
+    const duplicateEnv = { HASNA_PROJECTS_DB_PATH: duplicateDbPath };
+    const duplicateDb = new Database(duplicateDbPath);
+    duplicateDb.run("PRAGMA foreign_keys=ON");
+    runMigrations(duplicateDb);
+    for (let index = 0; index < 4; index += 1) {
+      createWorkspace({
+        name: "Cursor Duplicate",
+        slug: `cursor-duplicate-${index}`,
+        kind: "project",
+        primary_path: join(duplicateRoot, `cursor-duplicate-${index}`),
+      }, duplicateDb);
+    }
+    duplicateDb.close();
+    try {
+      const first = await runWorkspaceCommandInProcess([
+        "list", "--query", "Cursor Duplicate", "--query-scope", "identity", "--json", "--limit", "2",
+      ], duplicateEnv);
+      const firstPage = JSON.parse(text(first.stdout)) as {
+        projects: Array<{ id: string }>;
+        next_cursor: string;
+        next_offset: null;
+      };
+      expect(first.exitCode).toBe(0);
+      expect(firstPage.projects).toHaveLength(2);
+      expect(firstPage.next_cursor).toBeString();
+      expect(firstPage.next_offset).toBeNull();
+
+      const second = await runWorkspaceCommandInProcess([
+        "list", "--query", "Cursor Duplicate", "--query-scope", "identity", "--json", "--limit", "2", "--cursor", firstPage.next_cursor,
+      ], duplicateEnv);
+      const secondPage = JSON.parse(text(second.stdout)) as { projects: Array<{ id: string }>; next_cursor: null };
+      expect(second.exitCode).toBe(0);
+      expect(secondPage.projects).toHaveLength(2);
+      expect(secondPage.next_cursor).toBeNull();
+      const ids = [...firstPage.projects, ...secondPage.projects].map((project) => project.id);
+      expect(new Set(ids).size).toBe(4);
+
+      const rawOffset = runProjects([
+        "list", "--query", "Cursor Duplicate", "--query-scope", "identity", "--json", "--limit", "2", "--offset", "2",
+      ], duplicateEnv);
+      expect(rawOffset.exitCode).not.toBe(0);
+      expect(text(rawOffset.stderr)).toContain("refuses raw continuation offsets");
+    } finally {
+      rmSync(duplicateRoot, { recursive: true, force: true });
+    }
+
+    for (const mutation of ["insert", "delete", "reorder"] as const) {
+      const root = mkdtempSync(join(tmpdir(), `projects-cli-cursor-${mutation}-`));
+      const dbPath = join(root, "projects.db");
+      const env = { HASNA_PROJECTS_DB_PATH: dbPath };
+      const db = new Database(dbPath);
+      db.run("PRAGMA foreign_keys=ON");
+      runMigrations(db);
+      const seeded = Array.from({ length: 3 }, (_, index) => createWorkspace({
+        name: `Cursor Mutation ${index}`,
+        slug: `cursor-mutation-${index}`,
+        kind: "project",
+        primary_path: join(root, `cursor-mutation-${index}`),
+      }, db));
+      db.close();
+      try {
+        const first = await runWorkspaceCommandInProcess([
+          "list", "--query", "Cursor Mutation", "--query-scope", "identity", "--json", "--limit", "1",
+        ], env);
+        const firstPage = JSON.parse(text(first.stdout)) as { next_cursor: string };
+        expect(first.exitCode).toBe(0);
+        expect(firstPage.next_cursor).toBeString();
+
+        const mutationDb = new Database(dbPath);
+        if (mutation === "insert") {
+          createWorkspace({
+            name: "Cursor Mutation Inserted",
+            slug: "cursor-mutation-inserted",
+            kind: "project",
+            primary_path: join(root, "cursor-mutation-inserted"),
+          }, mutationDb);
+        } else if (mutation === "delete") {
+          mutationDb.run("DELETE FROM workspaces WHERE id = ?", [seeded[0]!.id]);
+        } else {
+          mutationDb.run("UPDATE workspaces SET name = ? WHERE id = ?", ["A Cursor Mutation Reordered", seeded[2]!.id]);
+        }
+        mutationDb.close();
+
+        const continued = runProjects([
+          "list", "--query", "Cursor Mutation", "--query-scope", "identity", "--json", "--limit", "1", "--cursor", firstPage.next_cursor,
+        ], env);
+        expect(continued.exitCode).not.toBe(0);
+        expect(text(continued.stderr)).toContain("invalid or stale");
+        expect(text(continued.stderr)).toContain("Restart the listing");
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
+  }, 60_000);
 
   test("explicit query scope fails closed on an old hosted producer for JSON, human, and render paths", async () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-query-scope-attestation-"));
@@ -3068,7 +3189,7 @@ describe("project-first CLI surface", () => {
     }
   }, 30000);
 
-  test("top-level list JSON output is not truncated above 64 KiB", async () => {
+  test("ordinary list JSON stays under 32 KiB with adversarial metadata while --full preserves exhaustive records", async () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-large-list-json-"));
     const dbPath = join(root, "projects.db");
     const env = { HASNA_PROJECTS_DB_PATH: dbPath };
@@ -3086,18 +3207,38 @@ describe("project-first CLI surface", () => {
             slug: `large-list-${suffix}`,
             kind: "project",
             primary_path: join(root, `large-list-${suffix}`),
-            metadata: { notes: `large-json-output-${suffix}-${"x".repeat(1_000)}` },
+            metadata: { notes: `large-json-output-${suffix}-${"x".repeat(20_000)}` },
+            integrations: { evidence: "y".repeat(20_000) },
           }, db);
         }
       })();
       db.close();
       dbClosed = true;
 
-      const result = await runWorkspaceCommandInProcess(["list", "--limit", "120", "--json"], env);
+      const result = await runWorkspaceCommandInProcess(["list", "--json", "--meta"], env);
       const stdout = text(result.stdout);
       expect(result.exitCode).toBe(0);
-      expect(Buffer.byteLength(stdout)).toBeGreaterThan(65_536);
-      const rows = JSON.parse(stdout) as Array<{ slug: string; metadata: Record<string, string> }>;
+      expect(Buffer.byteLength(stdout)).toBeLessThanOrEqual(32 * 1024);
+      const page = JSON.parse(stdout) as {
+        projects: Array<Record<string, unknown>>;
+        count: number;
+        total: number;
+        limit: number;
+        next_cursor: string;
+        next_offset: null;
+        has_more: boolean;
+        detail: string;
+        response_bytes: number;
+      };
+      expect(page).toMatchObject({ count: 25, total: 120, limit: 25, next_offset: null, has_more: true, detail: "compact" });
+      expect(page.next_cursor).toBeString();
+      expect(page.projects.every((project) => !("metadata" in project) && !("integrations" in project))).toBe(true);
+      expect(page.response_bytes).toBe(Buffer.byteLength(stdout));
+
+      const legacy = await runWorkspaceCommandInProcess(["list", "--json", "--full"], env);
+      const legacyText = text(legacy.stdout);
+      expect(Buffer.byteLength(legacyText)).toBeGreaterThan(1_000_000);
+      const rows = JSON.parse(legacyText) as Array<{ slug: string; metadata: Record<string, string> }>;
       expect(rows).toHaveLength(120);
       expect(rows.find((row) => row.slug === "large-list-119")?.metadata.notes).toContain("large-json-output-119");
     } finally {

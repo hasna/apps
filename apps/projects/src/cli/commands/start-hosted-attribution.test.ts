@@ -121,6 +121,7 @@ function hostedStartFixture() {
     HASNA_PROJECTS_LOCAL: "",
     HASNA_PROJECTS_CHANNEL_ENSURE: "1",
     PROJECTS_AGENT_ONLINE_NOTIFICATIONS: "0",
+    HASNA_PROJECTS_MCP_PROFILE: "full",
     PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
   });
 

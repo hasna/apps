@@ -2,6 +2,12 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { isHttpMode, startMcpHttpServer, resolveMcpHttpPort } from "./http.js";
+import {
+  ProjectsToolCatalog,
+  createProfiledProjectsServer,
+  resolveProjectsMcpProfile,
+  type ProjectsMcpProfile,
+} from "./profile.js";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -42,6 +48,7 @@ import {
   projectListRow,
   resolveProjectListFields,
 } from "../lib/project-list-output.js";
+import { pageStableCollection } from "../lib/collection-cursor.js";
 import {
   PROJECT_PRIORITIES,
   PROJECT_STAGES,
@@ -111,10 +118,12 @@ MCP server for project management and launch tools (stdio transport by default)
 Options:
   --http         serve MCP over Streamable HTTP on 127.0.0.1 (also MCP_HTTP=1)
   --port <n>     HTTP port (default 8871, or MCP_HTTP_PORT)
+  --mcp-profile <core|full>  Tool inventory profile (default core)
   -V, --version  output the version number
   -h, --help     display help for command
 
 Environment:
+  HASNA_PROJECTS_MCP_PROFILE  core (default) or full compatibility inventory
   PROJECTS_MCP_TOKEN  Bearer token required on every HTTP route when set
                       (default-off); DNS-rebinding protection is always on`);
 }
@@ -130,14 +139,60 @@ if (args.includes("--version") || args.includes("-V")) {
   process.exit(0);
 }
 
-export function buildServer(): McpServer {
-const server = new McpServer({
+export function buildServer(profile: ProjectsMcpProfile = resolveProjectsMcpProfile()): McpServer {
+const rawServer = new McpServer({
   name: "projects",
   version: getPkgVersion(),
+}, {
+  instructions: `Active MCP profile: ${profile}. Core keeps discovery bounded; use search_tools/describe_tools or select the explicit full profile for the complete compatibility inventory.`,
+});
+const catalog = new ProjectsToolCatalog();
+
+const searchToolsSchema = {
+  query: z.string().optional().describe("Name, description, or parameter keyword"),
+  limit: z.number().int().positive().max(50).optional().describe("Maximum names, default 20"),
+  cursor: z.number().int().nonnegative().max(100_000).optional().describe("Zero-based result cursor"),
+};
+catalog.record("search_tools", "Search the complete Projects MCP tool inventory.", searchToolsSchema);
+rawServer.tool("search_tools", "Search the complete Projects MCP tool inventory.", searchToolsSchema, async ({ query, limit, cursor }) => {
+  const matches = catalog.search(query);
+  const effectiveLimit = limit ?? 20;
+  const effectiveCursor = cursor ?? 0;
+  const items = matches.slice(effectiveCursor, effectiveCursor + effectiveLimit).map((entry) => entry.name);
+  const nextCursor = effectiveCursor + items.length < matches.length ? effectiveCursor + items.length : null;
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify({
+      items,
+      count: items.length,
+      total: matches.length,
+      cursor: effectiveCursor,
+      next_cursor: nextCursor,
+      has_more: nextCursor !== null,
+      complete_inventory: true,
+    }) }],
+  };
 });
 
+const describeToolsSchema = {
+  names: z.array(z.string()).min(1).max(20).describe("Exact tool names returned by search_tools"),
+};
+catalog.record("describe_tools", "Describe selected Projects tools from the complete inventory.", describeToolsSchema);
+rawServer.tool("describe_tools", "Describe selected Projects tools from the complete inventory.", describeToolsSchema, async ({ names }) => {
+  const described = catalog.describe(names);
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify({
+      ...described,
+      count: described.items.length,
+      requested: names.length,
+      complete: described.missing.length === 0,
+    }) }],
+  };
+});
+
+const server = createProfiledProjectsServer(rawServer, profile, catalog);
+
 function jsonText(value: unknown) {
-  return { content: [{ type: "text" as const, text: JSON.stringify(redactProjectValue(value), null, 2) }] };
+  return { content: [{ type: "text" as const, text: JSON.stringify(redactProjectValue(value)) }] };
 }
 
 function errorText(message: string) {
@@ -289,14 +344,67 @@ function compactDoctorResult(result: ReturnType<typeof doctorWorkspace>) {
   };
 }
 
-function compactListPayload<T>(items: T[], visible: unknown[], limit: number, nextSteps: string) {
+function compactListPayload<T>(
+  items: T[],
+  visible: unknown[],
+  limit: number,
+  nextSteps: string,
+  offset = 0,
+) {
+  const consumed = offset + visible.length;
+  const hasMore = consumed < items.length;
   return {
     items: visible,
     count: visible.length,
-    total_returned: items.length,
+    total: items.length,
     limit,
-    has_more: items.length > visible.length,
+    offset,
+    next_offset: hasMore ? consumed : null,
+    has_more: hasMore,
+    complete: offset === 0 && !hasMore && visible.length === items.length,
     next_steps: nextSteps,
+  };
+}
+
+function stableCompactListPayload<T, U>(options: {
+  collection: string;
+  items: T[];
+  filter?: unknown;
+  limit: number;
+  offset?: number;
+  cursor?: string;
+  identity: (item: T) => string;
+  compare: (left: T, right: T) => number;
+  mapItem: (item: T) => U;
+  nextSteps: string;
+}) {
+  if (options.offset !== undefined && options.offset !== 0) {
+    throw new Error(`Compact ${options.collection} pages refuse raw continuation offsets; restart without offset and continue with next_cursor.`);
+  }
+  if (options.cursor !== undefined && options.offset !== undefined) {
+    throw new Error("Pass cursor or offset=0, not both");
+  }
+  const page = pageStableCollection(options.items, {
+    collection: options.collection,
+    filter: options.filter ?? {},
+    limit: options.limit,
+    cursor: options.cursor,
+    identity: options.identity,
+    compare: options.compare,
+  });
+  return {
+    items: page.items.map(options.mapItem),
+    count: page.items.length,
+    total: page.total,
+    limit: options.limit,
+    offset: page.position,
+    cursor: page.cursor,
+    next_cursor: page.cursorForCount(page.items.length),
+    next_offset: null,
+    snapshot: page.snapshot,
+    has_more: page.has_more,
+    complete: page.complete,
+    next_steps: options.nextSteps,
   };
 }
 
@@ -442,24 +550,37 @@ function cleanupTargetFromWorkspace(workspace: Workspace, events: WorkspaceEvent
 
 server.tool(
   "projects_roots_list",
-  "List registered root folders and path templates for projects. Full records by default; pass compact=true for compact summaries.",
+  "List registered root folders in a bounded compact page by default. Set full=true (or verbose=true/compact=false) for legacy full records.",
   {
     limit: z.number().int().positive().max(500).optional(),
-    compact: z.boolean().optional(),
-    verbose: z.boolean().optional(),
+    offset: z.number().int().nonnegative().max(100_000).optional(),
+    cursor: z.string().min(1).max(4096).optional().describe("Opaque collection/filter-bound cursor from next_cursor"),
+    compact: z.boolean().optional().describe("Compatibility flag; compact=true is now the default"),
+    full: z.boolean().optional().describe("Return the legacy full-record array"),
+    verbose: z.boolean().optional().describe("Compatibility alias for full=true"),
   },
   async (input) => {
     const roots = await resolveProjectStore().listRoots();
-    if (!input.compact || input.verbose) return jsonText(roots);
+    if (input.full || input.verbose || input.compact === false) return jsonText(roots);
     const limit = mcpLimit(input.limit, DEFAULT_MCP_LIST_LIMIT);
-    return jsonText(compactListPayload(roots, roots.slice(0, limit).map((root) => ({
-      id: root.id,
-      slug: root.slug,
-      name: root.name,
-      kind: root.default_kind,
-      path: compactText(root.base_path, 160),
-      tags: root.tags,
-    })), limit, "Use projects_roots_show with an id, or projects_roots_list verbose=true for full root records."));
+    return jsonText(stableCompactListPayload({
+      collection: "project-roots",
+      items: roots,
+      limit,
+      offset: input.offset,
+      cursor: input.cursor,
+      identity: (root) => root.id,
+      compare: (left, right) => left.slug.localeCompare(right.slug) || left.id.localeCompare(right.id),
+      mapItem: (root) => ({
+        id: root.id,
+        slug: root.slug,
+        name: root.name,
+        kind: root.default_kind,
+        path: compactText(root.base_path, 160),
+        tags: root.tags,
+      }),
+      nextSteps: "Use projects_roots_show with an id, or projects_roots_list full=true for legacy full root records.",
+    }));
   },
 );
 
@@ -581,24 +702,37 @@ server.tool(
 
 server.tool(
   "projects_recipes_list",
-  "List project recipes for agent-visible creation defaults. Full records by default; pass compact=true for compact summaries.",
+  "List project recipes in a bounded compact page by default. Set full=true (or verbose=true/compact=false) for legacy full records.",
   {
     limit: z.number().int().positive().max(500).optional(),
-    compact: z.boolean().optional(),
-    verbose: z.boolean().optional(),
+    offset: z.number().int().nonnegative().max(100_000).optional(),
+    cursor: z.string().min(1).max(4096).optional().describe("Opaque collection/filter-bound cursor from next_cursor"),
+    compact: z.boolean().optional().describe("Compatibility flag; compact=true is now the default"),
+    full: z.boolean().optional().describe("Return the legacy full-record array"),
+    verbose: z.boolean().optional().describe("Compatibility alias for full=true"),
   },
   async (input) => {
     const recipes = await resolveProjectStore().listRecipes();
-    if (!input.compact || input.verbose) return jsonText(recipes);
+    if (input.full || input.verbose || input.compact === false) return jsonText(recipes);
     const limit = mcpLimit(input.limit, DEFAULT_MCP_LIST_LIMIT);
-    return jsonText(compactListPayload(recipes, recipes.slice(0, limit).map((recipe) => ({
-      id: recipe.id,
-      slug: recipe.slug,
-      name: recipe.name,
-      kind: recipe.kind,
-      version: recipe.version,
-      tags: recipe.default_tags,
-    })), limit, "Use projects_recipes_list verbose=true for full recipe records including steps."));
+    return jsonText(stableCompactListPayload({
+      collection: "project-recipes",
+      items: recipes,
+      limit,
+      offset: input.offset,
+      cursor: input.cursor,
+      identity: (recipe) => recipe.id,
+      compare: (left, right) => left.slug.localeCompare(right.slug) || left.id.localeCompare(right.id),
+      mapItem: (recipe) => ({
+        id: recipe.id,
+        slug: recipe.slug,
+        name: recipe.name,
+        kind: recipe.kind,
+        version: recipe.version,
+        tags: recipe.default_tags,
+      }),
+      nextSteps: "Use projects_recipes_list full=true for legacy recipe records including steps.",
+    }));
   },
 );
 
@@ -631,22 +765,35 @@ server.tool(
 
 server.tool(
   "projects_recipes_built_ins",
-  "List built-in project recipe definitions. Full records by default; pass compact=true for compact summaries.",
+  "List built-in project recipes in a bounded compact page by default. Set full=true (or verbose=true/compact=false) for legacy full records.",
   {
     limit: z.number().int().positive().max(500).optional(),
-    compact: z.boolean().optional(),
-    verbose: z.boolean().optional(),
+    offset: z.number().int().nonnegative().max(100_000).optional(),
+    cursor: z.string().min(1).max(4096).optional().describe("Opaque collection/filter-bound cursor from next_cursor"),
+    compact: z.boolean().optional().describe("Compatibility flag; compact=true is now the default"),
+    full: z.boolean().optional().describe("Return the legacy full-record array"),
+    verbose: z.boolean().optional().describe("Compatibility alias for full=true"),
   },
   async (input) => {
     const recipes = builtInWorkspaceRecipes();
-    if (!input.compact || input.verbose) return jsonText(recipes);
+    if (input.full || input.verbose || input.compact === false) return jsonText(recipes);
     const limit = mcpLimit(input.limit, DEFAULT_MCP_LIST_LIMIT);
-    return jsonText(compactListPayload(recipes, recipes.slice(0, limit).map((recipe) => ({
-      slug: recipe.slug,
-      name: recipe.name,
-      kind: recipe.kind,
-      tags: recipe.default_tags ?? [],
-    })), limit, "Use projects_recipes_built_ins verbose=true for full built-in recipe definitions."));
+    return jsonText(stableCompactListPayload({
+      collection: "project-built-in-recipes",
+      items: recipes,
+      limit,
+      offset: input.offset,
+      cursor: input.cursor,
+      identity: (recipe) => recipe.slug ?? recipe.name,
+      compare: (left, right) => (left.slug ?? left.name).localeCompare(right.slug ?? right.name),
+      mapItem: (recipe) => ({
+        slug: recipe.slug,
+        name: recipe.name,
+        kind: recipe.kind,
+        tags: recipe.default_tags ?? [],
+      }),
+      nextSteps: "Use projects_recipes_built_ins full=true for legacy built-in recipe definitions.",
+    }));
   },
 );
 
@@ -669,39 +816,65 @@ server.tool(
 
 server.tool(
   "projects_agents_list",
-  "List registered agents, or agents assigned to a specific project. Full records by default; pass compact=true for compact summaries.",
+  "List registered or assigned agents in a bounded compact page by default. Set full=true (or verbose=true/compact=false) for legacy full records.",
   {
     project: z.string().optional(),
     limit: z.number().int().positive().max(500).optional(),
-    compact: z.boolean().optional(),
-    verbose: z.boolean().optional(),
+    offset: z.number().int().nonnegative().max(100_000).optional(),
+    cursor: z.string().min(1).max(4096).optional().describe("Opaque collection/filter-bound cursor from next_cursor"),
+    compact: z.boolean().optional().describe("Compatibility flag; compact=true is now the default"),
+    full: z.boolean().optional().describe("Return the legacy full-record array"),
+    verbose: z.boolean().optional().describe("Compatibility alias for full=true"),
   },
   async (input) => {
     const limit = mcpLimit(input.limit, DEFAULT_MCP_LIST_LIMIT);
+    const legacyFull = input.full || input.verbose || input.compact === false;
     if (!input.project) {
       const agents = await resolveProjectStore().listAgents();
-      if (!input.compact || input.verbose) return jsonText(agents);
-      return jsonText(compactListPayload(agents, agents.slice(0, limit).map((agent) => ({
-        id: agent.id,
-        slug: agent.slug,
-        name: agent.name,
-        kind: agent.kind,
-        provider: agent.provider,
-        model: agent.model,
-        role: agent.role,
-      })), limit, "Use projects_agents_list verbose=true for full agent records."));
+      if (legacyFull) return jsonText(agents);
+      return jsonText(stableCompactListPayload({
+        collection: "project-agents",
+        items: agents,
+        filter: { project: null },
+        limit,
+        offset: input.offset,
+        cursor: input.cursor,
+        identity: (agent) => agent.id,
+        compare: (left, right) => left.slug.localeCompare(right.slug) || left.id.localeCompare(right.id),
+        mapItem: (agent) => ({
+          id: agent.id,
+          slug: agent.slug,
+          name: agent.name,
+          kind: agent.kind,
+          provider: agent.provider,
+          model: agent.model,
+          role: agent.role,
+        }),
+        nextSteps: "Use projects_agents_list full=true for legacy agent records.",
+      }));
     }
     const store = resolveProjectStore();
     const project = await findProjectTarget(input.project, store);
     if (!project) return errorText(`Project not found: ${input.project}`);
     const assignments = await store.getProjectAgents(project.id);
-    if (!input.compact || input.verbose) return jsonText(assignments);
-    return jsonText(compactListPayload(assignments, assignments.slice(0, limit).map((assignment) => ({
-      agent: assignment.agent?.slug ?? assignment.agent_id,
-      role: assignment.role,
-      kind: assignment.agent?.kind ?? null,
-      created_at: assignment.created_at,
-    })), limit, "Use projects_agents_list verbose=true for full assignment records."));
+    if (legacyFull) return jsonText(assignments);
+    return jsonText(stableCompactListPayload({
+      collection: "project-agent-assignments",
+      items: assignments,
+      filter: { project_id: project.id },
+      limit,
+      offset: input.offset,
+      cursor: input.cursor,
+      identity: (assignment) => assignment.id,
+      compare: (left, right) => left.role.localeCompare(right.role) || left.created_at.localeCompare(right.created_at) || left.id.localeCompare(right.id),
+      mapItem: (assignment) => ({
+        agent: assignment.agent?.slug ?? assignment.agent_id,
+        role: assignment.role,
+        kind: assignment.agent?.kind ?? null,
+        created_at: assignment.created_at,
+      }),
+      nextSteps: "Use projects_agents_list full=true for legacy assignment records.",
+    }));
   },
 );
 
@@ -771,26 +944,39 @@ server.tool(
 
 server.tool(
   "projects_tmux_profiles_list",
-  "List saved project tmux profiles. Full records by default; pass compact=true for compact summaries.",
+  "List saved tmux profiles in a bounded compact page by default. Set full=true (or verbose=true/compact=false) for legacy full records.",
   {
     limit: z.number().int().positive().max(500).optional(),
-    compact: z.boolean().optional(),
-    verbose: z.boolean().optional(),
+    offset: z.number().int().nonnegative().max(100_000).optional(),
+    cursor: z.string().min(1).max(4096).optional().describe("Opaque collection/filter-bound cursor from next_cursor"),
+    compact: z.boolean().optional().describe("Compatibility flag; compact=true is now the default"),
+    full: z.boolean().optional().describe("Return the legacy full-record array"),
+    verbose: z.boolean().optional().describe("Compatibility alias for full=true"),
   },
   async (input) => {
     const store = resolveProjectStore();
     const profiles = await store.listTmuxProfiles();
     const full = await Promise.all(profiles.map(async (profile) => ({ ...profile, windows: await store.listTmuxProfileWindows(profile.id) })));
-    if (!input.compact || input.verbose) return jsonText(full);
+    if (input.full || input.verbose || input.compact === false) return jsonText(full);
     const limit = mcpLimit(input.limit, DEFAULT_MCP_LIST_LIMIT);
-    return jsonText(compactListPayload(full, full.slice(0, limit).map((profile) => ({
-      id: profile.id,
-      slug: profile.slug,
-      name: profile.name,
-      session: profile.session_template,
-      attach: profile.attach,
-      windows: profile.windows.length,
-    })), limit, "Use projects_tmux_profiles_list verbose=true or projects_tmux_profiles_apply dry_run=true for details."));
+    return jsonText(stableCompactListPayload({
+      collection: "project-tmux-profiles",
+      items: full,
+      limit,
+      offset: input.offset,
+      cursor: input.cursor,
+      identity: (profile) => profile.id,
+      compare: (left, right) => left.slug.localeCompare(right.slug) || left.id.localeCompare(right.id),
+      mapItem: (profile) => ({
+        id: profile.id,
+        slug: profile.slug,
+        name: profile.name,
+        session: profile.session_template,
+        attach: profile.attach,
+        windows: profile.windows.length,
+      }),
+      nextSteps: "Use projects_tmux_profiles_list full=true or projects_tmux_profiles_apply dry_run=true for details.",
+    }));
   },
 );
 
@@ -890,45 +1076,131 @@ function projectDoctorPayload(result: ReturnType<typeof doctorWorkspace>) {
 
 server.tool(
   "projects_list",
-  "List registered projects across all roots and arbitrary paths. Full records by default; pass compact=true for compact summaries.",
+  "List registered projects with a compact bounded page by default. Use projects_show for one full record; set full=true (or verbose=true/compact=false) for the legacy full-record array.",
   {
     kind: z.string().optional(),
     status: z.enum(["active", "archived", "deleted"]).optional(),
-    query: z.string().optional(),
-    tags: z.array(z.string()).optional(),
+    query: z.string().max(MAX_PROJECT_QUERY_LENGTH).optional(),
+    query_scope: z.enum(["identity", "discovery", "structured", "all"]).optional(),
+    tags: z.array(z.string().trim().min(1).max(MAX_PROJECT_QUERY_TAG_LENGTH)).max(MAX_PROJECT_QUERY_TAGS).optional(),
     include_evals: z.boolean().optional(),
     include_fixtures: z.boolean().optional(),
-    limit: z.number().int().positive().max(500).optional(),
-    compact: z.boolean().optional(),
-    verbose: z.boolean().optional(),
+    limit: z.number().int().positive().max(100).optional(),
+    offset: z.number().int().nonnegative().optional().describe("Legacy numeric offset; compact mode accepts only 0"),
+    cursor: z.string().min(1).max(4096).optional().describe("Opaque collection/filter-bound cursor from next_cursor"),
+    detail: z.enum(["compact", "full"]).optional(),
+    fields: z.array(z.enum(PROJECT_LIST_FIELDS)).min(1).max(PROJECT_LIST_FIELDS.length).optional(),
+    max_bytes: z.number().int().min(MIN_PROJECT_LIST_MAX_BYTES).max(MAX_PROJECT_LIST_MAX_BYTES).optional(),
+    pretty: z.boolean().optional(),
+    all: z.boolean().optional().describe("Return the complete compact population within the 256 KiB hard ceiling"),
+    full: z.boolean().optional().describe("Return the legacy full-record JSON array"),
+    compact: z.boolean().optional().describe("Compatibility flag; compact=true is now the default, compact=false requests the legacy array"),
+    verbose: z.boolean().optional().describe("Compatibility alias for the legacy full-record array"),
   },
   async (input) => {
-    const store = resolveProjectStore();
-    const limit = mcpLimit(input.limit, DEFAULT_MCP_LIST_LIMIT);
-    const projects = filterProjectEvalArtifacts(await store.listProjects({
-      kind: input.kind as WorkspaceKind | undefined,
-      status: input.status,
-      query: input.query,
-      tags: input.tags,
-      exclude_eval_artifacts: !input.include_evals,
-      exclude_registry_fixtures: !input.include_fixtures,
-      limit: input.compact && !input.verbose ? limit + 1 : input.limit,
-    }), input.include_evals);
-    if (!input.compact || input.verbose) return jsonText(projects.map(projectWithManagement));
-    const visible = projects.slice(0, limit);
-    return jsonText({
-      projects: visible.map(compactProject),
-      count: visible.length,
-      limit,
-      has_more: projects.length > visible.length,
-      next_steps: "Use projects_show with an id/slug for details, omit compact or pass verbose=true for full records, or limit/query/tags filters to narrow results.",
-    });
+    try {
+      const store = resolveProjectStore();
+      const legacyFull = input.full === true || input.verbose === true || input.compact === false;
+      if (legacyFull) {
+        if (input.detail !== undefined || input.fields !== undefined || input.max_bytes !== undefined || input.cursor !== undefined) {
+          return errorText("full/verbose/compact=false cannot be combined with detail, fields, max_bytes, or cursor");
+        }
+        const projects = filterRegistryFixtures(filterProjectEvalArtifacts(await store.listProjects({
+          kind: input.kind as WorkspaceKind | undefined,
+          status: input.status,
+          query: input.query,
+          query_scope: input.query_scope,
+          tags: input.tags,
+          exclude_eval_artifacts: !input.include_evals,
+          exclude_registry_fixtures: !input.include_fixtures,
+          limit: input.all ? undefined : input.limit,
+        }), input.include_evals), input.include_fixtures);
+        return jsonText(projects.map(projectWithManagement));
+      }
+
+      const detail = input.detail ?? "compact";
+      if (input.all && input.limit !== undefined) return errorText("all=true cannot be combined with limit");
+      if (input.all && input.offset !== undefined) return errorText("all=true cannot be combined with offset");
+      if (input.all && input.cursor !== undefined) return errorText("all=true cannot be combined with cursor");
+      if (input.offset !== undefined && input.offset !== 0) return errorText("Compact project pages refuse raw continuation offsets; restart without offset and continue with next_cursor.");
+      if (input.cursor !== undefined && input.offset !== undefined) return errorText("Pass cursor or offset=0, not both");
+      if (input.all && detail === "full") return errorText("all=true requires compact detail");
+      if (detail === "full" && input.fields) return errorText("fields is only available with detail=compact");
+      const fields = detail === "compact" ? resolveProjectListFields(input.fields) : null;
+      const queryScope = input.query_scope ?? (input.query ? "discovery" : "all");
+      const requestedLimit = input.all ? undefined : mcpLimit(input.limit, DEFAULT_MCP_LIST_LIMIT);
+      const stableFilter = {
+        kind: input.kind as WorkspaceKind | undefined,
+        status: input.status,
+        query: input.query,
+        query_scope: queryScope,
+        tags: input.tags,
+        exclude_eval_artifacts: !input.include_evals,
+        exclude_registry_fixtures: !input.include_fixtures,
+        require_list_v2_contract: true,
+      };
+      const population = await store.listProjectsComplete(stableFilter);
+      const projects = filterRegistryFixtures(
+        filterProjectEvalArtifacts(population.projects, input.include_evals),
+        input.include_fixtures,
+      );
+      if (projects.length !== population.projects.length || projects.length !== population.total) {
+        return errorText("Projects producer attested the v2 filter contract but returned an excluded eval/fixture row.");
+      }
+      const stablePage = pageStableCollection(projects, {
+        collection: "projects",
+        filter: { ...stableFilter, detail, fields },
+        limit: input.all ? Math.max(projects.length, 1) : requestedLimit!,
+        cursor: input.cursor,
+        identity: (project) => project.id,
+        compare: (left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id),
+      });
+      const rows: unknown[] = detail === "full"
+        ? stablePage.items
+        : stablePage.items.map((project) => projectListRow(project, fields ?? undefined));
+      const maxBytes = input.max_bytes ?? (input.all ? MAX_PROJECT_LIST_MAX_BYTES : DEFAULT_PROJECT_LIST_MAX_BYTES);
+      const nextArguments = redactProjectValue({
+        ...(input.query ? { query: input.query } : {}),
+        query_scope: queryScope,
+        ...(input.kind ? { kind: input.kind } : {}),
+        ...(input.status ? { status: input.status } : {}),
+        ...(input.tags ? { tags: input.tags } : {}),
+        ...(input.include_evals ? { include_evals: true } : {}),
+        ...(input.include_fixtures ? { include_fixtures: true } : {}),
+        detail,
+        ...(fields ? { fields } : {}),
+        max_bytes: maxBytes,
+        ...(input.pretty ? { pretty: true } : {}),
+      }) as Record<string, unknown>;
+      const output = buildBoundedProjectListOutput({
+        projects: redactProjectValue(rows) as unknown[],
+        total: stablePage.total,
+        offset: stablePage.position,
+        limit: input.all ? null : requestedLimit!,
+        detail,
+        fields,
+        queryScope,
+        hasMore: stablePage.has_more,
+        complete: stablePage.complete,
+        cursor: stablePage.cursor,
+        snapshot: stablePage.snapshot,
+        opaqueCursor: true,
+        nextCursorForCount: stablePage.cursorForCount,
+        nextArguments,
+      }, { maxBytes, pretty: input.pretty });
+      if (input.all && output.envelope.truncated) {
+        return errorText(`all=true requires a complete response, but the compact population exceeds ${maxBytes} bytes; narrow the filters or page the read`);
+      }
+      return { content: [{ type: "text" as const, text: output.text }] };
+    } catch (err) {
+      return errorText(`Error: ${err instanceof Error ? err.message : String(err)}`);
+    }
   },
 );
 
 server.tool(
   "projects_search",
-  "Search registered projects with a compact bounded page by default. Searches discovery fields unless query_scope is explicit; use projects_show for full detail. Legacy projects_list remains unchanged.",
+  "Search registered projects with a compact bounded page by default. Searches discovery fields unless query_scope is explicit; use projects_show for full detail. projects_list uses the same compact default and retains explicit full compatibility.",
   {
     query: z.string().trim().min(1).max(MAX_PROJECT_QUERY_LENGTH),
     query_scope: z.enum(["identity", "discovery", "structured", "all"]).optional(),
@@ -938,7 +1210,8 @@ server.tool(
     include_evals: z.boolean().optional(),
     include_fixtures: z.boolean().optional(),
     limit: z.number().int().positive().max(100).optional(),
-    offset: z.number().int().nonnegative().optional(),
+    offset: z.number().int().nonnegative().optional().describe("Legacy numeric offset; compact mode accepts only 0"),
+    cursor: z.string().min(1).max(4096).optional().describe("Opaque collection/filter-bound cursor from next_cursor"),
     detail: z.enum(["compact", "full"]).optional(),
     fields: z.array(z.enum(PROJECT_LIST_FIELDS)).min(1).max(PROJECT_LIST_FIELDS.length).optional(),
     max_bytes: z.number().int().min(MIN_PROJECT_LIST_MAX_BYTES).max(MAX_PROJECT_LIST_MAX_BYTES).optional(),
@@ -948,14 +1221,15 @@ server.tool(
     try {
       const store = resolveProjectStore();
       const limit = mcpLimit(input.limit, DEFAULT_MCP_LIST_LIMIT);
-      const offset = input.offset ?? 0;
+      if (input.offset !== undefined && input.offset !== 0) return errorText("Compact project search refuses raw continuation offsets; restart without offset and continue with next_cursor.");
+      if (input.cursor !== undefined && input.offset !== undefined) return errorText("Pass cursor or offset=0, not both");
       const detail = input.detail ?? "compact";
       if (detail === "full" && input.fields) {
         return errorText("fields is only available with detail=compact");
       }
       const fields = detail === "compact" ? resolveProjectListFields(input.fields) : null;
       const queryScope = input.query_scope ?? "discovery";
-      const page = await store.listProjectsPage({
+      const stableFilter = {
         kind: input.kind as WorkspaceKind | undefined,
         status: input.status,
         query: input.query,
@@ -963,21 +1237,27 @@ server.tool(
         tags: input.tags,
         exclude_eval_artifacts: !input.include_evals,
         exclude_registry_fixtures: !input.include_fixtures,
-        limit,
-        offset,
         require_list_v2_contract: true,
-      });
+      };
+      const population = await store.listProjectsComplete(stableFilter);
       const projects = filterRegistryFixtures(
-        filterProjectEvalArtifacts(page.projects, input.include_evals),
+        filterProjectEvalArtifacts(population.projects, input.include_evals),
         input.include_fixtures,
       );
-      if (projects.length !== page.projects.length) {
+      if (projects.length !== population.projects.length || projects.length !== population.total) {
         return errorText("Projects producer attested the v2 filter contract but returned an excluded eval/fixture row.");
       }
-      const total = page.total;
+      const stablePage = pageStableCollection(projects, {
+        collection: "projects",
+        filter: { ...stableFilter, detail, fields },
+        limit,
+        cursor: input.cursor,
+        identity: (project) => project.id,
+        compare: (left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id),
+      });
       const rows: unknown[] = detail === "full"
-        ? projects
-        : projects.map((project) => projectListRow(project, fields ?? undefined));
+        ? stablePage.items
+        : stablePage.items.map((project) => projectListRow(project, fields ?? undefined));
       const safeRows = redactProjectValue(rows) as unknown[];
       const nextArguments = redactProjectValue({
         query: input.query,
@@ -994,15 +1274,18 @@ server.tool(
       }) as Record<string, unknown>;
       const output = buildBoundedProjectListOutput({
         projects: safeRows,
-        total,
-        offset: page.offset,
-        limit: page.limit,
+        total: stablePage.total,
+        offset: stablePage.position,
+        limit,
         detail,
         fields,
         queryScope,
-        hasMore: page.has_more,
-        complete: page.complete,
-        nextOffset: page.has_more ? page.offset + page.projects.length : null,
+        hasMore: stablePage.has_more,
+        complete: stablePage.complete,
+        cursor: stablePage.cursor,
+        snapshot: stablePage.snapshot,
+        opaqueCursor: true,
+        nextCursorForCount: stablePage.cursorForCount,
         nextArguments,
       }, {
         maxBytes: input.max_bytes ?? DEFAULT_PROJECT_LIST_MAX_BYTES,
@@ -1293,30 +1576,37 @@ server.tool(
 );
 server.tool(
   "projects_locations_list",
-  "List registered folder locations for a project. Full records by default; pass compact=true for compact summaries.",
+  "List registered folder locations in a bounded compact page by default. Set full=true (or verbose=true/compact=false) for legacy full records.",
   {
     project: z.string(),
     limit: z.number().int().positive().max(500).optional(),
-    compact: z.boolean().optional(),
-    verbose: z.boolean().optional(),
+    offset: z.number().int().nonnegative().max(100_000).optional(),
+    cursor: z.string().min(1).max(4096).optional().describe("Opaque collection/filter-bound cursor from next_cursor"),
+    compact: z.boolean().optional().describe("Compatibility flag; compact=true is now the default"),
+    full: z.boolean().optional().describe("Return the legacy full-record object"),
+    verbose: z.boolean().optional().describe("Compatibility alias for full=true"),
   },
   async (input) => {
     const store = resolveProjectStore();
     const project = await findProjectTarget(input.project, store);
     if (!project) return errorText(`Project not found: ${input.project}`);
     const locations = await store.getProjectLocations(project.id);
-    if (!input.compact || input.verbose) return jsonText({ project: projectWithManagement(project), locations });
+    if (input.full || input.verbose || input.compact === false) return jsonText({ project: projectWithManagement(project), locations });
     const limit = mcpLimit(input.limit, DEFAULT_MCP_LIST_LIMIT);
-    const visible = locations.slice(0, limit);
-    return jsonText({
-      project: compactProject(project),
-      locations: visible.map(compactLocation),
-      count: visible.length,
-      total: locations.length,
+    const page = stableCompactListPayload({
+      collection: "project-locations",
+      items: locations,
+      filter: { project_id: project.id },
       limit,
-      has_more: locations.length > visible.length,
-      next_steps: "Pass verbose=true for full location records, or use projects_show verbose=true for project context.",
+      offset: input.offset,
+      cursor: input.cursor,
+      identity: (location) => location.id,
+      compare: (left, right) => Number(right.is_primary) - Number(left.is_primary) || left.created_at.localeCompare(right.created_at) || left.id.localeCompare(right.id),
+      mapItem: compactLocation,
+      nextSteps: "Use full=true for legacy full location records, or projects_show for project context.",
     });
+    const { items, ...metadata } = page;
+    return jsonText({ project: compactProject(project), locations: items, ...metadata });
   },
 );
 
@@ -2059,14 +2349,17 @@ server.tool(
 
 server.tool(
   "projects_doctor",
-  "Check one or all projects for path, marker, reference, location, and failed-run issues. Full records by default; pass compact=true for compact summaries.",
+  "Check one or all projects with compact issue summaries by default. Set full=true (or verbose=true/compact=false) for legacy full records.",
   {
     id: z.string().optional(),
     fix: z.boolean().optional(),
     dry_run: z.boolean().optional(),
     limit: z.number().int().positive().max(500).optional(),
-    compact: z.boolean().optional(),
-    verbose: z.boolean().optional(),
+    offset: z.number().int().nonnegative().max(100_000).optional(),
+    cursor: z.string().min(1).max(4096).optional().describe("Opaque collection/filter-bound cursor from next_cursor"),
+    compact: z.boolean().optional().describe("Compatibility flag; compact=true is now the default"),
+    full: z.boolean().optional().describe("Return legacy full doctor records"),
+    verbose: z.boolean().optional().describe("Compatibility alias for full=true"),
   },
   async (input) => {
     const store = resolveProjectStore();
@@ -2080,32 +2373,60 @@ server.tool(
       const result = input.fix && !input.dry_run
         ? await withWorkspaceMutationLock(store, project, owner, "project doctor fix", () => doctorWorkspaceWithStore(store, project, options))
         : await doctorWorkspaceWithStore(store, project, options);
-      return jsonText(!input.compact || input.verbose
+      return jsonText(input.full || input.verbose || input.compact === false
         ? [projectDoctorPayload(result)]
         : {
             results: [compactDoctorResult(result)],
             count: 1,
             total: 1,
             limit: 1,
+            offset: 0,
+            cursor: null,
+            next_cursor: null,
+            next_offset: null,
+            snapshot: null,
             has_more: false,
-            next_steps: "Pass verbose=true for full check records and full project payloads.",
+            complete: true,
+            next_steps: "Pass full=true for legacy full check records and project payloads.",
           });
     }
     const owner = mcpMutationAgent(store);
+    const legacyFull = input.full || input.verbose || input.compact === false;
     const limit = mcpLimit(input.limit, DEFAULT_MCP_LIST_LIMIT);
-    const projects = await store.listProjects({ limit: input.compact && !input.verbose ? limit + 1 : input.limit ?? 500 });
-    const results = await Promise.all(projects.map((project) => input.fix && !input.dry_run
-      ? withWorkspaceMutationLock(store, project, owner, "project doctor fix", () => doctorWorkspaceWithStore(store, project, options))
-      : doctorWorkspaceWithStore(store, project, options)));
-    if (!input.compact || input.verbose) return jsonText(results.map(projectDoctorPayload));
-    const visible = results.slice(0, limit);
-    return jsonText({
-      results: visible.map(compactDoctorResult),
-      count: visible.length,
-      total_returned: results.length,
+    if (legacyFull) {
+      if (input.cursor !== undefined) return errorText("cursor is for compact doctor pages; use offset with full=true");
+      const projects = await store.listProjects({ limit: input.limit ?? 500, offset: input.offset });
+      const results = await Promise.all(projects.map((project) => input.fix && !input.dry_run
+        ? withWorkspaceMutationLock(store, project, owner, "project doctor fix", () => doctorWorkspaceWithStore(store, project, options))
+        : doctorWorkspaceWithStore(store, project, options)));
+      return jsonText(results.map(projectDoctorPayload));
+    }
+    if (input.fix && !input.dry_run) return errorText("Paged projects_doctor fix is unsafe because it mutates its own snapshot; pass id or full=true.");
+    if (input.offset !== undefined && input.offset !== 0) return errorText("Compact doctor pages refuse raw continuation offsets; continue with next_cursor.");
+    if (input.cursor !== undefined && input.offset !== undefined) return errorText("Pass cursor or offset=0, not both");
+    const population = await store.listProjectsComplete();
+    const projectPage = pageStableCollection(population.projects, {
+      collection: "project-doctor",
+      filter: { dry_run: Boolean(input.dry_run), fix: Boolean(input.fix) },
       limit,
-      has_more: results.length > visible.length,
-      next_steps: "Pass verbose=true for full check records and full project payloads, or pass id to inspect one project.",
+      cursor: input.cursor,
+      identity: (project) => project.id,
+      compare: (left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id),
+    });
+    const results = await Promise.all(projectPage.items.map((project) => doctorWorkspaceWithStore(store, project, options)));
+    return jsonText({
+      results: results.map(compactDoctorResult),
+      count: results.length,
+      total: projectPage.total,
+      limit,
+      offset: projectPage.position,
+      cursor: projectPage.cursor,
+      next_cursor: projectPage.cursorForCount(results.length),
+      next_offset: null,
+      snapshot: projectPage.snapshot,
+      has_more: projectPage.has_more,
+      complete: projectPage.complete,
+      next_steps: "Continue with next_cursor; pass full=true for legacy full check records and project payloads, or pass id to inspect one project.",
     });
   },
 );
@@ -2125,30 +2446,37 @@ server.tool(
 
 server.tool(
   "projects_events_list",
-  "List audit events for a project. Full records by default; pass compact=true for compact summaries.",
+  "List recent audit events in a bounded compact page by default. Set full=true (or verbose=true/compact=false) for the legacy full object.",
   {
     project: z.string(),
     limit: z.number().int().positive().max(500).optional(),
-    compact: z.boolean().optional(),
-    verbose: z.boolean().optional(),
+    offset: z.number().int().nonnegative().max(100_000).optional(),
+    cursor: z.string().min(1).max(4096).optional().describe("Opaque collection/filter-bound cursor from next_cursor"),
+    compact: z.boolean().optional().describe("Compatibility flag; compact=true is now the default"),
+    full: z.boolean().optional().describe("Return the legacy full project and event records"),
+    verbose: z.boolean().optional().describe("Compatibility alias for full=true"),
   },
   async (input) => {
     const store = resolveProjectStore();
     const project = await findProjectTarget(input.project, store);
     if (!project) return errorText(`Project not found: ${input.project}`);
     const events = await store.listEvents(project.id);
-    if (!input.compact) return jsonText({ project, events });
+    if (input.full || input.verbose || input.compact === false) return jsonText({ project, events });
     const limit = mcpLimit(input.limit, DEFAULT_MCP_EVENT_LIMIT);
-    const visible = events.slice(-limit).reverse();
-    return jsonText({
-      project: input.verbose ? projectWithManagement(project) : compactProject(project),
-      events: input.verbose ? visible : visible.map((event) => compactEvent(event)),
-      count: visible.length,
-      total: events.length,
+    const page = stableCompactListPayload({
+      collection: "project-events",
+      items: events,
+      filter: { project_id: project.id },
       limit,
-      has_more: events.length > visible.length,
-      next_steps: "Increase limit, pass verbose=true for full event records, or use projects_show verbose=true for full project context.",
+      offset: input.offset,
+      cursor: input.cursor,
+      identity: (event) => event.id,
+      compare: (left, right) => right.created_at.localeCompare(left.created_at) || right.id.localeCompare(left.id),
+      mapItem: (event) => compactEvent(event),
+      nextSteps: "Continue with next_cursor; set full=true for legacy full event records.",
     });
+    const { items, ...metadata } = page;
+    return jsonText({ project: compactProject(project), events: items, ...metadata });
   },
 );
 
@@ -2191,17 +2519,30 @@ server.tool(
 
 server.tool(
   "projects_locks",
-  "List currently held project mutation locks. Full records by default; pass compact=true for compact summaries.",
+  "List project mutation locks in a bounded compact page by default. Set full=true (or verbose=true/compact=false) for legacy full records.",
   {
     limit: z.number().int().positive().max(500).optional(),
-    compact: z.boolean().optional(),
-    verbose: z.boolean().optional(),
+    offset: z.number().int().nonnegative().max(100_000).optional(),
+    cursor: z.string().min(1).max(4096).optional().describe("Opaque collection/filter-bound cursor from next_cursor"),
+    compact: z.boolean().optional().describe("Compatibility flag; compact=true is now the default"),
+    full: z.boolean().optional().describe("Return legacy full lock records"),
+    verbose: z.boolean().optional().describe("Compatibility alias for full=true"),
   },
   async (input) => {
     const locks = await resolveProjectStore().listLocks();
-    if (!input.compact || input.verbose) return jsonText(locks);
+    if (input.full || input.verbose || input.compact === false) return jsonText(locks);
     const limit = mcpLimit(input.limit, DEFAULT_MCP_LIST_LIMIT);
-    return jsonText(compactListPayload(locks, locks.slice(0, limit).map(compactLock), limit, "Pass verbose=true for full lock records."));
+    return jsonText(stableCompactListPayload({
+      collection: "project-locks",
+      items: locks,
+      limit,
+      offset: input.offset,
+      cursor: input.cursor,
+      identity: (lock) => lock.id,
+      compare: (left, right) => left.created_at.localeCompare(right.created_at) || left.id.localeCompare(right.id),
+      mapItem: compactLock,
+      nextSteps: "Set full=true for legacy full lock records.",
+    }));
   },
 );
 
@@ -2597,7 +2938,7 @@ server.tool(
   },
 );
 
-return server;
+return rawServer;
 }
 
 /**
@@ -2623,13 +2964,14 @@ function prepareMcpRuntime(): void {
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
+  const profile = resolveProjectsMcpProfile(args);
   prepareMcpRuntime();
   if (isHttpMode(args)) {
-    startMcpHttpServer({ name: "projects", port: resolveMcpHttpPort(args), buildServer });
+    startMcpHttpServer({ name: "projects", port: resolveMcpHttpPort(args), buildServer: () => buildServer(profile) });
     return;
   }
   const transport = new StdioServerTransport();
-  await buildServer().connect(transport);
+  await buildServer(profile).connect(transport);
 }
 
 if (import.meta.main) {
