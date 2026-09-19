@@ -31,6 +31,20 @@ describe("Domains production deployment workflow", () => {
     }
   });
 
+  test("projects required provider secrets from the reviewed manifest into the candidate task", () => {
+    expect(workflow).toContain("web_secrets=\"$(jq -ce");
+    expect(workflow).toContain('has("CLOUDFLARE_API_TOKEN")');
+    expect(workflow).toContain("MANIFEST_WEB_SECRETS");
+    expect(workflow).toContain("required_secrets");
+    expect(workflow).toContain("valueFrom:.value");
+  });
+
+  test("refuses a failed service pointer as a rollback anchor", () => {
+    expect(workflow).toContain('rolloutState == "COMPLETED"');
+    expect(workflow).toContain('rolloutState == "FAILED"');
+    expect(workflow).toContain("Domains service requires reconciliation before deployment");
+  });
+
   test("binds migration state before service mutation and refuses unsafe rollback", () => {
     const catalog = workflow.indexOf("Build exact migration ID and checksum catalog");
     const before = workflow.indexOf("Capture exact pre-migration ledger receipt");
