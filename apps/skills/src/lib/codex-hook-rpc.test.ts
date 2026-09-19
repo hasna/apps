@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { connectCodexHookRpc } from "./codex-hook-rpc.js";
 
-for (const version of ["0.999.0", "0.154.0"]) test(`native transport refuses ${version === "0.999.0" ? "unknown versions" : "malformed response envelopes"}`, async () => {
+for (const version of ["0.999.0", "0.154.0", "0.155.1"]) test(`native transport refuses ${version === "0.999.0" ? "unknown versions" : "malformed response envelopes"}`, async () => {
   const home = mkdtempSync(join(tmpdir(), "skills-rpc-refusal-")), command = join(home, "codex");
   try {
     writeFileSync(command, `#!/bin/sh\nif [ "$1" = "--version" ]; then printf 'codex-cli ${version}\\n'; exit 0; fi\nprintf 'null\\n'\n`, { mode: 0o700 });
