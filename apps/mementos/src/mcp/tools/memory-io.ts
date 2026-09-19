@@ -2,31 +2,49 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { createMemory, listMemoriesBounded } from "../../db/memories.js";
 import { formatError } from "./memory-utils.js";
+import { redactMemoryForOutput } from "../../lib/redact.js";
+import { boundedMcpOutput, mcpMaxBytes } from "./bounded-output.js";
 import type { CreateMemoryInput } from "../../types/index.js";
 
 export function registerMemoryIoTools(server: McpServer): void {
   server.tool(
     "memory_export",
-    "Export memories. format='json' (default) returns JSON array. format='v1' returns mementos-export-v1 JSONL with entity links.",
+    "Export one truthful byte-bounded page. format='json' returns full memory objects; format='v1' returns portable entries with entity links. Continue with next_offset.",
     {
       scope: z.enum(["global", "shared", "private", "working"]).optional(),
       category: z.enum(["preference", "fact", "knowledge", "history", "procedural", "resource"]).optional(),
       agent_id: z.string().optional(),
       project_id: z.string().optional(),
-      format: z.enum(["json", "v1"]).optional().describe("Export format: json (default) or v1 (JSONL with entity links)"),
+      format: z.enum(["json", "v1"]).optional().describe("Export page format: json (default) or portable v1 entries"),
+      limit: z.coerce.number().int().min(1).max(1000).optional().describe("Page size (default: 20, maximum: 1000)"),
+      offset: z.coerce.number().int().min(0).optional().describe("Continuation offset"),
+      max_bytes: z.coerce.number().int().min(1024).max(1024 * 1024).optional().describe("Response ceiling (default: 65536, maximum: 1048576)"),
     },
     async (args) => {
       try {
-        if (args.format === "v1") {
-          const { exportV1, toJsonl } = await import("../../lib/export-v1.js");
-          const entries = exportV1({ ...args });
-          return { content: [{ type: "text" as const, text: toJsonl(entries) }] };
-        }
-        // Export targets up to 10000 rows; the server caps single responses at
-        // 1000, so the requested population is assembled by walking bounded
-        // pages (BUG 2796806b).
-        const memories = listMemoriesBounded({ ...args }, 10000).rows;
-        return { content: [{ type: "text" as const, text: JSON.stringify(memories, null, 2) }] };
+        const { format, limit: requestedLimit, offset: requestedOffset, max_bytes, ...filter } = args;
+        const limit = requestedLimit ?? 20;
+        const offset = requestedOffset ?? 0;
+        const page = listMemoriesBounded({ ...filter, offset }, limit);
+        const memories = page.rows.map(redactMemoryForOutput);
+        const portable = format === "v1";
+        const items: unknown[] = portable
+          ? (await import("../../lib/export-v1.js")).exportV1Entries(memories)
+          : memories;
+        const output = boundedMcpOutput({
+          collection: portable ? "entries" : "memories",
+          receipt: portable ? "mementos.export.v1.page.v1" : "mementos.export.page.v1",
+          items,
+          offset,
+          limit,
+          sourceHasMore: page.has_more,
+          detail: "full",
+          maxBytes: mcpMaxBytes(max_bytes, "full"),
+          metadata: { format: portable ? "v1" : "json" },
+          nextArguments: { format: portable ? "v1" : "json", ...filter },
+          includeDetailInNextArguments: false,
+        });
+        return { content: [{ type: "text" as const, text: output.text }] };
       } catch (e) {
         return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
       }

@@ -16,9 +16,18 @@ import {
   positiveIntOrDefault,
   printPageHint,
   truncateText,
+  collectPagedRows,
   type GlobalOpts,
 } from "../helpers.js";
 import { redactSearchResultForOutput } from "../../lib/redact.js";
+import {
+  STRUCTURED_ALL_MAX_ROWS,
+  compactSearchResult,
+  structuredCollectionOutput,
+  structuredMaxBytes,
+  structuredPageLimit,
+  type StructuredDetail,
+} from "../structured-json.js";
 
 export function registerSearchCommand(program: Command): void {
   const handleError = makeHandleError(program);
@@ -37,17 +46,27 @@ export function registerSearchCommand(program: Command): void {
     .option("--cursor <n>", "Cursor offset for the next page", parseInt)
     .option("--format <fmt>", "Output format: compact (default), json, csv, yaml")
     .option("--verbose", "Show match highlights and wider snippets")
+    .option("--all", `Exhaust matching results in one explicit JSON receipt (hard max: ${STRUCTURED_ALL_MAX_ROWS})`)
+    .option("--full", "Return full legacy search-result objects in the bounded JSON receipt")
+    .option("--max-bytes <n>", "JSON response byte ceiling", parseInt)
     .option("--history", "Show recent search queries instead of searching")
     .option("--popular", "Show most popular search queries")
     .action((query: string, opts) => {
       try {
         const fmt = getOutputFormat(program, opts.format as string | undefined);
         const isStructured = fmt === "json" || fmt === "csv" || fmt === "yaml";
-        const limit = positiveIntOrDefault(
-          opts.limit,
-          isStructured ? 20 : DEFAULT_SEARCH_LIMIT
-        );
-        const offset = cursorOrOffset(opts.cursor, opts.offset);
+        const jsonMode = fmt === "json";
+        const all = Boolean(opts.all);
+        const detail: StructuredDetail = opts.full ? "full" : "compact";
+        if (!jsonMode && (all || opts.full || opts.maxBytes !== undefined)) {
+          throw new Error("--all, --full, and --max-bytes require JSON output");
+        }
+        if (all && opts.limit !== undefined) throw new Error("--all cannot be combined with --limit");
+        const limit = jsonMode
+          ? structuredPageLimit(opts.limit, 20)
+          : positiveIntOrDefault(opts.limit, isStructured ? 20 : DEFAULT_SEARCH_LIMIT);
+        const offset = cursorOrOffset(opts.cursor, opts.offset) ?? 0;
+        if (all && offset !== 0) throw new Error("--all requires --cursor/--offset 0");
 
         if (opts.history) {
           const history = getSearchHistory(limit);
@@ -107,11 +126,25 @@ export function registerSearchCommand(program: Command): void {
           project_id: projectId,
           agent_id: agentId,
           session_id: (opts.session as string | undefined) || globalOpts.session,
-          limit: isStructured ? limit : limit + 1,
-          offset,
         };
-
-        const fetched = searchMemories(query, filter);
+        const target = all ? STRUCTURED_ALL_MAX_ROWS : limit;
+        const { rows: fetched, hasMore } = collectPagedRows(
+          (cursor, pageLimit) => {
+            const rows = searchMemories(query, { ...filter, limit: pageLimit, offset: cursor });
+            return {
+              rows,
+              has_more: rows.length < pageLimit ? false : undefined,
+              next_cursor: cursor + rows.length,
+            };
+          },
+          target,
+          offset,
+        );
+        if (all && hasMore) {
+          throw new Error(
+            `Exhaustive search output exceeds the hard safety limit of ${STRUCTURED_ALL_MAX_ROWS} rows; use paginated JSON output`,
+          );
+        }
         // Read-path redaction (todos e12c7659): the write path redacts
         // value/summary but never the KEY, so a credential-shaped key stored
         // by any write path reaches stdout verbatim across every format — and
@@ -121,11 +154,24 @@ export function registerSearchCommand(program: Command): void {
         // metadata (score, match_type, memory id/scope/category/importance)
         // survives.
         const sanitized = fetched.map(redactSearchResultForOutput);
-        const hasMore = !isStructured && sanitized.length > limit;
         const results = hasMore ? sanitized.slice(0, limit) : sanitized;
 
-        if (fmt === "json") {
-          outputJson(sanitized);
+        if (jsonMode) {
+          const items = detail === "full"
+            ? results.map((result) => ({ ...result }))
+            : results.map(compactSearchResult);
+          process.stdout.write(structuredCollectionOutput({
+            collection: "results",
+            receipt: "mementos.search.page.v1",
+            items,
+            offset,
+            limit,
+            sourceHasMore: hasMore,
+            all,
+            detail,
+            maxBytes: structuredMaxBytes(opts.maxBytes, { all, detail }),
+            nextArguments: { query },
+          }));
           return;
         }
 

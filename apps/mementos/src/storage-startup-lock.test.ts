@@ -52,7 +52,7 @@ function fixture() {
   async function initialize(mode: "DELETE" | "WAL") {
     const initial = await cli(true).result;
     expect(initial.exitCode).toBe(0);
-    expect(JSON.parse(initial.stdout)).toEqual([]);
+    expect(JSON.parse(initial.stdout)).toMatchObject({ memories: [], _meta: { count: 0, complete: true } });
     const db = new Database(dbPath);
     try {
       expect(db.query(`PRAGMA journal_mode = ${mode}`).get()).toEqual({ journal_mode: mode.toLowerCase() });
@@ -109,7 +109,7 @@ describe("SQLite startup busy timeout", () => {
         const result = await run.result;
         expect(result.exitCode).toBe(0);
         expect(result.stdout + result.stderr).not.toContain("database is locked");
-        if (json) expect(JSON.parse(result.stdout)).toEqual([]);
+        if (json) expect(JSON.parse(result.stdout)).toMatchObject({ memories: [], _meta: { count: 0, complete: true } });
         else expect(result.stdout).toContain("No memories found");
         expect(f.trace().slice(0, 2).map(({ sql }) => sql)).toEqual([
           "PRAGMA busy_timeout = 5000", "PRAGMA journal_mode = WAL",
@@ -125,7 +125,7 @@ describe("SQLite startup busy timeout", () => {
       f.hold();
       const result = await f.cli(true).result;
       expect(result.exitCode).toBe(0);
-      expect(JSON.parse(result.stdout)).toEqual([]);
+      expect(JSON.parse(result.stdout)).toMatchObject({ memories: [], _meta: { count: 0, complete: true } });
       // The writer remains locked through successful child completion.
       f.release();
     } finally { await f.cleanup(); }
@@ -161,7 +161,7 @@ describe("SQLite startup busy timeout", () => {
       f.release();
       const recovered = await f.cli(true).result;
       expect(recovered.exitCode).toBe(0);
-      expect(JSON.parse(recovered.stdout)).toEqual([]);
+      expect(JSON.parse(recovered.stdout)).toMatchObject({ memories: [], _meta: { count: 0, complete: true } });
     } finally { await f.cleanup(); }
   }, 30_000);
 });

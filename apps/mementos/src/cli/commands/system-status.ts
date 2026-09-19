@@ -93,7 +93,10 @@ export function resolveApiStatus(version: string = getPackageVersion()): { statu
   // A refused base configures no HTTP transport and is never echoed: the
   // rejection reason may be userinfo, and the `--json` branch would otherwise
   // print the raw env value verbatim, password included.
-  const validBase = error ? null : apiBase;
+  const resolvedApiUrl = error ? null : (apiUrl ?? resolved?.baseUrl ?? null);
+  const validBase = error
+    ? null
+    : (apiBase ?? resolved?.baseUrl.replace(/\/v1$/, "") ?? null);
   const apiKeyConfigured = configured?.apiKeyPresent ?? false;
 
   let transport: MementosApiStatus["transport"];
@@ -112,7 +115,7 @@ export function resolveApiStatus(version: string = getPackageVersion()): { statu
       app: "mementos",
       version,
       transport,
-      api_url: apiUrl,
+      api_url: resolvedApiUrl,
       api_base: validBase,
       api_key_present: apiKeyConfigured || resolved !== null,
     },

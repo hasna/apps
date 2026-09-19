@@ -126,10 +126,10 @@ describe("save: agent-source writes carry the writing agent identity", () => {
     expect(saved.created_by_agent).toBe(saved.agent_id);
 
     // The name was registered on first use, so the attribution is resolvable.
-    const agents = JSON.parse(
+    const agents = (JSON.parse(
       (await runCli(env, "--json", "agents")).stdout,
-    ) as { name: string }[];
-    expect(agents.some((a) => a.name === AGENT_NAME)).toBe(true);
+    ) as { agents: Array<{ name: string }> }).agents;
+    expect(agents.some((agent) => agent.name === AGENT_NAME)).toBe(true);
 
     // And the stored row agrees with the CLI's own receipt.
     const rows = readMemories();
